@@ -137,14 +137,15 @@ enum ModeReducer {
       return (restoreTo.mode, [.renderSurface])
 
     case .enterVisual:
-      // VISUAL is NORMAL with a button held: the pill changes, nothing else —
-      // a pointer or grid session that pressed the button keeps its keys.
+      // VISUAL is NORMAL with a button held: the pill and the mapping table
+      // change (`[mode.visual.mappings]` over NORMAL), nothing else — a
+      // pointer or grid session that pressed the button keeps its keys.
       guard case .normal = state else { return (state, []) }
-      return (.visual, [.renderSurface])
+      return (.visual, [.setMappingScope(.visual), .renderSurface])
 
     case .exitVisual:
       guard case .visual = state else { return (state, []) }
-      return (.normal, [.renderSurface])
+      return (.normal, [.setMappingScope(.normal), .renderSurface])
     }
   }
 

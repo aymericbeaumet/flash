@@ -13,7 +13,8 @@ extension AppDelegate {
     MainThreadActivity.note("effective_mappings")
     let context = pluginSelectorContext(fallbackBundleID: bundleID)
     let effective = effectiveMode(for: context)
-    overlay?.normalModeMappings = effective.compiledNormal
+    overlay?.normalModeMappings =
+      modeStore.mode.isVisual ? effective.compiledVisual : effective.compiledNormal
     overlay?.hyperModeMappings = effective.compiledHyper
     // The cache hands back one value per selector key, so a focus change
     // that lands on the key already applied skips the six-table compare.
@@ -31,6 +32,17 @@ extension AppDelegate {
       lastAppliedMappingMode = effective
       debugStateDidChange()
     }
+  }
+
+  /// The NORMAL interpreter's table for `scope`: VISUAL's entries over
+  /// NORMAL's while a button is held, NORMAL's otherwise. A half-typed
+  /// sequence belongs to the table it was typed against, so a switch drops it.
+  func applyInterpreterTable(for scope: MappingScope) {
+    guard let overlay, let effective = lastAppliedMappingMode else { return }
+    let table = scope == .visual ? effective.compiledVisual : effective.compiledNormal
+    guard overlay.normalModeMappings != table else { return }
+    overlay.normalModeMappings = table
+    resetPendingNormalSequence(reason: "mapping_scope")
   }
 
   /// Drop cached effective modes and force the next refresh to re-apply the
@@ -72,5 +84,6 @@ extension AppDelegate {
     guard let old else { return true }
     return old.all != new.all || old.normal != new.normal || old.insert != new.insert
       || old.command != new.command || old.terminal != new.terminal || old.hyper != new.hyper
+      || old.visual != new.visual
   }
 }

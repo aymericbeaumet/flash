@@ -305,7 +305,11 @@ release, so `<leader>` sequences keep working. `+` is written `<plus>`.
 
 Holding a mouse button (`v`, `mouse_button --state=toggle`) enters VISUAL,
 NORMAL with the button down, until the button is released; the status pill
-turns orange and shows `mode.labels.visual` (default `VISUAL`). See the
+turns orange and shows `mode.labels.visual` (default `VISUAL`). Keys in
+`[mode.visual.mappings]` are read before NORMAL's while the button is held,
+modified chords included; every other key keeps its NORMAL meaning. The
+defaults put Vim's `j` `k` `h` `l` on `mouse_step`, so they move the pointer
+one text line or character and the held drag extends the selection. See the
 [mode guide](normal-mode.md#holding-a-mouse-button-visual).
 
 ```toml
@@ -355,7 +359,8 @@ while that app is focused:
 App-specific entries take precedence over plugin and global mappings in the
 same scope. `false` suppresses an inherited mapping for that app; other apps
 keep their existing bindings. Bundle IDs match exactly and are case-sensitive.
-The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, and `hyper`;
+The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, `hyper`, and
+`visual`;
 COMMAND mappings still require a single modified key. Flash updates the active
 mapping table when focus changes, so no config reload is needed.
 

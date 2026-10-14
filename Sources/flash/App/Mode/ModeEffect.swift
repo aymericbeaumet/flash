@@ -4,6 +4,8 @@ import Foundation
 /// global registration so only the popup's local mappings can intercept keys.
 enum MappingScope: Hashable {
   case normal
+  /// NORMAL with a mouse button held: `[mode.visual.mappings]` over NORMAL.
+  case visual
   case insert
   case command
   case terminal

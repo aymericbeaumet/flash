@@ -75,6 +75,28 @@ extension AppDelegate {
         + "point=(\(Int(point.x)),\(Int(point.y)))")
   }
 
+  /// `mouse_step`: one text line or character from the glyph under the
+  /// pointer, read from Accessibility on the geometry queue, never on main.
+  /// In VISUAL a horizontal step lands one point past the character's centre
+  /// (as `s` does), so the held button's selection takes that character.
+  func performMouseStep(_ direction: TextStep.Direction) {
+    let primaryH = ActionDispatcher.primaryScreenHeight()
+    let pointer = NSEvent.mouseLocation
+    let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
+    let selectingThrough = modeStore.mode.isVisual
+    monitor.geometryQueue.async {
+      let target = TextStep.target(
+        pointer: topLeft, direction: direction,
+        landing: { BigramMatcher.clickPoint(in: $0, selectingThrough: selectingThrough) })
+      DispatchQueue.main.async {
+        let point = CGPoint(x: target.x, y: primaryH - target.y)
+        _ = ActionDispatcher.moveCursor(to: point)
+        FlashLog.trace(
+          "[mouse_step] direction=\(direction.rawValue) point=(\(Int(point.x)),\(Int(point.y)))")
+      }
+    }
+  }
+
   /// The display a screen warp uses: the focused window's, else the
   /// pointer's, else the first.
   static func warpScreenFrame(

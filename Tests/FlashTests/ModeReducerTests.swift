@@ -522,10 +522,11 @@ final class ModeReducerTests: XCTestCase {
   func testVisualFollowsTheHeldButtonOverNormal() {
     let entered = ModeReducer.reduce(.normal, .enterVisual)
     XCTAssertEqual(entered.0, .visual)
-    XCTAssertEqual(entered.1, [.renderSurface])
+    // The held button switches the mapping table: VISUAL's own keys first.
+    XCTAssertEqual(entered.1, [.setMappingScope(.visual), .renderSurface])
     let left = ModeReducer.reduce(.visual, .exitVisual)
     XCTAssertEqual(left.0, .normal)
-    XCTAssertEqual(left.1, [.renderSurface])
+    XCTAssertEqual(left.1, [.setMappingScope(.normal), .renderSurface])
     for state in allStates where state != .normal {
       XCTAssertEqual(ModeReducer.reduce(state, .enterVisual).0, state, "\(state) ignores the hold")
     }
@@ -744,6 +745,45 @@ final class ModeReducerTests: XCTestCase {
       LeaderHold.canEnter(
         pending: "", leaderRepeatsAnchor: true, leaderAtom: " ", leaderContinuesPending: false,
         isRepeat: false))
+  }
+
+  /// `[mode.visual.mappings]` is read before NORMAL while a button is held:
+  /// `j` `k` `h` `l` step the pointer there and nowhere else, and every key
+  /// VISUAL leaves alone keeps NORMAL's meaning, Carbon chords included.
+  func testVisualMappingsLayerOverNormal() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.visual.mappings]
+      "ctrl+o" = ["flash", "scroll_top"]
+      "x" = false
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    let visual = config.mode.compiledVisual
+    let normal = config.mode.compiledNormal
+    XCTAssertEqual(
+      visual.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("j")!)?.action,
+      .flashCommand(.mouseStep(.down)))
+    XCTAssertNil(normal.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("j")!))
+    XCTAssertEqual(
+      visual.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("h")!)?.action,
+      .flashCommand(.mouseStep(.left)))
+    XCTAssertEqual(
+      normal.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("h")!)?.action,
+      .flashCommand(.scroll(.left)))
+    // NORMAL's `f` answers in VISUAL too.
+    let f = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("f"))
+    XCTAssertEqual(visual.mapping(for: f)?.action, normal.mapping(for: f)?.action)
+    // A VISUAL chord wins over NORMAL's only while the button is held.
+    let chord = try XCTUnwrap(ModeMapping.parseNativeHotkey("ctrl+o"))
+    XCTAssertEqual(
+      MappingsCoordinator.activeMappingTable(in: config.mode, scope: .visual)[chord]?.action,
+      .flashCommand(.scroll(.top)))
+    XCTAssertNotEqual(
+      MappingsCoordinator.activeMappingTable(in: config.mode, scope: .normal)[chord]?.action,
+      .flashCommand(.scroll(.top)))
+    XCTAssertEqual(
+      ConfigLoader.parse("[mode.apps.\"com.example.app\".visual.mappings]\n\"q\" = false")
+        .diagnostics, [])
   }
 
   // MARK: Structural purity

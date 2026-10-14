@@ -46,6 +46,9 @@ indirect enum URLCommand: Hashable {
   /// `mouse_warp`: the pointer jumps to an edge or the centre of the focused
   /// window or its screen.
   case mouseWarp(MouseWarpRequest)
+  /// `mouse_step`: the pointer moves one text line or one character from the
+  /// text under it; in VISUAL the held button drags, extending the selection.
+  case mouseStep(TextStep.Direction)
   /// `mouse_position`: the saved pointer positions — save, hint, cycle,
   /// forget.
   case mousePosition(MousePositionRequest)
@@ -814,6 +817,11 @@ final class URLEventHandler: NSObject {
         }
         return .mouseWarp(request)
       }),
+    "mouse_step": .init(
+      [.text("direction", "up|down|left|right", required: true)],
+      parse: { a in
+        a.value("direction").flatMap(TextStep.Direction.init(rawValue:)).map { .mouseStep($0) }
+      }),
     "mouse_position": .init(
       [.text("action", "save|unsave|clear|hints|next|previous", required: true)]
         + clickParameters,
@@ -1185,7 +1193,8 @@ extension URLEventHandler {
       controls. While labels are up, Tab moves the same click to the grid and
       Shift-Tab widens it to the screen; Backspace returns. `mouse_screens`
       labels each display, `mouse_warp` jumps the pointer to an edge or the
-      centre of the focused window or its screen, and `mouse_position` saves,
+      centre of the focused window or its screen, `mouse_step` moves it one
+      text line or character from the text under it, and `mouse_position` saves,
       hints, cycles and forgets pointer positions. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
       the status items) and `mouse_notifications` (Notification Center's
       banners, alerts and buttons) hint surfaces outside the focused window.

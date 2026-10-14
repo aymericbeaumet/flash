@@ -795,6 +795,7 @@ struct Config {
       var terminal: [ModeMapping] = []
       var command: [ModeMapping] = []
       var hyper: [ModeMapping] = []
+      var visual: [ModeMapping] = []
       var unmapped: [ModeScope: Set<String>] = [:]
 
       func mappings(for scope: ModeScope) -> [ModeMapping] {
@@ -805,6 +806,7 @@ struct Config {
         case .terminal: return terminal
         case .command: return command
         case .hyper: return hyper
+        case .visual: return visual
         }
       }
 
@@ -840,6 +842,9 @@ struct Config {
         case .hyper:
           hyper.removeAll(where: sameKey)
           hyper.insert(mapping, at: 0)
+        case .visual:
+          visual.removeAll(where: sameKey)
+          visual.insert(mapping, at: 0)
         }
       }
 
@@ -856,6 +861,7 @@ struct Config {
         case .terminal: terminal.removeAll(where: matches)
         case .command: command.removeAll(where: matches)
         case .hyper: hyper.removeAll(where: matches)
+        case .visual: visual.removeAll(where: matches)
         }
       }
     }
@@ -881,6 +887,9 @@ struct Config {
     /// Keys read while the NORMAL leader is held. Not merged with `[mode.all]`:
     /// a hyper binding replaces NORMAL for that key for the duration of the hold.
     var hyper: [ModeMapping] = Self.defaultHyperMappings
+    /// Keys read before NORMAL while a mouse button is held (VISUAL). A key
+    /// with no entry here is NORMAL's.
+    var visual: [ModeMapping] = Self.defaultVisualMappings
     /// Exact focused-app bundle identifier to per-scope additions/removals.
     var appMappings: [String: AppMappings] = [:]
     /// Keys a `"<key>" = false` entry removed, per table, after every layer.
@@ -989,6 +998,24 @@ struct Config {
       return bindings.map { key, command in
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
           preconditionFailure("invalid default hyper mapping: \(key)")
+        }
+        return ModeMapping(key: canonical, action: .flashCommand(command))
+      }
+    }()
+
+    /// Vim's visual motions while a button is held: `j` `k` `h` `l` move the
+    /// pointer one text line or character, so the held button's drag extends
+    /// the selection. Every other key is NORMAL's.
+    static let defaultVisualMappings: [ModeMapping] = {
+      let bindings: [(String, URLCommand)] = [
+        ("j", .mouseStep(.down)),
+        ("k", .mouseStep(.up)),
+        ("h", .mouseStep(.left)),
+        ("l", .mouseStep(.right)),
+      ]
+      return bindings.map { key, command in
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+          preconditionFailure("invalid default visual mapping: \(key)")
         }
         return ModeMapping(key: canonical, action: .flashCommand(command))
       }
@@ -1122,6 +1149,9 @@ struct Config {
     private(set) var compiledInsert = CompiledMappings()
     private(set) var compiledTerminal = CompiledMappings()
     private(set) var compiledHyper = CompiledMappings()
+    /// VISUAL's own entries, then NORMAL's: the table the interpreter reads
+    /// while a button is held.
+    private(set) var compiledVisual = CompiledMappings()
 
     var effectiveTerminalMappings: [ModeMapping] {
       var claimed = Set<String>()
@@ -1144,6 +1174,7 @@ struct Config {
       compiledInsert = CompiledMappings(mappings(for: .insert))
       compiledTerminal = CompiledMappings(effectiveTerminalMappings)
       compiledHyper = CompiledMappings(Self.resolveMappings(hyper))
+      compiledVisual = CompiledMappings(Self.resolveMappings(visual + normal + all))
     }
 
     /// One mapping-key atom, or nil. `"<leader>"` becomes the leader atom, and
@@ -1167,15 +1198,16 @@ struct Config {
       guard let leaderRaw = normalLeader,
         let leaderInternal = NormalModeInterpreter.translateLeader(leaderRaw)
       else { return }
-      for index in normal.indices where normal[index].key.contains("<leader>") {
-        let mapping = normal[index]
-        let resolved = mapping.key.replacingOccurrences(of: "<leader>", with: leaderInternal)
-        normal[index] = ModeMapping(
-          key: resolved,
+      func resolvingLeader(_ mapping: ModeMapping) -> ModeMapping {
+        guard mapping.key.contains("<leader>") else { return mapping }
+        return ModeMapping(
+          key: mapping.key.replacingOccurrences(of: "<leader>", with: leaderInternal),
           action: mapping.action,
           repeatsOnFinalKey: mapping.repeatsOnFinalKey,
           origin: mapping.origin)
       }
+      normal = normal.map(resolvingLeader)
+      visual = visual.map(resolvingLeader)
     }
 
     var containsNormalModeMapping: Bool {
@@ -1710,6 +1742,7 @@ struct Config {
     add(mode.effectiveTerminalMappings, at: ["mode", "terminal"])
     add(mode.command, at: ["mode", "command"])
     add(mode.hyper, at: ["mode", "hyper"])
+    add(mode.visual, at: ["mode", "visual"])
     for (bundle, app) in mode.appMappings {
       for scope in ModeScope.allCases {
         add(app.mappings(for: scope), at: ["mode", "apps", bundle, scope.rawValue])
@@ -1799,6 +1832,7 @@ extension URLCommand {
       return verb("mouse_target", ["--words"] + command.argTokens)
     case .mouseScreens: return verb("mouse_screens")
     case .mouseWarp(let request): return verb("mouse_warp", request.argTokens)
+    case .mouseStep(let direction): return verb("mouse_step", ["--direction=\(direction.rawValue)"])
     case .mousePosition(let request): return verb("mouse_position", request.argTokens)
     case .mouseGrid(let command):
       return verb("mouse_grid", command.argTokens)

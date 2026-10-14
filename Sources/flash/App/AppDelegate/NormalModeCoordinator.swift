@@ -134,6 +134,7 @@ extension AppDelegate {
         overlay.statusPopupController.dismiss()
       case .setMappingScope(let scope):
         mappings.apply(scope: scope)
+        applyInterpreterTable(for: scope)
       case .clearTransientHintState:
         // Reads the still-current overlay surface to tear down a command /
         // modal we are leaving, then clears hint + input state.
@@ -1257,6 +1258,8 @@ extension AppDelegate {
       activateScreenHints()
     case .mouseWarp(let request):
       performMouseWarp(request)
+    case .mouseStep(let direction):
+      for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseStep(direction) }
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(let request):

@@ -257,6 +257,14 @@ right of their letter instead of one point left, so the selection the held
 button draws ends on that letter: `v` at the start, `ms` plus a letter, and
 the text up to and including it is selected.
 
+`[mode.visual.mappings]` is read before NORMAL while the button is held;
+any key it leaves alone keeps its NORMAL meaning. As in Vim's visual mode,
+`j` / `k` move the pointer one text line down / up in its column and `h` /
+`l` one character left / right (`mouse_step`), measured from the glyph under
+the pointer, so the held drag extends the selection by a line or a
+character. A half-typed NORMAL sequence is dropped when the button goes down
+or up, since the tables differ.
+
 Scrolls extend the selection the way a Vim motion extends it from the
 cursor. `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` move the page under the
 pointer, and Flash re-posts the held button's drag where the pointer is, once

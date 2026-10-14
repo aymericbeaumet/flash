@@ -2025,6 +2025,8 @@ final class ConfigLoaderTests: XCTestCase {
     builtinMode.normal.sort { $0.key < $1.key }
     loadedMode.hyper.sort { $0.key < $1.key }
     builtinMode.hyper.sort { $0.key < $1.key }
+    loadedMode.visual.sort { $0.key < $1.key }
+    builtinMode.visual.sort { $0.key < $1.key }
     loadedMode.recompileMappings()
     builtinMode.recompileMappings()
     XCTAssertEqual(loadedMode, builtinMode)

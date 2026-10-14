@@ -32,6 +32,13 @@ extension URLCommand {
       let area = request.area == .window ? "the focused window" : "the screen"
       let edge = request.edge == .center ? "the centre" : "the \(request.edge.rawValue) edge"
       return "Moves the pointer to \(edge) of \(area)."
+    case .mouseStep(let direction):
+      switch direction {
+      case .up, .down:
+        return "Moves the pointer one text line \(direction.rawValue), in its column."
+      case .left, .right:
+        return "Moves the pointer one character \(direction.rawValue)."
+      }
     case .mousePosition(let request):
       return positionExplanation(request)
     case .mouseBigram(let command):

@@ -587,6 +587,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateScreenHints()
     case .mouseWarp(let request):
       performMouseWarp(request)
+    case .mouseStep(let direction):
+      performMouseStep(direction)
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(let request):

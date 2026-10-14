@@ -503,6 +503,7 @@ enum ConfigLoader {
       ],
       "mode": [
         "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "hyper",
+        "visual",
         "apps",
         "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
         "click_hold_ms", "send_key_interval_ms",
@@ -1821,7 +1822,7 @@ enum ConfigLoader {
       }
     }
 
-    for scope in [ModeScope.insert, .terminal, .hyper] {
+    for scope in [ModeScope.insert, .terminal, .hyper, .visual] {
       let name = scope.rawValue
       guard
         let scoped = sectionTable(
@@ -1882,7 +1883,7 @@ enum ConfigLoader {
           let scopePath = appPath + [scopeName]
           guard let scope = ModeScope(rawValue: scopeName) else {
             config.addDiagnostic(
-              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper",
+              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, visual",
               location: locations.location(for: scopePath))
             continue
           }
@@ -2482,6 +2483,9 @@ enum ConfigLoader {
     case .hyper:
       config.mode.hyper.removeAll { $0.key == key }
       config.mode.hyper.append(mapping)
+    case .visual:
+      config.mode.visual.removeAll { $0.key == key }
+      config.mode.visual.append(mapping)
     }
   }
 
@@ -2500,6 +2504,7 @@ enum ConfigLoader {
     case .terminal: config.mode.terminal.removeAll(where: removed)
     case .command: config.mode.command.removeAll(where: removed)
     case .hyper: config.mode.hyper.removeAll(where: removed)
+    case .visual: config.mode.visual.removeAll(where: removed)
     }
   }
 

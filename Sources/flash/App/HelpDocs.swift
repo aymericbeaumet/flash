@@ -378,6 +378,7 @@ enum HelpDocs {
       | Select between points | `flash mouse_target --select` |
       | Label each display | `flash mouse_screens` |
       | Jump to a window edge | `flash mouse_warp --edge=top` |
+      | Step one text line or character | `flash mouse_step --direction=down` |
       | Save and recall pointer positions | `flash mouse_position --action=save` |
 
       While labels are up, Tab restarts the same click on the grid, Shift-Tab

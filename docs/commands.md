@@ -36,6 +36,7 @@ flash mouse_notifications                # hint Notification Center's banners, a
 flash mouse_pointer                      # freestyle cursor control (layout hjkl, m/,/. click, v drag)
 flash mouse_screens                      # one label per display; the pointer lands on its centre
 flash mouse_warp --area=window --edge=center # jump the pointer to a window or screen edge or centre
+flash mouse_step --direction=down        # move the pointer one text line (up, down) or character (left, right)
 flash mouse_position --action=save       # remember the pointer position (hints, next, previous, unsave, clear)
 flash mouse_position --action=hints --move # label the saved positions and move to the one you pick
 flash mouse_button --state=down          # press the primary button where the pointer is
@@ -174,7 +175,10 @@ the surface the session came from.
 `mouse_screens` labels the centre of every display; committing moves the
 pointer there. `mouse_warp` moves the pointer to the centre or a side of the
 focused window (`--area=window`, the default) or of its display
-(`--area=screen`), a few points inside the edge. `mouse_position` keeps a
+(`--area=screen`), a few points inside the edge. `mouse_step` moves it one
+text line up or down, in its column, or one character left or right,
+measured from the glyph Accessibility reports under it; off text it moves a
+fixed line height or column. VISUAL binds it to `j` `k` `h` `l`. `mouse_position` keeps a
 bounded list of saved pointer positions, per app with `[hints]
 position_history_scope = "app"`: `save`, `unsave` the one under the pointer,
 `clear`, `next` and `previous` cycle from the one the pointer is on, and
