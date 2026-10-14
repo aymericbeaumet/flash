@@ -113,6 +113,18 @@ final class MappingsCoordinator {
   /// current set; `flash doctor` reports it.
   private var refusedKeys: [ObjectIdentifier: [String]] = [:]
 
+  /// Mapping keys registered with macOS, per registration set: the chords
+  /// Flash takes from every app until the scope changes.
+  private var registeredKeys: [ObjectIdentifier: [String]] = [:]
+
+  /// The scope whose chords are registered and whose table the tap reads.
+  var appliedScope: MappingScope { lastAppliedScope }
+
+  /// Every mapping key Flash holds as a system-wide hotkey right now.
+  var registeredHotkeys: [String] {
+    Array(Set(registeredKeys.values.joined())).sorted()
+  }
+
   var refusedHotkeys: [String] {
     Array(Set(refusedKeys.values.joined())).sorted()
   }
@@ -126,6 +138,9 @@ final class MappingsCoordinator {
       self?.handle(hotkey: chord, origin: .carbon)
     }
     refusedKeys[ObjectIdentifier(hotkeys)] = result.refused.map { keysByChord[$0] ?? "?" }
+    registeredKeys[ObjectIdentifier(hotkeys)] = hotkeys.registeredChords.map {
+      keysByChord[$0] ?? "?"
+    }
     for chord in result.refused {
       FlashLog.warn(
         "[mappings] could not register \"\(keysByChord[chord] ?? "?")\" — "

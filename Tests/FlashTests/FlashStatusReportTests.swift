@@ -6,8 +6,9 @@ import XCTest
 final class FlashStatusReportTests: XCTestCase {
   private func report() -> FlashStatusReport {
     FlashStatusReport(
-      version: "1.2.3", build: "45", mode: "normal", hintSession: "idle",
+      version: "1.2.3", build: "45", mode: "normal", mappingScope: "normal", hintSession: "idle",
       focusedApp: "com.apple.Safari", accessibility: true, capture: .tap, secureInput: false,
+      globalChords: ["cmd+<right>", "ctrl+e"],
       inputSource: "com.apple.keylayout.Russian", keyboardLayout: "auto",
       referenceLayout: "com.apple.keylayout.ABC", configPath: "/tmp/flash.toml",
       configDiagnostics: 2, plugins: .init(loaded: 3, ready: 2, error: 1), statusBar: true,
@@ -22,21 +23,27 @@ final class FlashStatusReportTests: XCTestCase {
 
   /// Scripts parse this object; a key added, renamed or dropped is a schema
   /// change and must bump `schema`.
-  func testSchemaV2KeysArePinned() throws {
-    XCTAssertEqual(FlashStatusReport.schema, 2)
+  func testSchemaV3KeysArePinned() throws {
+    XCTAssertEqual(FlashStatusReport.schema, 3)
     XCTAssertEqual(
       FlashStatusReport.keys,
       [
-        "schema", "version", "build", "mode", "hint_session", "focused_app", "accessibility",
-        "capture", "secure_input", "input_source", "keyboard_layout", "reference_layout",
-        "config_path", "config_diagnostics", "plugins", "statusbar", "autostart", "hints",
+        "schema", "version", "build", "mode", "mapping_scope", "hint_session", "focused_app",
+        "accessibility", "capture", "secure_input", "global_chords", "input_source",
+        "keyboard_layout", "reference_layout", "config_path", "config_diagnostics", "plugins",
+        "statusbar", "autostart", "hints",
       ])
     let object = try XCTUnwrap(
       JSONSerialization.jsonObject(with: report().data) as? [String: Any])
     XCTAssertEqual(Set(object.keys), Set(FlashStatusReport.keys))
     XCTAssertEqual(
       Set((object["plugins"] as? [String: Any] ?? [:]).keys), ["loaded", "ready", "error"])
-    XCTAssertEqual(object["schema"] as? Int, 2)
+    XCTAssertEqual(object["schema"] as? Int, 3)
+    XCTAssertEqual(object["mapping_scope"] as? String, "normal")
+    XCTAssertEqual(object["global_chords"] as? [String], ["cmd+<right>", "ctrl+e"])
+    let text = FlashStatusReport.render(object)
+    XCTAssertTrue(text.contains("mapping scope"), text)
+    XCTAssertTrue(text.contains("cmd+<right> ctrl+e"), text)
     XCTAssertEqual(object["capture"] as? String, "tap")
     XCTAssertEqual(object["reference_layout"] as? String, "com.apple.keylayout.ABC")
 

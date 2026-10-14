@@ -13,6 +13,7 @@ import Foundation
 //  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
 //  - Advanced gate: `.enterNormal` is refused while `.disabled`.
 enum ModeReducer {
+
   static func reduce(_ state: Mode, _ event: ModeEvent) -> (Mode, [ModeEffect]) {
     switch event {
     case .enterInsert(let targetPID):
@@ -139,14 +140,14 @@ enum ModeReducer {
 
     case .buttonHeld(let hold):
       // VISUAL and DRAG are NORMAL with a button held: the pill and the
-      // mapping table change (their own table over NORMAL), nothing else — a
-      // pointer or grid session that pressed the button keeps its keys.
+      // mapping table (`Mode.mappingScope`) change, nothing else — a pointer
+      // or grid session that pressed the button keeps its keys.
       guard case .normal = state else { return (state, []) }
-      return (hold.mode, [.setMappingScope(hold.mappingScope), .renderSurface])
+      return (hold.mode, [.renderSurface])
 
     case .buttonReleased:
       guard state.buttonHold != nil else { return (state, []) }
-      return (.normal, [.setMappingScope(.normal), .renderSurface])
+      return (.normal, [.renderSurface])
     }
   }
 
@@ -157,29 +158,29 @@ enum ModeReducer {
     switch mode {
     case .normal:
       return [
-        .prepareModeEntry, .setMappingScope(.normal), .clearTransientHintState, .renderSurface,
+        .prepareModeEntry, .clearTransientHintState, .renderSurface,
         .scheduleRecapture,
       ]
     case .insert:
       // Hide transient hint content BEFORE rendering so the surface (badge +
       // active-window border) is drawn last and survives the hide.
       return [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .prepareModeEntry, .clearTransientHintState, .hideOverlayIfIdle,
         .renderSurface,
         .activateFocusedApp(pid: targetPID),
       ]
     case .disabled:
       return [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .prepareModeEntry, .clearTransientHintState, .hideOverlayIfIdle,
         .renderSurface,
       ]
     case .command:
       // Command surfaces keep all-mode and command-specific modified mappings.
       // Hint cleanup belongs to their content setup (`enterCommandLineMode`).
-      return [.prepareModeEntry, .setMappingScope(.command), .renderSurface, .scheduleRecapture]
+      return [.prepareModeEntry, .renderSurface, .scheduleRecapture]
     case .terminal:
       return [
-        .prepareModeEntry, .setMappingScope(.terminal), .clearTransientHintState,
+        .prepareModeEntry, .clearTransientHintState,
         .hideOverlayIfIdle, .renderSurface,
       ]
     case .hyper, .visual, .drag:

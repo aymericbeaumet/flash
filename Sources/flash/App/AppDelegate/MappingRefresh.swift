@@ -14,7 +14,7 @@ extension AppDelegate {
     let context = pluginSelectorContext(fallbackBundleID: bundleID)
     let effective = effectiveMode(for: context)
     overlay?.normalModeMappings = Self.interpreterTable(
-      for: modeStore.mode.buttonHold?.mappingScope ?? .normal, in: effective)
+      for: modeStore.mode.mappingScope, in: effective)
     overlay?.hyperModeMappings = effective.compiledHyper
     // The cache hands back one value per selector key, so a focus change
     // that lands on the key already applied skips the six-table compare.

@@ -85,6 +85,19 @@ extension Mode {
     }
   }
 
+  /// The mapping scope this mode reads: its own table, NORMAL's while HYPER
+  /// is held over it, INSERT's while advanced mode is off.
+  var mappingScope: MappingScope {
+    switch self {
+    case .disabled, .insert: return .insert
+    case .normal, .hyper: return .normal
+    case .visual: return .visual
+    case .drag: return .drag
+    case .command: return .command
+    case .terminal: return .terminal
+    }
+  }
+
   /// Which label string the status bar / badge shows.
   var label: ModeLabel {
     switch self {

@@ -13,6 +13,7 @@ extension AppDelegate {
       version: info["CFBundleShortVersionString"] as? String ?? "unknown",
       build: info["CFBundleVersion"] as? String ?? "unknown",
       mode: FlashStatusReport.modeName(modeStore.mode),
+      mappingScope: mappings.appliedScope.rawValue,
       hintSession: FlashStatusReport.hintSessionPhase(
         route: hintSession.keyRoute, active: hintSession.isActive,
         discovering: activationInFlight),
@@ -24,6 +25,7 @@ extension AppDelegate {
         tapInstalled: keyboardCaptureTap != nil, secureInputEnabled: secure,
         session: sessionRunning ? hintSession.capture : nil),
       secureInput: secure,
+      globalChords: mappings.registeredHotkeys,
       inputSource: keyboardLayoutMonitor.state.inputSourceID,
       keyboardLayout: config.app.keyboardLayout,
       referenceLayout: keyboardLayoutMonitor.state.reference.table?.sourceID,

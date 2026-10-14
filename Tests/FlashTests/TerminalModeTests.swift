@@ -11,7 +11,7 @@ final class TerminalModeTests: XCTestCase {
       XCTAssertEqual(mode, .terminal(restoreTo: base.asReturnMode, returnPID: nil))
       XCTAssertFalse(mode.ownsKeyboard(hasHints: false, activationInFlight: false))
       XCTAssertEqual(mode.label, .terminal)
-      XCTAssertTrue(effects.contains(.setMappingScope(.terminal)))
+      XCTAssertEqual(mode.mappingScope, .terminal)
       XCTAssertFalse(effects.contains(.scheduleRecapture))
       for scope in ModeScope.allCases {
         XCTAssertFalse(MappingsCoordinator.scopeIsActive(scope, for: .terminal))

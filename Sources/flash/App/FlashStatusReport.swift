@@ -6,12 +6,13 @@ import Foundation
 /// identifiers and activation counts and timings) — and its key set is
 /// pinned by a test, so a scripted consumer can rely on `schema`.
 struct FlashStatusReport: Equatable {
-  static let schema = 2
+  static let schema = 3
 
   /// Every top-level key, in the order the text rendering lists them.
   static let keys = [
-    "schema", "version", "build", "mode", "hint_session", "focused_app", "accessibility",
-    "capture", "secure_input", "input_source", "keyboard_layout", "reference_layout",
+    "schema", "version", "build", "mode", "mapping_scope", "hint_session", "focused_app",
+    "accessibility", "capture", "secure_input", "global_chords", "input_source",
+    "keyboard_layout", "reference_layout",
     "config_path", "config_diagnostics", "plugins", "statusbar", "autostart", "hints",
   ]
 
@@ -39,8 +40,12 @@ struct FlashStatusReport: Equatable {
 
   var version: String
   var build: String
-  /// `disabled`, `insert`, `normal`, `command` or `terminal`.
+  /// `disabled`, `insert`, `normal`, `visual`, `drag`, `hyper`, `command` or
+  /// `terminal`.
   var mode: String
+  /// The mapping table the mode reads and whose chords are registered:
+  /// `insert`, `normal`, `visual`, `drag`, `command` or `terminal`.
+  var mappingScope: String
   /// `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`
   /// or `bigram`.
   var hintSession: String
@@ -50,6 +55,9 @@ struct FlashStatusReport: Equatable {
   /// session arrive.
   var capture: KeyboardCaptureTap.SessionCapture
   var secureInput: Bool
+  /// Configured mapping keys Flash holds as system-wide hotkeys right now:
+  /// those chords never reach the focused app.
+  var globalChords: [String]
   var inputSource: String?
   /// `[app] keyboard_layout` as configured.
   var keyboardLayout: String
@@ -107,11 +115,13 @@ struct FlashStatusReport: Equatable {
       "version": version,
       "build": build,
       "mode": mode,
+      "mapping_scope": mappingScope,
       "hint_session": hintSession,
       "focused_app": focusedApp ?? NSNull(),
       "accessibility": accessibility,
       "capture": capture.rawValue,
       "secure_input": secureInput,
+      "global_chords": globalChords,
       "input_source": inputSource ?? NSNull(),
       "keyboard_layout": keyboardLayout,
       "reference_layout": referenceLayout ?? NSNull(),
@@ -160,11 +170,19 @@ struct FlashStatusReport: Equatable {
     let rows: [(String, String)] =
       [
         ("mode", text("mode")),
+        ("mapping scope", text("mapping_scope")),
         ("hint session", text("hint_session")),
         ("focused app", text("focused_app")),
         ("accessibility", text("accessibility") == "yes" ? "granted" : "not granted"),
         ("key capture", text("capture")),
         ("secure input", text("secure_input") == "yes" ? "on" : "off"),
+        (
+          "global chords",
+          (object["global_chords"] as? [String]).map {
+            $0.isEmpty ? "none" : $0.joined(separator: " ")
+          }
+            ?? "-"
+        ),
         ("input source", text("input_source")),
         (
           "keyboard layout",

@@ -123,6 +123,11 @@ extension AppDelegate {
   /// existing routines. No decisions live here.
   func applyModeEffects(_ effects: [ModeEffect], previous: Mode, next: Mode) {
     MainThreadActivity.note("mode_effects")
+    // The mapping scope is a projection of the mode, applied on every
+    // transition: no path can leave INSERT reading NORMAL's chords, or any
+    // mode reading another's table. Idempotent when it does not change.
+    mappings.apply(scope: next.mappingScope)
+    applyInterpreterTable(for: next.mappingScope)
     for effect in effects {
       switch effect {
       case .prepareKeyboardCapture:
@@ -132,9 +137,6 @@ extension AppDelegate {
       case .hideTerminalPopup:
         terminalInputMappings?.flush()
         overlay.statusPopupController.dismiss()
-      case .setMappingScope(let scope):
-        mappings.apply(scope: scope)
-        applyInterpreterTable(for: scope)
       case .clearTransientHintState:
         // Reads the still-current overlay surface to tear down a command /
         // modal we are leaving, then clears hint + input state.

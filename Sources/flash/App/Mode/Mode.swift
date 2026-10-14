@@ -72,13 +72,6 @@ enum ButtonHold: String, CaseIterable, Equatable {
     case .drag: return .drag
     }
   }
-
-  var mappingScope: MappingScope {
-    switch self {
-    case .visual: return .visual
-    case .drag: return .drag
-    }
-  }
 }
 
 /// Where a transient surface (command / modal) returns to when it closes.

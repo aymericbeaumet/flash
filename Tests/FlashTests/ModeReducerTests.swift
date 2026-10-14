@@ -179,9 +179,9 @@ final class ModeReducerTests: XCTestCase {
       .advancedModeChanged(enabled: true),
       .leaveMode(hasHints: false),
     ] {
-      let (next, effects) = ModeReducer.reduce(mode, event)
+      let next = ModeReducer.reduce(mode, event).0
       XCTAssertEqual(next, .normal, "\(event) must preserve explicit NORMAL")
-      XCTAssertFalse(effects.contains(.setMappingScope(.insert)))
+      XCTAssertEqual(next.mappingScope, .normal)
       mode = next
     }
 
@@ -431,7 +431,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       normal,
       [
-        .prepareModeEntry, .setMappingScope(.normal), .clearTransientHintState, .renderSurface,
+        .prepareModeEntry, .clearTransientHintState, .renderSurface,
         .scheduleRecapture,
       ])
 
@@ -439,7 +439,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       insert,
       [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .prepareModeEntry, .clearTransientHintState, .hideOverlayIfIdle,
         .renderSurface,
         .activateFocusedApp(pid: 42),
       ])
@@ -448,7 +448,7 @@ final class ModeReducerTests: XCTestCase {
     let command = ModeReducer.enterEffects(
       for: .command(restoreTo: .normal), targetPID: nil)
     XCTAssertEqual(
-      command, [.prepareModeEntry, .setMappingScope(.command), .renderSurface, .scheduleRecapture])
+      command, [.prepareModeEntry, .renderSurface, .scheduleRecapture])
   }
 
   // MARK: Projection correctness — the anti-drift table
@@ -530,11 +530,11 @@ final class ModeReducerTests: XCTestCase {
     for (hold, mode) in [(ButtonHold.visual, Mode.visual), (.drag, .drag)] {
       let entered = ModeReducer.reduce(.normal, .buttonHeld(hold))
       XCTAssertEqual(entered.0, mode)
-      XCTAssertEqual(entered.1, [.setMappingScope(hold.mappingScope), .renderSurface])
+      XCTAssertEqual(entered.1, [.renderSurface])
       XCTAssertEqual(mode.buttonHold, hold)
       let left = ModeReducer.reduce(mode, .buttonReleased)
       XCTAssertEqual(left.0, .normal)
-      XCTAssertEqual(left.1, [.setMappingScope(.normal), .renderSurface])
+      XCTAssertEqual(left.1, [.renderSurface])
       for state in allStates where state != .normal {
         XCTAssertEqual(
           ModeReducer.reduce(state, .buttonHeld(hold)).0, state, "\(state) ignores the hold")
@@ -857,6 +857,31 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertNotNil(config.mode.compiledNormal.mapping(for: df))
     XCTAssertNil(
       config.mode.compiledVisual.mapping(for: df), "VISUAL's own d (cut) hides NORMAL's df too")
+  }
+
+  /// The mapping scope is a projection of the mode, applied on every
+  /// transition, so no path can leave INSERT reading NORMAL's chords (a
+  /// Command chord NORMAL maps would be swallowed in the app) or VISUAL's
+  /// table outside VISUAL. HYPER reads NORMAL's; advanced mode off reads
+  /// INSERT's.
+  func testEachModeReadsItsOwnMappingScope() {
+    let expected: [(Mode, MappingScope)] = [
+      (.disabled, .insert), (.insert, .insert), (.normal, .normal),
+      (.hyper(restoreTo: .normal), .normal), (.visual, .visual), (.drag, .drag),
+      (.command(restoreTo: .insert), .command), (.command(restoreTo: .normal), .command),
+      (.terminal(restoreTo: .insert, returnPID: nil), .terminal),
+    ]
+    for (mode, scope) in expected {
+      XCTAssertEqual(mode.mappingScope, scope, "\(mode)")
+    }
+    for state in allStates {
+      for event in allEvents {
+        let next = ModeReducer.reduce(state, event).0
+        XCTAssertEqual(
+          next.mappingScope == .insert, next == .disabled || next.isInsert,
+          "\(state) + \(event): only INSERT and disabled read INSERT's chords")
+      }
+    }
   }
 
   // MARK: Structural purity
