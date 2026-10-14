@@ -24,6 +24,35 @@ final class NormalModeTests: XCTestCase {
         visible: true, hasTransientInput: true, activationInFlight: false))
   }
 
+  /// A half-typed sequence and the timeout armed for it belong to one mapping
+  /// table. When the effective mappings are rebuilt for another selector —
+  /// the focused app changed, or a plugin's mappings did — the sequence is
+  /// dropped and the timeout disowned, so it cannot fire a mapping from the
+  /// previous table. The same selector again leaves a sequence alone.
+  func testMappingTableChangeDropsThePendingSequenceAndItsTimeout() {
+    _ = NSApplication.shared
+    let delegate = AppDelegate()
+    delegate.registry = SourceRegistry(descriptors: [], runningApplications: [])
+    delegate.monitor = AppMonitor(registry: delegate.registry, config: delegate.config)
+    delegate.overlay = OverlayPanel()
+    delegate.overlay.normalModePending = "g"
+    delegate.overlay.normalModeRepeatAnchor = "t"
+    delegate.overlay.hyperPending = "x"
+    let token = delegate.normalModePendingCommandToken
+    delegate.invalidateEffectiveMappings()
+    delegate.refreshEffectiveMappings(for: nil)
+    XCTAssertEqual(delegate.overlay.normalModePending, "")
+    XCTAssertNil(delegate.overlay.normalModeRepeatAnchor)
+    XCTAssertEqual(delegate.overlay.hyperPending, "")
+    XCTAssertNotEqual(delegate.normalModePendingCommandToken, token, "the timeout is disowned")
+
+    delegate.overlay.normalModePending = "g"
+    let settled = delegate.normalModePendingCommandToken
+    delegate.refreshEffectiveMappings(for: nil)
+    XCTAssertEqual(delegate.overlay.normalModePending, "g", "the same selector keeps it")
+    XCTAssertEqual(delegate.normalModePendingCommandToken, settled)
+  }
+
   func testDirectionalScrollKeys() {
     XCTAssertEqual(command(chars: "h"), .scroll(.left))
     XCTAssertNil(command(chars: "j"))

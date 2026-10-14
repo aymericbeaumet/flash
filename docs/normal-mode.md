@@ -104,7 +104,9 @@ mappings.
   for `sequence_timeout_ms` before it fires. Triple click therefore ships
   unbound, because `tf` would stall the bare `t` (new tab). To bind `tf` /
   `tF`, remove the default `t` with `"t" = false` in the same table; `tf`
-  then fires on its second key with no timeout.
+  then fires on its second key with no timeout. A pending sequence is dropped
+  when the focused app or the effective mappings change, and its timeout
+  never fires a mapping from the previous table.
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
   NORMAL. Everything in a terminal emulator (an app a plugin declares in
   `terminal_emulators`) is an input target, so a primary click on a hint

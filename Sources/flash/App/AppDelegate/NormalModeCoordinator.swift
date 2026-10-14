@@ -528,12 +528,30 @@ extension AppDelegate {
     }
   }
 
-  private func resetModeInputState() {
-    cancelCandidateFinderSessionWork()
+  /// Drop a half-typed NORMAL sequence, its repeat anchor, the hyper and
+  /// leader-fallback sequences, and disown the timeout armed for the pending
+  /// command: they were all resolved against one mapping table, so when the
+  /// focused app or the effective mappings change, nothing of them may
+  /// complete against the next table. The physical leader hold is not a
+  /// sequence and is left alone.
+  func resetPendingNormalSequence(reason: String) {
+    if !overlay.normalModePending.isEmpty || overlay.normalModeRepeatAnchor != nil
+      || !overlay.hyperPending.isEmpty || overlay.leaderFallbackPending != nil
+    {
+      FlashLog.trace(
+        "[input] pending_reset reason=\(reason) pending=\(overlay.normalModePending) "
+          + "anchor=\(overlay.normalModeRepeatAnchor ?? "-") hyper=\(overlay.hyperPending)")
+    }
     overlay.normalModePending = ""
     overlay.normalModeRepeatAnchor = nil
     overlay.hyperPending = ""
     overlay.leaderFallbackPending = nil
+    normalModePendingCommandToken &+= 1
+  }
+
+  private func resetModeInputState() {
+    cancelCandidateFinderSessionWork()
+    resetPendingNormalSequence(reason: "mode_enter")
     overlay.leaderHold = LeaderHold()
     overlay.hyperHoldWatch = HyperHoldWatch()
     overlay.commandLineText = ""

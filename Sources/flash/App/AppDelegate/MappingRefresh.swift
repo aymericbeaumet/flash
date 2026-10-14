@@ -17,10 +17,13 @@ extension AppDelegate {
     overlay?.hyperModeMappings = effective.compiledHyper
     // The cache hands back one value per selector key, so a focus change
     // that lands on the key already applied skips the six-table compare.
-    if lastAppliedMappingKey != context.cacheKey || lastAppliedMappingMode == nil,
-      mappingModeChanged(from: lastAppliedMappingMode, to: effective)
-    {
-      lastAppliedMappingKey = context.cacheKey
+    let selectorChanged = lastAppliedMappingKey != context.cacheKey || lastAppliedMappingMode == nil
+    guard selectorChanged else { return }
+    lastAppliedMappingKey = context.cacheKey
+    // A half-typed sequence and the timeout armed for it were resolved
+    // against the table this replaces; neither may complete against this one.
+    resetPendingNormalSequence(reason: "mappings_refreshed")
+    if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
       terminalInputMappings?.replaceMappings(
         effective.compiledTerminal,
         timeoutMs: config.mode.sequenceTimeoutMs)
