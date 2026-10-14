@@ -251,7 +251,7 @@ final class PluginProcess {
       if observed {
         self.applyLifecycle(.activate)
       } else if !self.performActivated, Self.stopsWhenUnobserved(self.lifecycle.state) {
-        self.applyLifecycle(.reload(resident: false))
+        self.applyLifecycle(.deactivate)
       }
     }
   }

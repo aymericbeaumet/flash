@@ -77,7 +77,8 @@ stop → stopped (all attempt work invalidated)
 other requests and no events until `running`. Restarts back off linearly
 (1..30 s); after five retries within 300 s, another failure parks the plugin in `failed` (recover with
 `:plugins reload` or a plugin-file change). Successful initialize does not
-reset the rolling failure budget; even an initialize-then-crash loop parks.
+reset the rolling failure budget; even an initialize-then-crash loop parks,
+and a status-bound plugin that stops being observed keeps its budget too.
 Lifecycle transitions belong to attempt generations. Stop/reload invalidates
 pending retries, installation completions, and transport work. Rejected
 initialize replies park immediately. The published catalog survives

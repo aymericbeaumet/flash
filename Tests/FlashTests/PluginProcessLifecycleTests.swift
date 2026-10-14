@@ -905,6 +905,48 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertEqual(Lifecycle.performRoute(state: .idle, onDemand: true), .waitAndActivate)
   }
 
+  /// A status-bound plugin that stops being observed is torn down without
+  /// forgetting its failures: the toggle is not a user's reload, so a
+  /// crash-looping plugin parks on the same budget once it is shown again.
+  func testDeactivationKeepsTheFailureBudget() {
+    var lifecycle = PluginLifecycle()
+    let limit = 2
+    func step(_ event: PluginLifecycle.Event, at now: TimeInterval) -> [PluginLifecycle.Effect] {
+      lifecycle.transition(
+        event, now: now, restartLimit: limit, restartWindow: 300, restartDelay: { _ in 1 })
+    }
+    _ = step(.start(resident: false), at: 0)
+    XCTAssertEqual(step(.activate, at: 0), [.start(lifecycle.generation)])
+    for attempt in 0..<limit {
+      let token = lifecycle.generation
+      _ = step(.installed(token), at: TimeInterval(attempt))
+      _ = step(.initialized(token), at: TimeInterval(attempt))
+      XCTAssertEqual(
+        step(.interrupted(token), at: TimeInterval(attempt)),
+        [.teardown, .retry(token, 1)], "attempt \(attempt) still retries")
+      _ = step(.retry(token), at: TimeInterval(attempt))
+    }
+    XCTAssertEqual(step(.deactivate, at: 10), [.teardown])
+    XCTAssertEqual(lifecycle.state, .idle)
+    XCTAssertEqual(step(.activate, at: 11), [.start(lifecycle.generation)])
+    let token = lifecycle.generation
+    _ = step(.installed(token), at: 11)
+    _ = step(.initialized(token), at: 11)
+    XCTAssertEqual(
+      step(.interrupted(token), at: 12), [.teardown, .park],
+      "the budget survived the toggle, so the next failure parks")
+    XCTAssertEqual(lifecycle.state, .failed)
+
+    var reloaded = PluginLifecycle()
+    _ = reloaded.transition(
+      .start(resident: false), now: 0, restartLimit: limit, restartWindow: 300,
+      restartDelay: { _ in 1 })
+    XCTAssertEqual(
+      reloaded.transition(
+        .reload(resident: false), now: 0, restartLimit: limit, restartWindow: 300,
+        restartDelay: { _ in 1 }), [.teardown], "a reload still tears down to idle")
+  }
+
   func testLingeringPluginIsKilledByEscalationWithinTwoSeconds() throws {
     // Ignores EOF and SIGTERM: the host escalates stdin-close → (1 s)
     // SIGTERM → (+0.5 s) SIGKILL and stopAndWait returns once the kill is

@@ -11,6 +11,10 @@ struct PluginLifecycle {
   enum Event {
     case start(resident: Bool)
     case activate
+    /// The child exists only to feed status surfaces and none shows it any
+    /// more: tear it down and return to `idle`, keeping the failure budget,
+    /// so a crash-looping plugin cannot earn a fresh budget on each toggle.
+    case deactivate
     case reload(resident: Bool)
     case installed(UInt64)
     case initialized(UInt64)
@@ -76,6 +80,10 @@ struct PluginLifecycle {
     case .activate:
       guard state == .idle || state == .initial else { return [] }
       return begin()
+    case .deactivate:
+      generation &+= 1
+      state = .idle
+      return [.teardown]
     case .reload(let resident):
       generation &+= 1
       failures.removeAll()
