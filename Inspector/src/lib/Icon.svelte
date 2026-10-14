@@ -4,6 +4,7 @@
     home: "m3 10 9-7 9 7v10H3z M9 20v-7h6v7",
     docs: "M4 3h6l2 2 2-2h6v17h-6l-2 1-2-1H4z M12 5v16 M6 8h3 M15 8h3 M6 12h3 M15 12h3",
     mappings: "M3 5h18v14H3z M6 9h1 M10 9h1 M14 9h1 M18 9h.1 M6 13h1 M10 13h1 M14 13h4 M8 16h8",
+    keyboard: "M2 7h20v11H2z M5 10h2 M9 10h2 M13 10h2 M17 10h2 M5 14h2 M9 14h6 M17 14h2 M12 3v4",
     commands: "m5 5 6 6-6 6 M13 18h6",
     plugins: "M9 3v4 M15 3v4 M6 7h12v4a6 6 0 0 1-6 6v4 M6 11a6 6 0 0 0 6 6",
     state: "M3 12h4l3-8 4 16 3-8h4",

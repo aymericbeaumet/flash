@@ -82,6 +82,7 @@ final class DebugServerTests: XCTestCase {
     let pages: [DebugServer.Page] = [
       .home, .docs(topic: nil), .docs(topic: "getting-started"), .docs(topic: "é/ü"),
       .mappings, .commands, .plugins(id: nil), .plugins(id: "tmux"), .state, .logs, .clipboard,
+      .keyboard,
     ]
     for page in pages {
       XCTAssertEqual(DebugServer.Page(path: page.path), page, page.path)

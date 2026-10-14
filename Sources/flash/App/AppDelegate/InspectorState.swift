@@ -235,7 +235,8 @@ extension AppDelegate {
   /// | `commands`, `plugins` | `pluginStateDidChange` (lifecycle, status publishes, logs, reloads) |
   /// | `mappings` | Config reload, focus, plugin state, `refreshEffectiveMappings` applying a new table |
   /// | `focused_app` | Workspace activation, including Flash's own; `applyFocusedApplicationChange` |
-  /// | `hints`, `hint_command`, `activation_in_flight` | `hintSession`; `activationLifecycle` |
+  /// | `hints`, `hint_command`, `hint_session`, `activation_in_flight` | `hintSession`; `activationLifecycle` |
+  /// | `keyboard` | Config reload (layout, alphabet, grid keys); `hintSession` (what the keys do now) |
   /// | `clipboard` | `clipboardEntries` (the clipboard plugin's history reply) |
   /// | `statusbar`, `terminals`, `widgets` | Status model publishes and menu-bar yielding; popup presentation and terminal sessions; widget placement; their windows' notifications (below) |
   /// | `windows` | Flash's windows moving, resizing, ordering in or out, changing screen or key status, or closing; the active Space |
@@ -334,6 +335,10 @@ extension AppDelegate {
         "pid": focusedPID,
       ],
       "mode": String(describing: modeStore.mode.label),
+      "hint_session": FlashStatusReport.hintSessionPhase(
+        route: hintSession.keyRoute, active: hintSession.isActive,
+        discovering: activationInFlight),
+      "keyboard": keyboardStateJSON(),
       "hints": hintSession.hints.map { hint -> [String: Any] in
         [
           "label": hint.label,
@@ -422,7 +427,7 @@ extension HintSession {
   /// Whether the inspector's `hints` and `hint_command` read the same for
   /// both sessions. Typing a label prefix changes neither.
   func showsSameInspectorState(as other: HintSession) -> Bool {
-    command == other.command && hints.count == other.hints.count
+    command == other.command && keyRoute == other.keyRoute && hints.count == other.hints.count
       && zip(hints, other.hints).allSatisfy { new, old in
         new.label == old.label && new.target.frame == old.target.frame
           && new.target.role == old.target.role
@@ -483,5 +488,37 @@ final class InspectorChangeObservers: NSObject {
         [changed] in changed()
       }
     }
+  }
+}
+
+extension AppDelegate {
+  /// The keyboard page's model: the physical layout `[keyboard] layout`
+  /// names, the hint alphabet with each key's ease, the grid block, the zone
+  /// rows of `label_order = "zones"`, and the navigation keys. What the keys
+  /// do right now comes from `mode`, `hint_session` and `mappings`.
+  func keyboardStateJSON() -> [String: Any] {
+    let layoutName = config.positionLayoutName
+    let layout = Alphabet.layouts[layoutName]
+    let resolved = config.resolvedAlphabet
+    let navigation = Alphabet.navigation(layoutName: layoutName)
+    return [
+      "layout": layoutName,
+      "rows": (layout?.physical ?? []).map { String($0) },
+      "alphabet": String(resolved.chars),
+      "key_scores": Dictionary(
+        uniqueKeysWithValues: resolved.chars.map { (String($0), resolved.keyScores[$0] ?? 0) }),
+      "grid_keys": config.resolvedMouseGridKeys.map { String($0) },
+      "label_order": config.hints.labelOrder.rawValue,
+      "zone_rows": HintLabelOrdering.zoneRows(
+        alphabet: resolved.chars, keyRows: resolved.keyRows, keyColumns: resolved.keyColumns
+      ).map { String($0) },
+      "navigation": [
+        "left": String(navigation.left), "down": String(navigation.down),
+        "up": String(navigation.up), "right": String(navigation.right),
+        "quadrants": navigation.quadrants.map { String($0) },
+      ],
+      "adjust_digits": config.hints.adjustDigits.rawValue,
+      "held_button": ActionDispatcher.heldButton?.rawValue as Any? ?? NSNull(),
+    ]
   }
 }

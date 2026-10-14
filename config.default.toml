@@ -57,6 +57,47 @@ keys = "<qwerty_homerow+qwerty_toprow>"
 # Floor on label length. Force longer labels by raising this.
 min_length = 1
 
+# Keys that outrank the layout's ease when labels are handed out, best
+# first, as a string of hint keys: "fjdk" gives f, j, d and k the first
+# one-key labels and the strongest two-key pairs. Every other key keeps its
+# place behind them. A key that is not in `keys` is reported and ignored.
+# Empty keeps the layout's own order.
+key_priority = ""
+
+# Which target gets the easiest label.
+#   "reading"  the first in reading order: top to bottom, left to right.
+#   "center"   the one nearest the centre of the window (or screen).
+#   "zones"    the first key of every label names the zone of the window
+#              the target sits in, laid out like your keyboard: with the
+#              default alphabet the window splits into two bands of ten
+#              columns, `q` top-left, `p` top-right, `a` to `;` below. The
+#              rest of the label is handed out as usual inside the zone, so
+#              a target's first key is predictable before the labels show.
+label_order = "reading"
+
+# What the digits do in `mouse_target --adjust`.
+#   "width"  `1`-`9` place the point across the target's width, in tenths.
+#   "grid"   a numeric keypad: `7` `8` `9` across the top third of the
+#            target, `4` `5` `6` the middle, `1` `2` `3` the bottom.
+adjust_digits = "width"
+
+# `mouse_position` saves pointer positions, labels them and cycles through
+# them. This many are kept; past it the oldest is forgotten.
+position_history_size = 16
+# "global" shares one list between every app; "app" keeps a list per app, so
+# a position saved in one never shows in another.
+position_history_scope = "global"
+
+# Bring the pointer to the centre of a newly focused app's window, when it
+# is outside that window, so the next scroll or pointer move lands there.
+pointer_follows_focus = false
+
+# `mouse_pointer` movement, in points: one keystroke at rest, what each
+# autorepeat adds, and the ceiling. Shift always moves by 2 points.
+pointer_step = 12
+pointer_acceleration = 6
+pointer_max_step = 90
+
 # Modifiers that can be held on the final hint key. Target and mouse-grid clicks
 # preserve them consistently; terminal links additionally require Shift so the
 # terminal handles the link instead of forwarding the click to its application.

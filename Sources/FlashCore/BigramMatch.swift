@@ -198,6 +198,11 @@ public enum BigramMatcher {
     return boxes
   }
 
+  /// The UTF-16 columns of one line: its length without trailing breaks.
+  public static func columns(of line: String) -> Int {
+    utf16LengthDroppingTrailingBreaks(line)
+  }
+
   private static func utf16LengthDroppingTrailingBreaks(_ text: String) -> Int {
     let ns = text as NSString
     var length = ns.length

@@ -71,6 +71,40 @@ public enum BigramTextCollector {
       return AccessibilityProvider.settlingInsertIntent(
         targets, bundleIdentifier: bundleIdentifier)
     }
+
+    /// One target per visible word, in tree order then left to right, at most
+    /// `limit` of them. The click lands on the word's leading edge
+    /// (`WordMatcher.clickPoint`), inside the word.
+    public func wordTargets(limit: Int = 1500) -> [JumpTarget] {
+      var located: [(rect: CGRect, value: Hit)] = []
+      for (index, run) in runs.enumerated() {
+        let haystack = run.text as NSString
+        for (occurrence, rect) in BigramTextCollector.wordHits(run) {
+          let center = CGPoint(x: rect.midX, y: rect.midY)
+          guard clip.containsInclusive(center) else { continue }
+          let label = haystack.substring(
+            with: NSRange(location: occurrence.location, length: occurrence.length))
+          located.append(
+            (
+              rect: rect,
+              value: Hit(
+                runIndex: index, location: occurrence.location, length: occurrence.length,
+                label: label)
+            ))
+          if located.count >= limit { break }
+        }
+        if located.count >= limit { break }
+      }
+      let kept = BigramMatcher.dedupe(located)
+      let targets = kept.enumerated().map { ordinal, item in
+        BigramTextCollector.wordTarget(
+          hit: item.value, rect: item.rect, run: runs[item.value.runIndex],
+          ordinal: ordinal, pid: pid, bundleIdentifier: bundleIdentifier, screenH: screenH,
+          clip: clip)
+      }
+      return AccessibilityProvider.settlingInsertIntent(
+        targets, bundleIdentifier: bundleIdentifier)
+    }
   }
 
   public static func collect(in context: AppContext, screenH: CGFloat) -> Corpus {
@@ -262,15 +296,22 @@ public enum BigramTextCollector {
   private static func glyphHits(
     _ run: Run, query: String
   ) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
-    let lines: [BigramMatcher.BigramLineBox]
+    BigramMatcher.glyphRects(in: run.text, query: query, lines: lineBoxes(run))
+  }
+
+  /// Word rects for one run, from the same measured lines.
+  private static func wordHits(_ run: Run) -> [(occurrence: BigramOccurrence, rect: CGRect)] {
+    WordMatcher.wordRects(in: run.text, lines: lineBoxes(run))
+  }
+
+  private static func lineBoxes(_ run: Run) -> [BigramMatcher.BigramLineBox] {
     switch run.layout {
     case .proportional:
       let length = (run.text as NSString).length
-      lines = [BigramMatcher.BigramLineBox(location: 0, length: length, bounds: run.frame)]
+      return [BigramMatcher.BigramLineBox(location: 0, length: length, bounds: run.frame)]
     case .lines(let measured):
-      lines = measured
+      return measured
     }
-    return BigramMatcher.glyphRects(in: run.text, query: query, lines: lines)
   }
 
   /// A short run uses its frame. A tall run's visible lines are measured now,
@@ -428,6 +469,44 @@ public enum BigramTextCollector {
     hit: Hit, rect: CGRect, run: Run, query: String, ordinal: Int, pid: pid_t,
     bundleIdentifier: String, screenH: CGFloat, clip: CGRect
   ) -> JumpTarget {
+    textTarget(
+      id: "bigram-\(pid)-\(ordinal)", providerID: providerID, hit: hit, rect: rect, run: run,
+      pid: pid, bundleIdentifier: bundleIdentifier, screenH: screenH, clip: clip,
+      stillMatches: { text in
+        BigramMatcher.sliceMatches(
+          text: text, location: hit.location, length: hit.length, query: query)
+      },
+      point: BigramMatcher.clickPoint)
+  }
+
+  public static let wordProviderID = "words"
+
+  /// A word's target: the commit re-reads the string and lands only when the
+  /// same word still sits at the captured range.
+  private static func wordTarget(
+    hit: Hit, rect: CGRect, run: Run, ordinal: Int, pid: pid_t,
+    bundleIdentifier: String, screenH: CGFloat, clip: CGRect
+  ) -> JumpTarget {
+    let expected = hit.label
+    return textTarget(
+      id: "word-\(pid)-\(ordinal)", providerID: wordProviderID, hit: hit, rect: rect, run: run,
+      pid: pid, bundleIdentifier: bundleIdentifier, screenH: screenH, clip: clip,
+      stillMatches: { text in
+        let haystack = text as NSString
+        guard hit.location >= 0, hit.location + hit.length <= haystack.length else { return false }
+        return haystack.substring(with: NSRange(location: hit.location, length: hit.length))
+          == expected
+      },
+      point: WordMatcher.clickPoint)
+  }
+
+  /// A target on a range of one run's text. `stillMatches` judges the string
+  /// read back at commit time; `point` places the click in the range's rect.
+  private static func textTarget(
+    id: String, providerID: String, hit: Hit, rect: CGRect, run: Run, pid: pid_t,
+    bundleIdentifier: String, screenH: CGFloat, clip: CGRect,
+    stillMatches: @escaping (String) -> Bool, point: @escaping (CGRect) -> CGPoint
+  ) -> JumpTarget {
     let element = run.element
     let role = run.role
     let location = hit.location
@@ -438,14 +517,14 @@ public enum BigramTextCollector {
         let title = copiedText(element, kAXTitleAttribute as String)
         let value = copiedText(element, kAXValueAttribute as String)
         guard let text = BigramText.rawString(role: role, title: title, value: value),
-          BigramMatcher.sliceMatches(text: text, location: location, length: length, query: query)
+          stillMatches(text)
         else { return nil }
         if let bounds = AXAttribute.boundsForRange(
           element, location: location, length: length, screenH: screenH)
         {
           let center = CGPoint(x: bounds.midX, y: bounds.midY)
           guard clip.containsInclusive(center) else { return nil }
-          return BigramMatcher.clickPoint(in: bounds)
+          return point(bounds)
         }
         let frame = currentFrame(of: element, screenH: screenH) ?? capturedFrame
         guard BigramMatcher.allowsProportionalFallback(text: text, frame: frame),
@@ -455,11 +534,11 @@ public enum BigramTextCollector {
         else { return nil }
         let center = CGPoint(x: estimated.midX, y: estimated.midY)
         guard clip.containsInclusive(center) else { return nil }
-        return BigramMatcher.clickPoint(in: estimated)
+        return point(estimated)
       }
     }
     return JumpTarget(
-      id: "bigram-\(pid)-\(ordinal)",
+      id: id,
       frame: rect,
       role: role,
       accessibilityLabel: hit.label,

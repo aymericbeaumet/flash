@@ -42,7 +42,9 @@ extension AppDelegate {
       pointer.moveStreak = streak
       pointer.lastMoveAt = now
       hintSession.phase = .pointer(pointer)
-      let step = PointerModeInterpreter.step(streak: streak, fine: fine)
+      let step = PointerModeInterpreter.step(
+        streak: streak, fine: fine, base: config.hints.pointerStep,
+        acceleration: config.hints.pointerAcceleration, maximum: config.hints.pointerMaxStep)
       let target = Self.clampToScreens(
         CGPoint(x: location.x + CGFloat(dx) * step, y: location.y + CGFloat(dy) * step))
       _ = ActionDispatcher.moveCursor(to: target)
@@ -70,6 +72,7 @@ extension AppDelegate {
       // The same hold as `mouse_button --state=toggle`: a button another
       // press left down is released first.
       ActionDispatcher.setMouseButton(.toggle, .primary, at: location)
+      overlay.movePointerMarker(to: location)
       FlashLog.trace("[pointer_mode] drag held=\(ActionDispatcher.heldButton != nil)")
     case .commitClick:
       commitPointerModeClick(at: location)

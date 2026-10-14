@@ -1,0 +1,40 @@
+# mousemaster-shaped Flash configuration (neo-mousekeys layout).
+
+[hints]
+# Pointer mode: 10 points per keystroke, 8 more per autorepeat, up to 120.
+pointer_step = 10
+pointer_acceleration = 8
+pointer_max_step = 120
+# Centre the pointer on a newly focused app's window, as after Alt-Tab.
+pointer_follows_focus = true
+# One list of saved positions per app.
+position_history_size = 16
+position_history_scope = "app"
+
+[mode.all.mappings]
+# Activate and deactivate.
+"alt+e" = ["flash", "enter_normal_mode"]
+"alt+q" = ["flash", "enter_insert_mode"]
+
+[mode.normal.mappings]
+# Pointer mode: the arrows or the layout's hjkl move; m , . click; v drags.
+"i" = ["flash", "mouse_pointer"]
+# Grid: halves on hjkl, quarters on y u b n; Shift-arrows snap to an edge.
+"g" = ["flash", "mouse_grid", "--bisect"]
+# Hints on the controls, and on every visible word.
+"f" = ["flash", "mouse_target"]
+"<leader>f" = ["flash", "mouse_target", "--words"]
+# One big label per display.
+"c" = ["flash", "mouse_screens"]
+# Window edges and centre.
+"<leader>c" = ["flash", "mouse_warp", "--area=window", "--edge=center"]
+"<leader>i" = ["flash", "mouse_warp", "--area=window", "--edge=top"]
+"<leader>k" = ["flash", "mouse_warp", "--area=window", "--edge=bottom"]
+"<leader>j" = ["flash", "mouse_warp", "--area=window", "--edge=left"]
+"<leader>l" = ["flash", "mouse_warp", "--area=window", "--edge=right"]
+# Saved positions: label them, save, cycle, forget.
+"p" = ["flash", "mouse_position", "--action=hints"]
+"P" = ["flash", "mouse_position", "--action=save"]
+"<leader>n" = ["flash", "mouse_position", "--action=next"]
+"<leader>N" = ["flash", "mouse_position", "--action=previous"]
+"<leader>x" = ["flash", "mouse_position", "--action=clear"]

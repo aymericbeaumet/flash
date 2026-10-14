@@ -1240,6 +1240,14 @@ extension AppDelegate {
       activateMouseBigram(command, contextOverride: normalModeContext())
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
+    case .mouseTargetWords(let command):
+      activateWordHints(command, contextOverride: normalModeContext())
+    case .mouseScreens:
+      activateScreenHints()
+    case .mouseWarp(let request):
+      performMouseWarp(request)
+    case .mousePosition(let request):
+      performMousePosition(request)
     case .mouseGrid(let request):
       activateMouseGrid(request, contextOverride: normalModeContext())
     case .mouseRepeat:

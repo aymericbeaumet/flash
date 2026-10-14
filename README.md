@@ -177,7 +177,8 @@ pull request adding your setup to [`docs/examples`](docs/examples). See
   [full default reference](config.default.toml) · [commands](docs/commands.md) ·
   [normal mode](docs/normal-mode.md) · [flashlight](docs/flashlight.md) ·
   [windows](docs/windows.md) · [audio devices](docs/audio.md) ·
-  [from Hammerspoon](docs/hammerspoon.md) · [privacy](docs/privacy.md) ·
+  [from Hammerspoon](docs/hammerspoon.md) · [from Neverclick](docs/neverclick.md) ·
+  [from mousemaster](docs/mousemaster.md) · [privacy](docs/privacy.md) ·
   [comparison and FAQ](docs/comparison.md) · [troubleshooting](docs/troubleshooting.md)
 - **Status bar and widgets:** [format](docs/status-format.md) ·
   [widgets](docs/widgets.md) ·

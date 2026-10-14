@@ -18,6 +18,10 @@ flash mouse_grid --drag                  # drag between two grid positions
 flash mouse_target --select              # click a start point, shift-click an end point
 flash mouse_grid --select                # select text between two grid positions
 flash mouse_target --multi               # click several targets, rediscovered after each click; Escape ends
+flash mouse_target --sticky              # click several targets, the same labels stay up; Escape ends
+flash mouse_target --path                # pick two targets, click every one between them in reading order
+flash mouse_target --words               # a label on every visible word, landing on its leading edge
+flash mouse_target --words --select      # highlight the text between two words
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
 flash mouse_target --search              # type visible text to pick the target (seek & click)
@@ -30,6 +34,10 @@ flash mouse_dock                         # hint the Dock's items
 flash mouse_menubar                      # hint the focused app's menu titles and the status items
 flash mouse_notifications                # hint Notification Center's banners, alerts and buttons
 flash mouse_pointer                      # freestyle cursor control (layout hjkl, m/,/. click, v drag)
+flash mouse_screens                      # one label per display; the pointer lands on its centre
+flash mouse_warp --area=window --edge=center # jump the pointer to a window or screen edge or centre
+flash mouse_position --action=save       # remember the pointer position (hints, next, previous, unsave, clear)
+flash mouse_position --action=hints --move # label the saved positions and move to the one you pick
 flash mouse_button --state=down          # press the primary button where the pointer is
 flash mouse_button --state=up            # release it
 flash mouse_button --state=toggle --secondary # press or release the secondary button (or --middle)
@@ -46,6 +54,7 @@ flash window_restore                      # restore the most recently minimized 
 flash window_fullscreen                   # toggle native macOS full screen
 flash window_fullscreen --state=on        # enter native full screen (off exits)
 flash window_focus --direction=right      # focus the nearest window to the right
+flash window_focus --direction=behind     # focus the window just behind the focused one (next, previous cycle the stack)
 flash media input                        # list input devices in Flash's message overlay
 flash media output 'Studio Speakers'     # select the default output device
 flash media volumedown                   # one macOS volume step; the alert shows the percent
@@ -148,9 +157,28 @@ walks each one through Accessibility by its frame. The Accessibility shapes of
 these surfaces vary across macOS versions and have not been verified on every
 release, so a player or strip that exposes nothing pressable stays silent.
 
-`mouse_grid` takes the click flags of `mouse_target` except `--adjust` and
-`--search`, plus `--bisect` and `--zoom-to-depth=N` (N ≥ 1), which combine with
-every click flag. The screen splits like the left half of the keyboard; see
+`mouse_grid` takes the click flags of `mouse_target` except `--adjust`,
+`--search`, `--path` and `--sticky`, plus `--bisect` and `--zoom-to-depth=N`
+(N ≥ 1), which combine with every click flag.
+
+`mouse_target --path` picks two labels and clicks every target between them,
+in reading order from the first pick to the second; `--sticky` keeps the same
+labels up after each click with no new walk, where `--multi` discovers the
+targets again. `--words` labels the visible words of the focused window's
+text instead of its controls; it takes the click flags, `--move`, `--drag` and
+`--select`, and the click lands on the word's leading edge. While labels are
+up, `Tab` restarts the same click on the grid and `Shift-Tab` widens it to
+every app on the screen (and back); `Backspace` with nothing typed returns to
+the surface the session came from.
+
+`mouse_screens` labels the centre of every display; committing moves the
+pointer there. `mouse_warp` moves the pointer to the centre or a side of the
+focused window (`--area=window`, the default) or of its display
+(`--area=screen`), a few points inside the edge. `mouse_position` keeps a
+bounded list of saved pointer positions, per app with `[hints]
+position_history_scope = "app"`: `save`, `unsave` the one under the pointer,
+`clear`, `next` and `previous` cycle from the one the pointer is on, and
+`hints` labels them, taking the click flags and `--move`. The screen splits like the left half of the keyboard; see
 [normal mode](normal-mode.md#mouse-grid) for its keys.
 
 `window_move` accepts named positions (`topleft`, `topright`, `bottomleft`,
@@ -179,6 +207,8 @@ Accessibility requests away from
 Flash's keyboard input loop.
 
 `window_focus --direction=left|right|up|down` chooses the nearest cataloged
-non-minimized window in that direction. See [window navigation and placement](windows.md)
+non-minimized window in that direction. `next` and `previous` cycle the
+cataloged windows in WindowServer's stacking order, and `behind` focuses the
+frontmost window below the focused one that it overlaps. See [window navigation and placement](windows.md)
 for automatic placement rules. `flash media input` and `flash media output`
 list or select the default device; see [audio devices](audio.md).

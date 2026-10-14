@@ -391,6 +391,8 @@ extension OverlayPanel {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
+    adjustmentMarkerLayer.strokeColor = Self.nordFrost2CG
+    adjustmentMarkerLayer.lineWidth = 1.5
     adjustmentMarkerLayer.isHidden = false
     attachSelectionMarker()
     CATransaction.commit()
@@ -419,18 +421,37 @@ extension OverlayPanel {
   }
 
   /// Pointer-mode feedback: a ring around the cursor, on the adjustment
-  /// marker layer (the two states are mutually exclusive).
+  /// marker layer (the two states are mutually exclusive). The ring takes the
+  /// colour of the button Flash holds, and grows while one is held, so a
+  /// drag in progress is visible at the pointer.
   func movePointerMarker(to point: CGPoint) {
     let origin = frame.origin
     let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+    let held = ActionDispatcher.heldButton
+    let radius: CGFloat = held == nil ? 11 : 14
     let path = CGMutablePath()
-    path.addEllipse(in: CGRect(x: local.x - 11, y: local.y - 11, width: 22, height: 22))
+    path.addEllipse(
+      in: CGRect(x: local.x - radius, y: local.y - radius, width: radius * 2, height: radius * 2))
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
+    adjustmentMarkerLayer.strokeColor = Self.pointerMarkerColor(held: held)
+    adjustmentMarkerLayer.lineWidth = held == nil ? 1.5 : 2.5
     adjustmentMarkerLayer.isHidden = false
     attachSelectionMarker()
     CATransaction.commit()
+  }
+
+  /// The pointer ring's colour: Flash's frost blue at rest, green while the
+  /// primary button is held, orange for the secondary one, purple for the
+  /// middle one.
+  static func pointerMarkerColor(held: MouseButtonKind?) -> CGColor {
+    switch held {
+    case nil: return nordFrost2CG
+    case .primary: return NSColor(red: 0.64, green: 0.75, blue: 0.55, alpha: 1).cgColor
+    case .secondary: return NSColor(red: 0.82, green: 0.53, blue: 0.44, alpha: 1).cgColor
+    case .middle: return NSColor(red: 0.71, green: 0.56, blue: 0.68, alpha: 1).cgColor
+    }
   }
 
   func hide() {

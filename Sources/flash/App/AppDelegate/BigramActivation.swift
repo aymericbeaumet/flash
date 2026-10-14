@@ -86,7 +86,8 @@ extension AppDelegate {
     // The letter is the search. The label is always a bigram (or longer,
     // once the matches outgrow the alphabet), so the sequence is the letter
     // and then those two keys.
-    let hints = assignHints(targets, minLength: max(2, config.hints.minLength))
+    let hints = assignHints(
+      targets, minLength: max(2, config.hints.minLength), region: result.windowFrame)
     guard !hints.isEmpty else { return }
     hintSession.hints = hints
     hintSession.prefix = ""

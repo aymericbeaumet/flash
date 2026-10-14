@@ -223,6 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     var pid: pid_t?
   }
   var lastCommittedClick: LastCommittedClick?
+  /// `mouse_position`'s saved pointer positions.
+  var positionHistory = PositionHistory()
   var movementCurrent: MovementEntry?
   var movementBackStack: [MovementEntry] = []
   var movementForwardStack: [MovementEntry] = []
@@ -553,6 +555,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateMouseBigram(command, contextOverride: nil)
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
+    case .mouseTargetWords(let command):
+      activateWordHints(command, contextOverride: nil)
+    case .mouseScreens:
+      activateScreenHints()
+    case .mouseWarp(let request):
+      performMouseWarp(request)
+    case .mousePosition(let request):
+      performMousePosition(request)
     case .mouseGrid(let request):
       activateMouseGrid(request, contextOverride: nil)
     case .mouseRepeat:
@@ -661,9 +671,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       } else {
         FlashLog.warn("[window_move] no non-flash frontmost app")
       }
-    case .focusWindow(let direction):
+    case .focusWindow(let request):
       if let target = currentNonFlashRunningApplication() {
-        windowLayoutManager.focusWindow(direction, targetPID: target.processIdentifier)
+        focusWindow(request, targetPID: target.processIdentifier)
       }
     case .windowState(let action):
       if let target = currentNonFlashContext() {
@@ -1081,6 +1091,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           bundleID: app.bundleIdentifier))
       emitRunningApplicationsChanged(reason: reason)
       recordAppActivation(app.processIdentifier)
+      followFocusWithPointer(pid: app.processIdentifier)
     }
     if flashMode == .normal {
       normalModeTargetPID = app.processIdentifier

@@ -18,6 +18,12 @@ struct HintSession {
   /// preset ones at commit.
   var command: MouseCommand = .click(.leftClick, modifiers: [])
   var surface: Surface = .targets
+  /// The activation that produced this session, so Tab and Shift-Tab can
+  /// restart the same click on another surface (`HintSurfaceSwitching`).
+  var request: HintActivationRequest?
+  /// The activation a surface switch came from. Backspace with nothing left
+  /// to undo returns to it; nil for a session opened directly.
+  var origin: HintActivationRequest?
   var hints: [AssignedHint] = []
   var prefix: String = ""
   var sourceAppPID: pid_t?

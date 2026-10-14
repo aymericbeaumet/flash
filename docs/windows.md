@@ -17,6 +17,16 @@ The direction is relative to the focused window. These commands can also be
 used in `[mode.*.mappings]`. Use `:flashlight @windows` when you know a window's
 title instead of its position.
 
+```sh
+flash window_focus --direction=next      # the window below the focused one in the stacking order
+flash window_focus --direction=previous  # the one above it
+flash window_focus --direction=behind    # the frontmost window below it that it overlaps
+```
+
+The stacking order is WindowServer's on-screen window list, read on the main
+thread and matched to the cataloged Accessibility windows by owner and frame;
+`next` and `previous` wrap around it.
+
 ## Place the focused window
 
 `window_move` supports named positions, a complete proportional frame, and

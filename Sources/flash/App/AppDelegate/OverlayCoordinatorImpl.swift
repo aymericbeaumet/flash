@@ -232,6 +232,9 @@ extension AppDelegate {
         retreatFromBigramLabels()
         return
       }
+      if hintSession.prefix.isEmpty, hintSession.anchor == nil, overlayDidReturnToOrigin() {
+        return
+      }
       if !hintSession.prefix.isEmpty {
         hintSession.prefix.removeLast()
         overlay.filter(prefix: hintSession.prefix, hints: hintSession.hints)
@@ -262,18 +265,107 @@ extension AppDelegate {
           owner.performTwoPhaseGesture(from: points[0], to: points[1], clickModifiers: held)
         }
       } else {
-        hintSession.phase = .labels(anchor: .init(point: preferredPoint, hint: hint))
-        hintSession.prefix = ""
-        overlay.filter(prefix: "", hints: hintSession.hints)
+        anchorTwoPhaseGesture(at: preferredPoint, hint: hint)
+      }
+    case .path:
+      if let anchor = hintSession.anchor, let sourceHint = anchor.hint {
+        performPathClicks(from: sourceHint, to: hint, clickModifiers: held)
+      } else {
+        anchorTwoPhaseGesture(at: preferredPoint, hint: hint)
       }
     case .move:
       resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
         owner.movePointerAndFinish(to: points[0])
       }
-    case .click, .multi, .search:
+    case .click, .multi, .search, .sticky:
       resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
         owner.performTargetClick(hint: hint, at: points[0], clickModifiers: held)
       }
+    }
+  }
+
+  /// Phase 1 of a drag, selection or path: keep the first point, clear the
+  /// typed prefix so the second label starts fresh, and mark the anchor so
+  /// the second pick is made against something visible.
+  private func anchorTwoPhaseGesture(at point: CGPoint, hint: AssignedHint) {
+    hintSession.phase = .labels(anchor: .init(point: point, hint: hint))
+    hintSession.prefix = ""
+    overlay.filter(prefix: "", hints: hintSession.hints)
+    overlay.showSelectionMarker(at: point, targetFrame: hint.target.frame)
+  }
+
+  /// `--path`: every target from the first pick to the second, in reading
+  /// order, gets the session's click, one after the other on the click
+  /// queue. Status-bar spans are not app targets and are skipped. Each point
+  /// is validated off the main thread before anything is posted; one target
+  /// that is gone cancels the whole path rather than clicking around it.
+  private func performPathClicks(
+    from first: AssignedHint, to second: AssignedHint, clickModifiers held: ClickModifiers
+  ) {
+    let hints = hintSession.hints
+    guard let start = hints.firstIndex(where: { $0.label == first.label }),
+      let end = hints.firstIndex(where: { $0.label == second.label })
+    else {
+      cancelOverlay()
+      return
+    }
+    let fontSize = CGFloat(config.overlay.fontSize)
+    let path = HintPath.indexes(from: start, to: end, count: hints.count)
+      .map { hints[$0] }
+      .filter { $0.target.providerID != AppDelegate.statusBarProviderID }
+    guard !path.isEmpty else {
+      cancelOverlay()
+      return
+    }
+    let selections = path.map { ($0.target, Self.hintCommitPoint(for: $0, fontSize: fontSize)) }
+    resolveHintPoints(selections) { owner, points in
+      owner.postPathClicks(hints: path, at: points, clickModifiers: held)
+    }
+  }
+
+  private func postPathClicks(
+    hints: [AssignedHint], at points: [CGPoint], clickModifiers held: ClickModifiers
+  ) {
+    guard hints.count == points.count, let last = points.last else {
+      cancelOverlay()
+      return
+    }
+    let wasNormalMode = flashMode == .normal
+    let action = hintSession.command.action
+    let requested = hintSession.command.modifiers.union(held)
+    let pid = hints.first?.target.pid ?? hintSession.sourceAppPID
+    let restore = ActionDispatcher.PointerRestore.afterCommit(
+      restorePointer: config.hints.restorePointer, gridOrigin: nil)
+    FlashLog.trace("[commit] kind=path targets=\(hints.count) action=\(action)")
+    if let pid { recordMovement(.app(pid: pid), source: "hint_commit") }
+    if wasNormalMode { applyModeOverlay(captureOverride: false) }
+    overlay.hide()
+    clearHintSessionState(preservingStatusBarSnapshot: true)
+    let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
+    let needsHandoff = Self.hintCommitNeedsFrontmostHandoff(
+      targetPID: pid, frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    if let targetApp, needsHandoff {
+      RunningApplicationActivation.activate(
+        targetApp, options: [], restoringMinimizedWindows: false)
+    }
+    let modifiers = hints.map {
+      ActionDispatcher.hintClickModifiers(for: $0.target, requested: requested)
+    }
+    let recorded = LastCommittedClick(
+      point: last, action: action, modifiers: modifiers.last ?? requested, pid: pid)
+    performHintCommit(awaitingFrontmost: needsHandoff ? pid : nil, recording: recorded) {
+      finished in
+      // The click queue is serial, so the path lands in order; only the last
+      // click restores the pointer and reports completion.
+      for (index, point) in points.enumerated() {
+        let isLast = index == points.count - 1
+        _ = ActionDispatcher.synthesizeClick(
+          at: point, action: action, modifiers: modifiers[index],
+          restoring: isLast ? restore : .stay, completion: isLast ? finished : nil)
+      }
+    } completion: { owner in
+      guard wasNormalMode, owner.flashMode == .normal else { return }
+      owner.restoreNormalModeAfterCommit(action: action, at: last)
     }
   }
 
@@ -322,6 +414,8 @@ extension AppDelegate {
     let followUp: PointerCommitFollowUp
     if hintSession.command.isMulti {
       followUp = .rearmHints
+    } else if hintSession.command.isSticky {
+      followUp = .rearmSticky
     } else if Self.hintOpensMenuBarMenu(target) {
       followUp = .menuBarMenu
     } else {
@@ -386,6 +480,8 @@ extension AppDelegate {
     case menuBarMenu
     /// `--multi` on targets: discover again for the next selection.
     case rearmHints
+    /// `--sticky` on targets: the same labels stay up for the next selection.
+    case rearmSticky
     /// `--multi` on the grid: restart it at its full extent.
     case rearmGrid(MouseGrid.Navigation?, NormalModePointerPolicy.ClickTarget)
     /// Drags and selections have no typing intent: recapture NORMAL.
@@ -420,7 +516,7 @@ extension AppDelegate {
     case .finish, .menuBarMenu, .recapture:
       overlay.hide()
       clearHintSessionState(preservingStatusBarSnapshot: true)
-    case .rearmHints:
+    case .rearmHints, .rearmSticky:
       hintSession.prefix = ""
       overlay.filter(prefix: "", hints: hintSession.hints)
     case .rearmGrid:
@@ -489,6 +585,20 @@ extension AppDelegate {
       }
       guard !hintSession.hints.isEmpty else { return }
       rediscoverMultiTargets()
+    case .rearmSticky:
+      let target = NormalModePointerPolicy.ClickTarget.hint(
+        entersInsertMode: gesture.target?.entersInsertMode ?? false)
+      if flashMode == .normal,
+        NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
+      {
+        completeHintClick(target: target, action: action, at: gesture.point, pid: gesture.pid)
+        return
+      }
+      guard !hintSession.hints.isEmpty else { return }
+      // Re-present the same set so the panel re-keys after the app activation
+      // above; no walk, the labels are the point of the session.
+      overlay.display(hints: hintSession.hints)
+      applyModeOverlay()
     case .rearmGrid(let fresh, let target):
       if flashMode == .normal,
         NormalModePointerPolicy.clickShouldEnterInsert(target: target, action: action)
@@ -535,7 +645,8 @@ extension AppDelegate {
         self.cancelOverlay()
         return
       }
-      let relabelled = self.assignHints(hints.map(\.target), preserving: previous)
+      let relabelled = self.assignHints(
+        hints.map(\.target), preserving: previous, region: context.frontWindowFrame)
       self.hintSession.hints = relabelled
       self.hintSession.prefix = ""
       self.overlay.display(hints: relabelled)
@@ -745,7 +856,18 @@ extension AppDelegate {
     case .back:
       if hintSession.gridBack(), let restored = hintSession.grid {
         displayMouseGrid(restored)
+      } else {
+        overlayDidReturnToOrigin()
       }
+    case .snap(let direction):
+      // The pointer lands on that edge of the region, a hair inside it, so a
+      // drag or a hold can start from a grid line. A cancel puts it back.
+      if navigation.pointerOrigin == nil {
+        navigation.pointerOrigin = NSEvent.mouseLocation
+        hintSession.grid = navigation
+      }
+      _ = ActionDispatcher.moveCursor(
+        to: MouseGrid.edgePoint(of: current.region, direction))
     case .reset:
       navigation.reset()
       displayMouseGrid(navigation)
@@ -835,7 +957,7 @@ extension AppDelegate {
       }
     case .move:
       movePointerAndFinish(to: point)
-    case .click, .multi, .adjust, .search:
+    case .click, .multi, .adjust, .search, .path, .sticky:
       let command = hintSession.command
       // `--multi` restarts on the same display; its clicks moved the pointer,
       // so there is no origin left to restore.
@@ -925,7 +1047,8 @@ extension AppDelegate {
         owner.performTargetClick(hint: hint, at: points[0], clickModifiers: clickModifiers)
       }
     case .snapLeft, .snapRight, .snapTop, .snapBottom, .interpolate, .reset:
-      let updated = HintAdjustmentInterpreter.apply(command, to: point, in: hint.target.frame)
+      let updated = HintAdjustmentInterpreter.apply(
+        command, to: point, in: hint.target.frame, digits: config.hints.adjustDigits)
       hintSession.phase = .adjusting(hint: hint, point: updated)
       overlay.showSelectionMarker(at: updated, targetFrame: hint.target.frame)
     }
@@ -1307,5 +1430,23 @@ extension AppDelegate {
       self.refreshCurrentModeSideEffects(reason: "source_resolved")
       self.scheduleNormalModeRecapture()
     }
+  }
+}
+
+extension AppDelegate: OverlaySurfaceSwitching {
+  func overlayDidSwitchSurface(_ kind: HintSurfaceSwitch) {
+    guard !activationLifecycle.inFlight, let current = hintSession.request,
+      let next = HintSurfaceSwitching.request(from: current, kind: kind)
+    else { return }
+    FlashLog.trace("[overlay] switch_surface kind=\(kind)")
+    activateSwitchedSurface(next, origin: hintSession.origin ?? current)
+  }
+
+  @discardableResult
+  func overlayDidReturnToOrigin() -> Bool {
+    guard !activationLifecycle.inFlight, let origin = hintSession.origin else { return false }
+    FlashLog.trace("[overlay] return_to_origin")
+    performHintActivation(origin)
+    return true
   }
 }

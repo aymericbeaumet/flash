@@ -26,6 +26,7 @@ troubleshooting and development. Plugin manifests add their own topics.
 | Page | What it describes |
 | --- | --- |
 | Mappings | Effective bindings after defaults, plugin contributions and user overrides, grouped by mode. A blank search stays alphabetical by command. The search ranks what a binding does, including typos, and each row's ? explains that binding. The Source column is the same badge as Commands |
+| Keyboard | The `[keyboard] layout` drawn as keys, each showing what it does in the mode Flash is in: the bindings of that mode and `all`, the hint alphabet with each key's ease while labels are up, the grid block while the grid is up, the adjust, pointer and search keys in their sessions, and the zone of `label_order = "zones"`. Follows the resident's mode and hint session over the event stream, or a mode picked by hand. Selecting a key lists its bindings. Nothing typed is shown, only what Flash is ready for |
 | Commands | Built-in and installed plugin command definitions, sorted alphabetically |
 | Plugins | Loaded manifests, process health, errors and capabilities |
 | Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. The same page edits the TOML file; Purge defaults removes bundled values in the editor and Save writes the file |
@@ -53,6 +54,7 @@ the browser commands needs it, or at launch with
 | `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
 | `/mappings`, `/commands` | Effective mappings and how each action resolves in the focused app; command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
 | `/plugins`, `/plugins/<id>` | Plugin list; one plugin's details |
+| `/keyboard` | The live keyboard map |
 | `/state`, `/clipboard` | Runtime and clipboard pages |
 | `/logs` | Live logs. The record list fills the page height, and its search field is focused when the page opens |
 | `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read; `/api/state?refresh=1` takes a fresh snapshot |

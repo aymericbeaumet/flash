@@ -1,0 +1,115 @@
+import AppKit
+import FlashCore
+
+/// Pointer jumps that need no labels: `mouse_screens` (one hint per display),
+/// `mouse_warp` (an edge or the centre of the focused window or its screen),
+/// and `[hints] pointer_follows_focus`.
+extension AppDelegate {
+  static let screensProviderID = "screens"
+
+  /// `mouse_screens`: a hint at the centre of every display. Committing one
+  /// moves the pointer there, so the next grid or pointer session starts on
+  /// that display.
+  func activateScreenHints() {
+    guard prepareHintActivation(.screens) else { return }
+    let layouts = WindowMover.screenLayouts(
+      statusBarReservesSpace: statusBarVisible, statusBarMonitor: config.statusBar.monitor)
+    let targets = Self.screenTargets(layouts.map(\.usableFrame))
+    guard !targets.isEmpty else {
+      endHintActivationEmpty(bundleIdentifier: nil, path: "no_screens", surface: "screens")
+      applyModeOverlay()
+      return
+    }
+    hintSession.command = .move
+    hintSession.surface = .targets
+    hintSession.prefix = ""
+    hintSession.sourceAppPID = currentNonFlashContext()?.processID
+    overlay.debugConfig = config.debug
+    let hints = assignHints(targets, region: OverlayPanel.unionScreenFrame())
+    hintSession.hints = hints
+    applyModeOverlay()
+    presentHints(hints, prepared: .none, outcome: .none, bundleIdentifier: nil, surface: "screens")
+    FlashLog.debug("[screens] displayed displays=\(hints.count)")
+  }
+
+  /// One coordinate target per display frame, centred, in `NSScreen.screens`
+  /// order. The chip sits on the centre; the commit moves the pointer there.
+  static func screenTargets(_ frames: [CGRect]) -> [JumpTarget] {
+    frames.enumerated().compactMap { index, frame in
+      guard !frame.isNull, !frame.isInfinite, frame.width > 0, frame.height > 0 else { return nil }
+      return JumpTarget(
+        id: "screen_\(index)",
+        frame: CGRect(x: frame.midX - 1, y: frame.midY - 1, width: 2, height: 2),
+        role: "FlashScreen",
+        accessibilityLabel: "Display \(index + 1)",
+        entersInsertMode: false,
+        priority: .important,
+        providerID: screensProviderID)
+    }
+  }
+
+  /// `mouse_warp`: the pointer jumps to an edge or the centre of the focused
+  /// window, or of the display that window is on (the pointer's display when
+  /// no window is focused). Nothing is clicked and the mode is untouched.
+  func performMouseWarp(_ request: MouseWarpRequest) {
+    let context = normalModeContext() ?? currentNonFlashContext()
+    let window = context?.frontWindowFrame
+    let frame: CGRect?
+    switch request.area {
+    case .window:
+      frame = window
+    case .screen:
+      let layouts = WindowMover.screenLayouts(
+        statusBarReservesSpace: statusBarVisible, statusBarMonitor: config.statusBar.monitor)
+      frame = Self.warpScreenFrame(
+        layouts: layouts, window: window, pointer: NSEvent.mouseLocation)
+    }
+    guard let frame, !frame.isNull, !frame.isInfinite, frame.width > 0, frame.height > 0 else {
+      FlashLog.debug("[mouse_warp] no_\(request.area.rawValue)")
+      return
+    }
+    let point = request.point(in: frame)
+    _ = ActionDispatcher.moveCursor(to: point)
+    FlashLog.trace(
+      "[mouse_warp] area=\(request.area.rawValue) edge=\(request.edge.rawValue) "
+        + "point=(\(Int(point.x)),\(Int(point.y)))")
+  }
+
+  /// The display a screen warp uses: the focused window's, else the
+  /// pointer's, else the first.
+  static func warpScreenFrame(
+    layouts: [WindowScreenLayout], window: CGRect?, pointer: CGPoint
+  ) -> CGRect? {
+    if let window, !window.isNull, !window.isEmpty,
+      let layout = layouts.max(by: { lhs, rhs in
+        area(lhs.frame.intersection(window)) < area(rhs.frame.intersection(window))
+      }), area(layout.frame.intersection(window)) > 0
+    {
+      return layout.usableFrame
+    }
+    if let layout = layouts.first(where: { $0.frame.contains(pointer) }) {
+      return layout.usableFrame
+    }
+    return layouts.first?.usableFrame
+  }
+
+  private static func area(_ rect: CGRect) -> CGFloat {
+    rect.isNull ? 0 : rect.width * rect.height
+  }
+
+  /// `[hints] pointer_follows_focus`: a newly focused app brings the pointer
+  /// to the centre of its window, as mousemaster does after Alt-Tab, so the
+  /// next scroll or pointer move lands there. Only when the pointer is
+  /// outside that window, no hint session owns it, and no button is held.
+  func followFocusWithPointer(pid: pid_t) {
+    guard config.hints.pointerFollowsFocus, !hintSession.isActive, !activationInFlight,
+      ActionDispatcher.heldButton == nil,
+      let frame = monitor.context(for: pid)?.frontWindowFrame,
+      !frame.isNull, !frame.isInfinite, !frame.isEmpty
+    else { return }
+    let pointer = NSEvent.mouseLocation
+    guard !frame.contains(pointer) else { return }
+    _ = ActionDispatcher.moveCursor(to: CGPoint(x: frame.midX, y: frame.midY))
+    FlashLog.trace("[pointer_follows_focus] pid=\(pid)")
+  }
+}

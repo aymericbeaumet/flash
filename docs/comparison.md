@@ -9,6 +9,8 @@
 | [Vimac](https://github.com/nchudleigh/vimac) | GPL, unmaintained | Accessibility | Scroll | Homerow's open-source predecessor; Flash is maintained |
 | Wooshy, Mouseless, Superkey | Paid | Accessibility or text seek | | Superkey's text seek needs Screen Recording; Flash does not |
 | [Vimium](https://github.com/philc/vimium), Surfingkeys | MIT | The DOM, in the browser | | Every app, no extension |
+| [Neverclick](https://www.neverclick.com) | Free, closed, Windows only | A screen capture | Path and sticky hints, word targets, target snapping | The same hints from Accessibility, never a capture: path, sticky, words and adjust ship, with drag and text selection; see the [migration guide](neverclick.md) |
+| [mousemaster](https://github.com/petoncle/mousemaster) | MIT, Windows and macOS as root | Accessibility, screen grids, a screen capture | Combos and remapping, continuous movement, position history, zoom | Pointer mode, display labels, warps and saved positions without root or a capture; remapping stays with Karabiner or kanata; see the [migration guide](mousemaster.md) |
 | [Hammerspoon](https://www.hammerspoon.org) | MIT | | Lua automation of everything | A ready-made keyboard layer in TOML; see the [migration guide](hammerspoon.md). Hammerspoon can drive Flash with `flash <verb>` |
 | [SketchyBar](https://github.com/FelixKratz/SketchyBar) | GPL | | Scriptable bar | tmux formats, and one plugin feeds the bar, hints, search and widgets |
 | [Übersicht](https://github.com/felixhageloh/uebersicht), conky | GPL | | Web-view widgets; conky needs XQuartz | Native text widgets fed by the bar's collectors |

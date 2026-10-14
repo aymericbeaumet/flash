@@ -215,6 +215,18 @@ enum MouseGrid {
     return (gridRoot(of: layouts[index], includeStatusBar: includeStatusBar), index)
   }
 
+  /// Shift-arrows: the middle of that edge of `region`, two points inside it.
+  static func edgePoint(of region: CGRect, _ direction: Direction) -> CGPoint {
+    let dx = min(2, region.width / 2)
+    let dy = min(2, region.height / 2)
+    switch direction {
+    case .left: return CGPoint(x: region.minX + dx, y: region.midY)
+    case .right: return CGPoint(x: region.maxX - dx, y: region.midY)
+    case .up: return CGPoint(x: region.midX, y: region.maxY - dy)
+    case .down: return CGPoint(x: region.midX, y: region.minY + dy)
+    }
+  }
+
   /// Where a grid session is, and every earlier position so Backspace can undo
   /// any grid keystroke. Pure: the coordinator applies it to the overlay.
   struct Navigation: Equatable {

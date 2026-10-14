@@ -483,8 +483,11 @@ enum ConfigLoader {
       "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
       "keyboard": ["layout"],
       "hints": [
-        "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
-        "mouse_grid_keys", "mouse_grid_cursor_follow", "restore_pointer",
+        "keys", "min_length", "magic_modifiers", "key_priority", "label_order", "adjust_digits",
+        "position_history_size", "position_history_scope", "pointer_follows_focus",
+        "pointer_step", "pointer_acceleration", "pointer_max_step",
+        "mouse_grid_steps", "mouse_grid_opacity", "mouse_grid_keys", "mouse_grid_cursor_follow",
+        "restore_pointer",
       ],
       "plugins": [
         "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
@@ -681,6 +684,77 @@ enum ConfigLoader {
       let unknownSet = Set(unknown)
       config.hints.magicModifiers = value.filter { !unknownSet.contains($0) }
     }
+    applyString(
+      table["key_priority"], path: ["hints", "key_priority"],
+      message: "hints.key_priority must be a string of hint keys, best first (no repeats)",
+      locations: locations, into: &config,
+      validate: { value in
+        let keys = Alphabet.priorityKeys(value)
+        return keys.count == value.filter { !$0.isWhitespace }.count
+          && keys.allSatisfy { $0.isASCII && ($0.isLetter || $0 == ";" || $0 == "'") }
+      },
+      assign: { value, config in
+        config.hints.keyPriority = value
+      })
+    applyString(
+      table["label_order"], path: ["hints", "label_order"],
+      message: "hints.label_order must be \"reading\", \"center\" or \"zones\"",
+      locations: locations, into: &config,
+      validate: { Config.LabelOrder(rawValue: $0) != nil },
+      assign: { value, config in
+        config.hints.labelOrder = Config.LabelOrder(rawValue: value) ?? .reading
+      })
+    applyString(
+      table["adjust_digits"], path: ["hints", "adjust_digits"],
+      message: "hints.adjust_digits must be \"width\" or \"grid\"",
+      locations: locations, into: &config,
+      validate: { Config.AdjustDigits(rawValue: $0) != nil },
+      assign: { value, config in
+        config.hints.adjustDigits = Config.AdjustDigits(rawValue: value) ?? .width
+      })
+    applyInt(
+      table["position_history_size"], path: ["hints", "position_history_size"],
+      message: "hints.position_history_size must be an integer between 1 and 100",
+      locations: locations, into: &config, validate: { (1...100).contains($0) },
+      assign: { value, config in
+        config.hints.positionHistorySize = value
+      })
+    applyString(
+      table["position_history_scope"], path: ["hints", "position_history_scope"],
+      message: "hints.position_history_scope must be \"global\" or \"app\"",
+      locations: locations, into: &config,
+      validate: { Config.PositionScope(rawValue: $0) != nil },
+      assign: { value, config in
+        config.hints.positionHistoryScope = Config.PositionScope(rawValue: value) ?? .global
+      })
+    applyBool(
+      table["pointer_follows_focus"], path: ["hints", "pointer_follows_focus"],
+      message: "hints.pointer_follows_focus must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.pointerFollowsFocus = value
+      })
+    applyInt(
+      table["pointer_step"], path: ["hints", "pointer_step"],
+      message: "hints.pointer_step must be an integer between 1 and 500",
+      locations: locations, into: &config, validate: { (1...500).contains($0) },
+      assign: { value, config in
+        config.hints.pointerStep = value
+      })
+    applyInt(
+      table["pointer_acceleration"], path: ["hints", "pointer_acceleration"],
+      message: "hints.pointer_acceleration must be an integer between 0 and 100",
+      locations: locations, into: &config, validate: { (0...100).contains($0) },
+      assign: { value, config in
+        config.hints.pointerAcceleration = value
+      })
+    applyInt(
+      table["pointer_max_step"], path: ["hints", "pointer_max_step"],
+      message: "hints.pointer_max_step must be an integer between 1 and 1000",
+      locations: locations, into: &config, validate: { (1...1000).contains($0) },
+      assign: { value, config in
+        config.hints.pointerMaxStep = value
+      })
     applyInt(
       table["mouse_grid_steps"], path: ["hints", "mouse_grid_steps"],
       message: "hints.mouse_grid_steps must be an integer between 2 and 6", locations: locations,

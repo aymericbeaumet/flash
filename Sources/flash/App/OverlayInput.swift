@@ -4,6 +4,8 @@ enum OverlayKeyAction: Equatable {
   case cancel
   case backspace
   case commit(String, ClickModifiers)
+  /// Tab / Shift-Tab: the same click on another surface.
+  case switchSurface(HintSurfaceSwitch)
   case ignore
 }
 
@@ -73,6 +75,8 @@ enum MouseGridKeyCommand: Equatable {
   case reset
   /// Arrows: slide the region by its own size.
   case move(MouseGrid.Direction)
+  /// Shift-arrows: put the pointer on that edge of the region.
+  case snap(MouseGrid.Direction)
   /// Tab / Shift-Tab: the next / previous display.
   case screen(Int)
   /// `` ` ``: toggle cursor-follow.
@@ -112,10 +116,10 @@ enum MouseGridInputInterpreter {
     case 36, 76: return .commitHere(click)  // return / keypad enter
     case 49: return .centre(click)  // space
     case 48: return .screen(flags.contains(.shift) ? -1 : 1)  // tab
-    case 123: return .move(.left)
-    case 124: return .move(.right)
-    case 125: return .move(.down)
-    case 126: return .move(.up)
+    case 123: return flags.contains(.shift) ? .snap(.left) : .move(.left)
+    case 124: return flags.contains(.shift) ? .snap(.right) : .move(.right)
+    case 125: return flags.contains(.shift) ? .snap(.down) : .move(.down)
+    case 126: return flags.contains(.shift) ? .snap(.up) : .move(.up)
     default: break
     }
     guard let key = typed?.lowercased().first else { return .cancel }
@@ -142,7 +146,9 @@ enum HintAdjustmentCommand: Equatable {
   case snapRight
   case snapTop
   case snapBottom
-  /// `1`–`9`: place the point at n/10 of the target's width.
+  /// `1`–`9`: place the point at n/10 of the target's width, or, with
+  /// `[hints] adjust_digits = "grid"`, in the numeric-keypad cell of a 3×3
+  /// tiling (`7` `8` `9` along the top, `1` `2` `3` along the bottom).
   case interpolate(Int)
   /// `0`: back to the initial point (the target centre).
   case reset
@@ -332,10 +338,16 @@ enum PointerModeInterpreter {
   }
 
   /// Pixels for one movement keystroke. Sustained autorepeat accelerates from
-  /// the base step toward the cap; shift always moves by the 2px fine step.
-  static func step(streak: Int, fine: Bool) -> CGFloat {
+  /// the base step by `acceleration` per repeat toward `maximum`; shift
+  /// always moves by the 2px fine step. The defaults are `[hints]
+  /// pointer_step`, `pointer_acceleration` and `pointer_max_step`.
+  static func step(
+    streak: Int, fine: Bool, base: Int = 12, acceleration: Int = 6, maximum: Int = 90
+  ) -> CGFloat {
     if fine { return 2 }
-    return min(12 + CGFloat(max(0, streak)) * 6, 90)
+    let ceiling = CGFloat(max(1, max(base, maximum)))
+    return min(
+      CGFloat(max(1, base)) + CGFloat(max(0, streak)) * CGFloat(max(0, acceleration)), ceiling)
   }
 
   /// A movement within `windowMs` of the previous one (autorepeat cadence)
@@ -391,7 +403,8 @@ enum HintAdjustmentInterpreter {
     _ command: HintAdjustmentCommand,
     to point: CGPoint,
     in frame: CGRect,
-    inset: CGFloat = 2
+    inset: CGFloat = 2,
+    digits: Config.AdjustDigits = .width
   ) -> CGPoint {
     let edgeInsetX = min(inset, frame.width / 2)
     let edgeInsetY = min(inset, frame.height / 2)
@@ -401,8 +414,18 @@ enum HintAdjustmentInterpreter {
     case .snapRight: p.x = frame.maxX - edgeInsetX
     case .snapTop: p.y = frame.maxY - edgeInsetY
     case .snapBottom: p.y = frame.minY + edgeInsetY
-    case .interpolate(let tenths):
-      p.x = frame.minX + frame.width * CGFloat(min(max(tenths, 1), 9)) / 10
+    case .interpolate(let digit):
+      let digit = min(max(digit, 1), 9)
+      switch digits {
+      case .width:
+        p.x = frame.minX + frame.width * CGFloat(digit) / 10
+      case .grid:
+        // Keypad geometry: `1` is bottom-left, `9` top-right, `5` the centre.
+        let column = (digit - 1) % 3
+        let row = (digit - 1) / 3
+        p.x = frame.minX + frame.width * (CGFloat(column) + 0.5) / 3
+        p.y = frame.minY + frame.height * (CGFloat(row) + 0.5) / 3
+      }
     case .reset:
       p = CGPoint(x: frame.midX, y: frame.midY)
     case .commit, .cancel:
@@ -444,6 +467,12 @@ enum OverlayInputInterpreter {
         return .cancel
       }
       return .backspace
+    }
+    // Tab moves the same click to the grid; Shift-Tab widens it to the screen
+    // and back. A chord on Tab is nothing the labels know.
+    if keyCode == 48 {
+      guard strictModifiers.isEmpty else { return .cancel }
+      return .switchSurface(independentModifiers.contains(.shift) ? .scope : .grid)
     }
 
     // Click-pass-through: always allow shift to ride the click, even when
@@ -702,6 +731,9 @@ extension OverlayPanel {
       return true
     case .commit(let chars, let clickModifiers):
       coordinator.overlayDidCommit(prefix: chars, clickModifiers: clickModifiers)
+      return true
+    case .switchSurface(let kind):
+      (coordinator as? OverlaySurfaceSwitching)?.overlayDidSwitchSurface(kind)
       return true
     case .ignore:
       return swallowIgnored

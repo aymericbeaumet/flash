@@ -179,10 +179,53 @@ struct Config {
     var layout: String = "qwerty"
   }
 
+  /// Which target gets the easiest label (`[hints] label_order`).
+  enum LabelOrder: String, Equatable, CaseIterable {
+    /// Reading order: top to bottom, left to right.
+    case reading
+    /// The target nearest the centre of the window (or screen) first.
+    case center
+    /// The first key of every label names the keyboard-shaped zone of the
+    /// window the target sits in; the rest of the label is ergonomic.
+    case zones
+  }
+
+  /// What the digits do in `--adjust` (`[hints] adjust_digits`).
+  enum AdjustDigits: String, Equatable, CaseIterable {
+    /// `1`–`9` place the point at n/10 of the target's width.
+    case width
+    /// A numeric-keypad grid: `7` `8` `9` across the top third, `4` `5` `6`
+    /// the middle and `1` `2` `3` the bottom.
+    case grid
+  }
+
+  /// Which apps share `mouse_position`'s saved positions
+  /// (`[hints] position_history_scope`).
+  enum PositionScope: String, Equatable, CaseIterable {
+    /// One list for every app.
+    case global
+    /// A list per app: a position saved in one never shows in another.
+    case app
+  }
+
   struct Hints: Equatable {
     var keys: String = Alphabet.defaultKeys
     var minLength: Int = 1
     var magicModifiers: [String] = ["cmd", "ctrl", "alt", "shift"]
+    /// Keys that outrank the layout's ease, best first (`key_priority`).
+    var keyPriority: String = ""
+    var labelOrder: LabelOrder = .reading
+    var adjustDigits: AdjustDigits = .width
+    /// How many positions `mouse_position` keeps (per app when scoped).
+    var positionHistorySize: Int = 16
+    var positionHistoryScope: PositionScope = .global
+    /// A newly focused app brings the pointer to the centre of its window.
+    var pointerFollowsFocus = false
+    /// `mouse_pointer` movement: points per keystroke at rest, added per
+    /// autorepeat, and the ceiling.
+    var pointerStep: Int = 12
+    var pointerAcceleration: Int = 6
+    var pointerMaxStep: Int = 90
     /// Number of selection steps for the `mouse_grid` verb. Larger values
     /// give finer precision but require more keystrokes per click.
     var mouseGridSteps: Int = 3
@@ -1328,7 +1371,16 @@ struct Config {
 
   mutating func prepareDerivedValues() {
     mode.refreshLeaderDerivedDefaults()
-    resolvedAlphabet = Alphabet.resolve(effectiveHintKeys())
+    let alphabet = Alphabet.resolve(effectiveHintKeys())
+    removeDiagnostics { $0.hasPrefix(Self.unknownKeyPriorityWarningPrefix) }
+    let unknownPriority = alphabet.unknownPriorityKeys(hints.keyPriority)
+    if !unknownPriority.isEmpty {
+      addDiagnostic(
+        Self.unknownKeyPriorityWarningPrefix
+          + " \(String(unknownPriority)) is not in hints.keys \(effectiveHintKeys()); ignored",
+        location: valueLocations["hints.key_priority"])
+    }
+    resolvedAlphabet = alphabet.prioritizing(hints.keyPriority)
     resolvedMouseGridKeys = MouseGridKeys.resolve(
       hints.mouseGridKeys, layoutName: resolvedAlphabet.layoutName)
     diagnoseAmbiguousShiftMagicModifier()
@@ -1405,6 +1457,8 @@ struct Config {
     return hints.magicModifiers.filter { $0.lowercased() != "shift" }
   }
 
+  static let unknownKeyPriorityWarningPrefix = "hints.key_priority:"
+
   private mutating func diagnoseAmbiguousShiftMagicModifier() {
     removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
     guard effectiveMagicModifiers.count != hints.magicModifiers.count else { return }
@@ -1475,9 +1529,18 @@ struct Config {
       ],
       "keyboard": ["layout": keyboard.layout],
       "hints": [
+        "adjust_digits": hints.adjustDigits.rawValue,
+        "key_priority": hints.keyPriority,
         "keys": effectiveHintKeys(),
+        "label_order": hints.labelOrder.rawValue,
         "magic_modifiers": effectiveMagicModifiers,
         "min_length": hints.minLength,
+        "pointer_acceleration": hints.pointerAcceleration,
+        "pointer_follows_focus": hints.pointerFollowsFocus,
+        "pointer_max_step": hints.pointerMaxStep,
+        "pointer_step": hints.pointerStep,
+        "position_history_scope": hints.positionHistoryScope.rawValue,
+        "position_history_size": hints.positionHistorySize,
         "mouse_grid_cursor_follow": hints.mouseGridCursorFollow,
         "mouse_grid_keys": resolvedMouseGridKeys.map { String($0) },
         "mouse_grid_opacity": hints.mouseGridOpacity,
@@ -1725,6 +1788,11 @@ extension URLCommand {
       return verb("mouse_bigram", command.argTokens)
     case .mouseTargetScreen(let command):
       return verb("mouse_target", ["--scope=screen"] + command.argTokens)
+    case .mouseTargetWords(let command):
+      return verb("mouse_target", ["--words"] + command.argTokens)
+    case .mouseScreens: return verb("mouse_screens")
+    case .mouseWarp(let request): return verb("mouse_warp", request.argTokens)
+    case .mousePosition(let request): return verb("mouse_position", request.argTokens)
     case .mouseGrid(let command):
       return verb("mouse_grid", command.argTokens)
     case .mouseRepeat: return verb("mouse_repeat")
@@ -1852,8 +1920,8 @@ extension URLCommand {
           ? verb("window_fullscreen")
           : verb("window_fullscreen", [kv("state", state.rawValue)])
       }
-    case .focusWindow(let direction):
-      return verb("window_focus", [kv("direction", direction.rawValue)])
+    case .focusWindow(let request):
+      return verb("window_focus", [kv("direction", request.rawValue)])
     case .systemKey(let key):
       return verb("system_key", [kv("key", key.rawValue)])
     case .functionKey(let index):
@@ -1901,11 +1969,14 @@ extension MouseCommand {
       }
       return tokens
     case .multi(let action, let modifiers), .adjust(let action, let modifiers),
-      .search(let action, let modifiers):
+      .search(let action, let modifiers), .path(let action, let modifiers),
+      .sticky(let action, let modifiers):
       let session: String
       switch self {
       case .multi: session = "--multi"
       case .adjust: session = "--adjust"
+      case .path: session = "--path"
+      case .sticky: session = "--sticky"
       default: session = "--search"
       }
       var tokens = [session]

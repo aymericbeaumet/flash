@@ -17,7 +17,65 @@ struct WindowFocusCandidate<ID: Hashable> {
   let frame: CGRect
 }
 
+/// One on-screen window as WindowServer orders it, front first.
+struct WindowFocusZEntry: Equatable {
+  let pid: pid_t
+  let frame: CGRect
+}
+
 enum WindowFocusPlanner {
+  /// Two frames of the same window read through Accessibility and through
+  /// WindowServer agree within this many points on every edge.
+  static let frameMatchTolerance: CGFloat = 2
+
+  /// The catalog's windows in WindowServer order: each z entry claims the
+  /// first unclaimed catalog window of its pid with the same frame. Windows
+  /// the z-order does not show (another Space, minimized) are left out.
+  static func zOrdered<ID: Hashable>(
+    _ windows: [WindowFocusCandidate<ID>], zOrder: [WindowFocusZEntry], pid: (ID) -> pid_t
+  ) -> [ID] {
+    var claimed = Set<ID>()
+    var ordered: [ID] = []
+    for entry in zOrder {
+      guard
+        let match = windows.first(where: { candidate in
+          !claimed.contains(candidate.id) && pid(candidate.id) == entry.pid
+            && framesMatch(candidate.frame, entry.frame)
+        })
+      else { continue }
+      claimed.insert(match.id)
+      ordered.append(match.id)
+    }
+    return ordered
+  }
+
+  static func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+    abs(a.minX - b.minX) <= frameMatchTolerance && abs(a.minY - b.minY) <= frameMatchTolerance
+      && abs(a.width - b.width) <= frameMatchTolerance
+      && abs(a.height - b.height) <= frameMatchTolerance
+  }
+
+  /// `window_focus --direction=next|previous|behind` over the z-ordered
+  /// catalog: the window below or above the focused one in the stacking
+  /// order, wrapping, or the frontmost window below it that overlaps it.
+  static func cycle<ID: Hashable>(
+    _ cycle: WindowFocusCycle, from sourceID: ID, ordered: [ID],
+    frames: [ID: CGRect]
+  ) -> ID? {
+    guard let index = ordered.firstIndex(of: sourceID), ordered.count > 1 else { return nil }
+    switch cycle {
+    case .next:
+      return ordered[(index + 1) % ordered.count]
+    case .previous:
+      return ordered[(index - 1 + ordered.count) % ordered.count]
+    case .behind:
+      guard let source = frames[sourceID] else { return nil }
+      return ordered.dropFirst(index + 1).first { id in
+        frames[id].map { $0.intersects(source) } ?? false
+      }
+    }
+  }
+
   static func nearest<ID: Hashable>(
     _ direction: WindowFocusDirection, from sourceID: ID,
     in windows: [WindowFocusCandidate<ID>]
@@ -271,25 +329,50 @@ final class WindowLayoutManager {
   func focusWindow(_ direction: WindowFocusDirection, targetPID: pid_t) {
     queue.async { [weak self] in
       guard let self, let source = self.focusedWindowKey, source.pid == targetPID else { return }
-      let candidates = self.navigationWindows.values.sorted {
-        if $0.key.pid != $1.key.pid { return $0.key.pid < $1.key.pid }
-        if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
-        return $0.frame.minY < $1.frame.minY
-      }.map {
-        WindowFocusCandidate(id: $0.key, frame: $0.frame)
-      }
-      guard let selected = WindowFocusPlanner.nearest(direction, from: source, in: candidates),
-        let target = self.navigationWindows[selected]
+      let candidates = self.sortedNavigationCandidates()
+      guard let selected = WindowFocusPlanner.nearest(direction, from: source, in: candidates)
       else { return }
-      _ = AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
-      _ = AXUIElementSetAttributeValue(
-        target.window, kAXMainAttribute as CFString, kCFBooleanTrue)
-      _ = AXUIElementSetAttributeValue(
-        target.window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-      DispatchQueue.main.async {
-        guard let app = NSRunningApplication(processIdentifier: selected.pid) else { return }
-        RunningApplicationActivation.activate(app, restoringMinimizedWindows: false)
-      }
+      self.raiseNavigationWindow(selected)
+    }
+  }
+
+  /// `window_focus --direction=next|previous|behind`. `zOrder` is the
+  /// on-screen window list as read on the main thread by the caller
+  /// (`WindowSnapshot.windowList` must not run on this queue).
+  func focusWindow(cycle: WindowFocusCycle, targetPID: pid_t, zOrder: [WindowFocusZEntry]) {
+    queue.async { [weak self] in
+      guard let self, let source = self.focusedWindowKey, source.pid == targetPID else { return }
+      let candidates = self.sortedNavigationCandidates()
+      let ordered = WindowFocusPlanner.zOrdered(candidates, zOrder: zOrder) { $0.pid }
+      let frames = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0.frame) })
+      guard
+        let selected = WindowFocusPlanner.cycle(
+          cycle, from: source, ordered: ordered, frames: frames)
+      else { return }
+      self.raiseNavigationWindow(selected)
+    }
+  }
+
+  private func sortedNavigationCandidates() -> [WindowFocusCandidate<WindowKey>] {
+    navigationWindows.values.sorted {
+      if $0.key.pid != $1.key.pid { return $0.key.pid < $1.key.pid }
+      if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
+      return $0.frame.minY < $1.frame.minY
+    }.map {
+      WindowFocusCandidate(id: $0.key, frame: $0.frame)
+    }
+  }
+
+  private func raiseNavigationWindow(_ selected: WindowKey) {
+    guard let target = navigationWindows[selected] else { return }
+    _ = AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
+    _ = AXUIElementSetAttributeValue(
+      target.window, kAXMainAttribute as CFString, kCFBooleanTrue)
+    _ = AXUIElementSetAttributeValue(
+      target.window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    DispatchQueue.main.async {
+      guard let app = NSRunningApplication(processIdentifier: selected.pid) else { return }
+      RunningApplicationActivation.activate(app, restoringMinimizedWindows: false)
     }
   }
 

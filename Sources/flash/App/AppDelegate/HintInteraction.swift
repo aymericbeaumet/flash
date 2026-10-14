@@ -6,6 +6,12 @@ import QuartzCore
 enum HintActivationRequest {
   case target(MouseCommand, AppContext?)
   case screen(MouseCommand)
+  /// `mouse_target --words`: the visible words of the focused window.
+  case words(MouseCommand, AppContext?)
+  /// `mouse_screens`: one hint per display.
+  case screens
+  /// `mouse_position --action=hints`: the saved pointer positions.
+  case positions(MouseCommand)
   case grid(MouseGridRequest, AppContext?)
   case pointer
   case scroll
@@ -88,7 +94,15 @@ extension AppDelegate {
     overlay.hide()
     clearHintSessionState()
     beginHintSession()
+    hintSession.request = request
     return true
+  }
+
+  /// Tab or Shift-Tab while labels are up: the same click on another surface.
+  /// `origin` is where Backspace returns to, carried across chained switches.
+  func activateSwitchedSurface(_ request: HintActivationRequest, origin: HintActivationRequest) {
+    performHintActivation(request)
+    hintSession.origin = origin
   }
 
   /// Fix how the new session reads keys, and arm its latency probe while
@@ -174,12 +188,17 @@ extension AppDelegate {
     debugStateDidChange()
   }
 
-  private func performHintActivation(_ request: HintActivationRequest) {
+  func performHintActivation(_ request: HintActivationRequest) {
     switch request {
     case .target(let command, let context):
       activateMouseTarget(
         command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
     case .screen(let command): activateScreenScopeHints(command)
+    case .words(let command, let context):
+      activateWordHints(
+        command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
+    case .screens: activateScreenHints()
+    case .positions(let command): activatePositionHints(command)
     case .grid(let request, let context):
       activateMouseGrid(
         request, contextOverride: context.flatMap { monitor.context(for: $0.processID) })

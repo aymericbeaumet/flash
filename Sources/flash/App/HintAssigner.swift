@@ -18,28 +18,32 @@ struct AssignedHint {
 }
 
 enum HintAssigner {
-  /// Label `targets` with the prefix-free set for their count, best labels
-  /// first. With `previous` hints (a `--multi` session discovering again after
-  /// a click), a target that matches a previous one keeps its label when that
-  /// label is still in the set, and the rest take the remaining labels in
-  /// order — the same deterministic result for the same two inputs.
+  /// Label `targets` with the prefix-free set for their count. `order` says
+  /// which target gets the easiest label: the first in reading order, the one
+  /// nearest the centre of `region`, or, with zones, the first key of every
+  /// label names the keyboard-shaped zone of `region` the target sits in.
+  /// `region` is the window (or screen) the targets were found in; nil, or
+  /// an unusable rectangle, uses the targets' own bounding box. With
+  /// `previous` hints (a `--multi` session discovering again after a click),
+  /// a target that matches a previous one keeps its label when that label is
+  /// still in the set, and the rest take their own labels, else the first
+  /// free one — the same deterministic result for the same inputs.
   static func assign(
     targets: [JumpTarget],
     alphabet: [Character],
     leftHand: Set<Character> = [],
     keyScores: [Character: Int] = [:],
     keyRows: [Character: Int] = [:],
+    keyColumns: [Character: Int] = [:],
     minLength: Int = 1,
+    order: Config.LabelOrder = .reading,
+    region: CGRect? = nil,
     preserving previous: [AssignedHint] = []
   ) -> [AssignedHint] {
-    let labels = generateLabels(
-      count: targets.count,
-      alphabet: alphabet,
-      leftHand: leftHand,
-      keyScores: keyScores,
-      keyRows: keyRows,
-      minLength: minLength
-    )
+    let labels = alignedLabels(
+      targets: targets, alphabet: alphabet, leftHand: leftHand, keyScores: keyScores,
+      keyRows: keyRows, keyColumns: keyColumns, minLength: minLength, order: order,
+      region: region)
     guard !previous.isEmpty else {
       var out: [AssignedHint] = []
       out.reserveCapacity(targets.count)
@@ -49,6 +53,58 @@ enum HintAssigner {
       return out
     }
     return relabel(targets: targets, labels: labels, previous: previous)
+  }
+
+  /// One label per target, in target order, laid out by `order`.
+  static func alignedLabels(
+    targets: [JumpTarget],
+    alphabet: [Character],
+    leftHand: Set<Character> = [],
+    keyScores: [Character: Int] = [:],
+    keyRows: [Character: Int] = [:],
+    keyColumns: [Character: Int] = [:],
+    minLength: Int = 1,
+    order: Config.LabelOrder,
+    region: CGRect? = nil
+  ) -> [String] {
+    let frames = targets.map(\.frame)
+    switch order {
+    case .reading:
+      return generateLabels(
+        count: targets.count, alphabet: alphabet, leftHand: leftHand, keyScores: keyScores,
+        keyRows: keyRows, minLength: minLength)
+    case .center:
+      let labels = generateLabels(
+        count: targets.count, alphabet: alphabet, leftHand: leftHand, keyScores: keyScores,
+        keyRows: keyRows, minLength: minLength)
+      let ranks = HintLabelOrdering.centerRanks(frames: frames, region: region)
+      var aligned = [String](repeating: "", count: targets.count)
+      for (position, index) in ranks.enumerated() where position < labels.count {
+        aligned[index] = labels[position]
+      }
+      return aligned
+    case .zones:
+      let rows = HintLabelOrdering.zoneRows(
+        alphabet: alphabet, keyRows: keyRows, keyColumns: keyColumns)
+      let zones = HintLabelOrdering.zones(frames: frames, rows: rows, region: region)
+      var aligned = [String](repeating: "", count: targets.count)
+      var members: [Character: [Int]] = [:]
+      var zoneOrder: [Character] = []
+      for (index, zone) in zones.enumerated() {
+        if members[zone] == nil { zoneOrder.append(zone) }
+        members[zone, default: []].append(index)
+      }
+      for zone in zoneOrder {
+        let indexes = members[zone] ?? []
+        let inner = generateLabels(
+          count: indexes.count, alphabet: alphabet, leftHand: leftHand, keyScores: keyScores,
+          keyRows: keyRows, minLength: max(1, minLength - 1))
+        for (position, index) in indexes.enumerated() where position < inner.count {
+          aligned[index] = String(zone) + inner[position]
+        }
+      }
+      return aligned
+    }
   }
 
   /// What makes a target the same control across two walks: walk ids are
@@ -76,6 +132,7 @@ enum HintAssigner {
     }
   }
 
+  /// `labels[i]` is the label target `i` would get on a fresh assignment.
   private static func relabel(
     targets: [JumpTarget], labels: [String], previous: [AssignedHint]
   ) -> [AssignedHint] {
@@ -95,12 +152,22 @@ enum HintAssigner {
         kept[index] = label
       }
     }
-    var free = labels.lazy.filter { !taken.contains($0) }.makeIterator()
+    // A new target keeps the label its position earns when nobody kept it.
+    for index in targets.indices where kept[index] == nil && index < labels.count {
+      if taken.insert(labels[index]).inserted { kept[index] = labels[index] }
+    }
+    var cursor = 0
     var out: [AssignedHint] = []
     out.reserveCapacity(targets.count)
-    for (target, label) in zip(targets, kept) {
-      guard let label = label ?? free.next() else { break }
-      out.append(AssignedHint(target: target, label: label))
+    for (index, target) in targets.enumerated() {
+      if let label = kept[index] {
+        out.append(AssignedHint(target: target, label: label))
+        continue
+      }
+      while cursor < labels.count, taken.contains(labels[cursor]) { cursor += 1 }
+      guard cursor < labels.count else { break }
+      taken.insert(labels[cursor])
+      out.append(AssignedHint(target: target, label: labels[cursor]))
     }
     return out
   }

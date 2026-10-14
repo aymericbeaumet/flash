@@ -5,6 +5,7 @@
   import DocsPanel from "./lib/DocsPanel.svelte";
   import HomePanel from "./lib/HomePanel.svelte";
   import Icon from "./lib/Icon.svelte";
+  import KeyboardPanel from "./lib/KeyboardPanel.svelte";
   import LogList from "./lib/LogList.svelte";
   import MappingsPanel from "./lib/MappingsPanel.svelte";
   import { markGuideRead } from "./lib/onboarding";
@@ -18,6 +19,7 @@
     { id: "home", href: "/", label: "Home", group: "Explore" },
     { id: "docs", href: paths.docs(), label: "Documentation", group: "Explore" },
     { id: "mappings", href: paths.mappings(), label: "Key mappings", group: "Your Flash" },
+    { id: "keyboard", href: "/keyboard", label: "Keyboard map", group: "Your Flash" },
     { id: "commands", href: paths.commands(), label: "Commands", group: "Your Flash" },
     { id: "plugins", href: paths.plugins(), label: "Plugins", group: "Your Flash" },
     { id: "state", href: "/state", label: "Runtime & config", group: "Inspect" },
@@ -103,6 +105,7 @@
       {:else if route.page === "home"}<HomePanel snapshot={store.state} connected={store.connected} />
       {:else if route.page === "docs"}<DocsPanel {docs} topic={route.param} />
       {:else if route.page === "mappings"}<MappingsPanel {mappings} {commands} filter={route.param} />
+      {:else if route.page === "keyboard"}<KeyboardPanel state={store.state} {commands} connected={store.connected} />
       {:else if route.page === "commands"}<CommandsPanel {commands} filter={route.param} />
       {:else if route.page === "plugins"}<PluginsPanel {plugins} filter={route.param} sampledAt={store.state.snapshot_at_unix_ms} onresample={() => store.refresh()} />
       {:else if route.page === "state"}<RuntimePanel state={store.state} connected={store.connected} onrefresh={() => store.refresh()} />

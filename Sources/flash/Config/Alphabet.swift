@@ -13,8 +13,53 @@ enum Alphabet {
     /// Physical matrix row of each layout key: number 0, top 1, home 2,
     /// bottom 3. Empty for a literal alphabet, which has no keyboard.
     let keyRows: [Character: Int]
+    /// Physical matrix column of each layout key, 0 at the left. Empty for a
+    /// literal alphabet, whose keys then sit in one row in written order.
+    let keyColumns: [Character: Int]
     let layoutName: String?
     let warning: String?
+
+    /// This alphabet with `[hints] key_priority` applied: the listed keys
+    /// outrank every other key, in the order written, and the rest keep
+    /// their layout ease behind them. Keys the alphabet does not hold are
+    /// ignored; `prepareDerivedValues` reports them. An empty priority is
+    /// the alphabet itself.
+    func prioritizing(_ priority: String) -> Resolved {
+      let listed = Alphabet.priorityKeys(priority).filter { chars.contains($0) }
+      guard !listed.isEmpty else { return self }
+      var scores = keyScores
+      let ceiling = (keyScores.values.max() ?? 0) + 1
+      for (index, key) in listed.enumerated() {
+        scores[key] = ceiling + listed.count - index
+      }
+      let order = Dictionary(uniqueKeysWithValues: chars.enumerated().map { ($1, $0) })
+      let ranked = chars.sorted { a, b in
+        let aScore = scores[a] ?? 0
+        let bScore = scores[b] ?? 0
+        if aScore != bScore { return aScore > bScore }
+        return (order[a] ?? 0) < (order[b] ?? 0)
+      }
+      return Resolved(
+        chars: ranked, leftHand: leftHand, keyScores: scores, keyRows: keyRows,
+        keyColumns: keyColumns, layoutName: layoutName, warning: warning)
+    }
+
+    /// The `[hints] key_priority` keys this alphabet cannot label with.
+    func unknownPriorityKeys(_ priority: String) -> [Character] {
+      Alphabet.priorityKeys(priority).filter { !chars.contains($0) }
+    }
+  }
+
+  /// The distinct keys of a `[hints] key_priority` string, lowercased, in
+  /// written order. Whitespace separates nothing and is skipped.
+  static func priorityKeys(_ priority: String) -> [Character] {
+    var seen = Set<Character>()
+    var keys: [Character] = []
+    for raw in priority where !raw.isWhitespace {
+      let key = Character(raw.lowercased())
+      if seen.insert(key).inserted { keys.append(key) }
+    }
+    return keys
   }
 
   enum Row: String, CaseIterable {
@@ -37,6 +82,8 @@ enum Alphabet {
     /// This is the row index, not the ease band: bottom outranks top in
     /// `keyScores`, but a home-to-top jump is still one row.
     let keyRows: [Character: Int]
+    /// Matrix column of every key, 0 at the left.
+    let keyColumns: [Character: Int]
     /// The letters of the top, home and bottom rows, for hint selectors.
     let rows: [Row: [Character]]
     /// The letters in the left five columns of those rows.
@@ -47,14 +94,17 @@ enum Alphabet {
       self.physical = physical
       var scores: [Character: Int] = [:]
       var keyRows: [Character: Int] = [:]
+      var keyColumns: [Character: Int] = [:]
       for (row, keys) in physical.enumerated() {
         for (column, key) in keys.enumerated() {
           scores[key] = Alphabet.physicalKeyScore(row: row, column: column)
           keyRows[key] = row
+          keyColumns[key] = column
         }
       }
       self.keyScores = scores
       self.keyRows = keyRows
+      self.keyColumns = keyColumns
       self.rows = [
         .toprow: physical[1].filter(\.isLetter),
         .homerow: physical[2].filter(\.isLetter),
@@ -232,6 +282,7 @@ enum Alphabet {
       leftHand: layout.leftHand,
       keyScores: layout.keyScores,
       keyRows: layout.keyRows,
+      keyColumns: layout.keyColumns,
       layoutName: layoutName,
       warning: nil)
   }
@@ -305,6 +356,7 @@ enum Alphabet {
       leftHand: [],
       keyScores: literalScores(literal.chars),
       keyRows: [:],
+      keyColumns: [:],
       layoutName: nil,
       warning: warning)
   }
@@ -316,6 +368,7 @@ enum Alphabet {
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
       keyRows: resolved.keyRows,
+      keyColumns: resolved.keyColumns,
       layoutName: resolved.layoutName,
       warning: warning)
   }

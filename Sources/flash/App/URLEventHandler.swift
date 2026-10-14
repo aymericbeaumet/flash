@@ -37,6 +37,18 @@ indirect enum URLCommand: Hashable {
   /// `mouse_target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen (click variants only).
   case mouseTargetScreen(MouseCommand)
+  /// `mouse_target --words`: a hint on every visible word of the focused
+  /// window's text, landing on the word's leading edge (click, move, drag
+  /// and select).
+  case mouseTargetWords(MouseCommand)
+  /// `mouse_screens`: one hint per display; the pointer lands on its centre.
+  case mouseScreens
+  /// `mouse_warp`: the pointer jumps to an edge or the centre of the focused
+  /// window or its screen.
+  case mouseWarp(MouseWarpRequest)
+  /// `mouse_position`: the saved pointer positions — save, hint, cycle,
+  /// forget.
+  case mousePosition(MousePositionRequest)
   case mouseGrid(MouseGridRequest)
   /// Re-click the last Flash-committed click point (sticky click). Repeats
   /// honour normal-mode counts (`3` + mapped key clicks three times).
@@ -157,7 +169,7 @@ indirect enum URLCommand: Hashable {
   case openApp(name: String)
   case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
-  case focusWindow(WindowFocusDirection)
+  case focusWindow(WindowFocusRequest)
   case windowState(WindowStateAction)
   /// One printed Apple function-row action (brightness, sound, …).
   case systemKey(SystemKeyboard.RowKey)
@@ -297,6 +309,97 @@ struct MouseGridRequest: Hashable {
   }
 }
 
+/// `mouse_warp`: where the pointer jumps. `area` is the focused window or
+/// the display it is on; `edge` the centre or one side, a few points inside
+/// it so the pointer still sits on the area.
+struct MouseWarpRequest: Hashable {
+  enum Area: String, Hashable, CaseIterable {
+    case window, screen
+  }
+  enum Edge: String, Hashable, CaseIterable {
+    case center, top, bottom, left, right
+  }
+  var area: Area = .window
+  var edge: Edge = .center
+
+  var argTokens: [String] {
+    ["--area=\(area.rawValue)", "--edge=\(edge.rawValue)"]
+  }
+
+  /// The point `edge` names inside `frame` (NSScreen coordinates), `inset`
+  /// points in from a side.
+  func point(in frame: CGRect, inset: CGFloat = 8) -> CGPoint {
+    let dx = min(inset, frame.width / 2)
+    let dy = min(inset, frame.height / 2)
+    switch edge {
+    case .center: return CGPoint(x: frame.midX, y: frame.midY)
+    case .top: return CGPoint(x: frame.midX, y: frame.maxY - dy)
+    case .bottom: return CGPoint(x: frame.midX, y: frame.minY + dy)
+    case .left: return CGPoint(x: frame.minX + dx, y: frame.midY)
+    case .right: return CGPoint(x: frame.maxX - dx, y: frame.midY)
+    }
+  }
+}
+
+/// `mouse_position`: one action on the saved pointer positions.
+enum MousePositionRequest: Hashable {
+  /// Remember where the pointer is.
+  case save
+  /// Forget the saved position the pointer is on.
+  case unsave
+  /// Forget every saved position (of this app, when the history is per app).
+  case clear
+  /// Hint every saved position and act on the one you pick.
+  case hints(MouseCommand)
+  /// Jump to the saved position after / before the one the pointer is on.
+  case next
+  case previous
+
+  var argTokens: [String] {
+    switch self {
+    case .save: return ["--action=save"]
+    case .unsave: return ["--action=unsave"]
+    case .clear: return ["--action=clear"]
+    case .hints(let command): return ["--action=hints"] + command.argTokens
+    case .next: return ["--action=next"]
+    case .previous: return ["--action=previous"]
+    }
+  }
+}
+
+/// `window_focus`: the nearest window in a direction, or the next one in
+/// the z-order.
+enum WindowFocusCycle: String, Hashable, CaseIterable {
+  /// The window just below the focused one in the z-order (wrapping).
+  case next
+  /// The window just above it in the z-order (wrapping).
+  case previous
+  /// The frontmost window below the focused one that it overlaps.
+  case behind
+}
+
+enum WindowFocusRequest: Hashable {
+  case direction(WindowFocusDirection)
+  case cycle(WindowFocusCycle)
+
+  init?(rawValue: String) {
+    if let direction = WindowFocusDirection(rawValue: rawValue) {
+      self = .direction(direction)
+    } else if let cycle = WindowFocusCycle(rawValue: rawValue) {
+      self = .cycle(cycle)
+    } else {
+      return nil
+    }
+  }
+
+  var rawValue: String {
+    switch self {
+    case .direction(let direction): return direction.rawValue
+    case .cycle(let cycle): return cycle.rawValue
+    }
+  }
+}
+
 enum MouseCommand: Hashable {
   case click(JumpAction, modifiers: ClickModifiers)
   case move
@@ -320,6 +423,13 @@ enum MouseCommand: Hashable {
   /// Seek & click (`mouse_target` only): type visible label text to filter
   /// the targets, Tab cycles, Return commits the selection with `action`.
   case search(JumpAction, modifiers: ClickModifiers)
+  /// Path session (`mouse_target` only): the first commit picks one end,
+  /// the second the other, and every target between them in reading order
+  /// gets `action`, in that order.
+  case path(JumpAction, modifiers: ClickModifiers)
+  /// Sticky session (`mouse_target` only): each commit performs `action`
+  /// and the same labels stay up, with no new walk, until Escape ends it.
+  case sticky(JumpAction, modifiers: ClickModifiers)
 
   var action: JumpAction {
     switch self {
@@ -327,6 +437,8 @@ enum MouseCommand: Hashable {
     case .multi(let action, _): return action
     case .adjust(let action, _): return action
     case .search(let action, _): return action
+    case .path(let action, _): return action
+    case .sticky(let action, _): return action
     case .move, .drag, .select: return .leftClick
     }
   }
@@ -339,7 +451,37 @@ enum MouseCommand: Hashable {
     case .multi(_, let modifiers): return modifiers
     case .adjust(_, let modifiers): return modifiers
     case .search(_, let modifiers): return modifiers
+    case .path(_, let modifiers): return modifiers
+    case .sticky(_, let modifiers): return modifiers
     case .move: return []
+    }
+  }
+
+  var isPath: Bool {
+    if case .path = self { return true }
+    return false
+  }
+
+  var isSticky: Bool {
+    if case .sticky = self { return true }
+    return false
+  }
+
+  /// A session that keeps its labels up after a commit (`--multi`,
+  /// `--sticky`).
+  var repeats: Bool { isMulti || isSticky }
+
+  /// This command as a plain click of its action and modifiers: what a
+  /// surface that has no session shapes of its own (the grid, a switched
+  /// surface) performs.
+  var asClick: MouseCommand {
+    switch self {
+    case .move: return .move
+    case .drag(let modifiers): return .drag(modifiers: modifiers)
+    case .select(let modifiers): return .select(modifiers: modifiers)
+    case .multi: return self
+    case .click, .adjust, .search, .path, .sticky:
+      return .click(action, modifiers: modifiers)
     }
   }
 
@@ -619,13 +761,32 @@ final class URLEventHandler: NSObject {
   private static let mouseParameters: [VerbParameter] = [
     .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
     .flag("move"), .flag("drag"), .flag("select"), .flag("multi"),
-    .flag("adjust"), .flag("search"), .text("modifiers", "cmd+ctrl+alt+shift"),
+    .flag("adjust"), .flag("search"), .flag("path"), .flag("sticky"),
+    .text("modifiers", "cmd+ctrl+alt+shift"),
   ]
+
+  /// The click flags alone: no session shape.
+  private static let clickParameters: [VerbParameter] = [
+    .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
+    .flag("move"), .text("modifiers", "cmd+ctrl+alt+shift"),
+  ]
+
+  /// The session shapes only `mouse_target` on the focused window offers.
+  private static let targetSessionFlags = ["adjust", "search", "path", "sticky"]
 
   private static let commands: [String: VerbDefinition] = [
     "mouse_target": .init(
-      mouseParameters + [.text("scope", "app|screen")],
+      mouseParameters + [.text("scope", "app|screen"), .flag("words")],
       parse: { a in
+        if a.bool("words") {
+          // Words are a text walk: the session shapes that walk the app's
+          // controls again (`--multi`) or filter by control text do not apply.
+          guard a.value("scope") == nil, let command = mouseCommand(a) else { return nil }
+          switch command {
+          case .click, .move, .drag, .select: return .mouseTargetWords(command)
+          default: return nil
+          }
+        }
         switch a.value("scope") {
         case nil, "app":
           return mouseCommand(a).map(URLCommand.mouseTarget)
@@ -636,6 +797,41 @@ final class URLEventHandler: NSObject {
           return .mouseTargetScreen(command)
         default:
           return nil
+        }
+      }),
+    "mouse_screens": .init(parse: { a in a.args.isEmpty ? .mouseScreens : nil }),
+    "mouse_warp": .init(
+      [.text("area", "window|screen"), .text("edge", "center|top|bottom|left|right")],
+      parse: { a in
+        var request = MouseWarpRequest()
+        if let area = a.value("area") {
+          guard let parsed = MouseWarpRequest.Area(rawValue: area) else { return nil }
+          request.area = parsed
+        }
+        if let edge = a.value("edge") {
+          guard let parsed = MouseWarpRequest.Edge(rawValue: edge) else { return nil }
+          request.edge = parsed
+        }
+        return .mouseWarp(request)
+      }),
+    "mouse_position": .init(
+      [.text("action", "save|unsave|clear|hints|next|previous", required: true)]
+        + clickParameters,
+      parse: { a in
+        let clickArgs = a.args.filter { $0.key != "action" }
+        switch a.value("action") {
+        case "save": return clickArgs.isEmpty ? .mousePosition(.save) : nil
+        case "unsave": return clickArgs.isEmpty ? .mousePosition(.unsave) : nil
+        case "clear": return clickArgs.isEmpty ? .mousePosition(.clear) : nil
+        case "next": return clickArgs.isEmpty ? .mousePosition(.next) : nil
+        case "previous": return clickArgs.isEmpty ? .mousePosition(.previous) : nil
+        case "hints":
+          guard let command = mouseCommand(a, allowAdjust: false) else { return nil }
+          switch command {
+          case .click, .move: return .mousePosition(.hints(command))
+          default: return nil
+          }
+        default: return nil
         }
       }),
     // The grid IS the precision surface, so `--adjust` and `--search` are
@@ -653,7 +849,7 @@ final class URLEventHandler: NSObject {
         }
       }),
     "mouse_grid": .init(
-      mouseParameters.filter { !["adjust", "search"].contains($0.name) }
+      mouseParameters.filter { !targetSessionFlags.contains($0.name) }
         + [.flag("bisect"), .integer("zoom_to_depth")],
       parse: { a in
         mouseCommand(a, allowAdjust: false).map {
@@ -885,12 +1081,12 @@ final class URLEventHandler: NSObject {
       ], parse: windowMoveCommand),
 
     "window_focus": .init(
-      [.text("direction", "left|right|up|down", required: true)],
+      [.text("direction", "left|right|up|down|next|previous|behind", required: true)],
       parse: { a in
         guard let value = a.value("direction"),
-          let direction = WindowFocusDirection(rawValue: value)
+          let request = WindowFocusRequest(rawValue: value)
         else { return nil }
-        return .focusWindow(direction)
+        return .focusWindow(request)
       }),
 
     "window_minimize": .init(parse: { a in a.args.isEmpty ? .windowState(.minimize) : nil }),
@@ -983,7 +1179,14 @@ extension URLEventHandler {
       and b/n. Bépo's top-left quadrant is the dead key `^`.
       `--zoom-to-depth=N` starts N steps deep under the pointer.
       `--multi` keeps clicking, discovering the targets again after each
-      click. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
+      click; `--sticky` keeps the same labels up instead; `--path` clicks
+      every target between the two you pick, in reading order; `--words`
+      labels the visible words of the focused window's text instead of its
+      controls. While labels are up, Tab moves the same click to the grid and
+      Shift-Tab widens it to the screen; Backspace returns. `mouse_screens`
+      labels each display, `mouse_warp` jumps the pointer to an edge or the
+      centre of the focused window or its screen, and `mouse_position` saves,
+      hints, cycles and forgets pointer positions. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
       the status items) and `mouse_notifications` (Notification Center's
       banners, alerts and buttons) hint surfaces outside the focused window.
       `mouse_button --state=down|up|toggle` holds a button where the pointer
@@ -1087,8 +1290,10 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   let multi = a.bool("multi")
   let adjust = a.bool("adjust")
   let search = a.bool("search")
-  if (adjust || search) && !allowAdjust { return nil }
-  if [drag, select, multi, adjust, search].filter({ $0 }).count > 1 { return nil }
+  let path = a.bool("path")
+  let sticky = a.bool("sticky")
+  if (adjust || search || path || sticky) && !allowAdjust { return nil }
+  if [drag, select, multi, adjust, search, path, sticky].filter({ $0 }).count > 1 { return nil }
   let variants: [JumpAction] = [
     a.bool("secondary") ? .rightClick : nil,
     a.bool("double") ? .doubleClick : nil,
@@ -1096,9 +1301,8 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
     a.bool("triple") ? .tripleClick : nil,
   ].compactMap { $0 }
   if a.bool("move") {
-    return
-      (modifiers.isEmpty && variants.isEmpty && !drag && !select && !multi && !adjust && !search)
-      ? .move : nil
+    let shaped = drag || select || multi || adjust || search || path || sticky
+    return (modifiers.isEmpty && variants.isEmpty && !shaped) ? .move : nil
   }
   if drag { return variants.isEmpty ? .drag(modifiers: modifiers) : nil }
   if select { return variants.isEmpty ? .select(modifiers: modifiers) : nil }
@@ -1106,6 +1310,8 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   if multi { return .multi(variants.first ?? .leftClick, modifiers: modifiers) }
   if adjust { return .adjust(variants.first ?? .leftClick, modifiers: modifiers) }
   if search { return .search(variants.first ?? .leftClick, modifiers: modifiers) }
+  if path { return .path(variants.first ?? .leftClick, modifiers: modifiers) }
+  if sticky { return .sticky(variants.first ?? .leftClick, modifiers: modifiers) }
   return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }
 

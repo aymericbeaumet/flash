@@ -756,11 +756,14 @@ extension DebugServer {
     case state
     case logs
     case clipboard
+    /// The live keyboard map: the effective bindings of the mode Flash is in,
+    /// the hint alphabet and the grid keys, on a drawing of the layout.
+    case keyboard
 
     /// Pages that accept one detail segment, such as a topic or plugin id.
     private static let detailPages: Set<String> = ["docs", "plugins"]
     private static let pages: Set<String> = [
-      "docs", "mappings", "commands", "plugins", "state", "logs", "clipboard",
+      "docs", "mappings", "commands", "plugins", "state", "logs", "clipboard", "keyboard",
     ]
     /// RFC 3986 unreserved characters: everything else in a detail segment,
     /// including `/`, `?` and `#`, is percent-encoded.
@@ -778,6 +781,7 @@ extension DebugServer {
       case .state: return "/state"
       case .logs: return "/logs"
       case .clipboard: return "/clipboard"
+      case .keyboard: return "/keyboard"
       }
     }
 
@@ -803,6 +807,7 @@ extension DebugServer {
       case "plugins": self = .plugins(id: detail)
       case "state": self = .state
       case "logs": self = .logs
+      case "keyboard": self = .keyboard
       default: self = .clipboard
       }
     }

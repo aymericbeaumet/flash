@@ -23,6 +23,17 @@ extension URLCommand {
     case .mouseTargetScreen(let command):
       return
         "Labels targets across the front of this screen and \(gesture(command, object: "the one you pick", plural: "the ones you pick"))."
+    case .mouseTargetWords(let command):
+      return
+        "Labels the visible words in the focused window and \(gesture(command, object: "the start of the one you pick", plural: "the ones you pick"))."
+    case .mouseScreens:
+      return "Labels each display and moves the pointer to the centre of the one you pick."
+    case .mouseWarp(let request):
+      let area = request.area == .window ? "the focused window" : "the screen"
+      let edge = request.edge == .center ? "the centre" : "the \(request.edge.rawValue) edge"
+      return "Moves the pointer to \(edge) of \(area)."
+    case .mousePosition(let request):
+      return positionExplanation(request)
     case .mouseBigram(let command):
       return
         "Asks for a letter, then a two-character hint, and \(gesture(command, object: "that glyph", plural: "each glyph"))."
@@ -179,8 +190,17 @@ extension URLCommand {
       return "Runs the \(command) \(subcommand) command with \(args.joined(separator: " "))."
     case .moveWindow(let params):
       return windowMoveExplanation(params)
-    case .focusWindow(let direction):
-      return "Focuses the window to the \(direction.rawValue)."
+    case .focusWindow(let request):
+      switch request {
+      case .direction(let direction):
+        return "Focuses the window to the \(direction.rawValue)."
+      case .cycle(.next):
+        return "Focuses the next window down the stacking order."
+      case .cycle(.previous):
+        return "Focuses the next window up the stacking order."
+      case .cycle(.behind):
+        return "Focuses the window just behind the focused one."
+      }
     case .windowState(let action):
       return windowStateExplanation(action)
     case .systemKey(let key):
@@ -219,6 +239,23 @@ private func gesture(_ command: MouseCommand, object: String, plural: String) ->
     return "lets you place the point, then \(clicks(action)) it\(held)"
   case .search(let action, _):
     return "lets you type to filter the targets, then \(clicks(action)) \(object)\(held)"
+  case .path(let action, _):
+    return "\(clicks(action)) every target between the two you pick\(held)"
+  case .sticky(let action, _):
+    return "keeps \(clicking(action)) \(plural) with the same labels until you cancel\(held)"
+  }
+}
+
+private func positionExplanation(_ request: MousePositionRequest) -> String {
+  switch request {
+  case .save: return "Saves the pointer's position."
+  case .unsave: return "Forgets the saved position under the pointer."
+  case .clear: return "Forgets every saved position."
+  case .hints(let command):
+    return
+      "Labels the saved positions and \(gesture(command, object: "the one you pick", plural: "the ones you pick"))."
+  case .next: return "Jumps to the next saved position."
+  case .previous: return "Jumps to the previous saved position."
   }
 }
 

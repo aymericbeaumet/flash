@@ -124,6 +124,28 @@ mappings.
   and Shift always): `f` then Shift-`<hint>` is a Shift-click, on targets and on
   the grid alike. Link text repeated in a terminal pane resolves to the copy
   under the hint.
+- While labels are up, `Tab` restarts the same click on the mouse grid and
+  `Shift-Tab` widens it to every app on the screen, or narrows it back.
+  `Backspace` with nothing typed returns to the surface the session came from.
+  A chord on Tab cancels, like any other unknown chord.
+- `mouse_target --path` picks two labels and clicks every target between them
+  in reading order, from the first pick to the second; the first pick is
+  marked until the second lands. `--sticky` keeps the same labels up after each
+  click, with no new walk, until Escape or Return; `--multi` walks again.
+  `--words` labels the visible words of the window's text instead of its
+  controls, landing on each word's leading edge; with `--select` it highlights
+  the text between two words, with `--drag` it drags one. Nothing of this
+  reads the screen: the words come from the text Accessibility exposes, the
+  same walk `s` uses.
+- `[hints] label_order` decides which target gets the easiest label: the first
+  in reading order, the one nearest the centre of the window, or, with
+  `zones`, the first key of every label names the keyboard-shaped zone of the
+  window the target sits in. `[hints] key_priority` lists the keys handed out
+  first. See [configuration](configuration.md#hint-labels).
+- `mouse_screens` labels every display, `mouse_warp` jumps the pointer to an
+  edge or the centre of the focused window or its screen, and `mouse_position`
+  saves, labels, cycles and forgets pointer positions. None of them ships
+  bound; see [commands](commands.md).
 - `cF`, `dF` and `mF` use the [mouse grid](#mouse-grid) for a right-click, a
   double click and a move.
 - `?` and `:mappings` open the browser mapping reference for the focused app,
@@ -168,9 +190,10 @@ stops at the Dock, and at the menu bar when the Flash bar is hidden.
 | a grid key | Zoom into that cell; on the last step, click its centre |
 | `space` | Zoom into the centre; on the last step, click the centre |
 | `return` | Click the centre of the current region now |
-| `backspace` | Undo the last grid key (zoom, move, display switch) |
+| `backspace` | Undo the last grid key (zoom, move, display switch); with nothing left, back to the labels the grid was opened from |
 | `cmd-backspace` / `alt-backspace` | Start over on the whole display |
 | arrows | Slide the region by its own size, stopping at the display edge |
+| `shift`-arrows | Put the pointer on that edge of the region, so a drag or a held button can start on a grid line |
 | `tab` / `shift-tab` | Move to the next / previous display |
 | `` ` `` | Toggle cursor-follow (`hints.mouse_grid_cursor_follow`) |
 | `escape` | Cancel; a pointer moved by cursor-follow goes back |

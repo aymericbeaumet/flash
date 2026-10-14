@@ -95,7 +95,7 @@ extension AppMonitor {
           let targets = model.targets.filter(targetFilter)
           complete(
             path: "prepared_model_filter",
-            hints: assignTargets(targets, cfg: cfg),
+            hints: assignTargets(targets, cfg: cfg, region: context.frontWindowFrame),
             extra: [
               "model_targets": "\(model.targets.count)",
               "targets": "\(targets.count)",
@@ -122,7 +122,7 @@ extension AppMonitor {
             let targets = model.targets.filter(targetFilter)
             complete(
               path: "prepared_model_refresh_filter",
-              hints: self.assignTargets(targets, cfg: cfg),
+              hints: self.assignTargets(targets, cfg: cfg, region: context.frontWindowFrame),
               retried: retried,
               extra: [
                 "model_targets": "\(model.targets.count)",
@@ -492,7 +492,7 @@ extension AppMonitor {
           })
         auxiliaryTargets += finalized.targets.count
       }
-      let hints = self.assignTargets(merged, cfg: cfg)
+      let hints = self.assignTargets(merged, cfg: cfg, region: screenFrame)
       FlashLog.debug(
         "[discover] screen_scope complete",
         fields: [
@@ -640,7 +640,8 @@ extension AppMonitor {
     let finalizeEndedAt = DispatchTime.now()
     let targets = targetFilter.map { finalized.targets.filter($0) } ?? finalized.targets
     let assignStartedAt = DispatchTime.now()
-    let hints = assignTargets(targets, cfg: cfg)
+    let hints = assignTargets(
+      targets, cfg: cfg, region: frame.providerContext.frontWindowFrame)
     let assignEndedAt = DispatchTime.now()
     logDiscoveryPipeline(
       reason: reason,
@@ -713,9 +714,12 @@ extension AppMonitor {
       ])
   }
 
+  /// `region` is the window or screen the targets were found in, which
+  /// `[hints] label_order` measures against.
   private func assignTargets(
     _ targets: [JumpTarget],
-    cfg: Config
+    cfg: Config,
+    region: CGRect?
   ) -> [AssignedHint] {
     let resolved = cfg.resolvedAlphabet
     return HintAssigner.assign(
@@ -724,7 +728,10 @@ extension AppMonitor {
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
       keyRows: resolved.keyRows,
-      minLength: cfg.hints.minLength
+      keyColumns: resolved.keyColumns,
+      minLength: cfg.hints.minLength,
+      order: cfg.hints.labelOrder,
+      region: region
     )
   }
 

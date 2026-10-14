@@ -176,7 +176,8 @@ extension AppDelegate {
       let displayHints =
         statusBarTargets.isEmpty
         ? hints
-        : self.assignHints(hints.map(\.target) + statusBarTargets)
+        : self.assignHints(
+          hints.map(\.target) + statusBarTargets, region: context.frontWindowFrame)
       self.hintSession.hints = displayHints
       self.hintSession.prefix = ""
       if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
@@ -205,8 +206,11 @@ extension AppDelegate {
   /// the same policy `AppMonitor` uses, so a re-assembled hint set (app targets
   /// + status-bar links) stays consistent with a plain discovery result.
   /// `previous` keeps the labels of targets that persist (`--multi`).
+  /// `region` is the window or screen the targets were found in, which
+  /// `[hints] label_order` measures against; nil uses their bounding box.
   func assignHints(
-    _ targets: [JumpTarget], preserving previous: [AssignedHint] = [], minLength: Int? = nil
+    _ targets: [JumpTarget], preserving previous: [AssignedHint] = [], minLength: Int? = nil,
+    region: CGRect? = nil
   ) -> [AssignedHint] {
     let resolved = config.resolvedAlphabet
     return HintAssigner.assign(
@@ -215,7 +219,10 @@ extension AppDelegate {
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
       keyRows: resolved.keyRows,
+      keyColumns: resolved.keyColumns,
       minLength: minLength ?? config.hints.minLength,
+      order: config.hints.labelOrder,
+      region: region,
       preserving: previous)
   }
 
@@ -492,7 +499,7 @@ extension AppDelegate {
         self.hintSession.surface = .targets
         self.hintSession.prefix = ""
         self.overlay.debugConfig = self.config.debug
-        let hints = self.assignHints(targets)
+        let hints = self.assignHints(targets, region: context.frontWindowFrame)
         self.activationLifecycle.invalidate()
         self.hintSession.hints = hints
         self.applyModeOverlay()

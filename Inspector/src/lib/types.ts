@@ -115,6 +115,25 @@ export interface DocTopic {
   aliases?: string[];
 }
 
+/** The keyboard page's model: the layout, the hint alphabet and what the keys do. */
+export interface KeyboardState {
+  /** `qwerty`, `colemak`, `dvorak` or `bepo`. */
+  layout: string;
+  /** Four rows of ten keys: number, top, home, bottom. */
+  rows: string[];
+  /** The hint alphabet, best key first. */
+  alphabet: string;
+  key_scores: Record<string, number>;
+  /** The mouse grid's keys, one string per row. */
+  grid_keys: string[];
+  label_order: string;
+  /** The zone keys of `label_order = "zones"`, one string per keyboard row. */
+  zone_rows: string[];
+  navigation: { left: string; down: string; up: string; right: string; quadrants: string[] };
+  adjust_digits: string;
+  held_button?: string | null;
+}
+
 export interface InspectorState {
   /** When Flash took this snapshot: it pushes one on each change. */
   snapshot_at_unix_ms?: number;
@@ -132,6 +151,9 @@ export interface InspectorState {
     config_error?: string | null;
   };
   mode?: string;
+  /** `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`, `bigram` or `confirming`. */
+  hint_session?: string;
+  keyboard?: KeyboardState;
   overlay?: string | null;
   focused_app?: FocusedApp;
   config?: Record<string, unknown>;

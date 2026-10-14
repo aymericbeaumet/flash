@@ -103,6 +103,35 @@ the hjkl columns. The bindings are derived, so `config.default.toml`
 does not list them.
 
 
+## Hint labels
+
+`[hints] label_order` says which target gets the easiest label. `reading`
+(the default) hands the one-key labels out in reading order, top to bottom
+and left to right. `center` gives them to the targets nearest the centre of
+the window, or of the screen for `--scope=screen`, so the thing you are most
+likely looking at takes one key. `zones` makes the first key of every label
+predictable before the labels show: the window splits into bands and columns
+laid out like the alphabet's keys on the keyboard (two bands of ten columns
+with the default alphabet, `q` top-left, `p` top-right, `a` to `l` below),
+each target's first key is its zone, and the rest of the label is handed out
+inside the zone as usual. Every label is then at least two keys long.
+
+`[hints] key_priority` is a string of hint keys, best first. The listed keys
+outrank the layout's ease, in the order written, and every other key keeps
+its place behind them, so `"fjdk"` puts the index and middle fingers first
+whatever the layout says. A key that is not in `hints.keys` is reported in
+`flash config_check` and ignored.
+
+`[hints] adjust_digits` picks what `1`–`9` do in `mouse_target --adjust`:
+tenths of the target's width (`width`, the default), or a numeric keypad over
+the target (`grid`, `7` `8` `9` along the top).
+
+`mouse_position` keeps `position_history_size` saved pointer positions, one
+list for every app, or one per app with `position_history_scope = "app"`.
+`pointer_follows_focus = true` centres the pointer on a newly focused app's
+window when it was outside it. `pointer_step`, `pointer_acceleration` and
+`pointer_max_step` set `mouse_pointer`'s movement in points.
+
 ## Environment overrides
 
 Supported names are the uppercased field path with dots replaced by underscores,
