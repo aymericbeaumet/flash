@@ -94,6 +94,31 @@ scrolls, `/` opens Find and switches to INSERT while you type.*
 Everything reloads live when you save. There is no preferences window; the
 menu-bar icon offers About, Open Configuration, and Quit.
 
+## Modular, and loaded on demand
+
+Flash is one small resident process plus plugins. Each plugin is a separate
+sandboxed program with its own declared capabilities, and any of them can be
+turned off with one line (`[plugins] disabled = ["history"]`). The surfaces
+you do not configure do not exist at runtime:
+
+| You configure | Flash starts | Otherwise |
+| --- | --- | --- |
+| A hotkey | That one hotkey registration | Nothing registered |
+| `[statusbar] enabled = true` | The bar, its clock and the plugins its template names | No bar, no polling, the native menu bar untouched |
+| `[widgets.<name>]` | One desktop window per widget per display, its sources | No windows |
+| `[popup.<name>]` | A terminal session the first time the popup is shown | No PTY |
+| A status plugin named in a template (CPU, memory, disks, battery, feed…) | That plugin, while a visible surface reads it | Not running |
+| A command such as `:screenshot` or `media` | Its plugin on first use | Not running |
+| `:help` or `[debug] http_inspector_enabled` | The local help server | No listener |
+
+What does start at launch, with any configuration: the Accessibility
+observer for the focused app, so hints are ready before you press the key;
+the keyboard tap that decides which keys Flash swallows; and the plugins that
+feed hints and search (browsers, tmux, windows, clipboard and the other
+catalog sources), each a few megabytes. The [architecture guide](docs/architecture.md#what-starts-at-launch)
+lists every one with its cost, and `flash status` and the `/plugins` help
+page show what is running on your Mac right now.
+
 ## What Flash will not do
 
 These are design rules, enforced by tests and a guardrail script, not plans.

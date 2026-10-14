@@ -6,6 +6,36 @@ the resident. `flash status` and `flash doctor` travel the same event and read
 JSON from its reply; `flash config_check` never leaves the CLI. Configured mappings resolve through the same command definitions
 and dispatch in-process. Other mapping executables receive an argv array.
 
+## What starts at launch
+
+Configuration owns the surfaces: a hotkey registers only the chord it names
+(`ShortcutsCoordinator`), the status bar, widgets and their polling exist only
+with `[statusbar] enabled` or a `[widgets.<name>]` table, a popup's PTY starts
+on its first showing, the inspector listens only on demand or with
+`[debug] http_inspector_enabled`, and CoreAudio is touched per request. A
+plugin whose manifest declares only `status` runs while a visible surface
+reads one of its segments; a plugin with only commands starts on its first
+`perform`; a manifest without `exec` never spawns.
+
+The rest starts with the process, whatever the configuration says:
+
+| Component | Why it is eager | Cost |
+| --- | --- | --- |
+| `AppMonitor` AX observer and prepared model for the focused app | Hints must show without a walk on the key path (see the prepared-model guide) | One AXObserver per focused app, a complete walk per focus change, maintenance walks while the user is active |
+| `KeyboardCaptureTap` | The swallow decision must exist before the first mapped key; the no-tap fallback is slower | A session tap on main, plus the 2 s secure-input probe |
+| Resident plugins: every manifest with `sources`, `query`, `hints` or `listen` | Catalogs and hint providers are kept warm so the flashlight and terminal hints are complete on first open | One child process each (about eighteen by default), three queues and a root-directory watcher per plugin, `core:ax.changed` fan-out to the listeners |
+| Window navigation catalog (`WindowMover`) | Directional focus reads a prepared catalog rather than walking on the key path | `kAXWindows` per regular app at launch and on app launch/terminate |
+| Clipboard, network, volume and power monitors | A bundled manifest listens for them | A 500 ms pasteboard poll, one SCDynamicStore session, notification observers |
+| `ApplicationSource`, frecency and command history | Flashlight catalogs and ranking | An installed-apps scan with kqueue watchers, two files read on main |
+
+Making the resident plugins and the window catalog configuration-driven (spawn
+a catalog plugin on the first flashlight open from its persisted catalog, a
+scoped plugin when a matching app is focused, a listener only while its host
+monitor has a running consumer) is the planned next step; each item trades
+first-use latency for idle cost and is listed with its risk in the launch
+inventory of the resumption notes. Until then the README claims only what the
+table above supports.
+
 ## Boundaries
 
 | Owner | Responsibility |
