@@ -65,9 +65,10 @@ mappings.
   `d` (double) and `c` (context, the right-click). Finishers are `f` (a
   discovered target), `F` (a screen position through the grid) and `s` (one
   visible letter). `c` is the operator Vim and Vimium leave free; `r` reloads
-  and `s` is the search finisher. The pointer hides while `f` and `F` labels
-  are up and returns when it moves, or when the labels go away. Pointer mode
-  and a cursor-following grid keep it visible. So `df` double-clicks an
+  and `s` is the search finisher. The pointer hides while labels are up, even
+  with another app in front, and returns when it moves; the labels going away
+  leave it to that move. Pointer mode and a cursor-following grid keep it
+  visible. So `df` double-clicks an
   element, `dF` double-clicks a grid position, and `ds` double-clicks a letter.
   `cf`, `cF` and `cs` are the right-click of each.
   A system dialog in front of the focused app, such as the Gatekeeper prompt,

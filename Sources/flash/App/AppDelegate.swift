@@ -346,6 +346,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // screen-parameter observer reads it.
     ScreenSpace.startObserving()
     mainRunLoopStallObserver.start()
+    // Hint labels hide the pointer while another app stays frontmost.
+    let backgroundCursor = BackgroundCursor.enable()
+    FlashLog.debug("[overlay] background_cursor enabled=\(backgroundCursor)")
     signal(SIGTERM, SIG_IGN)
     let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
     termination.setEventHandler { NSApp.terminate(nil) }

@@ -306,10 +306,11 @@ final class OverlayPanel: NSPanel {
   }
 
   /// Hide the mouse cursor while hint labels own the keys, so it can't obscure
-  /// a chip or distract from picking one. It comes back when the pointer moves,
-  /// and when the hints go away. Pointer mode is the exception — the cursor is
-  /// its interface, and so is a cursor-following grid. A projection of
-  /// `inputMode` and `hintKeyRoute`.
+  /// a chip or distract from picking one. It comes back when the pointer
+  /// moves; ending the hints does not reshow it. Pointer mode is the
+  /// exception — the cursor is its interface, and so is a cursor-following
+  /// grid — and shows it at once. A projection of `inputMode` and
+  /// `hintKeyRoute`. Hiding from the background needs `BackgroundCursor`.
   var hintCursorShouldHide: Bool { inputMode == .hints && !hintKeyRoute.showsCursor }
 
   /// Apply `hintCursorShouldHide` once, at the end of the current turn: routing
@@ -321,7 +322,14 @@ final class OverlayPanel: NSPanel {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.cursorVisibilityUpdateScheduled = false
-      if self.hintCursorShouldHide { self.hideHintCursor() } else { self.showHintCursor() }
+      if self.hintCursorShouldHide {
+        self.hideHintCursor()
+      } else if self.inputMode == .hints, self.hintKeyRoute.showsCursor {
+        self.showHintCursor()
+      } else {
+        // The hints are gone: the pointer reappears when it moves.
+        self.hintCursorHidden = false
+      }
     }
   }
   private var cursorVisibilityUpdateScheduled = false
@@ -330,9 +338,9 @@ final class OverlayPanel: NSPanel {
   static var hintCursorVisibility: (Bool) -> Void = { hideUntilMouseMoves in
     NSCursor.setHiddenUntilMouseMoves(hideUntilMouseMoves)
   }
-  /// True while this panel has asked for the cursor to stay hidden. A mouse
-  /// move reveals it on its own; leaving the hint session shows it even if
-  /// the pointer never moved. The flag keeps the two calls paired.
+  /// True while this hint session has asked for the cursor to stay hidden. A
+  /// mouse move reveals it on its own; a route that steers the pointer shows
+  /// it at once. Cleared when the session ends, so the next one hides again.
   private var hintCursorHidden = false
   private func hideHintCursor() {
     guard !hintCursorHidden else { return }

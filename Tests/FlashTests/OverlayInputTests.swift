@@ -915,7 +915,10 @@ final class OverlayInputTests: XCTestCase {
     panel.hintKeyRoute = .labels
   }
 
-  func testHintCursorHidesUntilTheMouseMovesAndShowsWhenHintsEnd() {
+  /// Labels hide the pointer until the mouse moves; ending them leaves it to
+  /// that move rather than flashing it back. Each session hides it again, and
+  /// only a route that steers the pointer shows it at once.
+  func testHintCursorHidesUntilTheMouseMovesAndIsNotReshownWhenHintsEnd() {
     let panel = OverlayPanel()
     var hiddenUntilMove: [Bool] = []
     let previous = OverlayPanel.hintCursorVisibility
@@ -924,18 +927,27 @@ final class OverlayInputTests: XCTestCase {
       OverlayPanel.hintCursorVisibility = previous
       panel.inputMode = .passive
     }
+    func settle() {
+      let turn = expectation(description: "cursor update")
+      DispatchQueue.main.async { turn.fulfill() }
+      wait(for: [turn], timeout: 1)
+    }
     panel.hintKeyRoute = .labels
     panel.inputMode = .hints
-    let shown = expectation(description: "cursor hides")
-    DispatchQueue.main.async { shown.fulfill() }
-    wait(for: [shown], timeout: 1)
+    settle()
     XCTAssertEqual(hiddenUntilMove, [true])
 
     panel.inputMode = .passive
-    let restored = expectation(description: "cursor shows")
-    DispatchQueue.main.async { restored.fulfill() }
-    wait(for: [restored], timeout: 1)
-    XCTAssertEqual(hiddenUntilMove, [true, false])
+    settle()
+    XCTAssertEqual(hiddenUntilMove, [true], "ending the labels does not reshow it")
+
+    panel.inputMode = .hints
+    settle()
+    XCTAssertEqual(hiddenUntilMove, [true, true], "the next labels hide it again")
+
+    panel.hintKeyRoute = .pointer
+    settle()
+    XCTAssertEqual(hiddenUntilMove, [true, true, false], "pointer mode needs the cursor")
   }
 
   func testActiveWindowBorderIsStrokedInTheStyleOfTheBadgeShown() {
