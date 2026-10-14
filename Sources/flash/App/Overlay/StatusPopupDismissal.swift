@@ -28,10 +28,7 @@ extension OverlayPanel {
   /// moved does not summon it straight back. A pinned popup is not ephemeral;
   /// it leaves through `relinquishShownStatusPopup`.
   func dismissEphemeralStatusBarPopup(reason: String) {
-    if let pending = statusBarHoverDwellName {
-      statusBarHoverDwellWork?.cancel()
-      statusBarHoverDwellWork = nil
-      statusBarHoverDwellName = nil
+    if let pending = statusBarSpawnDwell.cancel() {
       statusBarHoverGate = .dismissed(pending)
     }
     guard let name = statusPopupController.presentation.ephemeralName else { return }

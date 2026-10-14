@@ -520,12 +520,27 @@ final class StatusBarHoverTests: XCTestCase {
 
     panel.statusBarTerminalNeedsSpawnHandler = { _ in true }
     try bar.hover(at: edge)
-    XCTAssertEqual(panel.statusBarHoverDwellName, "feed")
+    XCTAssertEqual(panel.statusBarSpawnDwell.pendingName, "feed")
 
     panel.nativeMenuBarRevealDidChange(true, pointer: edge)
-    XCTAssertNil(panel.statusBarHoverDwellName, "A confirmed reveal drops the spawn dwell")
-    XCTAssertNil(panel.statusBarHoverDwellWork)
+    XCTAssertNil(panel.statusBarSpawnDwell.pendingName, "A confirmed reveal drops the spawn dwell")
     XCTAssertEqual(bar.surface.hoverHighlight.opacity, 0, "and clears the wash")
+  }
+
+  /// A terminal popup with no process waits out the hover dwell before its
+  /// child is forked. Every further pointer move on the same span while that
+  /// dwell is pending keeps waiting: the second move must not fork at once,
+  /// or a sweep across the bar spawns one child per span after all.
+  func testRepeatedMovesOnTheSameSpanWaitOutTheDwell() throws {
+    let bar = try makeHoverBar()
+    let panel = bar.panel
+    panel.statusBarTerminalNeedsSpawnHandler = { _ in true }
+    let point = CGPoint(x: bar.popup.rect.midX, y: bar.popup.rect.midY)
+    try bar.hover(at: point)
+    try bar.hover(at: CGPoint(x: point.x + 1, y: point.y))
+    try bar.hover(at: point)
+    XCTAssertEqual(bar.previews(), [], "nothing is prepared before the dwell ends")
+    XCTAssertEqual(panel.statusBarSpawnDwell.pendingName, "feed")
   }
 
   func testHoverEligibilityFollowsTheReveal() {

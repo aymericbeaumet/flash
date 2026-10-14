@@ -211,8 +211,8 @@ final class OverlayPanel: NSPanel {
   /// spawn; see `showStatusBarPopup`.
   var statusBarTerminalNeedsSpawnHandler: ((String) -> Bool)?
   static let statusBarHoverDwellMs = 150
-  var statusBarHoverDwellName: String?
-  var statusBarHoverDwellWork: DispatchWorkItem?
+  /// The one terminal popup waiting out its hover dwell, if any.
+  var statusBarSpawnDwell = StatusBarSpawnDwell.idle
   var statusBarHoverGate = StatusBarHoverGate.ready
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()

@@ -72,12 +72,11 @@ final class StatusPopupDismissalTests: XCTestCase {
   func testAPendingHoverDwellIsCancelled() {
     let panel = OverlayPanel()
     let work = DispatchWorkItem {}
-    panel.statusBarHoverDwellName = "shell"
-    panel.statusBarHoverDwellWork = work
+    panel.statusBarSpawnDwell = .dwelling(name: "shell", work: work)
 
     panel.dismissEphemeralStatusBarPopup(reason: "pointer_click")
     XCTAssertTrue(work.isCancelled)
-    XCTAssertNil(panel.statusBarHoverDwellName)
+    XCTAssertNil(panel.statusBarSpawnDwell.pendingName)
     XCTAssertEqual(panel.statusBarHoverGate, .dismissed("shell"))
   }
 }

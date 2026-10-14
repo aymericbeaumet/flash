@@ -413,6 +413,28 @@ final class StatusBarClickPanel: NSPanel {
   var clickView: StatusBarClickView { contentView as! StatusBarClickView }
 }
 
+/// The hover dwell before a terminal popup's child is forked: idle, or one
+/// named popup waiting with its pending work item. One value, so a move that
+/// arrives while the dwell is pending can only keep waiting or cancel it,
+/// never present early.
+enum StatusBarSpawnDwell {
+  case idle
+  case dwelling(name: String, work: DispatchWorkItem)
+
+  var pendingName: String? {
+    if case .dwelling(let name, _) = self { return name }
+    return nil
+  }
+
+  /// Cancel the pending work, returning the popup it was waiting for.
+  mutating func cancel() -> String? {
+    guard case .dwelling(let name, let work) = self else { return nil }
+    work.cancel()
+    self = .idle
+    return name
+  }
+}
+
 extension OverlayPanel {
   func statusLinkRects(
     raw: String, font: NSFont, labelFrame: CGRect, alignment: CATextLayerAlignmentMode,
@@ -627,28 +649,36 @@ extension OverlayPanel {
     // hover. Sweeping the pointer across the bar must not spawn one child per
     // span, so such a popup waits for a short dwell with the pointer still on
     // it before it is prepared; document popups and running sessions show
-    // immediately as before.
-    if statusBarTerminalNeedsSpawnHandler?(popup.name) == true,
-      statusBarHoverDwellName != popup.name
-    {
-      statusBarHoverDwellWork?.cancel()
-      statusBarHoverDwellName = popup.name
+    // immediately as before. While the dwell is pending every further move
+    // on that span keeps waiting: only the dwell's own work item presents.
+    if statusBarTerminalNeedsSpawnHandler?(popup.name) == true {
+      if statusBarSpawnDwell.pendingName == popup.name { return }
+      _ = statusBarSpawnDwell.cancel()
       let work = DispatchWorkItem { [weak self] in
-        guard let self, self.statusBarHoverDwellName == popup.name,
-          popup.rect.contains(NSEvent.mouseLocation)
-        else {
-          self?.statusBarHoverDwellName = nil
-          return
-        }
-        self.showStatusBarPopup(
+        guard let self, self.statusBarSpawnDwell.pendingName == popup.name else { return }
+        self.statusBarSpawnDwell = .idle
+        guard popup.rect.contains(NSEvent.mouseLocation) else { return }
+        self.presentStatusBarPopup(
           popup, at: pointer, screenSnapshot: snapshot, preservingContent: preservingContent)
       }
-      statusBarHoverDwellWork = work
+      statusBarSpawnDwell = .dwelling(name: popup.name, work: work)
       DispatchQueue.main.asyncAfter(
         deadline: .now() + .milliseconds(Self.statusBarHoverDwellMs), execute: work)
       return
     }
-    statusBarHoverDwellName = nil
+    _ = statusBarSpawnDwell.cancel()
+    presentStatusBarPopup(
+      popup, at: pointer, screenSnapshot: snapshot, preservingContent: preservingContent)
+  }
+
+  /// Show `popup` now: the hover gate, the display, the terminal preparation
+  /// and the preview. `showStatusBarPopup` decides whether this waits.
+  private func presentStatusBarPopup(
+    _ popup: StatusBarPopupRegion,
+    at pointer: CGPoint,
+    screenSnapshot snapshot: ScreenSnapshot,
+    preservingContent: Bool
+  ) {
     statusBarHoverGate = statusBarHoverGate.hovering(popup.name)
     guard statusBarHoverGate.permits(popup.name) else { return }
     // The popup shows on the display whose bar draws its label.
@@ -728,9 +758,7 @@ extension OverlayPanel {
   }
 
   func hideStatusBarPopup(reason: String = "overlay_hidden") {
-    statusBarHoverDwellWork?.cancel()
-    statusBarHoverDwellWork = nil
-    statusBarHoverDwellName = nil
+    _ = statusBarSpawnDwell.cancel()
     statusPopupController.dismiss(reason: reason)
     activeStatusBarPopupName = nil
   }
