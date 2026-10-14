@@ -750,6 +750,8 @@ public final class AccessibilityProvider: FlashSource {
       roots = [focusedWindow]
     case .elementsInFrame:
       roots = Self.topLevelElements(in: app, meeting: clip, screenH: screenH)
+    case .openMenus:
+      roots = Self.openMenus(in: app, screenH: screenH).map(\.element)
     }
 
     var state = WalkState()
@@ -836,6 +838,26 @@ public final class AccessibilityProvider: FlashSource {
         let frame = frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
       else { return nil }
       return WalkedWindow(element: window, frame: frame)
+    }
+  }
+
+  /// The app's open menus with their frames: a context menu and any open
+  /// submenu are `AXMenu` children of the application element.
+  public static func openMenus(in app: AXUIElement, screenH: CGFloat) -> [(
+    element: AXUIElement, frame: CGRect
+  )] {
+    AXAttribute.children(app).compactMap { child in
+      guard AXAttribute.role(child) == (kAXMenuRole as String),
+        let origin = AXAttribute.point(child, kAXPositionAttribute as String),
+        let size = AXAttribute.size(child, kAXSizeAttribute as String),
+        size.width > 0, size.height > 0
+      else { return nil }
+      // Accessibility is top-left; Flash's frames are NSScreen bottom-left.
+      return (
+        child,
+        CGRect(
+          x: origin.x, y: screenH - origin.y - size.height, width: size.width, height: size.height)
+      )
     }
   }
 

@@ -162,6 +162,8 @@ public enum BigramTextCollector {
         roots = [window]
       case .elementsInFrame:
         roots = AccessibilityProvider.topLevelElements(in: app, meeting: clip, screenH: screenH)
+      case .openMenus:
+        roots = AccessibilityProvider.openMenus(in: app, screenH: screenH).map(\.element)
       }
       return roots.flatMap { walk(root: $0, clip: clip, screenH: screenH) }
     }

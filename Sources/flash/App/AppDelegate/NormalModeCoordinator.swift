@@ -611,9 +611,13 @@ extension AppDelegate {
   }
 
   /// Whether a native surface (a context menu, the About window) owns the
-  /// keyboard, so Flash must not capture it.
+  /// keyboard, so Flash must not capture it. A hint session over a context
+  /// menu takes it back through the tap (`NativeSurfaceOwnership.ownsKeyboard`).
   var nativeKeyboardOwnerActive: Bool {
-    nativeSurfaceSuspended
+    NativeSurfaceOwnership.ownsKeyboard(
+      owned: nativeSurfaceSuspended, hintSessionActive: hintSession.isActive,
+      activationInFlight: activationInFlight,
+      tapLive: keyboardCaptureTap != nil && !secureInputObserved)
       || Self.aboutWindowShouldOwnNativeKeyboard(
         visible: aboutWindowVisible,
         hasTransientInput: hintSession.isActive,

@@ -14,7 +14,8 @@ import Foundation
 struct NativeSurfaceOwnership: Equatable {
   enum State: Equatable {
     case none
-    case owned(menuOpenSeen: Bool)
+    /// `menuPID` is the app whose menu reported opening; nil until one did.
+    case owned(menuPID: pid_t?)
   }
 
   private(set) var state: State = .none
@@ -22,11 +23,28 @@ struct NativeSurfaceOwnership: Equatable {
   var isOwned: Bool { state != .none }
 
   /// Capture was suspended for a native surface.
-  mutating func begin() { state = .owned(menuOpenSeen: false) }
+  mutating func begin() { state = .owned(menuPID: nil) }
 
-  /// The app reported a menu opening while the surface is owned.
-  mutating func menuOpened() {
-    if case .owned = state { state = .owned(menuOpenSeen: true) }
+  /// App `pid` reported a menu opening while the surface is owned.
+  mutating func menuOpened(pid: pid_t) {
+    if case .owned = state { state = .owned(menuPID: pid) }
+  }
+
+  /// The app whose menu is open, once it reported opening: `f` walks that
+  /// menu instead of the window behind it.
+  var openMenuPID: pid_t? {
+    if case .owned(let pid) = state { return pid }
+    return nil
+  }
+
+  /// Whether the native surface keeps the keyboard. A hint session started
+  /// over it (`f` on an open context menu) takes the keyboard while it runs,
+  /// through the session tap only: Flash's key-window fallback would close
+  /// the menu by becoming key.
+  static func ownsKeyboard(
+    owned: Bool, hintSessionActive: Bool, activationInFlight: Bool, tapLive: Bool
+  ) -> Bool {
+    owned && !(tapLive && (hintSessionActive || activationInFlight))
   }
 
   /// Evidence the surface is gone: its menu closed, the user entered a mode,
@@ -41,9 +59,9 @@ struct NativeSurfaceOwnership: Equatable {
     switch state {
     case .none:
       return !windowActive
-    case .owned(menuOpenSeen: true):
+    case .owned(.some):
       return false
-    case .owned(menuOpenSeen: false):
+    case .owned(nil):
       if windowActive { return false }
       state = .none
       return true

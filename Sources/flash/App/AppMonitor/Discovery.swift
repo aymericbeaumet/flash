@@ -70,6 +70,15 @@ extension AppMonitor {
       return
     }
 
+    // An open context menu is walked from its own frames, above every
+    // window; the window's prepared model is neither served nor replaced.
+    if context.walkRoot == .openMenus {
+      discoverOpenMenus(context: context) { hints in
+        complete(path: hints.isEmpty ? "open_menu_empty" : "open_menu", hints: hints)
+      }
+      return
+    }
+
     if observers[pid] == nil {
       installObserver(for: pid)
     }
@@ -494,6 +503,39 @@ extension AppMonitor {
       })
   }
 
+  /// `f` over an open context menu: the app's open menus are walked by the
+  /// Accessibility provider alone and finalized against their own frames,
+  /// on `axQueue`. Completes on main, with no hints when no menu is open
+  /// any more.
+  private func discoverOpenMenus(
+    context: AppContext, completion: @escaping ([AssignedHint]) -> Void
+  ) {
+    let cfg = snapshotConfig()
+    let primaryH = primaryScreenHeight()
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      self.configureRuntime(for: cfg)
+      let menus = GeckoAccessibility.withTree(
+        pid: context.processID, bundleIdentifier: context.bundleIdentifier
+      ) { app in AccessibilityProvider.openMenus(in: app, screenH: primaryH) }
+      let frames = menus.map(\.frame)
+      let region = self.union(of: frames)
+      let providers = self.registry.hintProviderPlan(for: context).activationProviders.filter {
+        $0.identifier == Self.accessibilityProviderID
+      }
+      var hints: [AssignedHint] = []
+      if !frames.isEmpty, !providers.isEmpty {
+        let menuContext = self.clip(context, to: region)
+        let collection = Self.collectFocusedTargets(context: menuContext, providers: providers)
+        let finalized = TargetFinalizer.finalizeWithStats(
+          collection.targets, visibleRegions: frames)
+        hints = self.assignTargets(finalized.targets, cfg: cfg, region: region)
+      }
+      FlashLog.debug("[discover] open_menu menus=\(frames.count) hints=\(hints.count)")
+      DispatchQueue.main.async { completion(hints) }
+    }
+  }
+
   /// The auxiliary surfaces, assignment and completion of a screen-scope
   /// walk whose apps all walked; on `axQueue`.
   private func finishScreenScope(
@@ -801,7 +843,7 @@ extension AppMonitor {
     let walked: CGRect?
     var walkedWindow: AXUIElement?
     switch context.walkRoot {
-    case .elementsInFrame:
+    case .elementsInFrame, .openMenus:
       walked = context.frontWindowFrame.isNull ? nil : context.frontWindowFrame
     case .focusedWindow:
       let window = AccessibilityProvider.walkedWindow(

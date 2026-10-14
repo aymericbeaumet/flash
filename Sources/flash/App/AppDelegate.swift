@@ -398,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // A native menu's own open and close are the evidence that decides how
       // long it keeps the keyboard (`NativeSurfaceOwnership`).
       if notification == kAXMenuOpenedNotification as String {
-        self?.nativeSurfaceOwnership.menuOpened()
+        self?.nativeSurfaceOwnership.menuOpened(pid: pid)
       } else if notification == kAXMenuClosedNotification as String, let self,
         self.nativeSurfaceSuspended
       {
@@ -1257,7 +1257,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         visible: aboutWindowVisible,
         hasTransientInput: hintSession.isActive,
         activationInFlight: activationInFlight),
-      nativeSurfaceSuspended: nativeSurfaceSuspended,
+      // This callback is the tap, so a hint session over a menu takes its keys.
+      nativeSurfaceSuspended: NativeSurfaceOwnership.ownsKeyboard(
+        owned: nativeSurfaceSuspended, hintSessionActive: hintSession.isActive,
+        activationInFlight: activationInFlight, tapLive: true),
       isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
         || flags.contains(.maskAlternate),
       isBareEscape: event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)

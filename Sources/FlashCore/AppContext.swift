@@ -14,6 +14,19 @@ public struct AppContext: @unchecked Sendable {
     /// of another app, a Picture in Picture player, or the Stage Manager strip
     /// (`mouse_target --scope=screen`).
     case elementsInFrame
+    /// The app's open menus (a context menu and its open submenus), which
+    /// are children of the application, not of any window: `f` while a
+    /// context menu is up labels its items.
+    case openMenus
+
+    /// The root an activation walks: the open menus when `openMenuPID`, the
+    /// app whose menu reported opening, is the target and Flash reads keys
+    /// through the session tap (becoming key would close the menu); else the
+    /// target's focused window.
+    public static func activation(openMenuPID: pid_t?, targetPID: pid_t, tapLive: Bool) -> WalkRoot
+    {
+      openMenuPID == targetPID && tapLive ? .openMenus : .focusedWindow
+    }
   }
 
   public let bundleIdentifier: String

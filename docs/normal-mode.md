@@ -431,6 +431,13 @@ a system event asks for — an app launching, a Space change, the panel resignin
 key — never ends it, while its close notification, an explicit mode entry or
 another app coming forward does. A surface that posts no menu notifications
 keeps the bounded window that stood in for a close signal.
+While a context menu is open its app's NORMAL mappings still fire, so `f`
+labels the menu's items rather than the window behind it: the walk starts at
+the app's open menus (submenus included) and keeps targets inside their
+frames. The hint session takes the keyboard back from the menu while it runs,
+so labels and Escape reach Flash, and gives it back when it ends. This needs
+the session tap: Flash's key-window fallback would close the menu by becoming
+key, so under secure input `f` walks the window as before.
 A label or configuration refresh preserves native-menu capture suspension; only an explicit
 mode entry resets that interaction context. Reentrant events wait until the
 current mode effect batch finishes, preserving transition order.

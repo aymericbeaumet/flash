@@ -77,10 +77,20 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    let context = target.context
+    // A context menu the target app reported open is what `f` labels.
+    let walkRoot = AppContext.WalkRoot.activation(
+      openMenuPID: nativeSurfaceOwnership.openMenuPID, targetPID: target.context.processID,
+      tapLive: keyboardCaptureTap != nil && !secureInputObserved)
+    let context =
+      walkRoot == .openMenus
+      ? AppContext(
+        bundleIdentifier: target.context.bundleIdentifier, processID: target.context.processID,
+        runningApp: target.context.runningApp, frontWindowFrame: target.context.frontWindowFrame,
+        allScreensFrame: target.context.allScreensFrame, walkRoot: .openMenus)
+      : target.context
     FlashLog.debug(
       "[activation] target pid=\(context.processID) bundle=\(context.bundleIdentifier) "
-        + "source=\(contextOverride == nil ? "focused" : "override")"
+        + "source=\(contextOverride == nil ? "focused" : "override") root=\(walkRoot)"
     )
     hintSession.sourceAppPID = context.processID
     hintSession.command = command
