@@ -27,6 +27,9 @@ struct StatusAlert: Equatable {
   /// The widest value the alert can show, so the box stays put while the
   /// value changes (`6%` and `100%` share one box).
   var valueAnchor: String?
+  /// Substrings of `value` drawn in the hint accent colour: the keys a
+  /// question expects, so the line reads as a prompt and not as a state.
+  var valueAccents: [String] = []
   var style: Style = .standard
   var duration: Duration = .standard
 
@@ -54,11 +57,14 @@ struct StatusAlert: Equatable {
   }
 
   /// The question a confirmation session asks. It stays up until the session
-  /// answers it or is torn down.
-  static let confirmationChoices = "[y]es  [n]o"
+  /// answers it or is torn down; the keys are the accented part.
+  static let confirmationChoices = "[y]es / [n]o"
+  static let confirmationKeys = ["[y]", "[n]"]
 
   static func confirmation(_ prompt: String) -> Self {
-    Self(title: prompt, value: confirmationChoices, duration: .untilDismissed)
+    Self(
+      title: prompt, value: confirmationChoices, valueAccents: confirmationKeys,
+      duration: .untilDismissed)
   }
 }
 
@@ -161,7 +167,9 @@ extension OverlayPanel {
     var lines: [CALayer] = []
     if let valueText = alert.value {
       let value = makeLabelLayer()
-      value.string = valueText
+      value.string = Self.alertValueString(
+        valueText, accents: alert.valueAccents, font: valueFont, textColor: style.textColor,
+        accentColor: nsColor(fromHex: hintColors.bgTop) ?? .systemYellow)
       value.font = valueFont
       value.fontSize = Self.alertTextSize
       value.foregroundColor = style.textColor.cgColor
@@ -202,6 +210,29 @@ extension OverlayPanel {
 
   func dismissAlert() {
     dismissToast()
+  }
+
+  /// The value line with each accent substring in the accent colour. A
+  /// plain string when there is nothing to accent, so a state value keeps
+  /// the layer's own colour.
+  static func alertValueString(
+    _ text: String, accents: [String], font: NSFont, textColor: NSColor, accentColor: NSColor
+  ) -> Any {
+    guard !accents.isEmpty else { return text }
+    let string = NSMutableAttributedString(
+      string: text, attributes: [.font: font, .foregroundColor: textColor])
+    let whole = text as NSString
+    for accent in accents where !accent.isEmpty {
+      var search = NSRange(location: 0, length: whole.length)
+      while search.length > 0 {
+        let range = whole.range(of: accent, options: [], range: search)
+        guard range.location != NSNotFound else { break }
+        string.addAttribute(.foregroundColor, value: accentColor, range: range)
+        let next = range.location + range.length
+        search = NSRange(location: next, length: whole.length - next)
+      }
+    }
+    return string
   }
 
   private static func alertTextSize(

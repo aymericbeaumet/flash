@@ -1215,7 +1215,25 @@ final class StatusBarTests: XCTestCase {
 
     let question = StatusAlert.confirmation("Close this tmux window?")
     XCTAssertEqual(question.title, "Close this tmux window?")
-    XCTAssertEqual(question.value, StatusAlert.confirmationChoices)
+    XCTAssertEqual(question.value, "[y]es / [n]o")
+    XCTAssertEqual(question.valueAccents, ["[y]", "[n]"])
+    // The keys are the only accented runs; the rest keeps the text colour.
+    let choices = try XCTUnwrap(
+      OverlayPanel.alertValueString(
+        "[y]es / [n]o", accents: ["[y]", "[n]"], font: .systemFont(ofSize: 10),
+        textColor: .white, accentColor: .systemYellow) as? NSAttributedString)
+    var accented: [String] = []
+    choices.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: choices.length)) {
+      color, range, _ in
+      if color as? NSColor == NSColor.systemYellow {
+        accented.append((choices.string as NSString).substring(with: range))
+      }
+    }
+    XCTAssertEqual(accented, ["[y]", "[n]"])
+    XCTAssertTrue(
+      OverlayPanel.alertValueString(
+        "6%", accents: [], font: .systemFont(ofSize: 10), textColor: .white,
+        accentColor: .systemYellow) is String, "a state value stays plain")
     XCTAssertEqual(question.duration, .untilDismissed)
     XCTAssertEqual(question.style, .standard)
     panel.displayAlert(question)

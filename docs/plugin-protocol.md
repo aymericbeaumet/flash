@@ -639,9 +639,10 @@ Section semantics:
   this plugin performs destructively: action name → prompt, for names in
   `actions` only (an empty prompt or an action the plugin does not perform
   rejects the manifest). In the apps the root selector matches, the host
-  shows the prompt as its confirmation alert (`[y]es  [n]o`) and dispatches
-  the action only on `y`; the plugin then performs it without a prompt of
-  its own, which NORMAL mode's capture would swallow the answer to. Across
+  shows the prompt as its confirmation alert (`[y]es / [n]o`, keys in the
+  hint colour) and dispatches the action only on `y`; the plugin then
+  performs it without a prompt of its own, which NORMAL mode's capture
+  would swallow the answer to. Across
   plugins, a matching selector beats an unscoped one, then the higher
   `priority`, then the plugin id. The bundled tmux plugin gates `tab_close`
   and `pane_close` this way. A mapping gates any command the same way with

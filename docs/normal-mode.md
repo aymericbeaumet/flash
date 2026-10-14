@@ -20,12 +20,12 @@ mappings.
   find field.
 - `x` closes the current tab (`tab_close`); `X` reopens the last closed one
   (`tab_reopen`). Inside tmux `x` first asks `Close this tmux window?` in the
-  alert, with `[y]es  [n]o`: the tmux plugin declares the kill destructive
-  (`action_confirmations`), so `y` closes the window and any other key —
-  `n`, Escape, a click — closes only the question. Wrap any command the same
-  way with `confirm --prompt=… --command=…`. `X` acts in browsers and
-  editors; tmux, terminals and Finder keep no closed tabs, so there it does
-  nothing.
+  alert, with `[y]es / [n]o` and the keys in the hint colour: the tmux
+  plugin declares the kill destructive (`action_confirmations`), so `y`
+  closes the window and any other key — `n`, Escape, a click — closes only
+  the question. Wrap any command the same way with
+  `confirm --prompt=… --command=…`. `X` acts in browsers and editors; tmux,
+  terminals and Finder keep no closed tabs, so there it does nothing.
 - `r` reloads (`app_reload`); `R` hard-reloads (`app_reload --force`).
   Browsers use their own chords (Safari's hard reload is Cmd-Option-R) and
   tmux refreshes its client. Other apps, terminals included, do nothing:
