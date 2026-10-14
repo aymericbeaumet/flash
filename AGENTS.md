@@ -17,6 +17,9 @@ contracts before changing a subsystem:
 - [Privacy and permissions](docs/privacy.md).
 - [Window navigation and placement](docs/windows.md), [audio devices](docs/audio.md).
 - [Performance and latency benchmarks](docs/performance.md).
+- [Releases, signing and notarization](docs/release.md); user-facing
+  [getting started](docs/getting-started.md), [comparison and FAQ](docs/comparison.md),
+  [troubleshooting](docs/troubleshooting.md).
 
 ## Assemble great tools
 

@@ -304,7 +304,7 @@ sign_app() {
   # prohibits Flash's Accessibility/CGEventTap/subprocess core).
   local harden=()
   if [[ "${FLASH_HARDENED_RUNTIME:-0}" == "1" ]]; then
-    harden=(--options runtime --entitlements "$PROJECT_DIR/Resources/Flash.entitlements")
+    harden=(--options runtime --timestamp --entitlements "$PROJECT_DIR/Resources/Flash.entitlements")
   fi
   local plugins_dir="$bundle/Contents/Resources/Plugins"
   if [[ -d "$plugins_dir" && ! -L "$plugins_dir" ]]; then

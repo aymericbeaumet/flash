@@ -24,4 +24,4 @@ code is also a bug.
 
 ## Supported versions
 
-Only the latest nightly build is supported until the first tagged release.
+The latest release and the latest nightly build.

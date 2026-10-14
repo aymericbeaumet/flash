@@ -134,13 +134,51 @@ if [[ "$MODE" == "release" ]]; then
   sign_app "$STAGING_PATH" "$SIGN_IDENTITY"
 
   ZIP_PATH="${FLASH_ZIP_PATH:-$PROJECT_DIR/build/$APP_NAME.zip}"
-  rm -f "$ZIP_PATH" "$ZIP_PATH.sha256"
-  echo "==> Creating $ZIP_PATH"
-  (
-    cd "$(dirname "$STAGING_PATH")"
-    ditto -c -k --keepParent "$APP_NAME.app" "$ZIP_PATH"
-  )
-  shasum -a 256 "$ZIP_PATH" | awk '{print $1}' >"$ZIP_PATH.sha256"
+  package_zip() {
+    rm -f "$ZIP_PATH" "$ZIP_PATH.sha256"
+    echo "==> Creating $ZIP_PATH"
+    (
+      cd "$(dirname "$STAGING_PATH")"
+      ditto -c -k --keepParent "$APP_NAME.app" "$ZIP_PATH"
+    )
+    shasum -a 256 "$ZIP_PATH" | awk '{print $1}' >"$ZIP_PATH.sha256"
+  }
+  package_zip
+
+  # FLASH_NOTARIZE=1 submits the zip to Apple's notary service, staples the
+  # ticket to the bundle and zips again, so the shipped archive carries the
+  # ticket (docs/release.md). It needs a Developer ID signature with the
+  # hardened runtime and an App Store Connect API key.
+  if [[ "${FLASH_NOTARIZE:-0}" == "1" ]]; then
+    if [[ "$SIGN_IDENTITY" == "-" || "${FLASH_HARDENED_RUNTIME:-0}" != "1" ]]; then
+      echo "FLASH_NOTARIZE=1 requires FLASH_SIGN_IDENTITY (a Developer ID Application certificate) and FLASH_HARDENED_RUNTIME=1" >&2
+      exit 1
+    fi
+    : "${FLASH_NOTARY_KEY_PATH:?FLASH_NOTARY_KEY_PATH (App Store Connect API .p8 key) is required}"
+    : "${FLASH_NOTARY_KEY_ID:?FLASH_NOTARY_KEY_ID is required}"
+    : "${FLASH_NOTARY_ISSUER_ID:?FLASH_NOTARY_ISSUER_ID is required}"
+    echo "==> Notarizing $ZIP_PATH"
+    submission="$(xcrun notarytool submit "$ZIP_PATH" \
+      --key "$FLASH_NOTARY_KEY_PATH" \
+      --key-id "$FLASH_NOTARY_KEY_ID" \
+      --issuer "$FLASH_NOTARY_ISSUER_ID" \
+      --wait --timeout 30m --output-format json)"
+    submission_id="$(printf '%s' "$submission" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -1)"
+    if ! printf '%s' "$submission" | grep -q '"status" *: *"Accepted"'; then
+      echo "==> Notarization was not accepted:" >&2
+      printf '%s\n' "$submission" >&2
+      if [[ -n "$submission_id" ]]; then
+        xcrun notarytool log "$submission_id" \
+          --key "$FLASH_NOTARY_KEY_PATH" \
+          --key-id "$FLASH_NOTARY_KEY_ID" \
+          --issuer "$FLASH_NOTARY_ISSUER_ID" >&2 || true
+      fi
+      exit 1
+    fi
+    echo "==> Stapling the notarization ticket"
+    xcrun stapler staple "$STAGING_PATH"
+    package_zip
+  fi
   echo "zip=$ZIP_PATH"
   echo "sha256=$(cat "$ZIP_PATH.sha256")"
 fi

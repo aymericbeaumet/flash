@@ -63,4 +63,4 @@ python3 Scripts/test-hints-latency-summary.py   # the log parser's unit tests
 hotkeys and plugins; `flash config_check --file=<path>` validates a config file
 without it.
 
-`swift build` alone does not update the resident app in `/Applications`. See [AGENTS.md](../AGENTS.md) for the architecture, source contracts, and repository guardrails.
+`swift build` alone does not update the resident app in `/Applications`. CI publishes releases; [release.md](release.md) explains versioning, signing and notarization. See [AGENTS.md](../AGENTS.md) for the architecture, source contracts, and repository guardrails.
