@@ -666,8 +666,10 @@ Section semantics:
   only when hints are requested and observed with the reduced notification
   set that drives mode, border and focus. The bundled `defaults` plugin
   declares Notes.
-- **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
-  `normal`); `command` is an argv array with config-mapping syntax; entries
+- **`mappings`** — key bindings in any mode a config can map: `all | normal |
+  insert | terminal | command | hyper | visual` (default `normal`), under the
+  config's key rules (a `command` key is one modified chord); `command` is an
+  argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
   when its final key is pressed again, as in config. Map keys to high-level
   actions; an app's own chord for one belongs in `action_bindings`, and no

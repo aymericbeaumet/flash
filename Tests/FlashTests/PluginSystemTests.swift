@@ -1173,7 +1173,7 @@ final class PluginSystemTests: XCTestCase {
           "install": "true",
           "exec": ["/usr/bin/true"],
           "mappings": [
-            { "key": "x", "mode": "command", "command": ["true"] }
+            { "key": "x", "mode": "bogus", "command": ["true"] }
           ]
         }
         """)
@@ -1182,7 +1182,57 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains(
-          "plugin mapping mode command must be all, normal, insert, or terminal"))
+          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, or visual"
+        ))
+    }
+  }
+
+  /// A plugin maps keys in any mode a config can, under the same key rules:
+  /// a command-mode key is one modified chord.
+  func testManifestAcceptsEveryMappingModeAndRequiresAChordInCommand() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "every-mode",
+          "name": "Every mode",
+          "version": "1.0.0",
+          "description": "Mappings in every scope",
+          "install": "true",
+          "exec": ["/usr/bin/true"],
+          "mappings": [
+            { "key": "x", "mode": "all", "command": ["true"] },
+            { "key": "x", "mode": "normal", "command": ["true"] },
+            { "key": "x", "mode": "insert", "command": ["true"] },
+            { "key": "cmd+x", "mode": "terminal", "command": ["true"] },
+            { "key": "cmd+x", "mode": "command", "command": ["true"] },
+            { "key": "x", "mode": "hyper", "command": ["true"] },
+            { "key": "x", "mode": "visual", "command": ["true"] }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(
+      manifest.mappings.map(\.scope),
+      [.all, .normal, .insert, .terminal, .command, .hyper, .visual])
+
+    let bare = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "bare-command",
+          "name": "Bare command",
+          "version": "1.0.0",
+          "description": "Unmodified command key",
+          "install": "true",
+          "exec": ["/usr/bin/true"],
+          "mappings": [{ "key": "x", "mode": "command", "command": ["true"] }]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: bare) }
+    XCTAssertThrowsError(try PluginManifest.load(from: bare)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains(
+          "plugin mapping x in command mode must be a single modified key"))
     }
   }
 

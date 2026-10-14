@@ -9,9 +9,9 @@ import Foundation
 /// entries are stable-sorted by priority descending, so `CompiledMappings`'
 /// first-writer-wins hands each key to the highest-priority claimant.
 ///
-/// The merge is per scope. Mode-specific mappings override `all` fallbacks;
-/// plugin priority resolves collisions within each scope. Command mappings
-/// are config-owned and are preserved unchanged. A key the config removed
+/// The merge is per scope, every scope a config can fill. Mode-specific
+/// mappings override `all` fallbacks; plugin priority resolves collisions
+/// within each scope. A key the config removed
 /// from a scope (`"<key>" = false`) stays removed: plugin mappings on it are
 /// dropped.
 enum EffectiveMappings {
@@ -26,6 +26,7 @@ enum EffectiveMappings {
       effective.all = mergeScope(base: base.all, plugin: plugin, scope: .all)
       effective.normal = mergeScope(base: base.normal, plugin: plugin, scope: .normal)
       effective.insert = mergeScope(base: base.insert, plugin: plugin, scope: .insert)
+      effective.command = mergeScope(base: base.command, plugin: plugin, scope: .command)
       effective.terminal = mergeScope(base: base.terminal, plugin: plugin, scope: .terminal)
       effective.hyper = mergeScope(base: base.hyper, plugin: plugin, scope: .hyper)
       effective.visual = mergeScope(base: base.visual, plugin: plugin, scope: .visual)

@@ -1099,9 +1099,15 @@ struct PluginManifest: Decodable, Equatable {
       }
     }
     for mapping in mappings {
-      guard ["all", "normal", "insert", "terminal"].contains(mapping.mode) else {
+      guard let scope = ModeScope(rawValue: mapping.mode) else {
         throw PluginError.failure(
-          "plugin mapping mode \(mapping.mode) must be all, normal, insert, or terminal")
+          "plugin mapping mode \(mapping.mode) must be all, normal, insert, terminal, command, "
+            + "hyper, or visual")
+      }
+      // The config's rule: the command line reads only native chords.
+      if scope == .command, ModeMapping.parseNativeHotkey(mapping.key) == nil {
+        throw PluginError.failure(
+          "plugin mapping \(mapping.key) in command mode must be a single modified key")
       }
     }
     for prefix in query?.prefixes ?? [] {
