@@ -350,13 +350,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // and tooling the user has in their terminal. A GUI launch from Finder/
     // launchd would otherwise hand children a bare environment. Until this
     // lands the seeded cache (process env + PATH fallback) keeps commands
-    // usable, so the spawn need not block startup.
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      FlashProcessEnvironment.shared.refresh()
+    // usable, so the spawn need not block startup. The launch reload below
+    // does not ask again: this is the one launch refresh.
+    FlashProcessEnvironment.shared.refresh { [weak self] _ in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         self.statusTerminalEnvironmentReady = true
         self.reloadTerminalPopupConfiguration()
+        self.overlay.statusTerminals.retryFailedLaunches()
       }
     }
     // First run: give the user a working shortcut before the first load.

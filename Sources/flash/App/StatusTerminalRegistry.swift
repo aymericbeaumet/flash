@@ -122,10 +122,7 @@ final class StatusTerminalRegistry {
   init(
     environment: FlashProcessEnvironment = .shared,
     refreshEnvironment: @escaping (@escaping () -> Void) -> Void = { completion in
-      DispatchQueue.global(qos: .userInitiated).async {
-        FlashProcessEnvironment.shared.refresh()
-        DispatchQueue.main.async(execute: completion)
-      }
+      FlashProcessEnvironment.shared.refresh { _ in DispatchQueue.main.async(execute: completion) }
     }
   ) {
     processEnvironment = environment

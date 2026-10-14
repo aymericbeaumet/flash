@@ -118,4 +118,90 @@ final class ProcessEnvironmentTests: XCTestCase {
       shellPath: "/nonexistent/shell", timeout: 2)
     XCTAssertNil(resolved)
   }
+
+  // MARK: refresh ownership
+
+  /// A shell that cannot be run, times out or prints nothing leaves the
+  /// environment in effect alone: launchd's bare `PATH` must never replace a
+  /// resolved one because one refresh failed.
+  func testFailedRefreshKeepsThePreviousEnvironment() {
+    let env = FlashProcessEnvironment(seed: ["PATH": "/seed", "MARK": "1"])
+    let done = expectation(description: "refresh completes")
+    env.refresh(shellPath: "/nonexistent/shell", timeout: 1) { environment in
+      XCTAssertEqual(environment["PATH"], "/seed")
+      XCTAssertEqual(environment["MARK"], "1")
+      done.fulfill()
+    }
+    wait(for: [done], timeout: 5)
+    XCTAssertEqual(env.environment["PATH"], "/seed")
+    XCTAssertEqual(env.environment["MARK"], "1")
+  }
+
+  /// Refreshes run one at a time and store in request order: the second
+  /// request's result stands even when the first run finishes after it was
+  /// made, and that second request never joins the run already in progress.
+  func testOverlappingRefreshesStoreInRequestOrder() {
+    let firstStarted = DispatchSemaphore(value: 0)
+    let releaseFirst = DispatchSemaphore(value: 0)
+    let lock = NSLock()
+    var runs = 0
+    let env = FlashProcessEnvironment(seed: ["PATH": "/seed"]) { _, _ in
+      lock.lock()
+      runs += 1
+      let run = runs
+      lock.unlock()
+      if run == 1 {
+        firstStarted.signal()
+        releaseFirst.wait()
+        return ["PATH": "/first"]
+      }
+      return ["PATH": "/second"]
+    }
+    let first = expectation(description: "first completes")
+    let second = expectation(description: "second completes")
+    env.refresh {
+      XCTAssertEqual($0["PATH"], "/first")
+      first.fulfill()
+    }
+    XCTAssertEqual(firstStarted.wait(timeout: .now() + 5), .success)
+    env.refresh {
+      XCTAssertEqual($0["PATH"], "/second")
+      second.fulfill()
+    }
+    releaseFirst.signal()
+    wait(for: [first, second], timeout: 5, enforceOrder: true)
+    XCTAssertEqual(env.environment["PATH"], "/second")
+    XCTAssertEqual(runs, 2)
+  }
+
+  /// Requests made during a run share one follow-up run.
+  func testRequestsDuringARunShareOneFollowUp() {
+    let firstStarted = DispatchSemaphore(value: 0)
+    let releaseFirst = DispatchSemaphore(value: 0)
+    let lock = NSLock()
+    var runs = 0
+    let env = FlashProcessEnvironment(seed: [:]) { _, _ in
+      lock.lock()
+      runs += 1
+      let run = runs
+      lock.unlock()
+      if run == 1 {
+        firstStarted.signal()
+        releaseFirst.wait()
+      }
+      return ["RUN": "\(run)"]
+    }
+    env.refresh()
+    XCTAssertEqual(firstStarted.wait(timeout: .now() + 5), .success)
+    let later = (0..<3).map { expectation(description: "request \($0)") }
+    for expectation in later {
+      env.refresh {
+        XCTAssertEqual($0["RUN"], "2")
+        expectation.fulfill()
+      }
+    }
+    releaseFirst.signal()
+    wait(for: later, timeout: 5)
+    XCTAssertEqual(runs, 2)
+  }
 }
