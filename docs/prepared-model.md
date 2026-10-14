@@ -70,7 +70,13 @@ and arms no maintenance; nor does it count toward the slow-walk backoff, the
 empty-walk gate or a readiness rewalk. An activation that finds no model
 recomputes the visible region and walks on demand, so the same window list
 always gives the same hints, and a window still fully covered at activation
-stays silent.
+stays silent. A partly covered window is the same window-list state: every
+stored model carries the visible region its walk saw — the window's frame and
+the fragments left of it — and a lookup recomputes the region from the
+activation's own window-list read, through the builder the walk used, and
+treats a difference as a miss. A notification banner, a floating player or a
+panel moving over or off the window therefore costs one walk, never a stale
+set of hints drawn over the cover or missing from what it uncovered.
 
 ## Trees that are not built yet
 

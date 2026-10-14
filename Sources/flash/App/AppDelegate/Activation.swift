@@ -61,13 +61,15 @@ extension AppDelegate {
       "[activation] begin command=\(command) mode=\(flashMode) "
         + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
 
-    let resolved: AppContext?
+    let resolved: AppMonitor.ActivationTarget?
     if let contextOverride {
-      resolved = monitor.coveringInteractionContext(inFrontOf: contextOverride) ?? contextOverride
+      resolved = AppMonitor.ActivationTarget(
+        context: monitor.coveringInteractionContext(inFrontOf: contextOverride) ?? contextOverride,
+        windowEntries: nil)
     } else {
-      resolved = currentNonFlashActivationContext()
+      resolved = currentNonFlashActivationTarget()
     }
-    guard let context = resolved else {
+    guard let target = resolved else {
       FlashLog.debug("[activation] no target app")
       FlashLog.trace(
         "[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
@@ -75,6 +77,7 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
+    let context = target.context
     FlashLog.debug(
       "[activation] target pid=\(context.processID) bundle=\(context.bundleIdentifier) "
         + "source=\(contextOverride == nil ? "focused" : "override")"
@@ -110,7 +113,9 @@ extension AppDelegate {
     let isCurrent: () -> Bool = { [weak self] in
       self?.activationLifecycle.isCurrent(myGen) ?? false
     }
-    monitor.discoverAsync(context: context, isCurrent: isCurrent) { [weak self] hints, discovery in
+    monitor.discoverAsync(
+      context: context, windowEntries: target.windowEntries, isCurrent: isCurrent
+    ) { [weak self] hints, discovery in
       guard let self else { return }
       self.activationLifecycle.complete(token: myGen)
       FlashLog.trace(

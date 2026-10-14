@@ -43,6 +43,30 @@ struct WindowSnapshot {
   /// returned targets against `visibleRegions` afterward.
   let activeWindowFrame: CGRect?
 
+  /// What covers the focused window: its WindowServer frame and the
+  /// fragments of it left visible, sorted. A prepared model carries the
+  /// signature its walk saw, and a lookup that recomputes a different one is
+  /// a miss: whether another app's window has moved over or off the window
+  /// since the walk is window-list state no AX event reports, so the same
+  /// window list always yields the same hints and never a stale set.
+  struct OcclusionSignature: Equatable {
+    let frame: CGRect
+    let fragments: [CGRect]
+
+    init(frame: CGRect, fragments: [CGRect]) {
+      self.frame = frame
+      self.fragments = fragments.sorted {
+        ($0.minX, $0.minY, $0.width, $0.height) < ($1.minX, $1.minY, $1.width, $1.height)
+      }
+    }
+
+    /// Nil when the snapshot found no surface for `pid`.
+    init?(snapshot: WindowSnapshot, pid: pid_t) {
+      guard let frame = snapshot.activeWindowFrame else { return nil }
+      self.init(frame: frame, fragments: snapshot.visibleRegions[pid] ?? [])
+    }
+  }
+
   /// The one door to `CGWindowListCopyWindowInfo`, and it always opens on main.
   ///
   /// The call synchronizes with this process's pending Core Animation
@@ -79,8 +103,20 @@ struct WindowSnapshot {
     guard let info else {
       return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
     }
-    let entries = entries(from: info, primaryH: primaryH)
-      .filter { !ignoringPids.contains($0.pid) }
+    return build(
+      entries: entries(from: info, primaryH: primaryH), focusedPid: focusedPid,
+      frontmostPID: frontmostPID, ignoringPids: ignoringPids,
+      walkedWindowFrame: walkedWindowFrame)
+  }
+
+  /// The snapshot a walk and a later lookup both compute from one window
+  /// list, lag repair included: the one function behind the occlusion
+  /// signature, so the two can only differ when the window list did.
+  static func build(
+    entries: [Entry], focusedPid: pid_t, frontmostPID: pid_t?, ignoringPids: Set<pid_t>,
+    walkedWindowFrame: CGRect?
+  ) -> WindowSnapshot {
+    let entries = entries.filter { !ignoringPids.contains($0.pid) }
     let snapshot = build(
       entries: entries, focusedPid: focusedPid, walkedWindowFrame: walkedWindowFrame)
     guard focusedPid == frontmostPID, snapshot.activeWindowFrame != nil,

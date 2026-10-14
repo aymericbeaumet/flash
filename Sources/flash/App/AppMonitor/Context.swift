@@ -30,11 +30,24 @@ extension AppMonitor {
     return clip(context, to: topWindowFrame(for: context.processID) ?? context.frontWindowFrame)
   }
 
+  /// What a hint activation walks, with the window list that chose it, so
+  /// the prepared-model lookup reads none of its own.
+  struct ActivationTarget {
+    let context: AppContext
+    let windowEntries: [WindowSnapshot.Entry]?
+  }
+
+  func activationContext(excludingBundleIdentifier ignoredBundleIdentifier: String) -> AppContext? {
+    activationTarget(excludingBundleIdentifier: ignoredBundleIdentifier)?.context
+  }
+
   /// The app a hint activation walks: the frontmost app clipped to its top
   /// window (else the top visible window's app), or the dialog covering it.
-  /// One window-list read serves every step; each is a synchronous
-  /// WindowServer round trip on main, before the prepared model is consulted.
-  func activationContext(excludingBundleIdentifier ignoredBundleIdentifier: String) -> AppContext? {
+  /// One window-list read serves every step and the lookup after; each is a
+  /// synchronous WindowServer round trip on main.
+  func activationTarget(excludingBundleIdentifier ignoredBundleIdentifier: String)
+    -> ActivationTarget?
+  {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     let entries = WindowSnapshot.windowList(opts).map {
       WindowSnapshot.entries(from: $0, primaryH: primaryScreenHeight())
@@ -50,8 +63,10 @@ extension AppMonitor {
       base = nil
     }
     guard let base else { return nil }
-    guard let entries else { return base }
-    return coveringInteractionContext(inFrontOf: base, entries: entries) ?? base
+    guard let entries else { return ActivationTarget(context: base, windowEntries: nil) }
+    return ActivationTarget(
+      context: coveringInteractionContext(inFrontOf: base, entries: entries) ?? base,
+      windowEntries: entries)
   }
 
   func context(for pid: pid_t) -> AppContext? {

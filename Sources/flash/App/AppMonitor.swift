@@ -27,8 +27,8 @@ import os
 ///   - On completion, the prepared model is written ONLY if
 ///     `dirtyTokens[pid] == startToken` (no events during the walk) AND
 ///     the pid is still frontmost.
-///   - Model reads serve a hit ONLY if token, config revision, and
-///     freshness all match.
+///   - Model reads serve a hit ONLY if token, config revision, freshness
+///     and the window's visible region all match.
 ///
 /// The result is deterministic: two activations in the same UI state
 /// always serve the same hint set. No partial model, no stale model.
@@ -480,12 +480,33 @@ final class AppMonitor {
     localObservers.removeAll()
   }
 
-  func lookupPreparedModel(for pid: pid_t) -> PreparedModel? {
-    preparedModels.lookup(
+  /// The model for `pid` if it is still current, the visible region of its
+  /// window included: another app's window moving over or off it is window
+  /// list state no AX event reports, so the lookup recomputes the region
+  /// from `windowEntries` — the activation's own read — or one read here,
+  /// on main, through the same builder the walk used.
+  func lookupPreparedModel(
+    for pid: pid_t, windowEntries: [WindowSnapshot.Entry]? = nil
+  ) -> PreparedModel? {
+    guard let model = preparedModels.current(pid: pid) else { return nil }
+    let entries =
+      windowEntries
+      ?? WindowSnapshot.windowList().map {
+        WindowSnapshot.entries(from: $0, primaryH: primaryScreenHeight())
+      }
+    let occlusion = entries.flatMap { entries -> WindowSnapshot.OcclusionSignature? in
+      let snapshot = WindowSnapshot.build(
+        entries: entries, focusedPid: pid,
+        frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+        ignoringPids: [getpid()], walkedWindowFrame: model.occlusion?.frame)
+      return WindowSnapshot.OcclusionSignature(snapshot: snapshot, pid: pid)
+    }
+    return preparedModels.lookup(
       pid: pid,
       dirtyToken: dirtyTokens[pid] ?? 0,
       configRevision: configRevision,
-      now: DispatchTime.now())
+      now: DispatchTime.now(),
+      occlusion: occlusion)
   }
 
 }

@@ -24,6 +24,38 @@ final class WindowSnapshotTests: XCTestCase {
     XCTAssertFalse(visible.contains { $0.contains(CGPoint(x: 50, y: 50)) })
   }
 
+  /// The occlusion signature follows what covers the active window: a
+  /// foreign window moving over it changes the signature, one elsewhere on
+  /// the screen does not, and the same window list always yields the same
+  /// signature through the one builder a walk and a lookup share.
+  func testOcclusionSignatureTracksTheWindowsOverTheActiveWindow() {
+    let focused = WindowSnapshot.Entry(
+      pid: 42, layer: 0, nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    func signature(_ entries: [WindowSnapshot.Entry]) -> WindowSnapshot.OcclusionSignature? {
+      WindowSnapshot.OcclusionSignature(
+        snapshot: WindowSnapshot.build(
+          entries: entries, focusedPid: 42, frontmostPID: 42, ignoringPids: [],
+          walkedWindowFrame: focused.nsBounds),
+        pid: 42)
+    }
+    let clear = signature([focused])
+    XCTAssertEqual(clear?.fragments, [focused.nsBounds])
+    let over = WindowSnapshot.Entry(
+      pid: 7, layer: 3, nsBounds: CGRect(x: 25, y: 25, width: 50, height: 50))
+    XCTAssertNotEqual(signature([over, focused]), clear, "a window over it changes the cover")
+    let beside = WindowSnapshot.Entry(
+      pid: 7, layer: 3, nsBounds: CGRect(x: 200, y: 0, width: 50, height: 50))
+    XCTAssertEqual(signature([beside, focused]), clear, "a window beside it does not")
+    XCTAssertEqual(
+      signature([over, focused]), signature([over, focused]), "one list, one signature")
+    // The frontmost app's window under another app's normal window is the
+    // window list lagging an activation: the repaired build is the one a walk
+    // and a lookup both use, so they agree here too.
+    let lagging = WindowSnapshot.Entry(
+      pid: 7, layer: 0, nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    XCTAssertEqual(signature([lagging, focused]), clear)
+  }
+
   func testTheWalkedWindowIsTheSurfaceAndTheAppsTooltipOnlyCoversItsPatch() {
     // Firefox's "Verified by" tooltip: a small same-app window at a popup level
     // above the window the AX walk covers.

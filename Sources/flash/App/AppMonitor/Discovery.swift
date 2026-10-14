@@ -16,8 +16,12 @@ extension AppMonitor {
   /// (`DiscoveryOutcome`). `isCurrent` tells a repair that is still waiting
   /// on the app whether the activation it serves is still wanted; once it is
   /// not, the repair stops and completes with what it has.
+  /// `windowEntries` is the window list the activation already read, so the
+  /// prepared-model lookup can recompute the window's visible region without
+  /// a second WindowServer round trip; nil reads one here, on main.
   func discoverAsync(
     context: AppContext,
+    windowEntries: [WindowSnapshot.Entry]? = nil,
     targetFilter: ((JumpTarget) -> Bool)? = nil,
     isCurrent: @escaping () -> Bool = { true },
     completion: @escaping (_ hints: [AssignedHint], _ outcome: DiscoveryOutcome) -> Void
@@ -84,7 +88,7 @@ extension AppMonitor {
       // a refresh on the same window finds about 92. Fall through and refresh.
       // A degenerate one is the same kind of miss: a Chromium or Firefox tree
       // caught mid-build once gave 1 target for a view that had 98.
-      if let model = lookupPreparedModel(for: pid),
+      if let model = lookupPreparedModel(for: pid, windowEntries: windowEntries),
         !Self.discoveryLooksDegenerate(
           targets: model.targets.count, lastHealthy: healthyTargetCounts[pid])
       {
@@ -555,11 +559,14 @@ extension AppMonitor {
     var collectedTargets: Int = 0
     /// The focused window had no visible region, so nothing was walked.
     var occluded = false
+    /// What covered the window as it was walked; see `PreparedModel`.
+    var occlusion: WindowSnapshot.OcclusionSignature? = nil
   }
 
   private struct DiscoveryFrame {
     let providerContext: AppContext
     let visibleRegions: [CGRect]
+    let occlusion: WindowSnapshot.OcclusionSignature?
   }
 
   func buildPreparedModel(
@@ -585,7 +592,8 @@ extension AppMonitor {
       configRevision: configRevision,
       fingerprint: Self.targetsFingerprint(result.targets),
       freshnessMs: Self.modelFreshnessMs,
-      occluded: result.occluded)
+      occluded: result.occluded,
+      occlusion: result.occlusion)
   }
 
   static func targetsFingerprint(_ targets: [JumpTarget]) -> Int {
@@ -701,7 +709,8 @@ extension AppMonitor {
       targets: targets,
       hints: hints,
       allowsFallback: collection.allowsFallback,
-      collectedTargets: finalized.targets.count)
+      collectedTargets: finalized.targets.count,
+      occlusion: frame.occlusion)
   }
 
   private func logDiscoveryPipeline(
@@ -780,7 +789,8 @@ extension AppMonitor {
       let frame = context.frontWindowFrame
       return DiscoveryFrame(
         providerContext: context,
-        visibleRegions: frame.isNull ? [] : [frame])
+        visibleRegions: frame.isNull ? [] : [frame],
+        occlusion: nil)
     }
     // Scope to the window the walk covers, not merely the app's frontmost one.
     // A frame-scoped walk (a system dialog, a Picture in Picture player)
@@ -809,7 +819,8 @@ extension AppMonitor {
     let providerFrame = snapshot.activeWindowFrame ?? union(of: visible)
     return DiscoveryFrame(
       providerContext: clip(context, to: providerFrame, walkedWindow: walkedWindow),
-      visibleRegions: visible)
+      visibleRegions: visible,
+      occlusion: WindowSnapshot.OcclusionSignature(snapshot: snapshot, pid: context.processID))
   }
 
   /// The part of `pid`'s active window the walk may hint. Empty when it is

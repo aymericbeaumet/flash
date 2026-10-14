@@ -891,7 +891,7 @@ final class NormalModeTests: XCTestCase {
     }
     let model = PreparedModel(
       pid: 44, targets: [], hints: [], computedAt: .now(), dirtyToken: 0, configRevision: 0,
-      fingerprint: 0, freshnessMs: AppMonitor.modelFreshnessMs, occluded: false)
+      fingerprint: 0, freshnessMs: AppMonitor.modelFreshnessMs, occluded: false, occlusion: nil)
     monitor.scheduleMaintenanceRefresh(for: model)
     XCTAssertEqual(registered(), [AppMonitor.maintenanceClientID])
     monitor.cancelRefreshWork(for: 44)

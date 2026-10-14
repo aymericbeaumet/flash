@@ -69,7 +69,8 @@ it. Label lists are memoized per layout and target count, and the overlay
 keeps one attributed string per label, prefix length and accent.
 
 Prepared models contain a complete finalized target set and assigned labels.
-Reads require matching PID, dirty token, configuration revision and freshness.
+Reads require matching PID, dirty token, configuration revision, freshness and
+the window's visible region.
 AX notifications, focus, Space, display and configuration changes invalidate them.
 Stale completed walks are discarded. Walks are never served as partial captures;
 an activation miss obtains a complete walk. Model refresh timers have independent

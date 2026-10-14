@@ -21,25 +21,58 @@ final class PreparedModelStoreTests: XCTestCase {
         pid: 42,
         dirtyToken: 7,
         configRevision: 3,
-        now: now))
+        now: now,
+        occlusion: Self.walkedOcclusion))
     XCTAssertNil(
       store.lookup(
         pid: 42,
         dirtyToken: 8,
         configRevision: 3,
-        now: now))
+        now: now,
+        occlusion: Self.walkedOcclusion))
     XCTAssertNil(
       store.lookup(
         pid: 42,
         dirtyToken: 7,
         configRevision: 4,
-        now: now))
+        now: now,
+        occlusion: Self.walkedOcclusion))
     XCTAssertNil(
       store.lookup(
         pid: 42,
         dirtyToken: 7,
         configRevision: 3,
-        now: DispatchTime(uptimeNanoseconds: now.uptimeNanoseconds + 1_600_000_000)))
+        now: DispatchTime(uptimeNanoseconds: now.uptimeNanoseconds + 1_600_000_000),
+        occlusion: Self.walkedOcclusion))
+  }
+
+  /// A model is served only under the cover its walk saw. Another app's
+  /// window moving over or off the window since is a miss, and a model whose
+  /// walk had no window list is never served.
+  func testLookupRequiresTheWalksVisibleRegion() {
+    let now = DispatchTime(uptimeNanoseconds: 10_000_000_000)
+    var store = PreparedModelStore()
+    store.store(model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "a")]))
+    XCTAssertNotNil(
+      store.lookup(
+        pid: 42, dirtyToken: 7, configRevision: 3, now: now, occlusion: Self.walkedOcclusion))
+    let covered = WindowSnapshot.OcclusionSignature(
+      frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+      fragments: [CGRect(x: 0, y: 0, width: 100, height: 50)])
+    XCTAssertNil(
+      store.lookup(pid: 42, dirtyToken: 7, configRevision: 3, now: now, occlusion: covered),
+      "a window partly covered since the walk is walked again")
+    XCTAssertNil(
+      store.lookup(pid: 42, dirtyToken: 7, configRevision: 3, now: now, occlusion: nil),
+      "no window list now is a miss")
+    store.store(
+      model(
+        pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "a")],
+        occlusion: nil))
+    XCTAssertNil(
+      store.lookup(
+        pid: 42, dirtyToken: 7, configRevision: 3, now: now, occlusion: Self.walkedOcclusion),
+      "a walk that had no window list is never served")
   }
 
   func testLookupHonoursTheModelsOwnFreshnessCeiling() {
@@ -49,9 +82,15 @@ final class PreparedModelStoreTests: XCTestCase {
     extended.freshnessMs = 6_000
     store.store(extended)
     let later = DispatchTime(uptimeNanoseconds: now.uptimeNanoseconds + 5_000_000_000)
-    XCTAssertNotNil(store.lookup(pid: 42, dirtyToken: 7, configRevision: 3, now: later))
+    XCTAssertNotNil(
+      store.lookup(
+        pid: 42, dirtyToken: 7, configRevision: 3, now: later,
+        occlusion: Self.walkedOcclusion))
     let tooLate = DispatchTime(uptimeNanoseconds: now.uptimeNanoseconds + 6_100_000_000)
-    XCTAssertNil(store.lookup(pid: 42, dirtyToken: 7, configRevision: 3, now: tooLate))
+    XCTAssertNil(
+      store.lookup(
+        pid: 42, dirtyToken: 7, configRevision: 3, now: tooLate,
+        occlusion: Self.walkedOcclusion))
   }
 
   func testFreshnessDoublesOnlyForUnchangedMaintenanceWalks() {
@@ -90,7 +129,8 @@ final class PreparedModelStoreTests: XCTestCase {
       pid: 7,
       dirtyToken: 1,
       configRevision: 1,
-      now: now)
+      now: now,
+      occlusion: Self.walkedOcclusion)
     XCTAssertNotNil(found)
     XCTAssertTrue(found?.isEmptyReady ?? false)
     XCTAssertNil(
@@ -98,7 +138,8 @@ final class PreparedModelStoreTests: XCTestCase {
         pid: 8,
         dirtyToken: 1,
         configRevision: 1,
-        now: now))
+        now: now,
+        occlusion: Self.walkedOcclusion))
   }
 
   /// The logged Firefox case: a test run's floating window covered the
@@ -118,7 +159,10 @@ final class PreparedModelStoreTests: XCTestCase {
       store.store(
         model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [], occluded: true)))
     XCTAssertNil(store.current(pid: 42))
-    XCTAssertNil(store.lookup(pid: 42, dirtyToken: 7, configRevision: 3, now: now))
+    XCTAssertNil(
+      store.lookup(
+        pid: 42, dirtyToken: 7, configRevision: 3, now: now,
+        occlusion: Self.walkedOcclusion))
   }
 
   /// The snapshot side of the same case: a floating window of another
@@ -167,7 +211,8 @@ final class PreparedModelStoreTests: XCTestCase {
     revision: UInt64,
     computedAt: DispatchTime,
     targets: [JumpTarget],
-    occluded: Bool = false
+    occluded: Bool = false,
+    occlusion: WindowSnapshot.OcclusionSignature? = PreparedModelStoreTests.walkedOcclusion
   ) -> PreparedModel {
     let hints = targets.map { AssignedHint(target: $0, label: "a") }
     return PreparedModel(
@@ -179,8 +224,14 @@ final class PreparedModelStoreTests: XCTestCase {
       configRevision: revision,
       fingerprint: AppMonitor.targetsFingerprint(targets),
       freshnessMs: AppMonitor.modelFreshnessMs,
-      occluded: occluded)
+      occluded: occluded,
+      occlusion: occlusion)
   }
+
+  /// The cover a walk saw: the whole window visible.
+  static let walkedOcclusion = WindowSnapshot.OcclusionSignature(
+    frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+    fragments: [CGRect(x: 0, y: 0, width: 100, height: 100)])
 
   private func target(
     id: String, frame: CGRect = CGRect(x: 0, y: 0, width: 10, height: 10)
