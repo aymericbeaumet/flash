@@ -339,9 +339,8 @@ public struct CandidateResolution: Sendable {
 
 /// Discrete source actions the host can dispatch through ``FlashSource``.
 /// Each case carries the parameters the action needs and knows which
-/// ``FlashSourceCapabilities`` flag gates participation, so a single
-/// dispatch method on the SPI covers what used to be 12 parallel
-/// per-action methods.
+/// ``FlashSourceCapabilities`` flag gates participation, so one dispatch
+/// method on the SPI covers every action.
 public enum SourceAction: Sendable, Equatable {
   case tabSelect(index: Int)
   case tabNext
@@ -547,8 +546,6 @@ public struct SourceActionResult: Sendable {
     self.navigationURL = navigationURL
     self.failureReason = failureReason
   }
-
-  public var didPerform: Bool { disposition == .performed }
 
   /// This result, attributed to the source that produced it.
   public func attributed(to source: String) -> SourceActionResult {

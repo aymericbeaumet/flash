@@ -16,10 +16,7 @@ public struct AllowListEntry: Codable {
   /// page-relative instead of absolute screen coords makes the sidecar
   /// invariant to where Firefox's window actually sits — critical now
   /// that the oracle parks its windows offscreen, which shifts every
-  /// absolute coordinate by the (clamped) offscreen offset. The legacy
-  /// sidecars were recorded under the old maximize path where the page
-  /// sat at the screen origin, so their absolute values already equal
-  /// page-relative values within tolerance.
+  /// absolute coordinate by the (clamped) offscreen offset.
   public let rect: [Double]
   public let axRole: String?
   public let domSelector: String?

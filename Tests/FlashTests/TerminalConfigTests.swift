@@ -192,26 +192,6 @@ final class TerminalConfigTests: XCTestCase {
     XCTAssertTrue(config.invalidPopupNames.contains("editor"))
   }
 
-  func testRetiredTerminalKeysPointAtTheirReplacements() {
-    let config = ConfigLoader.parse(
-      """
-      [popup.feed]
-      command = ["newsboat"]
-      working_directory = "."
-      """)
-    XCTAssertTrue(
-      config.diagnostics.contains {
-        $0.message == "popup.feed: unknown key 'working_directory' — did you mean 'cwd'?"
-      }, "\(config.diagnostics)")
-    for key in ["columns", "rows"] {
-      let sized = ConfigLoader.parse("[popup.feed]\ncommand = [\"newsboat\"]\n\(key) = 30")
-      XCTAssertTrue(
-        sized.diagnostics.contains {
-          $0.message == "popup.feed: unknown key '\(key)' — did you mean 'size'?"
-        }, "\(sized.diagnostics)")
-    }
-  }
-
   func testResolvedDiagnosticsDoNotExposeTerminalCommandsOrEnvironment() {
     let config = ConfigLoader.parse(
       """

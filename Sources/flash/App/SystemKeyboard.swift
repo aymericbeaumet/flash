@@ -59,10 +59,6 @@ enum SystemKeyboard {
     }
   }
 
-  static func postFunctionKey(_ index: Int) {
-    postNamedKey("f\(index)")
-  }
-
   private static func postNamedKey(_ name: String, flags: CGEventFlags = []) {
     guard let key = HotkeySyntax.parseKey(name) else { return }
     postKey(CGKeyCode(key), flags: flags)

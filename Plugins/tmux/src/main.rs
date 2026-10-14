@@ -2660,8 +2660,8 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     }
     let mut raw_links: Vec<RawLink> = Vec::new();
 
-    // Capture every pane concurrently: this used to be one awaited tmux
-    // subprocess per pane, strictly sequential, on the `f` hot path.
+    // Capture every pane concurrently: one subprocess per pane on the `f`
+    // hot path would otherwise run strictly in sequence.
     let capture_runner = if client.remote {
         PaneCaptureRunner::Remote(plugin.remote_config(&client.backend_id))
     } else {

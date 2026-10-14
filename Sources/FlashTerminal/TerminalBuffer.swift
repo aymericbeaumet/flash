@@ -121,7 +121,6 @@ public struct TerminalFrame: Equatable, Sendable {
   public let changedRows: Set<Int>?
 
   public var cells: TerminalCells { TerminalCells(grid: grid, columns: columns) }
-  public var wrappedRows: Set<Int> { Set(grid.indices.filter { grid[$0].wrapped }) }
 
   func link(atColumn column: Int, row: Int) -> URL? {
     guard (0..<columns).contains(column), (0..<rows).contains(row) else { return nil }

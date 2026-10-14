@@ -429,9 +429,6 @@ enum ActionDispatcher {
 
   static var heldButton: MouseButtonKind? { buttonHold.held?.button }
 
-  /// What the held button is for: a visual selection or a drag.
-  static var heldPurpose: ButtonHold? { buttonHold.held?.purpose }
-
   /// Told, on main, each time the held button changes, with the hold now in
   /// place: the mode follows it (VISUAL or DRAG), whichever path pressed or
   /// released it — `mouse_button`, pointer mode's `v`, an overlay cancel, a

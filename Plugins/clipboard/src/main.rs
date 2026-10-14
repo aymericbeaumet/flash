@@ -56,13 +56,13 @@ impl FlashPlugin for Clipboard {
             DEFAULT_HISTORY_SIZE
         });
         self.capacity.store(capacity, Ordering::Relaxed);
-        let (mut loaded, migrated) = load_history(&ctx).await;
+        let mut loaded = load_history(&ctx).await;
         // A smaller history_size drops the oldest entries, and their images.
         let dropped: Vec<StoredEntry> = loaded.drain(capacity.min(loaded.len())..).collect();
         if let Ok(mut hist) = self.history.lock() {
             *hist = loaded.clone();
         }
-        if migrated || !dropped.is_empty() {
+        if !dropped.is_empty() {
             write_state(&ctx, HISTORY_FILE, &loaded).await;
         }
         for entry in dropped {
@@ -410,47 +410,14 @@ async fn remove_image_files(ctx: &Context, id: &str) {
     }
 }
 
-/// `(entries, migrated)`. A previous install stored a JSON array of strings;
-/// that file is rewritten once as structured entries. Anything else unreadable
-/// stays on disk until the next capture replaces it.
-async fn load_history(ctx: &Context) -> (Vec<StoredEntry>, bool) {
+/// The stored history; a missing or unreadable file is an empty history.
+async fn load_history(ctx: &Context) -> Vec<StoredEntry> {
     let Ok(raw) = tokio::fs::read_to_string(ctx.share_dir().join(HISTORY_FILE)).await else {
-        return (Vec::new(), false);
+        return Vec::new();
     };
-    if let Ok(entries) = serde_json::from_str::<Vec<StoredEntry>>(&raw) {
-        return (entries.into_iter().filter(valid_stored).collect(), false);
-    }
-    let Ok(texts) = serde_json::from_str::<Vec<String>>(&raw) else {
-        return (Vec::new(), false);
-    };
-    let entries = texts
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, text)| text_entry(index as u64, text))
-        .collect();
-    (entries, true)
-}
-
-fn text_entry(index: u64, text: String) -> Option<StoredEntry> {
-    if text.is_empty() || text.len() > MAX_ENTRY_BYTES {
-        return None;
-    }
-    Some(StoredEntry {
-        id: format!(
-            "{:016x}{:016x}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0),
-            index
-        ),
-        kind: "text".to_string(),
-        text,
-        html: None,
-        mime: None,
-        files: Vec::new(),
-        sha256: None,
-    })
+    serde_json::from_str::<Vec<StoredEntry>>(&raw)
+        .map(|entries| entries.into_iter().filter(valid_stored).collect())
+        .unwrap_or_default()
 }
 
 fn valid_stored(entry: &StoredEntry) -> bool {
@@ -576,6 +543,28 @@ mod tests {
             .permissions()
             .mode()
             & 0o777
+    }
+
+    fn text_entry(index: u64, text: String) -> Option<StoredEntry> {
+        if text.is_empty() || text.len() > MAX_ENTRY_BYTES {
+            return None;
+        }
+        Some(StoredEntry {
+            id: format!(
+                "{:016x}{:016x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0),
+                index
+            ),
+            kind: "text".to_string(),
+            text,
+            html: None,
+            mime: None,
+            files: Vec::new(),
+            sha256: None,
+        })
     }
 
     fn plugin() -> Clipboard {
@@ -716,32 +705,6 @@ mod tests {
         assert_eq!(mode(&dir).await, 0o700);
         assert_eq!(mode(&file).await, 0o600);
 
-        tokio::fs::remove_dir_all(ctx.data_dir()).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_string_array_history_is_rewritten_once() {
-        let harness = flash_plugin::testing::Harness::new("clipboard");
-        let ctx = harness.context();
-        assert!(
-            write_state(
-                &ctx,
-                HISTORY_FILE,
-                &vec!["newer".to_string(), "older".to_string()]
-            )
-            .await
-        );
-        let clipboard = plugin();
-        clipboard.on_start(ctx.clone()).await;
-        let shown = show(&clipboard, &ctx).await;
-        assert_eq!(shown[0]["value"], "newer");
-        assert_eq!(shown[1]["value"], "older");
-        assert_eq!(shown[0]["kind"], "text");
-        assert_eq!(shown[0]["id"].as_str().unwrap().len(), 32);
-        let stored = read_state::<Vec<StoredEntry>>(&ctx, HISTORY_FILE)
-            .await
-            .unwrap();
-        assert_eq!(stored[0].text, "newer");
         tokio::fs::remove_dir_all(ctx.data_dir()).await.unwrap();
     }
 

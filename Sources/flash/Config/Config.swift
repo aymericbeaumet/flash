@@ -678,8 +678,6 @@ struct Config {
     static let defaultTemplateString =
       "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}"
     var template: FlashStatusBarTemplate = Self.defaultTemplate
-    /// The defining layer, retained for diagnostics and source identity.
-    var templateSourceURL: URL?
     var sources: [String: FlashStatusBarSourceDefinition] = [:]
     var sourcesUsingDefaultInterval: Set<String> = []
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
@@ -1444,10 +1442,6 @@ struct Config {
     if let activeValueSource {
       valueSources[path] = activeValueSource
     }
-  }
-
-  mutating func clearLocation(path: String) {
-    valueLocations.removeValue(forKey: path)
   }
 
   mutating func addDiagnostic(

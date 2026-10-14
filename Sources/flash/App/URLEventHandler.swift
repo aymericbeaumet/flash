@@ -475,11 +475,6 @@ enum MouseCommand: Hashable {
     }
   }
 
-  var isPath: Bool {
-    if case .path = self { return true }
-    return false
-  }
-
   var isSticky: Bool {
     if case .sticky = self { return true }
     return false
@@ -503,11 +498,6 @@ enum MouseCommand: Hashable {
     }
   }
 
-  var isMove: Bool {
-    if case .move = self { return true }
-    return false
-  }
-
   var isDrag: Bool {
     if case .drag = self { return true }
     return false
@@ -520,11 +510,6 @@ enum MouseCommand: Hashable {
 
   var isMulti: Bool {
     if case .multi = self { return true }
-    return false
-  }
-
-  var isAdjust: Bool {
-    if case .adjust = self { return true }
     return false
   }
 

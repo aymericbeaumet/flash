@@ -1199,40 +1199,6 @@ extension AppDelegate {
     registry.registeredCandidateSourceLabels().map(CandidateFinder.sourceCompletionCandidate)
   }
 
-  /// Dispatch a selected bang row: route the live query's remainder to the
-  /// owning plugin via `invokeShebang`. Returns false for non-bang
-  /// candidates so callers fall through to the normal open path.
-  func dispatchBangCandidate(_ candidate: Candidate, query: String) -> Bool {
-    guard candidate.kind == CandidateFinder.bangKind,
-      let token = candidate.sourcePayload, !token.isEmpty
-    else { return false }
-    let remainder: String
-    if let bang = CandidateFinder.parseBang(query),
-      bang.token.lowercased() == token.lowercased()
-    {
-      remainder = bang.remainder
-    } else {
-      remainder = ""
-    }
-    return pluginManager.invokeShebang(
-      token: token,
-      query: remainder,
-      in: pluginSelectorContext()
-    ) { [weak self] ok, pid, stdout, navigationURL in
-      guard let self else { return }
-      guard ok else {
-        // A failed bang (unknown token, blocked open, plugin error) must
-        // say so — a submit that does visibly nothing reads as Flash
-        // being broken.
-        self.overlay.displayBanner("!\(token) failed")
-        return
-      }
-      self.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-      guard let stdout, !stdout.isEmpty else { return }
-      self.overlay.displayBanner(stdout)
-    }
-  }
-
   func candidateFinderDisplayItems(windowSize: Int? = nil) -> [CandidateDisplayItem] {
     guard !finder.matches.isEmpty else { return [] }
     let window = CandidateFinder.displayWindow(

@@ -18,7 +18,6 @@ extension OverlayPanel {
   }
 
   static let nordPolarNight0 = NSColor(calibratedRed: 0.18, green: 0.20, blue: 0.25, alpha: 1)
-  static let nordPolarNight1 = NSColor(calibratedRed: 0.23, green: 0.26, blue: 0.32, alpha: 1)
   static let nordSnowStorm0 = NSColor(calibratedRed: 0.85, green: 0.87, blue: 0.91, alpha: 1)
   static let nordSnowStorm1 = NSColor(calibratedRed: 0.90, green: 0.91, blue: 0.94, alpha: 1)
   static let nordSnowStorm2 = NSColor(calibratedRed: 0.93, green: 0.94, blue: 0.96, alpha: 1)
@@ -34,7 +33,6 @@ extension OverlayPanel {
   /// against NORMAL's green and HYPER's violet.
   static let nordAuroraOrange = NSColor(calibratedRed: 0.82, green: 0.53, blue: 0.44, alpha: 1)
   static let tmuxGrey245 = NSColor(calibratedWhite: 0.54, alpha: 1)
-  static let tmuxRed196 = NSColor(calibratedRed: 1.00, green: 0.00, blue: 0.00, alpha: 1)
 
   static let nordPolarNight0CG = nordPolarNight0.cgColor
   static let nordSnowStorm1CG = nordSnowStorm1.cgColor
@@ -45,7 +43,6 @@ extension OverlayPanel {
   static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
   static let hyperPurpleCG = hyperPurple.cgColor
   static let nordAuroraOrangeCG = nordAuroraOrange.cgColor
-  static let tmuxGrey245CG = tmuxGrey245.cgColor
   /// Hairline drawn along the bottom edge of the status bar so it separates
   /// from the window beneath without a shadow.
   static let statusBarHairlineCG = NSColor(calibratedWhite: 1, alpha: 0.07).cgColor

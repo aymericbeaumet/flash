@@ -147,20 +147,4 @@ final class StatusBarInlineTemplateTests: XCTestCase {
     XCTAssertEqual(run.foreground, .red)
   }
 
-  func testOptionsTablesAreRejected() {
-    let config = ConfigLoader.parse(
-      """
-      [statusbar]
-      template = "#{E:@left}"
-      [statusbar.options]
-      "@left" = "#{flash.mode}"
-      """)
-    XCTAssertEqual(
-      config.loadingDiagnostics.map(\.message),
-      ["[statusbar.options] is not read; write its formats inline in [statusbar] template"])
-    XCTAssertEqual(
-      FlashStatusBarTemplateEngine.render(
-        template: config.statusBar.template, context: context(app: "App")
-      ).modeText, "", "no option is set")
-  }
 }

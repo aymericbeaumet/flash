@@ -539,80 +539,13 @@ enum ConfigLoader {
     locations: ConfigSourceLocationIndex,
     into config: inout Config
   ) {
-    for (key, value) in table where !known.contains(key) {
+    for key in table.keys where !known.contains(key) {
       let fullPath = path + [key]
-      if let moved = movedKeys(fullPath, value: value) {
-        for (message, location) in moved {
-          config.addDiagnostic(message, location: location(locations))
-        }
-        continue
-      }
       let dotted = fullPath.joined(separator: ".")
       let suggestion = closestKnownKey(to: key, in: known).map { " — did you mean '\($0)'?" } ?? ""
       config.addDiagnostic(
         "unknown config key '\(dotted)'\(suggestion)",
         location: locations.location(for: fullPath))
-    }
-  }
-
-  /// Retired keys, each rejected with where its setting lives now: the popup
-  /// keys `[popup]` replaced (`[terminal.<name>]`, `[statusbar.popup]` and
-  /// the `popup_*` style keys of `[statusbar]`), the `options` tables a
-  /// template now writes inline, and `[open]`, now part of `[flashlight]`.
-  private static func movedKeys(
-    _ path: [String], value: any TOMLValueConvertible
-  ) -> [(String, (ConfigSourceLocationIndex) -> ConfigLocation?)]? {
-    func named(_ table: TOMLTable, _ message: @escaping (String) -> String) -> [(
-      String, (ConfigSourceLocationIndex) -> ConfigLocation?
-    )] {
-      table.keys.sorted().map { name in
-        (message(name), { $0.location(for: path + [name]) })
-      }
-    }
-    switch path {
-    case ["terminal"]:
-      guard let table = value.table else { return nil }
-      return named(table) { name in
-        "[terminal.\(name)] is not read; declare it as [popup.\(name)] with command = [...] "
-          + "(cwd, env, size = \"COLUMNSxROWS\" and persistent are its other keys)"
-      }
-    case ["statusbar", "popup"]:
-      guard let table = value.table else { return nil }
-      return named(table) { name in
-        "statusbar.popup.\(name) is not read; declare it as [popup.\(name)] with text = \"…\""
-      }
-    case ["open"]:
-      guard let table = value.table else { return nil }
-      return named(table) { name in
-        ["ignored_apps", "app_directories"].contains(name)
-          ? "open.\(name) is not read; set \(name) in [flashlight]"
-          : "[open] is not read; its ignored_apps and app_directories are in [flashlight]"
-      }
-    case ["statusbar", "options"]:
-      return [
-        (
-          "[statusbar.options] is not read; write its formats inline in [statusbar] template",
-          { $0.location(for: path) }
-        )
-      ]
-    case _ where path.count == 3 && path[0] == "widgets" && path[2] == "options":
-      return [
-        (
-          "[widgets.\(path[1]).options] is not read; write its formats inline in "
-            + "[widgets.\(path[1])] template",
-          { $0.location(for: path) }
-        )
-      ]
-    default:
-      guard path.count == 2, path[0] == "statusbar", path[1].hasPrefix("popup_"),
-        popupStyleKeys.contains(String(path[1].dropFirst("popup_".count)))
-      else { return nil }
-      return [
-        (
-          "statusbar.\(path[1]) is not read; set \(path[1].dropFirst("popup_".count)) in [popup]",
-          { $0.location(for: path) }
-        )
-      ]
     }
   }
 
@@ -1053,8 +986,6 @@ enum ConfigLoader {
       into: &config
     ) { value, config in
       config.statusBar.template.template = value
-      // Retain the defining layer rather than the last layer parsed.
-      config.statusBar.templateSourceURL = sourceURL
     }
     applyString(
       table["monitor"], path: ["statusbar", "monitor"],
@@ -1265,11 +1196,6 @@ enum ConfigLoader {
   private static let terminalPopupKeys: Set<String> = [
     "command", "cwd", "env", "size", "persistent",
   ]
-  /// Keys of the retired `[terminal.<name>]` tables, pointed at their
-  /// replacement.
-  private static let renamedTerminalPopupKeys = [
-    "working_directory": "cwd", "columns": "size", "rows": "size",
-  ]
 
   /// `[popup]`: TOML types tell the keys apart. A table is a named popup
   /// (`[popup.<name>]`); a scalar is a style key shared by every popup. A
@@ -1357,9 +1283,9 @@ enum ConfigLoader {
     if let key = definition.keys.sorted().first(where: { !allowed.contains($0) }) {
       let suggestion =
         isText
-        ? terminalPopupKeys.contains(key) || renamedTerminalPopupKeys[key] != nil
+        ? terminalPopupKeys.contains(key)
           ? " (\(key) belongs to command popups; a text popup takes only text)" : ""
-        : (renamedTerminalPopupKeys[key] ?? closestKnownKey(to: key, in: allowed)).map {
+        : closestKnownKey(to: key, in: allowed).map {
           " — did you mean '\($0)'?"
         } ?? ""
       invalid(": unknown key '\(key)'\(suggestion)", at: key)

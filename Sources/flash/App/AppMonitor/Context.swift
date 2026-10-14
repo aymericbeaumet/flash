@@ -37,10 +37,6 @@ extension AppMonitor {
     let windowEntries: [WindowSnapshot.Entry]?
   }
 
-  func activationContext(excludingBundleIdentifier ignoredBundleIdentifier: String) -> AppContext? {
-    activationTarget(excludingBundleIdentifier: ignoredBundleIdentifier)?.context
-  }
-
   /// The app a hint activation walks: the frontmost app clipped to its top
   /// window (else the top visible window's app), or the dialog covering it.
   /// One window-list read serves every step and the lookup after; each is a

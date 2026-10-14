@@ -138,9 +138,6 @@ final class StatusTerminalRegistry {
     return false
   }
 
-  /// A terminal popup with no session yet: showing it forks its process.
-  func needsSpawn(_ name: String) -> Bool { definitions[name] != nil && entries[name] == nil }
-
   func apply(
     style: Config.PopupStyle, terminals: [String: Config.Terminal],
     invalid: Set<String> = [], prewarm: Set<String> = []

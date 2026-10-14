@@ -906,9 +906,8 @@ final class OverlayPanel: NSPanel {
   /// distinguish nil-cached from absent-from-cache.
   ///
   /// Cache is keyed on the *normalised* hex (whitespace trimmed,
-  /// leading `#` removed, lowercased). The previous version keyed on
-  /// the raw input, so `"#FFAA00"` and `" #ffaa00 "` got separate
-  /// entries and the per-frame parse ran on every variant.
+  /// leading `#` removed, lowercased), so `"#FFAA00"` and `" #ffaa00 "`
+  /// share one entry and one parse.
   private var colorCache: [String: NSColor] = [:]
   private static let parseFailureSentinel = NSColor.clear
 

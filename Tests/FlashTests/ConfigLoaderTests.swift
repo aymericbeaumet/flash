@@ -1000,29 +1000,6 @@ final class ConfigLoaderTests: XCTestCase {
       })
   }
 
-  /// `[open]` moved into `[flashlight]`: its keys are rejected with where
-  /// they live now, and read nothing.
-  func testOpenSectionIsRejectedForFlashlight() {
-    let c = ConfigLoader.parse(
-      """
-      [open]
-      ignored_apps = ["Flash"]
-      app_directories = ["/Applications"]
-      """)
-    XCTAssertEqual(
-      Set(c.loadingDiagnostics.map(\.message)),
-      [
-        "open.ignored_apps is not read; set ignored_apps in [flashlight]",
-        "open.app_directories is not read; set app_directories in [flashlight]",
-      ])
-    XCTAssertTrue(c.loadingDiagnostics.allSatisfy { $0.location != nil })
-    XCTAssertTrue(c.flashlight.ignoredApps.isEmpty)
-    XCTAssertEqual(c.flashlight.appDirectories, Config.Flashlight.defaultAppDirectories)
-    XCTAssertEqual(
-      ConfigLoader.parse("", environment: ["FLASH_OPEN_IGNORED_APPS": "[\"Flash\"]"])
-        .flashlight.ignoredApps, [], "the old environment name reads nothing")
-  }
-
   func testParsesEmptyMagicModifiersArray() {
     let c = ConfigLoader.parse(
       """
@@ -2307,28 +2284,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(
       c.mode.normal.contains { $0.key.hasPrefix("\\") && $0.key.hasSuffix("x") },
       "expected a resolved <leader>x mapping, got keys: \(c.mode.normal.map(\.key))")
-  }
-
-  func testLayeredParseTemplateSourceFollowsDefiningLayer() {
-    // Diagnostics retain the file that defined the template even when later
-    // layers change unrelated settings.
-    let definer = ConfigLoader.Layer(
-      text: """
-        [statusbar]
-        template = "#{flash.mode}"
-        """,
-      sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"),
-      diagnosticLabel: "config.default.toml")
-    let silent = ConfigLoader.Layer(
-      text: """
-        [hints]
-        min_length = 2
-        """,
-      sourceURL: URL(fileURLWithPath: "/tmp/user/flash.toml"))
-    let c = ConfigLoader.parseLayers([definer, silent])
-    XCTAssertEqual(
-      c.statusBar.templateSourceURL,
-      URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
   }
 
   func testLayeredPopupSourcesResolveCommandsAgainstTheirDefiningFiles() {
