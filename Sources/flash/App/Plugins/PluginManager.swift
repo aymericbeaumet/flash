@@ -417,19 +417,19 @@ final class PluginManager {
     catalogStore.onCatalogsChanged = nil
     let plugins = queue.sync { () -> [PluginProcess] in
       let snapshot = Array(pluginsByID.values)
-      for plugin in pluginsByID.values {
-        plugin.onStatusChanged = nil
-        plugin.onHostRequest = nil
-        plugin.runningApplicationsProvider = nil
-      }
       pluginsByID.removeAll()
       sourceAdaptersByID.removeAll()
       loadFailureStatuses.removeAll()
       publishHotSnapshot()
       return snapshot
     }
+    // The callbacks are read on each plugin's own queue and on main; they
+    // are cleared only once the child that could still invoke them is gone.
     for plugin in plugins {
       plugin.stopAndWait(reason: "manager_stop")
+      plugin.onStatusChanged = nil
+      plugin.onHostRequest = nil
+      plugin.runningApplicationsProvider = nil
     }
     catalogStore.removeAll()
   }
