@@ -183,7 +183,8 @@ sub-cell labelled with the two keys that reach it (`qw` is `q`, then `w`), so
 the next key can be read before the first is pressed; the step's own labels are
 drawn on top and stay the first thing to find. The clicking step and cells too
 small for a two-letter label show no preview. `hints.mouse_grid_preview =
-false` turns it off.
+false` turns it off. The clicking step's labels are see-through, so the exact
+point each one clicks shows under it.
 
 Colemak uses `12345` / `qwfpg` / `arstd` / `zxcvb` and Dvorak `12345` /
 `',.py` / `aoeui` / `;qjkx`; a literal `hints.keys` gets the QWERTY block, and

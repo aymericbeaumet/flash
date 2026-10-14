@@ -50,6 +50,28 @@ enum MouseGrid {
   /// first is pressed. Never a key target of its own.
   static let previewCellRole = "FlashMouseGridPreviewCell"
 
+  /// How strongly each kind of grid cell draws, as factors the renderer
+  /// applies. The step's own cells hold the eye. The preview is a faint hint
+  /// under them. The clicking step's label is see-through, so the point it
+  /// clicks (the cell or chip centre, under the label) stays visible.
+  struct Appearance: Equatable {
+    /// Scales `hints.mouse_grid_opacity` for the tile's tint.
+    var tint: CGFloat
+    /// Added to the tint's alpha for the tile's border.
+    var border: CGFloat
+    /// Opacity of the label chip, letter included.
+    var label: CGFloat
+
+    static func of(role: String?) -> Appearance {
+      switch role {
+      case previewCellRole: return Appearance(tint: 0.15, border: 0.04, label: 0.3)
+      case finalCellRole: return Appearance(tint: 1, border: 0.3, label: 0.6)
+      case finalChipRole: return Appearance(tint: 1, border: 0.3, label: 0.6)
+      default: return Appearance(tint: 1, border: 0.3, label: 1)
+      }
+    }
+  }
+
   static func cellSize(of region: CGRect, shape: Shape) -> CGSize {
     guard shape.rows > 0, shape.columns > 0 else { return .zero }
     return CGSize(

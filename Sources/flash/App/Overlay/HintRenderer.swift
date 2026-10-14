@@ -149,8 +149,7 @@ extension OverlayPanel {
       // translucent backdrop. Larger clicking cells stay tiles.
       let isMouseGridFinalChip =
         isMouseGridHint && hint.target.role == MouseGrid.finalChipRole
-      let isMouseGridPreview =
-        isMouseGridHint && hint.target.role == MouseGrid.previewCellRole
+      let gridAppearance = MouseGrid.Appearance.of(role: hint.target.role)
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -168,10 +167,10 @@ extension OverlayPanel {
       // Without this reset, the next activation pulls hidden chips out
       // of the pool and the user sees only the debug outlines.
       chip.isHidden = false
-      // Every chip layer stays at full opacity. Mouse-grid cell
-      // translucency rides on the tint's colour alpha instead (set
-      // below), so the opaque label chip nested inside each cell — and
-      // therefore the letter — never inherits the see-through tint.
+      // Chip layers start at full opacity. Mouse-grid cell translucency
+      // rides on the tint's colour alpha instead (set below), so the label
+      // chip nested inside each cell never inherits the see-through tint;
+      // only the clicking step dims its label on purpose.
       chip.opacity = 1
       let label = dequeueLabelLayer()
       label.isHidden = false
@@ -259,10 +258,10 @@ extension OverlayPanel {
         // tint — never the letter — so the hint stays readable on any
         // background (light or dark) without its contrast drifting.
         let tint = Self.mouseGridColor(index: idx)
-        // A preview cell — the step after this one, read ahead — is a faint
-        // tile with a dimmed label chip, so the step's own cells, drawn over
-        // it, stay the first thing the eye finds.
-        let alpha = CGFloat(mouseGridOpacity) * (isMouseGridPreview ? 0.35 : 1)
+        // A preview cell (the step after this one, read ahead) is a faint
+        // tile with a faint label chip, so the step's own cells, drawn over
+        // it, stay the first thing the eye finds (`MouseGrid.Appearance`).
+        let alpha = CGFloat(mouseGridOpacity) * gridAppearance.tint
         chip.cornerRadius = 0
         chip.borderWidth = 1
         chip.colors = [
@@ -271,8 +270,7 @@ extension OverlayPanel {
           (tint.blended(withFraction: 0.40, of: .white) ?? tint)
             .withAlphaComponent(alpha).cgColor,
         ]
-        chip.borderColor =
-          tint.withAlphaComponent(min(1, alpha + (isMouseGridPreview ? 0.12 : 0.3))).cgColor
+        chip.borderColor = tint.withAlphaComponent(min(1, alpha + gridAppearance.border)).cgColor
 
         // Centred hint: the exact "f"-hint chip design (same gradient,
         // corner radius, border, glyph) so the letter is always crisp
@@ -298,7 +296,8 @@ extension OverlayPanel {
           y: labelAbs.minY - chipLocal.minY,
           width: labelAbs.width,
           height: labelAbs.height)
-        labelChip.opacity = isMouseGridPreview ? 0.5 : 1
+        // The clicking step's label lets its centre, the click point, show.
+        labelChip.opacity = Float(gridAppearance.label)
         label.frame = CGRect(x: 0, y: labelYOffset, width: chipW, height: labelHeight)
         labelChip.addSublayer(label)
         chip.addSublayer(labelChip)
@@ -306,6 +305,8 @@ extension OverlayPanel {
         chip.cornerRadius = 3
         chip.borderWidth = 1
         if isMouseGridFinalChip {
+          // The chip sits on its click point, so it is see-through.
+          chip.opacity = Float(gridAppearance.label)
           // Mouse-grid cluster only: make the chip background
           // slightly translucent so the user can see what's behind the
           // cluster while picking the precise click target. The label

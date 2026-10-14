@@ -60,4 +60,21 @@ final class MouseGridPreviewTests: XCTestCase {
         $0.message.contains("hints.mouse_grid_preview")
       })
   }
+
+  /// The step's own cells hold the eye; the preview is a faint hint under
+  /// them; the clicking step lets the point it clicks show through its label.
+  func testThePreviewIsFaintAndTheClickingStepIsSeeThrough() {
+    let cell = MouseGrid.Appearance.of(role: MouseGrid.cellRole)
+    let preview = MouseGrid.Appearance.of(role: MouseGrid.previewCellRole)
+    let commit = MouseGrid.Appearance.of(role: MouseGrid.finalCellRole)
+    let chip = MouseGrid.Appearance.of(role: MouseGrid.finalChipRole)
+    XCTAssertEqual(cell.tint, 1)
+    XCTAssertEqual(cell.label, 1)
+    XCTAssertLessThanOrEqual(preview.tint, 0.2)
+    XCTAssertLessThanOrEqual(preview.label, 0.35)
+    XCTAssertLessThan(preview.border, cell.border)
+    XCTAssertLessThan(commit.label, 1)
+    XCTAssertGreaterThan(commit.label, preview.label)
+    XCTAssertLessThan(chip.label, 1)
+  }
 }
