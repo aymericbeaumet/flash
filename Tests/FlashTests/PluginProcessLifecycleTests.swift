@@ -841,6 +841,41 @@ final class PluginProcessLifecycleTests: XCTestCase {
     }
   }
 
+  /// A second planned reload inside the grace window arms it again: a label
+  /// the newest replacement has not republished yet is not blanked by the
+  /// deadline the first reload armed.
+  func testASecondReloadInsideTheGraceArmsItAgain() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusrearm",
+      manifest: PluginFixtureKit.manifest(id: "statusrearm", extra: #""status": ["alpha"]"#),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let previousGrace = PluginProcess.statusReloadGraceSeconds
+    PluginProcess.statusReloadGraceSeconds = 2
+    defer { PluginProcess.statusReloadGraceSeconds = previousGrace }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait() }
+    process.start()
+    waitUntilTrue("initial startup") { process.runtimeStateSnapshot() == .running }
+    process.applyStatusSegments(["segments": ["alpha": "CPU 12%"]])
+    process.reload(reason: "plugins_reload")
+    waitUntilTrue("first reload finished") {
+      fixture.spawnCount() == 2 && process.runtimeStateSnapshot() == .running
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+    process.reload(reason: "plugins_reload")
+    waitUntilTrue("second reload finished") {
+      fixture.spawnCount() == 3 && process.runtimeStateSnapshot() == .running
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+    XCTAssertEqual(
+      process.statusBarInfo().statusSegments["alpha"], .text("CPU 12%"),
+      "the first reload's deadline has passed; the second one's has not")
+    waitUntilTrue("expires after the grace the second reload armed") {
+      process.statusBarInfo().statusSegments["alpha"] == nil
+    }
+  }
+
   func testRejectedReloadClearsRetainedStatusImmediately() throws {
     let fixture = try PluginFixtureKit.make(
       id: "statusfailed",

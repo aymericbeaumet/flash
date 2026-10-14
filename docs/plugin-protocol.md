@@ -82,8 +82,10 @@ and a status-bound plugin that stops being observed keeps its budget too.
 Lifecycle transitions belong to attempt generations. Stop/reload invalidates
 pending retries, installation completions, and transport work. Rejected
 initialize replies park immediately. The published catalog survives
-crashes and restarts (see `publish`) and is dropped on `failed` or unload;
-status segments clear on any teardown; in-flight `perform`s settle as errors.
+crashes and restarts (see `publish`) and is dropped on `failed` or unload.
+A planned reload keeps the previous status values for up to ten seconds,
+until each is republished, measured from the newest replacement; any other
+teardown clears them. In-flight `perform`s settle as errors.
 Asynchronous host RPC replies stay attached to the child that requested them:
 a replacement child can reuse an ID without receiving the old child's reply.
 

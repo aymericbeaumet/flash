@@ -181,6 +181,7 @@ among `high`, `normal` and `low`; `system` is core-only.
 | Catalog notify · `core:catalog_notify:<id>` | At most once a second | normal | An open flashlight re-reads the store on it |
 | Inspector publish · `core:inspector_publish:<id>` | 100 ms window while a stream is open | normal | A diagnostic page |
 | Plugin restart · `core:plugin_restart:<id>:<n>` | 1–30 s backoff | low | Catalogs survive a restart |
+| Plugin status grace · `core:plugin_status_grace:<id>:<n>` | 10 s after a planned reload | low | A stale label blanking late is not watched |
 | Liveness sweep · `core:plugin_liveness` | 30 s while a plugin runs | low | Background upkeep |
 | Covered widget · `core:widget_hidden:<name>` | 30 s grace | low | Nobody can see a covered widget |
 | Plugin cadences and deadlines · `plugin:<id>:<name>` | Plugin-chosen | Plugin-chosen: high, normal or low | See the [status plugins](status-plugins.md#scheduling) table |

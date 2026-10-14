@@ -97,7 +97,12 @@ final class PluginProcess {
   private var pollArmings: [String: UInt64] = [:]
   private var pollArmingSerial: UInt64 = 0
   private var staleStatusSegments: Set<String> = []
-  private var statusExpiryWork: DispatchWorkItem?
+  /// The grace a planned reload gives stale status segments, on the shared
+  /// clock. `.low`: nobody watches the instant a stale label blanks. Armed
+  /// afresh on every keep-status teardown, so the newest replacement gets
+  /// the whole grace. Queue-confined.
+  private lazy var statusGraceDeadline = PollDeadline(
+    "core:plugin_status_grace:\(manifest.id):\(instanceTag)", priority: .low, on: queue)
   private var startDate: Date?
   /// Mirrors of queue-confined runtime fields, guarded by `lock`, so status
   /// reads from main never wait on `queue` (a stop sleeps there for up to
@@ -467,23 +472,21 @@ final class PluginProcess {
     let needsStatusExpiry = !staleStatusSegments.isEmpty
     lock.unlock()
     if !preserveStatus {
-      statusExpiryWork?.cancel()
-      statusExpiryWork = nil
-    } else if needsStatusExpiry, statusExpiryWork == nil {
+      statusGraceDeadline.cancel()
+    } else if needsStatusExpiry {
       // A planned reload keeps the previous labels until each segment is
       // refreshed. One bounded grace window also handles a replacement that
-      // initializes successfully but never republishes its status.
-      let work = DispatchWorkItem { [weak self] in
+      // initializes successfully but never republishes its status; a second
+      // reload inside the window arms it again, so the grace a label gets
+      // is always measured from the newest replacement.
+      statusGraceDeadline.arm(after: Self.statusReloadGraceSeconds) { [weak self] in
         guard let self else { return }
         self.lock.lock()
         for name in self.staleStatusSegments { self.statusSegments.removeValue(forKey: name) }
         self.staleStatusSegments.removeAll()
         self.lock.unlock()
-        self.statusExpiryWork = nil
         self.notifyStatus()
       }
-      statusExpiryWork = work
-      queue.asyncAfter(deadline: .now() + Self.statusReloadGraceSeconds, execute: work)
     }
 
     for callback in abandonedCallbacks {
