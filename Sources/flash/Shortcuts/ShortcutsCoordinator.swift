@@ -123,7 +123,7 @@ final class MappingsCoordinator {
       if let chord = mapping.nativeHotkey { keysByChord[chord] = mapping.key }
     }
     let result = hotkeys.reconcile(desired: Set(keysByChord.keys)) { [weak self] chord in
-      self?.handle(hotkey: chord)
+      self?.handle(hotkey: chord, origin: .carbon)
     }
     refusedKeys[ObjectIdentifier(hotkeys)] = result.refused.map { keysByChord[$0] ?? "?" }
     for chord in result.refused {
@@ -176,11 +176,21 @@ final class MappingsCoordinator {
 
   // MARK: - Hot path
 
+  /// Where a chord came from. The session tap and the key window hand over
+  /// physical presses, already filtered of Flash's own tagged synthetic
+  /// keys; only a Carbon hotkey can be an echo of a chord Flash posted, and
+  /// only there do the echo window and the same-action debounce apply.
+  enum FireOrigin {
+    case carbon
+    case event
+  }
+
   func handle(event: NSEvent) -> Bool {
     handle(
       hotkey: ParsedHotkey(
         modifiers: Self.carbonModifiers(from: event.modifierFlags),
-        virtualKey: UInt32(event.keyCode)))
+        virtualKey: UInt32(event.keyCode)),
+      origin: .event)
   }
 
   /// The command a chord would fire, without firing it. EasyMotion uses this
@@ -202,24 +212,31 @@ final class MappingsCoordinator {
   }
 
   @discardableResult
-  private func handle(hotkey: ParsedHotkey) -> Bool {
+  private func handle(hotkey: ParsedHotkey, origin: FireOrigin) -> Bool {
     guard let mapping = activeMappings[hotkey] else { return false }
-    fire(mapping, parsed: hotkey)
+    fire(mapping, parsed: hotkey, origin: origin)
     return true
   }
 
-  private func fire(_ mapping: ModeMapping, parsed: ParsedHotkey) {
+  private func fire(_ mapping: ModeMapping, parsed: ParsedHotkey, origin: FireOrigin) {
     let action = mapping.action
     let now = Date()
-    if consumeSyntheticEcho(virtualKey: parsed.virtualKey, modifiers: parsed.modifiers, now: now) {
-      FlashLog.debug("[mappings] suppressed self-synthesized echo \(action.diagnosticDescription)")
-      return
+    if origin == .carbon {
+      if consumeSyntheticEcho(virtualKey: parsed.virtualKey, modifiers: parsed.modifiers, now: now)
+      {
+        FlashLog.debug(
+          "[mappings] suppressed self-synthesized echo \(action.diagnosticDescription)")
+        return
+      }
+      // A physical press never reaches here twice: the tap swallows before
+      // Carbon dispatch. Two Carbon fires inside the window are a chord
+      // echoed back; a held key's repeats on the tap path are the user's.
+      if lastFiredAction == action, now.timeIntervalSince(lastFireAt) < 0.08 {
+        return
+      }
+      lastFiredAction = action
+      lastFireAt = now
     }
-    if lastFiredAction == action, now.timeIntervalSince(lastFireAt) < 0.08 {
-      return
-    }
-    lastFiredAction = action
-    lastFireAt = now
     Trace.ensure(.hotkey) {
       FlashLog.debug("[mappings] fired \(action.diagnosticDescription)")
       mappingDispatch?(action)
