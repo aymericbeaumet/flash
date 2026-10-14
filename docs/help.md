@@ -52,9 +52,8 @@ the browser commands needs it, or at launch with
 | --- | --- |
 | `/` | Help homepage: a live onboarding checklist |
 | `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
-| `/mappings`, `/commands` | Effective mappings and how each action resolves in the focused app; command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
+| `/mappings`, `/commands` | Key mappings: your keyboard with what each key does in the mode picked under it (NORMAL, VISUAL, HYPER, INSERT, COMMAND, TERMINAL or all), tinted by purpose, with free keys dashed and NORMAL's counts marked. Modifier buttons show the Shift, Control, Option and Command layers; a key that starts longer bindings opens what can follow it; picking a key lists its bindings, and a free key offers the TOML to map it. The list below follows the mode and key, groups bindings by purpose, leads with what each does, and copies the TOML that rebinds or removes it. A search ranks the whole mode and lights the keys it matches. The page also shows how each action resolves in the focused app, and never follows the live mode. Command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
 | `/plugins`, `/plugins/<id>` | Plugin list; one plugin's details |
-| `/keyboard` | The live keyboard map |
 | `/state`, `/clipboard` | Runtime and clipboard pages |
 | `/logs` | Live logs. The record list fills the page height, and its search field is focused when the page opens |
 | `/search?q=<text>` | Results across guide sections, commands, mappings and plugins. Typing in the top bar rewrites the query in place, so a search reloads and can be shared; `↓` `↑` `↩` pick a result |

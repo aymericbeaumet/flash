@@ -5,7 +5,6 @@
   import DocsPanel from "./lib/DocsPanel.svelte";
   import HomePanel from "./lib/HomePanel.svelte";
   import Icon from "./lib/Icon.svelte";
-  import KeyboardPanel from "./lib/KeyboardPanel.svelte";
   import LogList from "./lib/LogList.svelte";
   import MappingsPanel from "./lib/MappingsPanel.svelte";
   import { markGuideRead } from "./lib/onboarding";
@@ -22,7 +21,6 @@
     { id: "home", href: "/", label: "Home", group: "Explore", key: "h" },
     { id: "docs", href: paths.docs(), label: "Documentation", group: "Explore", key: "d" },
     { id: "mappings", href: paths.mappings(), label: "Key mappings", group: "Your Flash", key: "m" },
-    { id: "keyboard", href: "/keyboard", label: "Keyboard map", group: "Your Flash", key: "k" },
     { id: "commands", href: paths.commands(), label: "Commands", group: "Your Flash", key: "c" },
     { id: "plugins", href: paths.plugins(), label: "Plugins", group: "Your Flash", key: "p" },
     { id: "state", href: "/state", label: "Runtime & config", group: "Inspect", key: "r" },
@@ -158,8 +156,7 @@
         </div>
       {:else if route.page === "home"}<HomePanel snapshot={store.state} connected={store.connected} />
       {:else if route.page === "docs"}<DocsPanel {docs} topic={route.param} loading={!loaded} version={store.state.runtime?.version} />
-      {:else if route.page === "mappings"}<MappingsPanel {mappings} {commands} filter={route.param} />
-      {:else if route.page === "keyboard"}<KeyboardPanel state={store.state} {commands} connected={store.connected} />
+      {:else if route.page === "mappings"}<MappingsPanel {mappings} keyboard={store.state.keyboard} {commands} filter={route.param} />
       {:else if route.page === "commands"}<CommandsPanel {commands} filter={route.param} />
       {:else if route.page === "plugins"}<PluginsPanel {plugins} filter={route.param} sampledAt={store.state.snapshot_at_unix_ms} onresample={() => store.refresh()} />
       {:else if route.page === "state"}<RuntimePanel state={store.state} connected={store.connected} onrefresh={() => store.refresh()} />
@@ -178,7 +175,7 @@
         <dt><kbd>g</kbd> then a letter</dt><dd>Jump to a page: {#each sections as item, position}{position ? ", " : ""}<kbd>{item.key}</kbd> {item.label.toLowerCase()}{/each}.</dd>
         <dt><kbd>?</kbd></dt><dd>This sheet.</dd>
       </dl>
-      <p class="muted">Shortcuts pause while you type in a field. Flash's own keys are on the <a href="/keyboard">keyboard map</a>.</p>
+      <p class="muted">Shortcuts pause while you type in a field. Flash's own keys are on the <a href="/mappings">key mappings</a> page.</p>
     </div>
   {/if}
 </div>

@@ -79,10 +79,26 @@ function capFor(token: string, leader: string): string | null {
   return null;
 }
 
-/** The mapping scopes the live mode reads: its own and `all`. */
+/** What the key-mappings keyboard draws: bindings, or a hint surface's keys. */
+export type BoardView = "bindings" | "alphabet" | "grid" | "zones";
+
+/** The modes the key-mappings page can show, in the order of its buttons. */
+export const mappingModes: { id: string; label: string; summary: string }[] = [
+  { id: "all", label: "All", summary: "Every mapping, in every mode." },
+  { id: "normal", label: "Normal", summary: "Navigate and act; unmapped keys are swallowed." },
+  { id: "visual", label: "Visual", summary: "A mouse button is held: its own keys first, then NORMAL's." },
+  { id: "hyper", label: "Hyper", summary: "While the hyper key is held." },
+  { id: "insert", label: "Insert", summary: "Typing in an app; only these keys are Flash's." },
+  { id: "command", label: "Command", summary: "The command line is open." },
+  { id: "terminal", label: "Terminal", summary: "A terminal popup has the keyboard." },
+];
+
+/** The mapping scopes a mode reads: its own and `all`. VISUAL reads its own
+ * table first, then NORMAL's. */
 export function scopesForMode(mode: string | undefined): string[] {
   switch (mode) {
     case "normal": return ["normal", "all"];
+    case "visual": return ["visual", "normal", "all"];
     case "hyper": return ["hyper"];
     case "insert": return ["insert", "all"];
     case "command": return ["command", "all"];
@@ -110,6 +126,142 @@ export function bindingsByCap(rows: MappingRow[], scopes: string[], leader: stri
   }
   for (const list of byCap.values()) list.sort((a, b) => a.row.key.localeCompare(b.row.key));
   return byCap;
+}
+
+/** The rows `mode` reads, every row for `all`, in their given order. */
+export function rowsForMode(rows: MappingRow[], mode: string): MappingRow[] {
+  if (mode === "all") return rows;
+  const wanted = new Set(scopesForMode(mode));
+  return rows.filter((row) => wanted.has(row.scope));
+}
+
+/** One key you press: its cap and the modifiers held with it. */
+export interface KeyStep {
+  cap: string;
+  /** In `cmd ctrl alt shift hyper fn` order; a capital letter is its cap with `shift`. */
+  modifiers: string[];
+}
+
+const modifierOrder = ["cmd", "ctrl", "alt", "shift", "hyper", "fn"];
+
+/** The steps a mapping key is pressed as: one for a chord, one per key of a sequence. */
+export function keySteps(key: string, leader: string): KeyStep[] | null {
+  const trimmed = key.trim();
+  if (!trimmed) return null;
+  const chord = parseChord(trimmed);
+  if (chord) {
+    return [{ cap: chord.cap, modifiers: [...chord.modifiers].sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b)) }];
+  }
+  const steps: KeyStep[] = [];
+  for (const token of tokenize(trimmed)) {
+    const cap = capFor(token, leader);
+    if (!cap) return null;
+    const capital = token.length === 1 && token !== token.toLowerCase();
+    steps.push({ cap, modifiers: capital ? ["shift"] : [] });
+  }
+  return steps.length ? steps : null;
+}
+
+function sameStep(a: KeyStep, b: KeyStep): boolean {
+  return a.cap === b.cap && a.modifiers.length === b.modifiers.length && a.modifiers.every((m, i) => m === b.modifiers[i]);
+}
+
+function startsWith(steps: KeyStep[], path: KeyStep[]): boolean {
+  return steps.length >= path.length && path.every((step, index) => sameStep(step, steps[index]));
+}
+
+const bracketed: Record<string, string> = { space: "<space>", return: "<return>", tab: "<tab>", esc: "<esc>", backspace: "<backspace>" };
+
+/** `steps` in `flash.toml` key syntax: `G` for a shifted letter, `<space>` in a sequence. */
+export function stepsToKey(steps: KeyStep[]): string {
+  return steps
+    .map((step) => {
+      const letter = /^[a-z]$/.test(step.cap);
+      if (letter && step.modifiers.length === 1 && step.modifiers[0] === "shift") return step.cap.toUpperCase();
+      if (step.modifiers.length) return [...step.modifiers, step.cap].join("+");
+      return bracketed[step.cap] ?? step.cap;
+    })
+    .join("");
+}
+
+/** What one key does after `path`, in one modifier layer. */
+export interface CapBindings {
+  /** The bindings that end on this key. */
+  bindings: MappingRow[];
+  /** How many longer bindings continue past it (it is a prefix). */
+  continues: number;
+}
+
+/** Every key that acts after the prefix `path` while `layer` is held. */
+export function capsAt(rows: MappingRow[], path: KeyStep[], layer: string[], leader: string): Map<string, CapBindings> {
+  const wanted = [...layer].sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
+  const caps = new Map<string, CapBindings>();
+  for (const row of rows) {
+    const steps = keySteps(row.key, leader);
+    if (!steps || steps.length <= path.length || !startsWith(steps, path)) continue;
+    const next = steps[path.length];
+    if (!sameStep(next, { cap: next.cap, modifiers: wanted })) continue;
+    const entry = caps.get(next.cap) ?? { bindings: [], continues: 0 };
+    if (steps.length === path.length + 1) entry.bindings.push(row);
+    else entry.continues += 1;
+    caps.set(next.cap, entry);
+  }
+  return caps;
+}
+
+/** The rows under the prefix `path`, and past `picked` when a key is picked. */
+export function rowsUnder(rows: MappingRow[], path: KeyStep[], picked: KeyStep | null, leader: string): MappingRow[] {
+  const prefix = picked ? [...path, picked] : path;
+  if (!prefix.length) return rows;
+  return rows.filter((row) => {
+    const steps = keySteps(row.key, leader);
+    return steps !== null && startsWith(steps, prefix);
+  });
+}
+
+/** What an action is for, so bindings group by purpose. */
+export const categories: { id: string; label: string }[] = [
+  { id: "pointer", label: "Click and point" },
+  { id: "scroll", label: "Scroll" },
+  { id: "tabs", label: "Tabs, pages and apps" },
+  { id: "windows", label: "Windows" },
+  { id: "modes", label: "Modes and the command line" },
+  { id: "system", label: "Keys and system" },
+  { id: "plugins", label: "Plugins" },
+  { id: "programs", label: "Programs" },
+  { id: "other", label: "Everything else" },
+];
+
+export function categoryOf(action: string): string {
+  const words = action.trim().split(/\s+/);
+  if (words[0] !== "flash" || words.length < 2) return "programs";
+  const verb = words[1];
+  if (words.length >= 3 && !words[2].startsWith("--") && !verb.includes("_")) return "plugins";
+  if (/^(mouse_|hints_)/.test(verb)) return "pointer";
+  if (verb.startsWith("scroll_")) return "scroll";
+  if (/^(tab_|app_|history_|pane_|resource_|page_)/.test(verb) || ["reload", "find", "undo", "redo"].includes(verb)) return "tabs";
+  if (verb.startsWith("window_")) return "windows";
+  if (/^(enter_|leave_|popup_|terminal_|command|candidate_finder|help)/.test(verb)) return "modes";
+  if (/^(system_key|function_key|arrow|send_key|volume|brightness|media)/.test(verb)) return "system";
+  return "other";
+}
+
+/** A keycap's few words: the verb, then the values of its flags. */
+export function keycapLabel(action: string): string {
+  const words = action.trim().split(/\s+/);
+  if (words[0] !== "flash" || words.length < 2) return action;
+  return words
+    .slice(1)
+    .map((word) => (word.startsWith("--") ? (word.includes("=") ? word.slice(word.indexOf("=") + 1) : word.slice(2)) : word))
+    .join(" ")
+    .replace(/_/g, " ");
+}
+
+/** The `flash.toml` lines that rebind or remove `row`'s key, in its own table. */
+export function mappingSnippet(row: MappingRow): string {
+  const key = JSON.stringify(row.key);
+  const argv = row.action.trim().split(/\s+/).map((word) => JSON.stringify(word)).join(", ");
+  return `[mode.${row.scope}.mappings]\n${key} = [${argv}]  # change the command\n# ${key} = false  # or remove the key`;
 }
 
 /** One hint session phase, as the keys see it. */

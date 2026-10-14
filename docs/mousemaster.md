@@ -30,7 +30,7 @@ best.
 | App-specific combos | `[mode.apps."<bundle id>".<mode>.mappings]` |
 | Macros (`+leftctrl +v -v -leftctrl`) | `send_key --keys=cmd+v`, `send_keys` |
 | Combos: holds, taps, tap-dances, timed sequences; key aliases; virtual keys | Not in Flash. Flash's keyboard tap only decides which key it swallows. Keep [Karabiner-Elements](https://karabiner-elements.pqrs.org) or [kanata](https://github.com/jtroo/kanata) for remapping; they run alongside Flash |
-| Cheatsheet while a key is held | `?` opens the mapping list; the [keyboard map](help.md) draws the bindings of the live mode |
+| Cheatsheet while a key is held | `?` opens the key mappings: your layout with the bindings of the mode you pick under it |
 | Hint appearance (fonts, gradients, animations) | `[overlay]` colours, font size and placement. No animations: hints are drawn in one commit |
 
 ## A mousemaster-shaped configuration

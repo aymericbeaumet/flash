@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { alphabetHeat, bindingsByCap, parseKey, phaseKeys, scopesForMode, zoneOf } from "./src/lib/keyboard.ts";
+import { alphabetHeat, bindingsByCap, capsAt, categoryOf, keycapLabel, keySteps, stepsToKey, mappingModes, mappingSnippet, parseKey, phaseKeys, rowsForMode, rowsUnder, scopesForMode, zoneOf } from "./src/lib/keyboard.ts";
 import type { KeyboardState, MappingRow } from "./src/lib/types.ts";
 
 const keyboard: KeyboardState = {
@@ -38,6 +38,103 @@ test("the live mode reads its own scope and all", () => {
   assert.deepEqual(scopesForMode("hyper"), ["hyper"]);
   assert.deepEqual(scopesForMode("insert"), ["insert", "all"]);
   assert.deepEqual(scopesForMode(undefined), ["all"]);
+  assert.deepEqual(scopesForMode("visual"), ["visual", "normal", "all"]);
+});
+
+test("the mode buttons pick what the keyboard lights and the list shows", () => {
+  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "visual", "hyper", "insert", "command", "terminal"]);
+  const rows: MappingRow[] = [
+    { scope: "normal", key: "f", action: "flash mouse_target" },
+    { scope: "visual", key: "j", action: "flash mouse_step --direction=down" },
+    { scope: "all", key: "cmd+space", action: "flash candidate_finder" },
+    { scope: "insert", key: "ctrl+[", action: "flash enter_normal_mode" },
+    { scope: "hyper", key: "1", action: "flash system_key --key=brightness_down" },
+  ];
+  assert.deepEqual(rowsForMode(rows, "all").length, 5);
+  assert.deepEqual(rowsForMode(rows, "visual").map((row) => row.key), ["f", "j", "cmd+space"]);
+  assert.deepEqual(rowsForMode(rows, "hyper").map((row) => row.key), ["1"]);
+  assert.deepEqual(rowsForMode(rows, "insert").map((row) => row.key), ["cmd+space", "ctrl+["]);
+});
+
+test("a key is the steps you press, a capital being its shift layer", () => {
+  assert.deepEqual(keySteps("f", "space"), [{ cap: "f", modifiers: [] }]);
+  assert.deepEqual(keySteps("G", "space"), [{ cap: "g", modifiers: ["shift"] }]);
+  assert.deepEqual(keySteps("ctrl+d", "space"), [{ cap: "d", modifiers: ["ctrl"] }]);
+  assert.deepEqual(keySteps("cmd+shift+]", "space"), [{ cap: "]", modifiers: ["cmd", "shift"] }]);
+  assert.deepEqual(keySteps("[t", "space"), [{ cap: "[", modifiers: [] }, { cap: "t", modifiers: [] }]);
+  assert.deepEqual(keySteps("<leader>s", "space"), [{ cap: "space", modifiers: [] }, { cap: "s", modifiers: [] }]);
+});
+
+const drillRows: MappingRow[] = [
+  { scope: "normal", key: "f", action: "flash mouse_target" },
+  { scope: "normal", key: "F", action: "flash mouse_target --insert" },
+  { scope: "normal", key: "c", action: "flash noop" },
+  { scope: "normal", key: "cf", action: "flash mouse_target --secondary" },
+  { scope: "normal", key: "ctrl+d", action: "flash scroll_half_page_down" },
+  { scope: "normal", key: "g1", action: "flash tab_select --index=1" },
+  { scope: "normal", key: "gg", action: "flash scroll_top" },
+];
+
+test("the keyboard shows what each key does at a prefix, in one modifier layer", () => {
+  const top = capsAt(drillRows, [], [], "space");
+  assert.equal(top.get("f")?.bindings.length, 1);
+  assert.equal(top.get("c")?.bindings.length, 1);
+  assert.equal(top.get("c")?.continues, 1);
+  assert.equal(top.get("g")?.bindings.length, 0);
+  assert.equal(top.get("g")?.continues, 2);
+  assert.equal(top.has("d"), false);
+  const shift = capsAt(drillRows, [], ["shift"], "space");
+  assert.deepEqual([...shift.keys()], ["f"]);
+  assert.equal(capsAt(drillRows, [], ["ctrl"], "space").get("d")?.bindings[0].key, "ctrl+d");
+  const afterG = capsAt(drillRows, [{ cap: "g", modifiers: [] }], [], "space");
+  assert.deepEqual([...afterG.keys()].sort(), ["1", "g"]);
+});
+
+test("the list keeps the bindings under a prefix and a picked key", () => {
+  const g = [{ cap: "g", modifiers: [] }];
+  assert.deepEqual(rowsUnder(drillRows, g, null, "space").map((row) => row.key), ["g1", "gg"]);
+  assert.deepEqual(rowsUnder(drillRows, g, { cap: "1", modifiers: [] }, "space").map((row) => row.key), ["g1"]);
+  assert.deepEqual(rowsUnder(drillRows, [], { cap: "c", modifiers: [] }, "space").map((row) => row.key), ["c", "cf"]);
+  assert.equal(rowsUnder(drillRows, [], null, "space").length, drillRows.length);
+});
+
+test("an action falls in a category by what it does", () => {
+  assert.equal(categoryOf("flash mouse_target --secondary"), "pointer");
+  assert.equal(categoryOf("flash mouse_bigram --move"), "pointer");
+  assert.equal(categoryOf("flash scroll_top"), "scroll");
+  assert.equal(categoryOf("flash tab_next"), "tabs");
+  assert.equal(categoryOf("flash app_previous"), "tabs");
+  assert.equal(categoryOf("flash window_focus --direction=left"), "windows");
+  assert.equal(categoryOf("flash system_key --key=mute"), "system");
+  assert.equal(categoryOf("flash enter_insert_mode"), "modes");
+  assert.equal(categoryOf("flash caffeinate toggle"), "plugins");
+  assert.equal(categoryOf("open -a Safari"), "programs");
+});
+
+test("a keycap names its action briefly", () => {
+  assert.equal(keycapLabel("flash mouse_target --secondary"), "mouse target secondary");
+  assert.equal(keycapLabel("flash scroll_half_page_down"), "scroll half page down");
+  assert.equal(keycapLabel("flash tab_select --index=1"), "tab select 1");
+  assert.equal(keycapLabel("open -a Safari"), "open -a Safari");
+});
+
+test("steps read back as flash.toml key syntax", () => {
+  for (const key of ["f", "G", "ctrl+d", "cmd+shift+]", "[t", "gg", "<space>s"]) {
+    assert.equal(stepsToKey(keySteps(key, "")!), key);
+  }
+  assert.equal(stepsToKey([{ cap: "space", modifiers: [] }, { cap: "x", modifiers: [] }]), "<space>x");
+  assert.equal(stepsToKey([{ cap: "return", modifiers: ["ctrl"] }]), "ctrl+return");
+});
+
+test("a binding's snippet remaps or removes it in its own table", () => {
+  assert.equal(
+    mappingSnippet({ scope: "normal", key: "f", action: "flash mouse_target" }),
+    '[mode.normal.mappings]\n"f" = ["flash", "mouse_target"]  # change the command\n# "f" = false  # or remove the key',
+  );
+  assert.equal(
+    mappingSnippet({ scope: "visual", key: "j", action: "flash mouse_step --direction=down" }),
+    '[mode.visual.mappings]\n"j" = ["flash", "mouse_step", "--direction=down"]  # change the command\n# "j" = false  # or remove the key',
+  );
 });
 
 test("bindings group by the key cap they start on, sorted", () => {

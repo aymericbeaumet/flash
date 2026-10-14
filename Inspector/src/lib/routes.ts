@@ -2,12 +2,12 @@
 // hands the app to a direct load or reload of any page, and a 404 to the rest.
 // Data endpoints live under `/api/`; fragments are in-page heading anchors.
 
-export type PageName = "home" | "docs" | "mappings" | "commands" | "plugins" | "state" | "logs" | "clipboard" | "keyboard" | "search";
+export type PageName = "home" | "docs" | "mappings" | "commands" | "plugins" | "state" | "logs" | "clipboard" | "search";
 
 /** `param` is the docs topic, the plugin id, or the `?q=` query of mappings, commands and search. */
 export type Route = { page: PageName | "not-found"; param: string };
 
-const pages = new Set(["docs", "mappings", "commands", "plugins", "state", "logs", "clipboard", "keyboard", "search"]);
+const pages = new Set(["docs", "mappings", "commands", "plugins", "state", "logs", "clipboard", "search"]);
 /** Pages that accept one detail segment. */
 const detailPages = new Set(["docs", "plugins"]);
 /** Pages whose list starts filtered by `?q=`. */

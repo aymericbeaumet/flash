@@ -39,7 +39,7 @@ hints and highlighting the text between two words.
 | Center-weighted hint keys, Key Priority Map | `[hints] label_order = "center"` and `[hints] key_priority = "fjdk…"` |
 | Hints use the keyboard language; Dvorak, Colemak | `[app] keyboard_layout = "auto"`, `[keyboard] layout = "colemak"` |
 | Multi-monitor, 4K and 8K | Every display, at its own scale |
-| Settings window with a virtual keyboard | `flash.toml`, reloaded on save; the [keyboard map](help.md) draws your bindings live |
+| Settings window with a virtual keyboard | `flash.toml`, reloaded on save; the [key mappings](help.md) page draws your bindings on your layout, one mode at a time |
 | Undo a hint key (`Backspace`) | `Backspace` |
 
 Neverclick's hint labels favour the keys at the centre of the keyboard and
@@ -83,5 +83,5 @@ key_priority = "fjdkslaghrueiwotyqp"
   draws prepared hints at once; `flash status` reports the measured latencies
   per app, and [performance](performance.md) has the method.
 - **Configuration is a file.** There is no settings window. The browser help
-  shows the effective bindings, the [keyboard map](help.md) draws them on
-  your layout as the mode changes, and the file reloads when saved.
+  shows the effective bindings, the [key mappings](help.md) page draws them
+  on your layout for the mode you pick, and the file reloads when saved.

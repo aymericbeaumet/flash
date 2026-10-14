@@ -245,6 +245,7 @@ extension NormalModeDispatcher {
   static func mappingsJSON(mode: Config.Mode) -> [[String: String]] {
     (mappingRows(scope: "all", mappings: Config.Mode.resolveMappings(mode.all))
       + mappingRows(scope: "normal", mappings: Config.Mode.resolveMappings(mode.normal))
+      + mappingRows(scope: "visual", mappings: Config.Mode.resolveMappings(mode.visual))
       + mappingRows(scope: "hyper", mappings: Config.Mode.resolveMappings(mode.hyper))
       + mappingRows(scope: "insert", mappings: Config.Mode.resolveMappings(mode.insert))
       + mappingRows(scope: "terminal", mappings: mode.effectiveTerminalMappings)

@@ -162,10 +162,14 @@ enum HelpDocs {
       ranks what the binding does, and a close spelling still matches. Each
       row's ? explains that binding. The Source column uses the same badge as
       the command list. The page focuses its search when it opens. Press `?`
-      in NORMAL or run `:mappings` to open it. The [keyboard map](/keyboard)
-      draws the same bindings on your layout and follows the mode Flash is
-      in, the hint alphabet and the grid keys as you use them. This guide
-      explains how to write your own.
+      in NORMAL or run `:mappings` to open it. Above the list, your layout is
+      drawn with what each key does in the mode picked under it: NORMAL,
+      VISUAL, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
+      dashed. Modifier buttons show the chord layers, a prefix key opens what
+      can follow it, and picking a key keeps its bindings in the list, each
+      with the TOML that rebinds or removes it. The keyboard can show the hint
+      alphabet, the grid keys and the zones instead. This guide explains how
+      to write your own.
 
       ## Add, replace or remove a binding
 
@@ -383,8 +387,8 @@ enum HelpDocs {
 
       While labels are up, Tab restarts the same click on the grid, Shift-Tab
       widens it to every app on the screen, and Backspace with nothing typed
-      returns to the surface before. The [keyboard map](/keyboard) shows what
-      every key does in the current session.
+      returns to the surface before. The [key mappings](/mappings) keyboard
+      shows the hint alphabet and the grid keys.
 
       Hold a configured magic modifier on the final hint key to include it in
       the click; Shift is always available. Terminal link hints add Shift so
