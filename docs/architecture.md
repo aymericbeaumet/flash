@@ -120,7 +120,8 @@ rotations, each status surface's clock and pending output — each time one
 lands, for the bar and desktop widgets alike. `PollDeadline` wraps one
 re-armable deadline for a queue-confined owner: a trailing debounce re-arms it
 per event, a backoff per attempt, and a fire already on its way is dropped once
-it is re-armed or cancelled. Plugins register over the wire with `poll` —
+it is re-armed or cancelled. It releases only the registration it armed, so a
+successor under the same id keeps its wake-up. Plugins register over the wire with `poll` —
 cadences and deadlines, each at its own priority — and are ticked with a
 `core:poll:<name>` event.
 
