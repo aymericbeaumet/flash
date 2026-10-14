@@ -435,6 +435,12 @@ enum StatusBarSpawnDwell {
   }
 }
 
+/// The reveal probe's last verdict and the tracking cycle it belongs to.
+struct MenuBarRevealProbeState: Equatable {
+  var generation: UInt64 = 0
+  var revealed = false
+}
+
 extension OverlayPanel {
   func statusLinkRects(
     raw: String, font: NSFont, labelFrame: CGRect, alignment: CATextLayerAlignmentMode,
@@ -939,23 +945,32 @@ extension OverlayPanel {
   /// near the band (armed by `mouseEntered`, self-stopping otherwise), and hops
   /// to main only when the state flips. Call on the main thread.
   func startMenuBarRevealTracking() {
-    guard !menuBarRevealProbeArmed else { return }
-    FlashLog.debug("Status menu reveal tracking started", source: "core:StatusLinks.menuReveal")
+    if !menuBarRevealProbeArmed {
+      FlashLog.debug("Status menu reveal tracking started", source: "core:StatusLinks.menuReveal")
+    }
+    // Every start is a new tracking cycle: a stop a previous tick queued, or
+    // a verdict it was still delivering, belongs to the old one and is
+    // dropped, so a pointer that re-entered the band keeps its probe.
     menuBarRevealProbeArmed = true
-    menuBarRevealedShadow = false
+    menuBarRevealGeneration &+= 1
+    let generation = menuBarRevealGeneration
     PollScheduler.shared.register(
       Self.menuBarRevealClientID, everyMs: Self.menuBarRevealIntervalMs, priority: .system,
       on: Self.menuBarRevealProbeQueue
-    ) { [weak self] in self?.probeMenuBarReveal() }
+    ) { [weak self] in self?.probeMenuBarReveal(generation: generation) }
   }
 
-  func stopMenuBarRevealTracking() {
+  /// `ifGeneration` is the cycle a probe tick asked from; a stop from a cycle
+  /// already left is dropped. Without it, this is the owner stopping.
+  func stopMenuBarRevealTracking(ifGeneration generation: UInt64? = nil) {
+    if let generation, !(menuBarRevealProbeArmed && generation == menuBarRevealGeneration) {
+      return
+    }
     if menuBarRevealProbeArmed {
       FlashLog.debug("Status menu reveal tracking stopped", source: "core:StatusLinks.menuReveal")
     }
     menuBarRevealProbeArmed = false
     PollScheduler.shared.unregister(Self.menuBarRevealClientID)
-    menuBarRevealedShadow = false
     // Leave the windows catching and the bar on top (the defaults) so a stale
     // click-through or yielded state can't survive a hide/show.
     for window in statusBarClickWindows where window.ignoresMouseEvents {
@@ -967,22 +982,29 @@ extension OverlayPanel {
     updateStatusBarHover(nativeMenuBarRevealed: false)
   }
 
-  /// One probe tick, on the probe queue.
-  private func probeMenuBarReveal() {
+  /// One probe tick, on the probe queue, for the cycle it was armed under.
+  private func probeMenuBarReveal(generation: UInt64) {
+    if menuBarRevealProbeState.generation != generation {
+      menuBarRevealProbeState = MenuBarRevealProbeState(generation: generation)
+    }
     let pointerNearBand = Self.pointerIsInMenuBarBand()
     let revealed =
       pointerNearBand
       && Self.nativeMenuBarIsRevealed(
         mainScreenWidth: CGDisplayBounds(CGMainDisplayID()).width)
-    let changed = revealed != menuBarRevealedShadow
-    menuBarRevealedShadow = revealed
+    let changed = revealed != menuBarRevealProbeState.revealed
+    menuBarRevealProbeState.revealed = revealed
     if changed {
-      DispatchQueue.main.async { [weak self] in self?.nativeMenuBarRevealDidChange(revealed) }
+      DispatchQueue.main.async { [weak self] in
+        self?.nativeMenuBarRevealDidChange(revealed, generation: generation)
+      }
     }
     if !pointerNearBand && !revealed {
       // Pointer left the band with the menu bar folded: nothing to watch.
       // `mouseEntered` re-arms on the next hover.
-      DispatchQueue.main.async { [weak self] in self?.stopMenuBarRevealTracking() }
+      DispatchQueue.main.async { [weak self] in
+        self?.stopMenuBarRevealTracking(ifGeneration: generation)
+      }
     }
   }
 
@@ -990,7 +1012,14 @@ extension OverlayPanel {
   /// the bar's level go to the native menu bar, and so does hover — whatever
   /// hover feedback the reveal lands on is cleared, and a fold re-hit-tests
   /// the pointer where it rests.
-  func nativeMenuBarRevealDidChange(_ revealed: Bool, pointer: CGPoint = NSEvent.mouseLocation) {
+  func nativeMenuBarRevealDidChange(
+    _ revealed: Bool, generation: UInt64? = nil, pointer: CGPoint = NSEvent.mouseLocation
+  ) {
+    // A verdict from a cycle already left — the probe was stopped, or the
+    // band re-entered since — would yield the bar with no probe to fold it.
+    if let generation, !(menuBarRevealProbeArmed && generation == menuBarRevealGeneration) {
+      return
+    }
     for window in statusBarClickWindows where window.ignoresMouseEvents != revealed {
       window.ignoresMouseEvents = revealed
     }

@@ -543,6 +543,31 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertEqual(panel.statusBarSpawnDwell.pendingName, "feed")
   }
 
+  /// A verdict or a stop that a probe tick queued belongs to the tracking
+  /// cycle it was armed under. A cycle started since drops it: a pointer that
+  /// re-entered the band keeps its probe, and a stale reveal cannot leave the
+  /// bar yielded with no probe running to fold it.
+  func testRevealProbeVerdictsBelongToTheirTrackingCycle() {
+    let panel = OverlayPanel()
+    defer { panel.stopMenuBarRevealTracking() }
+    panel.startMenuBarRevealTracking()
+    let first = panel.menuBarRevealGeneration
+    panel.stopMenuBarRevealTracking()
+    panel.startMenuBarRevealTracking()
+    let second = panel.menuBarRevealGeneration
+    XCTAssertNotEqual(second, first)
+    panel.stopMenuBarRevealTracking(ifGeneration: first)
+    XCTAssertTrue(panel.menuBarRevealProbeArmed, "a stop from the old cycle is dropped")
+    panel.nativeMenuBarRevealDidChange(true, generation: first)
+    XCTAssertFalse(
+      panel.statusBarHover.nativeMenuBarRevealed, "a verdict from the old cycle is dropped")
+    panel.nativeMenuBarRevealDidChange(true, generation: second)
+    XCTAssertTrue(panel.statusBarHover.nativeMenuBarRevealed)
+    panel.stopMenuBarRevealTracking(ifGeneration: second)
+    XCTAssertFalse(panel.menuBarRevealProbeArmed, "the current cycle's stop stops")
+    XCTAssertFalse(panel.statusBarHover.nativeMenuBarRevealed)
+  }
+
   func testHoverEligibilityFollowsTheReveal() {
     var state = StatusBarHoverState()
     XCTAssertTrue(state.permitsHover)

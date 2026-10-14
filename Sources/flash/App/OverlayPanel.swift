@@ -181,10 +181,13 @@ final class OverlayPanel: NSPanel {
   /// click view's `mouseEntered` and dropped the moment the pointer leaves
   /// the band, and ticked by `PollScheduler` rather than its own timer.
   var menuBarRevealProbeArmed = false
-  /// The probe's last observed reveal state. Written on the probe queue
-  /// between `resume()` and `cancel()`, reset on the main thread around
-  /// those edges — the timer lifecycle serializes the two.
-  var menuBarRevealedShadow = false
+  /// Bumped by every `startMenuBarRevealTracking`. A tick's verdict and the
+  /// stop it queues carry the generation they were armed under, and main
+  /// drops the ones from a tracking cycle it has already left. Main-owned.
+  var menuBarRevealGeneration: UInt64 = 0
+  /// The probe's last verdict, for the generation it belongs to. Written
+  /// only on `menuBarRevealProbeQueue`.
+  var menuBarRevealProbeState = MenuBarRevealProbeState()
   /// True while the bar sits below a pointer-revealed native menu bar; see
   /// `setStatusBarYieldsToNativeMenuBar`.
   var statusBarYieldsToNativeMenuBar = false
