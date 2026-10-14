@@ -84,6 +84,9 @@ struct PluginEvent {
   /// The wire frame for this event, encoded once by `PluginManager.emit` and
   /// shared by every listener instead of re-serializing the payload per plugin.
   var encodedFrame: Data?
+  /// The replacement slot this event supersedes in a plugin's queue, derived
+  /// once beside `encodedFrame` rather than per listener.
+  var coalescingKey: String?
 
   /// `core:ax.changed`: the one AX `notification` an observed app posted
   /// (`protocol.json` `host_events.ax_notifications`), so a plugin skips the

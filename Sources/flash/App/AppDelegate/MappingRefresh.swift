@@ -11,11 +11,16 @@ extension AppDelegate {
   /// registrations.
   func refreshEffectiveMappings(for bundleID: String?) {
     MainThreadActivity.note("effective_mappings")
-    let effective = effectiveMode(
-      for: pluginSelectorContext(fallbackBundleID: bundleID))
+    let context = pluginSelectorContext(fallbackBundleID: bundleID)
+    let effective = effectiveMode(for: context)
     overlay?.normalModeMappings = effective.compiledNormal
     overlay?.hyperModeMappings = effective.compiledHyper
-    if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
+    // The cache hands back one value per selector key, so a focus change
+    // that lands on the key already applied skips the six-table compare.
+    if lastAppliedMappingKey != context.cacheKey || lastAppliedMappingMode == nil,
+      mappingModeChanged(from: lastAppliedMappingMode, to: effective)
+    {
+      lastAppliedMappingKey = context.cacheKey
       terminalInputMappings?.replaceMappings(
         effective.compiledTerminal,
         timeoutMs: config.mode.sequenceTimeoutMs)
@@ -30,6 +35,7 @@ extension AppDelegate {
   func invalidateEffectiveMappings() {
     effectiveMappingCache.removeAll()
     lastAppliedMappingMode = nil
+    lastAppliedMappingKey = nil
   }
 
   /// Selectors only need a bundle id. A caller that already knows the

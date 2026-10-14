@@ -139,7 +139,7 @@ enum ActionDispatcher {
   ) -> CGPoint? {
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
 
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     let originalCursor = CGEvent(source: source)?.location ?? cgPoint
 
     guard
@@ -182,7 +182,7 @@ enum ActionDispatcher {
     else { return }
     // Let the release reach the app before the pointer leaves the target.
     usleep(20_000)
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     let current = CGEvent(source: source)?.location ?? destination
     warpCursor(to: destination)
     guard let move = pointerMoveEvent(to: destination, from: current, source: source) else {
@@ -335,7 +335,7 @@ enum ActionDispatcher {
   ) -> CGPoint {
     let start = CGPoint(x: from.x, y: screenH - from.y)
     let end = CGPoint(x: to.x, y: screenH - to.y)
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     let flags = modifiers.cgEventFlags
     let previous = CGEvent(source: source)?.location ?? start
 
@@ -464,7 +464,7 @@ enum ActionDispatcher {
     let screenH = primaryScreenHeight()
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
     clickQueue.async {
-      let source = CGEventSource(stateID: .combinedSessionState)
+      let source = SyntheticEventSources.session
       for effect in effects {
         let button: MouseButtonKind
         let pressed: Bool
@@ -519,7 +519,7 @@ enum ActionDispatcher {
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
     if let held = heldButton {
       clickQueue.async {
-        let source = CGEventSource(stateID: .combinedSessionState)
+        let source = SyntheticEventSources.session
         let previous = CGEvent(source: source)?.location ?? cgPoint
         warpCursor(to: cgPoint)
         pointerMoveEvent(to: cgPoint, from: previous, holding: held, source: source)?
@@ -529,7 +529,7 @@ enum ActionDispatcher {
     }
     let previous = CGEvent(source: nil)?.location ?? cgPoint
     warpCursor(to: cgPoint)
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     pointerMoveEvent(to: cgPoint, from: previous, source: source)?.post(tap: .cghidEventTap)
     return true
   }

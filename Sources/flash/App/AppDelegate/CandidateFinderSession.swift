@@ -56,6 +56,10 @@ final class CandidateFinderSession {
   /// do that lookup once per session instead of rebuilding the table on every
   /// keystroke.
   var precedenceTable: CandidateFinder.PrecedenceTable = .default
+  /// The plugin selector context frozen with the session: the focused app
+  /// cannot change under an open command line, and resolving it per
+  /// keystroke was a workspace lookup each.
+  var selectorContext: PluginSelectorContext?
   /// Session-local candidate normalization is CPU-only but can take tens of
   /// milliseconds for installed apps or the full emoji catalog. Keep that work
   /// off AppKit's main thread; generation checks still publish only the active

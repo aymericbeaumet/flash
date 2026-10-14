@@ -161,6 +161,11 @@ struct StatusFormatProgram: Equatable {
   var nodes: [Node]
   var diagnostics: [StatusFormatDiagnostic]
   var dependencies: StatusFormatDependencies
+  /// Whether the source holds a `%` strftime conversion, and the finest unit
+  /// those conversions show: decided once here, so a clock tick applies
+  /// `strftime` to the compiled text nodes instead of recompiling the format.
+  var hasTimeConversions = false
+  var strftimeResolution: StatusFormatTimeResolution?
 
   static func compile(
     source: String, origin: StatusFormatOrigin = StatusFormatOrigin()
@@ -174,9 +179,13 @@ struct StatusFormatProgram: Equatable {
     source: String, origin: StatusFormatOrigin, offset: Int, depth: Int
   ) -> Self {
     let bytes = Array(source.utf8)
+    let hasTimeConversions = bytes.contains(37)
     var result = Self(
       source: source, origin: origin, nodes: [], diagnostics: [],
-      dependencies: StatusFormatDependencies(containsTime: source.contains("%")))
+      dependencies: StatusFormatDependencies(containsTime: hasTimeConversions),
+      hasTimeConversions: hasTimeConversions,
+      strftimeResolution: hasTimeConversions
+        ? StatusFormatTimeResolution.of(strftime: source) : nil)
     guard depth < 100 else { return result }
     var index = 0
     var buffer = ""
@@ -496,18 +505,29 @@ private struct StatusFormatEvaluator {
     var program = program
     var context = context
     context.timeExpansion = time || context.timeExpansion
-    if context.timeExpansion, program.source.contains("%") {
+    // Time is applied to the compiled program's text: the structure of a
+    // format never changes with the clock, so a `%S` costs one `strftime`
+    // per text node rather than a lex and parse of the whole format every
+    // second. An operand compiled without nodes keeps the whole-source path.
+    let expandsTime = context.timeExpansion && program.hasTimeConversions
+    if expandsTime {
       dependencies.containsTime = true
-      dependencies.noteTime(StatusFormatTimeResolution.of(strftime: program.source))
-      let expanded = Self.strftime(program.source, date: context.now, timeZone: context.timeZone)
-      program = StatusFormatProgram.compile(source: expanded, origin: program.origin)
+      dependencies.noteTime(program.strftimeResolution)
+      if program.nodes.isEmpty {
+        let expanded = Self.strftime(
+          program.source, date: context.now, timeZone: context.timeZone)
+        program = StatusFormatProgram.compile(source: expanded, origin: program.origin)
+      }
     }
     var output: [StatusFormatFragment] = []
     for node in program.nodes {
       switch node {
       case .text(let text, var span):
         span.invocation = context.invocation
-        output.append(.init(text: text, span: span))
+        let expanded =
+          expandsTime && text.utf8.contains(37)
+          ? Self.strftime(text, date: context.now, timeZone: context.timeZone) : text
+        output.append(.init(text: expanded, span: span))
       case .expression(let expression, let span):
         var span = span
         span.invocation = context.invocation
@@ -519,13 +539,15 @@ private struct StatusFormatEvaluator {
       case .job(let commandProgram, var span):
         guard context.allowJobs else { continue }
         span.invocation = context.invocation
+        // The command text takes the format's time expansion (tmux applies
+        // strftime before `#()` runs); the command's output never does.
         var commandContext = context
         commandContext.allowJobs = false
-        commandContext.timeExpansion = false
         let command = expand(commandProgram, context: commandContext, depth: depth + 1).map(\.text)
           .joined()
         jobs.append(.init(rawCommand: commandProgram.source, command: command, span: span))
         dependencies.containsJobs = true
+        commandContext.timeExpansion = false
         let cached = StatusFormatProgram.compile(
           source: context.jobs[commandProgram.source] ?? "", origin: span.origin)
         output += expand(cached, context: commandContext, depth: depth + 1)
@@ -822,24 +844,63 @@ private struct StatusFormatEvaluator {
 
   static func truth(_ value: String) -> Bool { !value.isEmpty && value != "0" }
 
+  /// A zone's offset and abbreviation, valid until its next daylight-saving
+  /// transition: both are ICU lookups that a clock would otherwise repeat
+  /// every second for every text node that shows the time.
+  private struct ZoneFacts {
+    var identifier: String
+    var offset: Int
+    var abbreviation: String
+    /// The facts hold from the date they were read until the zone's next
+    /// transition; an earlier date may lie in a different offset period.
+    var validFrom: Date
+    var validUntil: Date
+  }
+  private static let zoneFactsLock = NSLock()
+  private static var zoneFacts: ZoneFacts?
+
+  private static func zoneFacts(for timeZone: TimeZone, at date: Date) -> (Int, String) {
+    zoneFactsLock.lock()
+    defer { zoneFactsLock.unlock() }
+    if let cached = zoneFacts, cached.identifier == timeZone.identifier,
+      date >= cached.validFrom, date < cached.validUntil
+    {
+      return (cached.offset, cached.abbreviation)
+    }
+    let offset = timeZone.secondsFromGMT(for: date)
+    let abbreviation = timeZone.abbreviation(for: date) ?? ""
+    let validUntil =
+      timeZone.nextDaylightSavingTimeTransition(after: date) ?? date.addingTimeInterval(86_400)
+    zoneFacts = ZoneFacts(
+      identifier: timeZone.identifier, offset: offset, abbreviation: abbreviation,
+      validFrom: date, validUntil: validUntil)
+    return (offset, abbreviation)
+  }
+
   static func strftime(_ format: String, date: Date, timeZone: TimeZone) -> String {
     guard let seconds = time_t(exactly: date.timeIntervalSince1970.rounded(.towardZero)) else {
       return ""
     }
-    let zoneOffset = timeZone.secondsFromGMT(for: date)
+    let (zoneOffset, abbreviation) = zoneFacts(for: timeZone, at: date)
     let adjusted = seconds.addingReportingOverflow(zoneOffset)
     guard !adjusted.overflow else { return "" }
     var timestamp = adjusted.partialValue
     var local = tm()
     guard gmtime_r(&timestamp, &local) != nil else { return "" }
     local.tm_gmtoff = zoneOffset
-    var buffer = [CChar](repeating: 0, count: 8192)
-    let count = (timeZone.abbreviation(for: date) ?? "").withCString { zone in
-      local.tm_zone = UnsafeMutablePointer(mutating: zone)
-      return format.withCString { Darwin.strftime(&buffer, buffer.count, $0, &local) }
+    // Sized to the text node, on the stack: a status line is a few hundred
+    // bytes, and a conversion expands a few bytes to at most a few dozen.
+    let capacity = max(256, format.utf8.count * 8 + 64)
+    return withUnsafeTemporaryAllocation(of: CChar.self, capacity: capacity) { buffer in
+      let count = abbreviation.withCString { zone in
+        local.tm_zone = UnsafeMutablePointer(mutating: zone)
+        return format.withCString {
+          Darwin.strftime(buffer.baseAddress!, capacity, $0, &local)
+        }
+      }
+      guard count > 0 else { return "" }
+      return String(cString: buffer.baseAddress!)
     }
-    guard count > 0 else { return "" }
-    return String(cString: buffer)
   }
 
   static func prettyTime(_ date: Date, now: Date, timeZone: TimeZone) -> String {
@@ -1137,6 +1198,17 @@ enum StatusFormatCells {
   }
 
   static func width(_ raw: String, styles: Bool = true) -> Int {
+    // ASCII with no style marker is one cell per printable byte; no pieces.
+    var total = 0
+    var ascii = true
+    for byte in raw.utf8 {
+      if byte >= 128 || (styles && byte == 35) {
+        ascii = false
+        break
+      }
+      if byte > 31, byte != 127 { total += 1 }
+    }
+    if ascii { return total }
     let values = pieces(raw, styles: styles)
     if styles, (values.last?.bytes.upperBound ?? 0) < raw.utf8.count { return 0 }
     return values.reduce(0) { $0 + $1.width }

@@ -8,7 +8,7 @@ struct WindowScreenLayout: Equatable {
   let usableFrame: CGRect
 }
 
-enum WindowFocusDirection: String, Hashable {
+enum WindowFocusDirection: String, Hashable, CaseIterable {
   case left, right, up, down
 }
 

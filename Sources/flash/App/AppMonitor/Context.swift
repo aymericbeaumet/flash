@@ -30,6 +30,30 @@ extension AppMonitor {
     return clip(context, to: topWindowFrame(for: context.processID) ?? context.frontWindowFrame)
   }
 
+  /// The app a hint activation walks: the frontmost app clipped to its top
+  /// window (else the top visible window's app), or the dialog covering it.
+  /// One window-list read serves every step; each is a synchronous
+  /// WindowServer round trip on main, before the prepared model is consulted.
+  func activationContext(excludingBundleIdentifier ignoredBundleIdentifier: String) -> AppContext? {
+    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    let entries = WindowSnapshot.windowList(opts).map {
+      WindowSnapshot.entries(from: $0, primaryH: primaryScreenHeight())
+    }
+    let base: AppContext?
+    if let context = currentContext(), context.bundleIdentifier != ignoredBundleIdentifier {
+      let top = entries.flatMap { Self.topWindowFrame(entries: $0, pid: context.processID) }
+      base = clip(context, to: top ?? context.frontWindowFrame)
+    } else if let entries {
+      base = topVisibleWindowContext(
+        entries: entries, excludingBundleIdentifier: ignoredBundleIdentifier)
+    } else {
+      base = nil
+    }
+    guard let base else { return nil }
+    guard let entries else { return base }
+    return coveringInteractionContext(inFrontOf: base, entries: entries) ?? base
+  }
+
   func context(for pid: pid_t) -> AppContext? {
     guard pid > 0,
       let app = NSRunningApplication(processIdentifier: pid)
@@ -68,14 +92,17 @@ extension AppMonitor {
     return makeContext(for: app, frontWindowFrame: entry.nsBounds)
   }
 
-  func clip(_ context: AppContext, to frame: CGRect) -> AppContext {
+  func clip(
+    _ context: AppContext, to frame: CGRect, walkedWindow: AXUIElement? = nil
+  ) -> AppContext {
     AppContext(
       bundleIdentifier: context.bundleIdentifier,
       processID: context.processID,
       runningApp: context.runningApp,
       frontWindowFrame: frame.isNull ? context.frontWindowFrame : frame,
       allScreensFrame: context.allScreensFrame,
-      walkRoot: context.walkRoot
+      walkRoot: context.walkRoot,
+      walkedWindow: walkedWindow ?? context.walkedWindow
     )
   }
 
@@ -134,7 +161,10 @@ extension AppMonitor {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
-    let entries = WindowSnapshot.entries(from: info, primaryH: primaryH)
+    return topWindowFrame(entries: WindowSnapshot.entries(from: info, primaryH: primaryH), pid: pid)
+  }
+
+  static func topWindowFrame(entries: [WindowSnapshot.Entry], pid: pid_t) -> CGRect? {
     // Match `WindowSnapshot.build`: a layer-0 card anchored over the app's main
     // window (Firefox tab-hover preview) shouldn't become the front window frame.
     let layer0App = entries.filter { $0.layer == 0 && $0.pid == pid && $0.pid != getpid() }
@@ -168,8 +198,15 @@ extension AppMonitor {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = WindowSnapshot.windowList(opts)
     else { return nil }
+    return topVisibleWindowContext(
+      entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()),
+      excludingBundleIdentifier: ignoredBundleIdentifier)
+  }
 
-    for entry in WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()) {
+  private func topVisibleWindowContext(
+    entries: [WindowSnapshot.Entry], excludingBundleIdentifier ignoredBundleIdentifier: String
+  ) -> AppContext? {
+    for entry in entries {
       guard WindowSnapshot.isInteractionSurfaceLayer(entry.layer),
         entry.pid > 0,
         entry.pid != getpid(),
@@ -209,7 +246,14 @@ extension AppMonitor {
     guard let front else { return nil }
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = WindowSnapshot.windowList(opts) else { return nil }
-    let entries = WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
+    return coveringInteractionContext(
+      inFrontOf: front, entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
+    )
+  }
+
+  func coveringInteractionContext(
+    inFrontOf front: AppContext, entries: [WindowSnapshot.Entry]
+  ) -> AppContext? {
     var screen: CGRect = .null
     for candidate in NSScreen.screens where candidate.frame.intersects(front.frontWindowFrame) {
       screen = candidate.frame

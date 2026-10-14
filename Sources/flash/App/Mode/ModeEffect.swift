@@ -2,7 +2,7 @@ import Foundation
 
 /// Which native mapping set Carbon should own. Terminal input suspends every
 /// global registration so only the popup's local mappings can intercept keys.
-enum MappingScope: Equatable {
+enum MappingScope: Hashable {
   case normal
   case insert
   case command

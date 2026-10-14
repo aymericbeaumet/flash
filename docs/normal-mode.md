@@ -430,6 +430,17 @@ share the main run loop. Treat that loop as the input latency budget:
   reconcile
   does no work when the event's target pid already matches the observed
   frontmost app (`reconcileFrontmostApplication(forKeyTargetingPID:)`).
+- The hyper key is prepared once per config load (`HyperKeyMatcher`: the
+  atom's physical chord and the characters that can spell it). A key that
+  cannot be it is settled from its key code or typed character before any
+  key atom is built, and the tap drops every other swallowed release without
+  an `NSEvent` or a main-thread hop. The HYPER hold watch reads that prepared
+  chord; the leader atom is resolved once with it. Entering or leaving HYPER
+  paints the border's cached frame instead of reading the window list.
+- Arrow and function-key mapping commands carry prepared key codes, and every
+  synthesized key, click, pointer move and wheel step uses the process's
+  shared `CGEventSource`s (`SyntheticEventSources`); creating one per event
+  was a WindowServer round trip.
 - A recapture-only event calls `recaptureNormalModeKeyboardInput()`. With a live
   tap this restores `.normal` routing and stops; only the no-tap fallback needs
   key-window retries. Recapture must not rebuild the status bar or active-window

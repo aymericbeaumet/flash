@@ -739,13 +739,18 @@ extension AppMonitor {
     // A frame-scoped walk (a system dialog, a Picture in Picture player)
     // already named its window. The process's focused window is a different
     // surface, and swapping to it would hint the app behind the dialog.
+    // The resolved window element rides along so the walk starts at the
+    // element whose frame was measured, without a second focused-window read.
     let walked: CGRect?
+    var walkedWindow: AXUIElement?
     switch context.walkRoot {
     case .elementsInFrame:
       walked = context.frontWindowFrame.isNull ? nil : context.frontWindowFrame
     case .focusedWindow:
-      walked = AccessibilityProvider.walkedWindowFrame(
+      let window = AccessibilityProvider.walkedWindow(
         pid: context.processID, bundleIdentifier: context.bundleIdentifier, screenH: primaryH)
+      walked = window?.frame
+      walkedWindow = window?.element
     }
     let snapshot = WindowSnapshot.build(
       primaryH: primaryH,
@@ -756,7 +761,7 @@ extension AppMonitor {
       of: context.processID, in: snapshot, whenWindowListUnavailable: context.frontWindowFrame)
     let providerFrame = snapshot.activeWindowFrame ?? union(of: visible)
     return DiscoveryFrame(
-      providerContext: clip(context, to: providerFrame),
+      providerContext: clip(context, to: providerFrame, walkedWindow: walkedWindow),
       visibleRegions: visible)
   }
 
@@ -801,10 +806,11 @@ extension AppMonitor {
         results = []
       }
       if !results.isEmpty {
+        let priority = provider.priority(in: focused)
         let targets = results.enumerated().map { ordinal, target in
           TargetCandidate(
             target: target,
-            priority: provider.priority(in: focused),
+            priority: priority,
             providerOrder: providerOrder,
             ordinal: ordinal)
         }

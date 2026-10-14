@@ -58,6 +58,16 @@ grid and the same window rectangle, including the status line and each
 pane-border title. `f` and `cf` label that grid's panes, links, window
 tabs and pane titles; they also label the same status-bar spans.
 
+A walk resolves the window it covers once: the frame step keeps the focused
+window element (`AppContext.walkedWindow`) and the walk starts there instead
+of asking the app for its focused window again. Per node, the batched
+attribute array is read in place by type id (`AXBatchValues`); strings are
+bridged only for a node the role gate admits, and the extension-document
+test is a scheme prefix check, not a `URL` parse. An activation reads the
+window list once for the frontmost app's top window and the dialog covering
+it. Label lists are memoized per layout and target count, and the overlay
+keeps one attributed string per label, prefix length and accent.
+
 Prepared models contain a complete finalized target set and assigned labels.
 Reads require matching PID, dirty token, configuration revision and freshness.
 AX notifications, focus, Space, display and configuration changes invalidate them.

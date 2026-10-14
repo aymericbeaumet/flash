@@ -61,6 +61,9 @@ final class PluginProcess {
   let manifest: PluginManifest
   let origin: PluginOrigin
   private let listenPatterns: [PluginPattern]
+  /// The manifest's status segment names, as a set built once: every
+  /// `status` notification is filtered against it.
+  private let declaredStatusSegments: Set<String>
 
   private let queue: DispatchQueue
   private let readQueue: DispatchQueue
@@ -203,6 +206,7 @@ final class PluginProcess {
     self.manifest = manifest
     self.origin = origin
     self.listenPatterns = manifest.listen.map(PluginPattern.init)
+    self.declaredStatusSegments = Set(manifest.statusSegments)
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.readQueue = DispatchQueue(label: "flash.plugin.\(manifest.id).read", qos: .utility)
@@ -708,8 +712,13 @@ final class PluginProcess {
 
   // MARK: - Events
 
+  /// Whether the manifest's `listen` globs admit `name`.
+  func listens(to name: String) -> Bool {
+    listenPatterns.contains(where: { $0.matches(name) })
+  }
+
   func sendEvent(_ event: PluginEvent) {
-    guard listenPatterns.contains(where: { $0.matches(event.name) }) else { return }
+    guard listens(to: event.name) else { return }
     // Default-deny capability gate. Events that carry sensitive data
     // (clipboard text, etc.) reach a plugin only when its manifest
     // explicitly opts in via `capabilities`.
@@ -757,10 +766,15 @@ final class PluginProcess {
     ]
   }
 
-  private func deliverEventOnQueue(_ event: PluginEvent) {
+  /// The queue slot `event` replaces, from the payload every listener sees.
+  static func coalescingKey(_ event: PluginEvent) -> String? {
     var payload = event.payload
     if payload["pid"] == nil, let pid = event.pid { payload["pid"] = Int(pid) }
-    let coalescingKey = PluginProtocol.coalescingKey(eventName: event.name, payload: payload)
+    return PluginProtocol.coalescingKey(eventName: event.name, payload: payload)
+  }
+
+  private func deliverEventOnQueue(_ event: PluginEvent) {
+    let coalescingKey = event.coalescingKey ?? Self.coalescingKey(event)
     if let frame = event.encodedFrame, frame.count - 1 <= PluginProtocol.maxFrameBytes {
       enqueueWrite(frame, label: "event", coalescingKey: coalescingKey)
       return
@@ -1703,11 +1717,12 @@ final class PluginProcess {
         return
       }
       let elapsedMsValue = Self.elapsedMillisecondsValue(since: request.startedAt)
-      let elapsedMs = Self.elapsedMilliseconds(since: request.startedAt)
+      // Formatted inside the field autoclosures: nothing is built at `info`.
+      let elapsedMs = { Self.elapsedMilliseconds(since: request.startedAt) }
       if let deadline = request.deadline, DispatchTime.now() >= deadline {
         FlashLog.plugin(
           .debug, pluginID: manifest.id, message: "[plugin] reply after its deadline",
-          fields: ["id": "\(responseID)", "method": request.method, "elapsed_ms": elapsedMs],
+          fields: ["id": "\(responseID)", "method": request.method, "elapsed_ms": elapsedMs()],
           trace: request.trace)
         request.completion(nil)
         return
@@ -1722,7 +1737,7 @@ final class PluginProcess {
         fields: [
           "id": "\(responseID)",
           "method": request.method,
-          "elapsed_ms": elapsedMs,
+          "elapsed_ms": elapsedMs(),
           "ok": result == nil ? "false" : "true",
         ],
         trace: request.trace)
@@ -1798,7 +1813,7 @@ final class PluginProcess {
   /// without a live child process.
   func applyStatusSegments(_ params: [String: Any]) {
     guard let raw = params["segments"] as? [String: Any] else { return }
-    let declared = Set(manifest.statusSegments)
+    let declared = declaredStatusSegments
     guard !declared.isEmpty else { return }
     var decoded: [(key: String, segment: PluginStatusSegment?)] = []
     for (name, value) in raw {
@@ -1814,17 +1829,24 @@ final class PluginProcess {
           fields: ["segment": key])
       }
     }
+    // A notification that restates every segment unchanged wakes nobody:
+    // the bar's re-evaluation and host-source reconcile run only for a
+    // value, or a stale mark, that actually moved.
+    var changed = false
     lock.lock()
     for (key, segment) in decoded {
-      staleStatusSegments.remove(key)
+      if staleStatusSegments.remove(key) != nil { changed = true }
       if let segment {
-        statusSegments[key] = segment
-      } else {
-        statusSegments.removeValue(forKey: key)
+        if statusSegments[key] != segment {
+          statusSegments[key] = segment
+          changed = true
+        }
+      } else if statusSegments.removeValue(forKey: key) != nil {
+        changed = true
       }
     }
     lock.unlock()
-    notifyStatus()
+    if changed { notifyStatus() }
   }
 
   /// One registration of a `poll` set: a cadence (`every`) or a one-shot

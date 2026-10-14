@@ -61,7 +61,13 @@ extension AppDelegate {
       "[activation] begin command=\(command) mode=\(flashMode) "
         + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
 
-    guard let base = contextOverride ?? currentNonFlashContext() else {
+    let resolved: AppContext?
+    if let contextOverride {
+      resolved = monitor.coveringInteractionContext(inFrontOf: contextOverride) ?? contextOverride
+    } else {
+      resolved = currentNonFlashActivationContext()
+    }
+    guard let context = resolved else {
       FlashLog.debug("[activation] no target app")
       FlashLog.trace(
         "[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
@@ -69,7 +75,6 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    let context = monitor.coveringInteractionContext(inFrontOf: base) ?? base
     FlashLog.debug(
       "[activation] target pid=\(context.processID) bundle=\(context.bundleIdentifier) "
         + "source=\(contextOverride == nil ? "focused" : "override")"

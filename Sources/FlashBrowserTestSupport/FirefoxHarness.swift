@@ -421,7 +421,7 @@ public enum FirefoxHarness {
   /// the window cannot be read.
   public static func clippedToWalkedWindow(_ context: AppContext) -> AppContext {
     guard
-      let window = AccessibilityProvider.walkedWindowFrame(
+      let window = AccessibilityProvider.walkedWindow(
         pid: context.processID, bundleIdentifier: context.bundleIdentifier,
         screenH: primaryScreenHeight())
     else { return context }
@@ -429,9 +429,10 @@ public enum FirefoxHarness {
       bundleIdentifier: context.bundleIdentifier,
       processID: context.processID,
       runningApp: context.runningApp,
-      frontWindowFrame: window,
+      frontWindowFrame: window.frame,
       allScreensFrame: context.allScreensFrame,
-      walkRoot: context.walkRoot)
+      walkRoot: context.walkRoot,
+      walkedWindow: window.element)
   }
 
   private static func primaryScreenHeight() -> CGFloat {

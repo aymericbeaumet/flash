@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import XCTest
@@ -527,6 +528,70 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(letter?.modifiers, .maskControl)
     XCTAssertNil(HyperKeyChord.parse("ctrl-"))
     XCTAssertNil(HyperKeyChord.parse("cmd+nope"))
+  }
+
+  /// The prepared matcher settles every key that cannot be the hyper key
+  /// from its key code or typed character, and agrees with the full test on
+  /// every key that can.
+  func testHyperKeyMatcherAgreesWithTheFullTestAndFiltersReleases() {
+    let space = CGKeyCode(HotkeySyntax.parseKey("space")!)
+    let a = CGKeyCode(HotkeySyntax.parseKey("a")!)
+    let f = CGKeyCode(HotkeySyntax.parseKey("f")!)
+    struct Key {
+      var code: CGKeyCode
+      var flags: NSEvent.ModifierFlags = []
+      var characters: String?
+      var ignoring: String?
+    }
+    let keys: [Key] = [
+      Key(code: space, characters: " ", ignoring: " "),
+      Key(code: space, flags: .shift, characters: " ", ignoring: " "),
+      Key(code: space, flags: .command, characters: " ", ignoring: " "),
+      Key(code: space, characters: nil, ignoring: nil),
+      Key(code: a, characters: "a", ignoring: "a"),
+      Key(code: a, flags: .control, characters: "\u{01}", ignoring: "a"),
+      Key(code: a, flags: .shift, characters: "A", ignoring: "a"),
+      Key(code: f, characters: "f", ignoring: "f"),
+      // A remapped layout types `f` on the ANSI `a` position.
+      Key(code: a, characters: "f", ignoring: "f"),
+      Key(code: f, flags: .shift, characters: "?", ignoring: "/"),
+    ]
+    for atom in ["space", "cmd+space", "ctrl-a", "f", "?", "tab"] {
+      let matcher = HyperKeyMatcher(atom: atom)
+      for key in keys {
+        let full = NormalModeInterpreter.isHyperKey(
+          atom: atom, keyCode: key.code, modifierFlags: key.flags,
+          characters: key.characters, charactersIgnoringModifiers: key.ignoring)
+        let fast = NormalModeInterpreter.isHyperKey(
+          matcher: matcher, keyCode: key.code, modifierFlags: key.flags,
+          characters: key.characters, charactersIgnoringModifiers: key.ignoring)
+        XCTAssertEqual(fast, full, "atom=\(atom) code=\(key.code) flags=\(key.flags)")
+        if full {
+          XCTAssertTrue(matcher.mayMatch(keyCode: Int64(key.code)), "atom=\(atom)")
+        }
+      }
+    }
+    let spaceMatcher = HyperKeyMatcher(atom: "space")
+    XCTAssertTrue(spaceMatcher.mayMatch(keyCode: Int64(space)))
+    XCTAssertFalse(spaceMatcher.mayMatch(keyCode: Int64(a)), "other releases need no event")
+    let letterMatcher = HyperKeyMatcher(atom: "f")
+    XCTAssertTrue(letterMatcher.mayMatch(keyCode: Int64(a)), "a layout may type f anywhere")
+    XCTAssertEqual(letterMatcher.characters, ["f", "F"])
+  }
+
+  func testConfigPreparesTheHyperMatcherAndLeaderAtom() {
+    var mode = Config.Mode()
+    mode.normalLeader = "space"
+    mode.hyperKey = "<leader>"
+    mode.refreshLeaderDerivedDefaults()
+    XCTAssertEqual(mode.resolvedHyperKey, "space")
+    XCTAssertEqual(mode.resolvedHyperMatcher?.atom, "space")
+    XCTAssertEqual(mode.resolvedHyperMatcher?.chord, HyperKeyChord.parse("space"))
+    XCTAssertEqual(mode.resolvedLeaderAtom, NormalModeInterpreter.translateLeader("space"))
+    mode.normalLeader = nil
+    mode.refreshLeaderDerivedDefaults()
+    XCTAssertNil(mode.resolvedHyperMatcher)
+    XCTAssertNil(mode.resolvedLeaderAtom)
   }
 
   func testASecondLeaderHoldEntersHyperWhileItsPrefixIsArmed() {

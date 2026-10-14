@@ -23,8 +23,25 @@ final class MappingsCoordinator {
   private var mappingDispatch: ((MappingCommand) -> Void)?
   private var activeMappings: [ParsedHotkey: ModeMapping] = [:]
   private var configuredMode: Config.Mode = .init()
+  /// The native tables of each scope under `configuredMode`, built on first
+  /// use after `apply(mode:)`: a NORMAL/INSERT/COMMAND transition then swaps
+  /// a prepared table instead of resolving the mapping lists again.
+  private struct ScopeTables {
+    var active: [ParsedHotkey: ModeMapping]
+    var scoped: [ModeMapping]
+  }
+  private var scopeTables: [MappingScope: ScopeTables] = [:]
+
+  private func tables(for scope: MappingScope) -> ScopeTables {
+    if let cached = scopeTables[scope] { return cached }
+    let built = ScopeTables(
+      active: Self.activeMappingTable(in: configuredMode, scope: scope),
+      scoped: Self.scopedNativeMappings(in: configuredMode, scope: scope))
+    scopeTables[scope] = built
+    return built
+  }
   private var lastAppliedScope: MappingScope = .insert
-  private var lastFireDiagnostic: String?
+  private var lastFiredAction: MappingCommand?
   private var lastFireAt: Date = .distantPast
   /// Chords Flash just synthesized into the focused app (e.g. the `⌘⇧]`
   /// Messages tab-traversal fallback). `postToPid` is *supposed* to bypass
@@ -51,7 +68,8 @@ final class MappingsCoordinator {
   /// from inside the synchronous tap callback, which must never wait on it.
   func apply(mode: Config.Mode) {
     configuredMode = mode
-    activeMappings = Self.activeMappingTable(in: mode, scope: lastAppliedScope)
+    scopeTables.removeAll(keepingCapacity: true)
+    activeMappings = tables(for: lastAppliedScope).active
     guard !registrationReconcileQueued else { return }
     registrationReconcileQueued = true
     DispatchQueue.main.async { [weak self] in
@@ -85,10 +103,9 @@ final class MappingsCoordinator {
 
   private func reconcileScopedMappings(for mappingScope: MappingScope) {
     lastAppliedScope = mappingScope
-    activeMappings = Self.activeMappingTable(in: configuredMode, scope: mappingScope)
-    reconcile(
-      Self.scopedNativeMappings(in: configuredMode, scope: mappingScope), with: scopedHotkeys,
-      label: "\(mappingScope)")
+    let tables = tables(for: mappingScope)
+    activeMappings = tables.active
+    reconcile(tables.scoped, with: scopedHotkeys, label: "\(mappingScope)")
   }
 
   /// Mapping keys macOS refused to register, per registration set. A refused
@@ -192,20 +209,20 @@ final class MappingsCoordinator {
   }
 
   private func fire(_ mapping: ModeMapping, parsed: ParsedHotkey) {
-    let diagnostic = mapping.action.diagnosticDescription
+    let action = mapping.action
     let now = Date()
     if consumeSyntheticEcho(virtualKey: parsed.virtualKey, modifiers: parsed.modifiers, now: now) {
-      FlashLog.debug("[mappings] suppressed self-synthesized echo \(diagnostic)")
+      FlashLog.debug("[mappings] suppressed self-synthesized echo \(action.diagnosticDescription)")
       return
     }
-    if lastFireDiagnostic == diagnostic, now.timeIntervalSince(lastFireAt) < 0.08 {
+    if lastFiredAction == action, now.timeIntervalSince(lastFireAt) < 0.08 {
       return
     }
-    lastFireDiagnostic = diagnostic
+    lastFiredAction = action
     lastFireAt = now
     Trace.ensure(.hotkey) {
-      FlashLog.debug("[mappings] fired \(diagnostic)")
-      mappingDispatch?(mapping.action)
+      FlashLog.debug("[mappings] fired \(action.diagnosticDescription)")
+      mappingDispatch?(action)
     }
   }
 

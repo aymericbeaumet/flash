@@ -16,6 +16,10 @@ final class StatusRunRenderer {
     var previousFont: NSFont?
     var previousForeground: CGColor?
     var previousFrame: CGRect?
+    /// The container fill last written, nil for none: an unchanged run writes
+    /// no new `CGColor` to the layer.
+    var previousBackground: FlashStatusTextColor?
+    var paintedBackground = false
 
     private(set) var existingPill: CAGradientLayer?
     private(set) var existingOutgoing: CATextLayer?
@@ -179,8 +183,14 @@ final class StatusRunRenderer {
       let cellBackground = run.segment.reverse ? run.segment.foreground : run.segment.background
       let paintsBackground =
         !isPill && (run.segment.reverse || cellBackground != .defaultBackground)
-      layers.container.backgroundColor =
-        paintsBackground ? FlashStatusTextColor.nsColor(cellBackground).cgColor : nil
+      if paintsBackground != layers.paintedBackground
+        || (paintsBackground && layers.previousBackground != cellBackground)
+      {
+        layers.container.backgroundColor =
+          paintsBackground ? FlashStatusTextColor.cgColor(cellBackground) : nil
+        layers.paintedBackground = paintsBackground
+        layers.previousBackground = paintsBackground ? cellBackground : nil
+      }
       if let pill, isPill {
         let layer = layers.pill
         layer.frame = textRect

@@ -11,6 +11,15 @@ extension AppDelegate {
   /// and every eligible plugin's in-memory location catalog are then frozen into
   /// one deterministic snapshot and revealed exactly once. Nothing is retained
   /// in the host after the session closes.
+  /// The session's frozen selector context, resolved now for a session that
+  /// opened cold (typed `:` without a flashlight entry).
+  private func sessionSelectorContext() -> PluginSelectorContext {
+    if let context = finder.selectorContext { return context }
+    let context = pluginSelectorContext()
+    finder.selectorContext = context
+    return context
+  }
+
   func openCandidateFinderSession(scope: CandidateScope) {
     let startedNs = DispatchTime.now().uptimeNanoseconds
     // Advisory: the flashlight opened. Eager plugins may refresh their
@@ -20,6 +29,7 @@ extension AppDelegate {
         PluginEvent(name: "core:session.opened", payload: [:], bundleID: nil))
     }
     finder.precedenceTable = buildCandidateFinderPrecedenceTable()
+    finder.selectorContext = pluginSelectorContext()
     finder.scope = scope
     finder.sessionGeneration &+= 1
     finder.liveQuery.cancel()
@@ -305,7 +315,7 @@ extension AppDelegate {
     } else if let bang = CandidateFinder.parseBangState(parsed.text.trimmed),
       bang.confirmed,
       let candidateSource = pluginManager.shebangCandidateSource(
-        token: bang.token, in: pluginSelectorContext())
+        token: bang.token, in: sessionSelectorContext())
     {
       filter = candidateSource
       text = bang.remainder
@@ -781,7 +791,7 @@ extension AppDelegate {
     if usesTransientCompletionPool {
       invalidateCandidateQueryEvaluation()
       let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
-      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+      let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: normalizedQuery)
       let scored = CandidateFinder.scoreMatches(
         pool: pool,
         normalizedQuery: normalizedQuery,
@@ -799,7 +809,7 @@ extension AppDelegate {
 
     if scoringText.trimmed.isEmpty {
       invalidateCandidateQueryEvaluation()
-      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+      let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: "")
       let scored = CandidateFinder.scoreMatches(
         pool: pool,
         normalizedQuery: "",
@@ -844,7 +854,7 @@ extension AppDelegate {
     // empty query and lists every glyph unranked.
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(
       NormalModeDispatcher.expandEmoticons(scoringText))
-    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: normalizedQuery)
     let signature = parsed.sourceFilter ?? ""
     // Incremental narrowing: if the new query extends the previous one
     // and neither the pool nor the attribute filters have changed since
@@ -880,9 +890,16 @@ extension AppDelegate {
     // work that's pure waste here.
     let store = self.frecencyStore
     if let store, !store.isEmpty {
+      // One copy of the table per keystroke; the key was derived at prepare.
+      let boosts = store.boosts()
       for index in scored.indices {
-        if let key = FrecencyMapper.itemKey(for: scored[index].candidate) {
-          scored[index].score += store.boost(forKey: key)
+        let candidate = scored[index].candidate
+        let key =
+          candidate.sortKey.isEmpty
+          ? FrecencyMapper.itemKey(for: candidate)
+          : (candidate.frecencyKey.isEmpty ? nil : candidate.frecencyKey)
+        if let key, let boost = boosts[key] {
+          scored[index].score += boost
         }
       }
     }
@@ -1022,7 +1039,7 @@ extension AppDelegate {
   /// which land in the session pool once the non-location sources are read on
   /// the first `@source`/`!` keystroke.
   private func bangListCandidates() -> [Candidate] {
-    pluginManager.shebangCandidates(in: pluginSelectorContext())
+    pluginManager.shebangCandidates(in: sessionSelectorContext())
       + finder.candidates.filter { $0.kind == CandidateFinder.bangKind }
   }
 
@@ -1080,16 +1097,18 @@ extension AppDelegate {
     rawQuery: String,
     sourceFilter: String?
   ) -> (pool: [Candidate], scoringText: String) {
-    let availableCandidates = finder.candidates + finder.liveQuery.rows
+    // Joined only by the branches that read it: the cache hit below, the
+    // common keystroke, copies nothing.
+    func availableCandidates() -> [Candidate] { finder.candidates + finder.liveQuery.rows }
     if let bang = CandidateFinder.parseBangState(trimmed),
       bang.confirmed,
       let candidateSource = pluginManager.shebangCandidateSource(
         token: bang.token,
-        in: pluginSelectorContext())
+        in: sessionSelectorContext())
     {
       // Confirmed bang bound to a candidate source: swap the pool to that
       // source's live candidates. Selection routes back through the bang.
-      let scoped = availableCandidates.filter { candidate in
+      let scoped = availableCandidates().filter { candidate in
         guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
         return CandidateFinder.candidateMatchesSourceFilter(candidate, filter: candidateSource)
       }
@@ -1131,13 +1150,14 @@ extension AppDelegate {
       // `@<source>` opts in to whatever source the user names. Without an
       // explicit source filter, keep the default flashlight focused on locations.
       let userOptedIntoSource = sourceFilter != nil
-      let pool = availableCandidates.filter { candidate in
+      let precedence = precedenceTable()
+      let pool = availableCandidates().filter { candidate in
         guard candidate.kind != CandidateFinder.bangKind,
           candidate.kind != CandidateFinder.sourceKind
         else { return false }
         guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
         if !userOptedIntoSource,
-          !CandidateFinder.isDefaultFlashlightCandidate(candidate, precedence: precedenceTable())
+          !CandidateFinder.isDefaultFlashlightCandidate(candidate, precedence: precedence)
         {
           return false
         }
@@ -1636,6 +1656,7 @@ extension AppDelegate {
 
   func resetCommandLineState() {
     finder.invocationTargetPID = nil
+    finder.selectorContext = nil
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
     finder.scope = .all

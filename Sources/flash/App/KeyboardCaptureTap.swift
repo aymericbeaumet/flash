@@ -21,6 +21,10 @@ final class KeyboardCaptureTap {
   private let shouldSwallow: (CGEvent) -> Bool
   private let handle: (NSEvent) -> Void
   private let handleKeyUp: (NSEvent) -> Void
+  /// Whether a swallowed release with this key code is one the key-up handler
+  /// wants (the hyper key). Other releases stay a set removal: no `NSEvent`,
+  /// no main-thread hop.
+  private let keyUpMatters: (Int64) -> Bool
   /// Releases pair with the presses this tap swallowed. Main-thread only: the
   /// tap source runs in the main run loop.
   private var swallowedKeys = SwallowedKeys()
@@ -49,11 +53,13 @@ final class KeyboardCaptureTap {
   init(
     shouldSwallow: @escaping (CGEvent) -> Bool,
     handle: @escaping (NSEvent) -> Void,
-    handleKeyUp: @escaping (NSEvent) -> Void = { _ in }
+    handleKeyUp: @escaping (NSEvent) -> Void = { _ in },
+    keyUpMatters: @escaping (Int64) -> Bool = { _ in false }
   ) {
     self.shouldSwallow = shouldSwallow
     self.handle = handle
     self.handleKeyUp = handleKeyUp
+    self.keyUpMatters = keyUpMatters
   }
 
   /// What the tap does with one `keyDown`, decided from state alone. The
@@ -214,6 +220,7 @@ final class KeyboardCaptureTap {
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
     if type == .keyUp {
       guard me.swallowedKeys.releaseIsSwallowed(keyCode) else { return passthrough }
+      guard me.keyUpMatters(keyCode) else { return nil }
       if let ns = NSEvent(cgEvent: event) {
         let keyUp = me.handleKeyUp
         DispatchQueue.main.async { keyUp(ns) }

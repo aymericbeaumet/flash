@@ -40,7 +40,9 @@ final class AppMonitor {
   /// an AX walk on `axQueue`. Window-list reads never run here; see
   /// `WindowSnapshot.windowList`.
   let geometryQueue = DispatchQueue(label: "flash.window_geometry", qos: .userInitiated)
-  var focusedElementDidChange: ((pid_t, String) -> Void)?
+  /// Every observed AX notification: the app's pid, its bundle id as known
+  /// at observer install, and the notification name.
+  var focusedElementDidChange: ((pid_t, String?, String) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
   var activeWindowMayHaveChanged: ((pid_t, String, AXUIElement?) -> Void)?
   var focusedWindowDidResolve: ((pid_t, AXUIElement) -> Void)?
@@ -236,12 +238,16 @@ final class AppMonitor {
   final class ObserverContext {
     weak var monitor: AppMonitor?
     let pid: pid_t
+    /// The observed app's bundle id, looked up once at install so a storm of
+    /// notifications never consults LaunchServices per event.
+    let bundleIdentifier: String?
     private let focusedWindowLock = NSLock()
     private var focusedWindow: AXUIElement?
 
-    init(monitor: AppMonitor, pid: pid_t) {
+    init(monitor: AppMonitor, pid: pid_t, bundleIdentifier: String?) {
       self.monitor = monitor
       self.pid = pid
+      self.bundleIdentifier = bundleIdentifier
     }
 
     func setFocusedWindow(_ window: AXUIElement?) {
@@ -268,16 +274,18 @@ final class AppMonitor {
     monitor.enqueueAXEvent(
       PendingAXEvent(
         pid: ctx.pid,
+        bundleIdentifier: ctx.bundleIdentifier,
         notification: notification as String,
         observedElementIsFocusedWindow: isFocusedWindow,
         observedWindow: isFocusedWindow ? element : nil))
   }
 
   struct PendingAXEvent {
-    let pid: pid_t
-    let notification: String
-    let observedElementIsFocusedWindow: Bool
-    let observedWindow: AXUIElement?
+    var pid: pid_t
+    var bundleIdentifier: String? = nil
+    var notification: String
+    var observedElementIsFocusedWindow: Bool
+    var observedWindow: AXUIElement?
   }
 
   private let pendingAXEventsLock = NSLock()
@@ -305,6 +313,7 @@ final class AppMonitor {
     for event in batch {
       onAXEvent(
         pid: event.pid,
+        bundleIdentifier: event.bundleIdentifier,
         notification: event.notification,
         observedElementIsFocusedWindow: event.observedElementIsFocusedWindow,
         observedWindow: event.observedWindow)

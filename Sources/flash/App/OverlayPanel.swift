@@ -100,6 +100,21 @@ final class OverlayPanel: NSPanel {
   let contentLayer = CALayer()
   var hintLayers: [CAGradientLayer] = []
   var labelLayers: [CATextLayer] = []
+  /// Chip label strings by label, typed prefix and accent, for one label
+  /// style. The label space is a few hundred strings, so every display and
+  /// every keystroke reuses them instead of building attributed strings.
+  struct HintLabelStyle: Equatable {
+    var fontSize: CGFloat
+    var fg: NSColor
+    var importantFG: NSColor
+  }
+  struct HintLabelKey: Hashable {
+    var display: String
+    var typedPrefixLen: Int
+    var accent: Bool
+  }
+  var hintLabelStyle: HintLabelStyle?
+  var hintLabelCache: [HintLabelKey: NSAttributedString] = [:]
   var hintLayerPool: [CAGradientLayer] = []
   var labelLayerPool: [CATextLayer] = []
   let modeBadgeLayer = CAGradientLayer()
@@ -124,7 +139,7 @@ final class OverlayPanel: NSPanel {
   var statusBarClickWindows: [StatusBarClickPanel] = []
   /// Signature of the currently-installed band + link rects, so an unchanged
   /// render skips reordering the click windows.
-  var lastStatusBarClickSignature: String?
+  var lastStatusBarClickSignature: StatusBarClickSignature?
   /// Per-screen clickable and hover-popup rects in screen coordinates, rebuilt
   /// on every `configureModeBadge`. The `f` hint path uses the active window's
   /// screen so every meaningful status segment is hintable without duplicating

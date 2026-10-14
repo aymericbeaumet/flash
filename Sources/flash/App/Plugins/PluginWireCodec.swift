@@ -38,9 +38,20 @@ enum PluginWireCodec {
     return id
   }
 
+  private static let envelopeKeys: Set<String> = ["id", "method", "params", "result"]
+  private static let performOKKeys: Set<String> = ["ok", "target_pid", "navigation_url", "message"]
+  private static let hintPayloadKeys: Set<String> = ["ok", "targets", "context_pid"]
+  private static let frameKeys: Set<String> = ["x", "y", "width", "height"]
+  private static let catalogRowKeys: Set<String> = ["source", "title", "url", "metadata", "effect"]
+
+  /// `object`'s keys all lie in `allowed`, without building a set per frame.
+  private static func keys(of object: [String: Any], within allowed: Set<String>) -> Bool {
+    object.keys.allSatisfy(allowed.contains)
+  }
+
   static func decodeFrame(_ line: Data) throws -> [String: Any] {
     guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any],
-      Set(object.keys).isSubset(of: ["id", "method", "params", "result"])
+      keys(of: object, within: envelopeKeys)
     else { throw PluginError.failure("invalid IPC envelope") }
     if let id = object["id"] {
       guard let integer = PluginJSON.integer(id), integer > 0 else {
@@ -81,9 +92,7 @@ enum PluginWireCodec {
   static func validatedPerformResult(_ result: [String: Any]) -> PluginPerformOutcome? {
     guard let ok = PluginJSON.boolean(result["ok"]) else { return nil }
     if ok {
-      guard Set(result.keys).isSubset(of: ["ok", "target_pid", "navigation_url", "message"]) else {
-        return nil
-      }
+      guard keys(of: result, within: performOKKeys) else { return nil }
       let pid: pid_t?
       if let raw = PluginJSON.present(result["target_pid"]) {
         guard let decoded = PluginJSON.pid(raw) else { return nil }
@@ -109,10 +118,10 @@ enum PluginWireCodec {
       }
       return .performed(pid: pid, navigationURL: navigationURL, message: message)
     }
-    if Set(result.keys) == ["ok", "unhandled"], PluginJSON.boolean(result["unhandled"]) == true {
+    if result.count == 2, PluginJSON.boolean(result["unhandled"]) == true {
       return .unhandled
     }
-    guard Set(result.keys) == ["ok", "error"], let error = result["error"] as? String,
+    guard result.count == 2, let error = result["error"] as? String,
       !error.trimmed.isEmpty
     else { return nil }
     return .failed(error)
@@ -122,7 +131,7 @@ enum PluginWireCodec {
     from payload: [String: Any], sourceID: String, contextPID: pid_t
   ) -> [PluginWireTarget]? {
     guard PluginJSON.boolean(payload["ok"]) == true,
-      Set(payload.keys).isSubset(of: ["ok", "targets", "context_pid"]),
+      keys(of: payload, within: hintPayloadKeys),
       let raw = payload["targets"] as? [[String: Any]]
     else { return nil }
     if let value = PluginJSON.present(payload["context_pid"]) {
@@ -145,7 +154,7 @@ enum PluginWireCodec {
       ]),
       let id = raw["id"] as? String, !id.isEmpty,
       let frameRaw = raw["frame"] as? [String: Any],
-      Set(frameRaw.keys) == ["x", "y", "width", "height"],
+      frameRaw.count == 4, keys(of: frameRaw, within: frameKeys),
       let x = PluginJSON.number(frameRaw["x"]), let y = PluginJSON.number(frameRaw["y"]),
       let width = PluginJSON.number(frameRaw["width"]),
       let height = PluginJSON.number(frameRaw["height"]),
@@ -227,7 +236,7 @@ enum PluginWireCodec {
   private static func decodedCatalogRow(
     from raw: [String: Any], sourceID: String, allowedSources: Set<String>
   ) -> Candidate? {
-    guard Set(raw.keys).isSubset(of: ["source", "title", "url", "metadata", "effect"]),
+    guard keys(of: raw, within: catalogRowKeys),
       let source = raw["source"] as? String, allowedSources.contains(source),
       let title = raw["title"] as? String, !title.isEmpty,
       title.utf8.count <= PluginProtocol.maxTitleBytes

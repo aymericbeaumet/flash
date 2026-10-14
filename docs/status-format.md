@@ -40,6 +40,11 @@ sign in authored templates; text inserted through an ordinary value is not
 time-expanded. This also matters when authoring percent-encoded inline popup
 bodies directly in a template. Plugin-supplied inline bodies arrive as values.
 
+Time is applied to the compiled format, not its source: a template compiles
+once, and each clock tick runs `strftime` over its text nodes and the text of
+its `#()` commands, never the lexer or parser. A job is keyed by the command
+as written in the template, and its output is never time-expanded.
+
 Configuration supplies no tmux user options (`@name`): there is no
 `[statusbar.options]` or `[widgets.<name>.options]` table, and a format that
 reads `#{@name}` gets an empty value, as with any unset tmux option.

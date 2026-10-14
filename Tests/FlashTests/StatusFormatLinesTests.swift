@@ -36,10 +36,13 @@ final class StatusFormatLinesTests: XCTestCase {
     XCTAssertEqual(metric.foreground, .defaultForeground)
     let cleared = StatusFormatDocument.parse("#[label]Cld#[nolabel] 6%")
     XCTAssertEqual(cleared.runs.first { $0.text.contains("6%") }?.foreground, .defaultForeground)
-    XCTAssertEqual(StatusFormatDocument.parse("#[fg=label]Cld").runs.first { $0.text.contains("Cld") }?.foreground, .label)
+    XCTAssertEqual(
+      StatusFormatDocument.parse("#[fg=label]Cld").runs.first { $0.text.contains("Cld") }?
+        .foreground, .label)
     XCTAssertEqual(FlashStatusTextColor.validated("label"), .label)
     XCTAssertEqual(FlashStatusTextColor.label.markerValue, "label")
-    XCTAssertEqual(FlashStatusTextColor.nsColor(.label), FlashStatusTextColor.nsColor(.rgb(0xEBCB8B)))
+    XCTAssertEqual(
+      FlashStatusTextColor.nsColor(.label), FlashStatusTextColor.nsColor(.rgb(0xEBCB8B)))
   }
 
   func testColoursAndAttributesCarryOverToTheNextLine() throws {

@@ -122,14 +122,20 @@ struct StatusFormatDocument: Equatable {
     return Self(runs: StatusFormatGauge.render(runs))
   }
 
+  /// Parsing is pure, and the same popup bodies and lane texts come back
+  /// every tick, so a parse of a string is memoized (bounded) by its inputs.
   static func parse(
     _ raw: String, origin: StatusFormatOrigin = .init(),
     defaultForeground: FlashStatusTextColor = .defaultForeground
   ) -> Self {
-    parse(
-      StatusFormatEvaluation(fragments: [
-        .init(text: raw, span: .init(origin: origin, bytes: 0..<raw.utf8.count))
-      ]), defaultForeground: defaultForeground)
+    StatusFormatDocumentCache.shared.document(
+      raw: raw, origin: origin, defaultForeground: defaultForeground
+    ) {
+      parse(
+        StatusFormatEvaluation(fragments: [
+          .init(text: raw, span: .init(origin: origin, bytes: 0..<raw.utf8.count))
+        ]), defaultForeground: defaultForeground)
+    }
   }
 
   func aligned(_ alignment: StatusFormatAlignment) -> [FlashStatusTextSegment] {

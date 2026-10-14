@@ -220,6 +220,11 @@ public struct Candidate: @unchecked Sendable {
   public var sortKey: String
   public var scoringMask: UInt64
   public var wordStartMask: UInt64
+  /// `source` lowercased, for the precedence table's per-match lookups.
+  public var loweredSource: String
+  /// The frecency item key, or "" when the row has none; "" also while the
+  /// row is unprepared (`sortKey` empty).
+  public var frecencyKey: String
 
   public init(
     title: String,
@@ -231,7 +236,9 @@ public struct Candidate: @unchecked Sendable {
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
     sortKey: String = "",
     scoringMask: UInt64 = 0,
-    wordStartMask: UInt64 = 0
+    wordStartMask: UInt64 = 0,
+    loweredSource: String = "",
+    frecencyKey: String = ""
   ) {
     self.title = title
     self.url = url
@@ -243,6 +250,8 @@ public struct Candidate: @unchecked Sendable {
     self.sortKey = sortKey
     self.scoringMask = scoringMask
     self.wordStartMask = wordStartMask
+    self.loweredSource = loweredSource
+    self.frecencyKey = frecencyKey
   }
 }
 

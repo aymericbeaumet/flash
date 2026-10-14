@@ -299,7 +299,7 @@ extension NormalModeDispatcher {
 
   @discardableResult
   private static func postLineScroll(lines: Int32) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let event = CGEvent(
         scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
@@ -328,7 +328,7 @@ extension NormalModeDispatcher {
     else {
       return false
     }
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let event = CGEvent(
         scrollWheelEvent2Source: source,

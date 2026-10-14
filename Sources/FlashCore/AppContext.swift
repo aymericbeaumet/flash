@@ -22,6 +22,9 @@ public struct AppContext: @unchecked Sendable {
   public let frontWindowFrame: CGRect
   public let allScreensFrame: CGRect
   public let walkRoot: WalkRoot
+  /// The `.focusedWindow` element the frame step already resolved, so the
+  /// walk starts there without asking the app for its focused window again.
+  public let walkedWindow: AXUIElement?
 
   public init(
     bundleIdentifier: String,
@@ -29,7 +32,8 @@ public struct AppContext: @unchecked Sendable {
     runningApp: NSRunningApplication,
     frontWindowFrame: CGRect,
     allScreensFrame: CGRect,
-    walkRoot: WalkRoot = .focusedWindow
+    walkRoot: WalkRoot = .focusedWindow,
+    walkedWindow: AXUIElement? = nil
   ) {
     self.bundleIdentifier = bundleIdentifier
     self.processID = processID
@@ -37,5 +41,6 @@ public struct AppContext: @unchecked Sendable {
     self.frontWindowFrame = frontWindowFrame
     self.allScreensFrame = allScreensFrame
     self.walkRoot = walkRoot
+    self.walkedWindow = walkedWindow
   }
 }

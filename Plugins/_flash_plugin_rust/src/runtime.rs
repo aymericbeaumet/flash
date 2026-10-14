@@ -306,9 +306,16 @@ where
         // Each payload is already one newline-terminated JSON line; flush
         // every frame to keep latency low.
         let mut out = BufWriter::with_capacity(64 * 1024, output);
-        while let Some(payload) = out_rx.recv().await {
+        'frames: while let Some(payload) = out_rx.recv().await {
             if out.write_all(&payload.payload).await.is_err() {
                 break;
+            }
+            // Frames already queued behind this one ride the same flush: a
+            // status, a log and a publish emitted together cost one write.
+            while let Ok(next) = out_rx.try_recv() {
+                if out.write_all(&next.payload).await.is_err() {
+                    break 'frames;
+                }
             }
             if out.flush().await.is_err() {
                 break;
@@ -362,7 +369,7 @@ where
                 }
             };
         }
-        let Ok(frame) = serde_json::from_slice::<Value>(&line) else {
+        let Ok(mut frame) = serde_json::from_slice::<Value>(&line) else {
             ctx.log("warn", "[plugin] dropped undecodable frame");
             continue;
         };
@@ -375,9 +382,14 @@ where
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let params = frame.get("params").cloned().unwrap_or_else(|| json!({}));
         let trace = crate::trace::from_envelope(&frame);
         let deadline = crate::deadline::from_envelope(&frame);
+        // Moved out of the envelope, not cloned: a `hints` request or an
+        // apps list is the bulk of the frame.
+        let params = frame
+            .as_object_mut()
+            .and_then(|object| object.remove("params"))
+            .unwrap_or_else(|| json!({}));
 
         // Frame triage: id+method = request, id alone = the host's response
         // to a plugin-initiated call, method alone = notification.

@@ -372,6 +372,8 @@ enum CandidateFinder {
     normalize: (String) -> String = NormalModeDispatcher.normalizedSearchText
   ) -> Candidate {
     var prepared = candidate
+    prepared.loweredSource = candidate.source.lowercased()
+    prepared.frecencyKey = FrecencyMapper.itemKey(for: candidate) ?? ""
     let display = displayTitle(candidate)
     prepared.displayTitle = display
     let normalizedSearchText = normalize(searchText(candidate))
@@ -897,6 +899,9 @@ enum CandidateFinder {
   struct PrecedenceTable: Sendable {
     private struct Entry: Sendable {
       var pattern: String
+      /// `pattern + "."`, built once: the table is consulted per match per
+      /// keystroke.
+      var prefix: String
       var weight: Int
       /// Non-nil only for registry-declared sources. Override-only entries
       /// can change ranking weight, but cannot opt hidden sources into default
@@ -939,10 +944,10 @@ enum CandidateFinder {
     /// list; everything else is `base + (alive ? bonus : 0)`.
     public func weight(for candidate: Candidate) -> Int {
       if candidate.kind == bangKind { return Self.bangWeight }
-      let lowered = candidate.source.lowercased()
+      let lowered = Self.loweredSource(of: candidate)
       var base: Int?
       for entry in entries {
-        if lowered == entry.pattern || lowered.hasPrefix(entry.pattern + ".") {
+        if lowered == entry.pattern || lowered.hasPrefix(entry.prefix) {
           base = entry.weight
           break
         }
@@ -957,9 +962,9 @@ enum CandidateFinder {
     /// have not registered descriptors. Location-kind candidates return their
     /// category ladder rank; standard sources return nil (below the band).
     public func defaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
-      let lowered = candidate.source.lowercased()
+      let lowered = Self.loweredSource(of: candidate)
       for entry in entries {
-        guard lowered == entry.pattern || lowered.hasPrefix(entry.pattern + ".") else {
+        guard lowered == entry.pattern || lowered.hasPrefix(entry.prefix) else {
           continue
         }
         guard let kind = entry.kind else { continue }
@@ -986,11 +991,19 @@ enum CandidateFinder {
       overrides: [:],
       aliveBonus: 10)
 
+    /// The prepared lowercase source, or the lowercasing for an unprepared row.
+    private static func loweredSource(of candidate: Candidate) -> String {
+      candidate.loweredSource.isEmpty ? candidate.source.lowercased() : candidate.loweredSource
+    }
+
     private static func sortedEntries(
       _ records: [String: (weight: Int, kind: CandidateSourceKind?)]
     ) -> [Entry] {
       records
-        .map { Entry(pattern: $0.key, weight: $0.value.weight, kind: $0.value.kind) }
+        .map {
+          Entry(
+            pattern: $0.key, prefix: $0.key + ".", weight: $0.value.weight, kind: $0.value.kind)
+        }
         .sorted { lhs, rhs in
           if lhs.pattern.count != rhs.pattern.count {
             return lhs.pattern.count > rhs.pattern.count

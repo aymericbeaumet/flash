@@ -343,8 +343,9 @@ final class FlashStatusBarController {
 
   func updateModeLabel(_ label: String) {
     queue.async { [weak self] in
-      self?.modeLabel = label
-      self?.publishCurrentModel()
+      guard let self, self.modeLabel != label else { return }
+      self.modeLabel = label
+      self.publishCurrentModel()
     }
   }
 

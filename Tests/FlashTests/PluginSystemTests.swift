@@ -582,6 +582,50 @@ final class PluginSystemTests: XCTestCase {
 
   // MARK: - Status segments
 
+  /// A `status` that restates every segment unchanged schedules no status
+  /// callback: the bar re-evaluates and host sources reconcile only for a
+  /// value that moved.
+  func testUnchangedStatusSegmentsScheduleNoNotification() throws {
+    let manifest = try decodedManifest(
+      """
+      {
+        "id": "seg",
+        "name": "Seg",
+        "version": "1.0.0",
+        "description": "fixture",
+        "exec": ["/usr/bin/true"],
+        "status": ["session", "window"]
+      }
+      """)
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-plugin-seg-\(UUID().uuidString)")
+    let process = PluginProcess(
+      root: root, manifest: manifest, origin: .official, baseDataDir: root, watchFiles: false)
+    var notifications = 0
+    process.onStatusChanged = { notifications += 1 }
+    func settle() {
+      let turn = expectation(description: "main turn")
+      DispatchQueue.main.async { turn.fulfill() }
+      wait(for: [turn], timeout: 1)
+    }
+    process.applyStatusSegments(["segments": ["session": "main", "window": "2"]])
+    settle()
+    XCTAssertEqual(notifications, 1)
+    process.applyStatusSegments(["segments": ["session": "main", "window": "2"]])
+    process.applyStatusSegments(["segments": ["window": "2"]])
+    settle()
+    XCTAssertEqual(notifications, 1, "a restatement wakes nobody")
+    process.applyStatusSegments(["segments": ["window": "3"]])
+    settle()
+    XCTAssertEqual(notifications, 2)
+    process.applyStatusSegments(["segments": ["session": ""]])
+    settle()
+    XCTAssertEqual(notifications, 3, "clearing a segment is a change")
+    process.applyStatusSegments(["segments": ["session": ""]])
+    settle()
+    XCTAssertEqual(notifications, 3, "clearing an absent segment is not")
+  }
+
   func testStatusSegmentUpdatesMergeWithoutLostUpdates() throws {
     let manifest = try decodedManifest(
       """

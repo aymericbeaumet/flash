@@ -105,25 +105,31 @@ struct WindowSnapshot {
     return repaired
   }
 
+  // The window-list keys, bridged once rather than per window per read.
+  private static let ownerPIDKey = kCGWindowOwnerPID as String
+  private static let boundsKey = kCGWindowBounds as String
+  private static let layerKey = kCGWindowLayer as String
+  private static let alphaKey = kCGWindowAlpha as String
+
   static func entries(from info: [[String: Any]], primaryH: CGFloat) -> [Entry] {
     var entries: [Entry] = []
     entries.reserveCapacity(info.count)
     for w in info {
-      guard let wpid = w[kCGWindowOwnerPID as String] as? Int32,
-        let boundsDict = w[kCGWindowBounds as String] as? [String: Any],
+      guard let wpid = w[ownerPIDKey] as? Int32,
+        let boundsDict = w[boundsKey] as? [String: Any],
         let cgBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
       else { continue }
       // Skip zero-area or pathological bounds — they can't occlude
       // anything and can't host hints.
       if cgBounds.width <= 0 || cgBounds.height <= 0 { continue }
-      let layer = (w[kCGWindowLayer as String] as? Int) ?? 0
+      let layer = (w[layerKey] as? Int) ?? 0
       let ns = CGRect(
         x: cgBounds.minX,
         y: primaryH - cgBounds.minY - cgBounds.height,
         width: cgBounds.width,
         height: cgBounds.height
       )
-      let alpha = (w[kCGWindowAlpha as String] as? Double) ?? 1
+      let alpha = (w[alphaKey] as? Double) ?? 1
       entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns, alpha: alpha))
     }
     return entries
@@ -340,16 +346,18 @@ struct WindowSnapshot {
     }
   }
 
-  static func isInteractionSurfaceLayer(_ layer: Int) -> Bool {
-    if layer == 0 { return true }
-    let allowedLevels = [
+  /// Window levels (process constants) whose windows the user interacts with.
+  private static let interactionSurfaceLevels: Set<Int> = Set(
+    [
       CGWindowLevelForKey(.floatingWindow),
       CGWindowLevelForKey(.modalPanelWindow),
       CGWindowLevelForKey(.utilityWindow),
       CGWindowLevelForKey(.popUpMenuWindow),
       CGWindowLevelForKey(.statusWindow),
-    ]
-    return allowedLevels.contains(Int32(layer))
+    ].map { Int($0) })
+
+  static func isInteractionSurfaceLayer(_ layer: Int) -> Bool {
+    layer == 0 || interactionSurfaceLevels.contains(layer)
   }
 
   /// Rectangle subtraction in NSScreen-coord (Y-up) space. Returns up to

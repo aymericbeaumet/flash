@@ -113,6 +113,10 @@ final class PluginManager {
     label: "flash.plugins.materialize", qos: .utility)
   private let hotSnapshotLock = NSLock()
   private var hotSnapshot = HotSnapshot()
+  /// The plugins listening to each event name seen since the snapshot was
+  /// published, so a storm of one event (`core:ax.changed`) never re-walks
+  /// every plugin's listen globs. Guarded by `hotSnapshotLock`.
+  private var listenersByEventName: [String: [PluginProcess]] = [:]
   /// Monotonic config generation. A reload that finished materializing for a
   /// superseded config (or after `stop()`) must not clobber newer state.
   private let generationLock = NSLock()
@@ -219,6 +223,17 @@ final class PluginManager {
     hotSnapshotLock.lock()
     defer { hotSnapshotLock.unlock() }
     return hotSnapshot
+  }
+
+  /// The plugins whose manifests listen to `name`, resolved once per name
+  /// per published snapshot.
+  private func listeners(for name: String) -> [PluginProcess] {
+    hotSnapshotLock.lock()
+    defer { hotSnapshotLock.unlock() }
+    if let cached = listenersByEventName[name] { return cached }
+    let listeners = hotSnapshot.plugins.filter { $0.listens(to: name) }
+    if listenersByEventName.count < 256 { listenersByEventName[name] = listeners }
+    return listeners
   }
 
   /// Runs on `queue` after any mutation of the plugin set.
@@ -371,6 +386,7 @@ final class PluginManager {
     OnDemandHintApps.declared.declare(onDemandHintApps)
     hotSnapshotLock.lock()
     hotSnapshot = snapshot
+    listenersByEventName.removeAll(keepingCapacity: true)
     hotSnapshotLock.unlock()
   }
 
@@ -419,7 +435,7 @@ final class PluginManager {
   }
 
   func hasListener(for eventName: String) -> Bool {
-    readHotSnapshot().eventListenPatterns.contains { $0.matches(eventName) }
+    !listeners(for: eventName).isEmpty
   }
 
   private func runningApplicationsSnapshotValue() -> [[String: Any]] {
@@ -570,10 +586,12 @@ final class PluginManager {
   /// sendEvent filters by listen pattern and hops to each plugin's own queue.
   /// The frame is identical for every listener, so it is encoded once here.
   private func emitOnEventQueue(_ event: PluginEvent) {
-    guard hasListener(for: event.name) else { return }
+    let listeners = listeners(for: event.name)
+    guard !listeners.isEmpty else { return }
     var event = event
     event.encodedFrame = PluginProcess.encodedEventFrame(event)
-    for plugin in readHotSnapshot().plugins {
+    event.coalescingKey = PluginProcess.coalescingKey(event)
+    for plugin in listeners {
       plugin.sendEvent(event)
     }
   }

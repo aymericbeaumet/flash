@@ -144,7 +144,9 @@ extension AppDelegate {
         resetModeInputState()
         clearTransientHintState(reason: "mode_enter")
       case .renderSurface:
-        applyModeOverlay()
+        // A HYPER hold toggles the pill over the same app and window: the
+        // border keeps its frame instead of re-reading the window list.
+        applyModeOverlay(reusesWindowFrame: previous.isHyper != next.isHyper)
       case .scheduleRecapture:
         scheduleNormalModeRecapture()
       case .activateFocusedApp(let pid):
@@ -187,8 +189,7 @@ extension AppDelegate {
   /// Nil when the configured key cannot be read. Callers stay in HYPER then,
   /// rather than dropping it because the chord did not parse.
   private func hyperKeyPhysicallyDown() -> Bool? {
-    guard let atom = config.mode.resolvedHyperKey, let chord = HyperKeyChord.parse(atom)
-    else { return nil }
+    guard let chord = config.mode.resolvedHyperMatcher?.chord else { return nil }
     return HyperKeyChord.isPhysicallyDown(chord)
   }
 
@@ -253,10 +254,11 @@ extension AppDelegate {
   /// Returns true when the key was consumed as the hyper hold or as a key
   /// typed during it. Other keys return false and follow the NORMAL path.
   func handleLeaderHoldKeyDown(_ event: NSEvent) -> Bool {
-    guard let atom = config.mode.resolvedHyperKey else { return false }
+    guard let matcher = config.mode.resolvedHyperMatcher else { return false }
+    let atom = matcher.atom
     let keys = overlay.keyCharacters(for: event)
     let isHyperKey = NormalModeInterpreter.isHyperKey(
-      atom: atom,
+      matcher: matcher,
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
       characters: keys.characters,
@@ -315,11 +317,11 @@ extension AppDelegate {
   /// Leader key-up. A clean tap arms the NORMAL `<leader>` prefix; a hold
   /// that typed anything returns to NORMAL without one.
   func handleLeaderKeyUp(_ event: NSEvent) -> Bool {
-    guard let atom = config.mode.resolvedHyperKey else { return false }
+    guard let matcher = config.mode.resolvedHyperMatcher else { return false }
     let keys = overlay.keyCharacters(for: event)
     guard
       NormalModeInterpreter.isHyperKey(
-        atom: atom,
+        matcher: matcher,
         keyCode: event.keyCode,
         modifierFlags: event.modifierFlags,
         characters: keys.characters,
@@ -372,8 +374,7 @@ extension AppDelegate {
   }
 
   private func currentLeaderAtom() -> String? {
-    guard let raw = config.mode.normalLeader else { return nil }
-    return NormalModeInterpreter.translateLeader(raw)
+    config.mode.resolvedLeaderAtom
   }
 
   private func leaderAtomArmsPrefix(_ atom: String) -> Bool {
@@ -608,7 +609,7 @@ extension AppDelegate {
     debugStateDidChange()
   }
 
-  func applyModeOverlay(captureOverride: Bool? = nil) {
+  func applyModeOverlay(captureOverride: Bool? = nil, reusesWindowFrame: Bool = false) {
     MainThreadActivity.note("mode_overlay")
     let mode = modeStore.mode
     // A pointer-mode session behaves exactly like a hint set being up: the
@@ -642,8 +643,25 @@ extension AppDelegate {
         label: text, style: mode.badgeStyle, barVisible: statusBarVisible,
         capturesInput: capture),
       render: !entersCommand)
-    updateActiveWindowBorder(reason: "apply_mode_overlay")
+    updateActiveWindowBorder(reason: "apply_mode_overlay", reusesCachedFrame: reusesWindowFrame)
   }
+
+  /// Key codes for the arrow and function-key mapping commands, resolved once
+  /// rather than parsed from their names on every (repeated) press.
+  private static let arrowKeyCodes: [WindowFocusDirection: CGKeyCode] = {
+    var codes: [WindowFocusDirection: CGKeyCode] = [:]
+    for direction in WindowFocusDirection.allCases {
+      if let key = HotkeySyntax.parseKey(direction.rawValue) { codes[direction] = CGKeyCode(key) }
+    }
+    return codes
+  }()
+  private static let functionKeyCodes: [Int: CGKeyCode] = {
+    var codes: [Int: CGKeyCode] = [:]
+    for index in 1...24 {
+      if let key = HotkeySyntax.parseKey("f\(index)") { codes[index] = CGKeyCode(key) }
+    }
+    return codes
+  }()
 
   static func commandSurfaceModeLabel(labels: Config.Mode.Labels) -> String {
     labels.command
@@ -1168,12 +1186,11 @@ extension AppDelegate {
     case .systemKey(let key):
       for _ in 0..<repeatCount { SystemKeyboard.perform(key) }
     case .functionKey(let index):
-      guard let key = HotkeySyntax.parseKey("f\(index)") else { return }
-      sendFocusedModeKey(CGKeyCode(key), repeatCount: repeatCount)
+      guard let key = Self.functionKeyCodes[index] else { return }
+      sendFocusedModeKey(key, repeatCount: repeatCount)
     case .arrow(let direction, let shift):
-      guard let key = HotkeySyntax.parseKey(direction.rawValue) else { return }
-      sendFocusedModeKey(
-        CGKeyCode(key), flags: shift ? .maskShift : [], repeatCount: repeatCount)
+      guard let key = Self.arrowKeyCodes[direction] else { return }
+      sendFocusedModeKey(key, flags: shift ? .maskShift : [], repeatCount: repeatCount)
     case .sendKey(_, let keyCode, let flagsRawValue):
       sendNormalModeKey(
         keyCode, flags: CGEventFlags(rawValue: flagsRawValue), repeatCount: repeatCount)

@@ -99,6 +99,7 @@ extension OverlayPanel {
     // `attributedLabel(...)`; the weight stays bold so glyph advance
     // and therefore chip width don't change across keystrokes.
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    resetHintLabelCache(for: HintLabelStyle(fontSize: fontSize, fg: fg, importantFG: importantFG))
     let chipHeight = Self.chipHeight(forFontSize: fontSize)
     let labelYOffset = (chipHeight - fontSize - 2) / 2
     let labelHeight = fontSize + 2
@@ -181,9 +182,8 @@ extension OverlayPanel {
       // a stale regular-weight font from a previous render.
       label.font = labelFont
       label.fontSize = fontSize
-      label.string = Self.attributedLabel(
-        display: hint.display, typedPrefixLen: 0,
-        font: labelFont, fgNS: fg)
+      label.string = cachedLabel(
+        display: hint.display, typedPrefixLen: 0, accent: false, font: labelFont, fgNS: fg)
       label.foregroundColor = fg.cgColor
 
       let labelLen = hint.display.count
@@ -319,9 +319,9 @@ extension OverlayPanel {
           chip.colors = importantGradientColors
           chip.borderColor = importantBorderCG
           label.foregroundColor = importantFGCG
-          label.string = Self.attributedLabel(
-            display: hint.display, typedPrefixLen: 0,
-            font: labelFont, fgNS: importantFG)
+          label.string = cachedLabel(
+            display: hint.display, typedPrefixLen: 0, accent: true, font: labelFont,
+            fgNS: importantFG)
         } else {
           chip.colors = gradientColors
           chip.borderColor = borderCG
@@ -717,11 +717,13 @@ extension OverlayPanel {
     CATransaction.setDisableActions(true)
     let upper = prefix.uppercased()
     let prefixLen = upper.count
-    let labelFont = NSFont.monospacedSystemFont(
-      ofSize: CGFloat(overlayConfig.fontSize), weight: .bold)
+    let fontSize = CGFloat(overlayConfig.fontSize)
+    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let colors = hintColors
     let fgNS = nsColor(fromHex: colors.fg) ?? .black
     let importantFGNS = nsColor(fromHex: colors.importantFG) ?? fgNS
+    resetHintLabelCache(
+      for: HintLabelStyle(fontSize: fontSize, fg: fgNS, importantFG: importantFGNS))
     let tracksBounds = debugConfig.showHintsBounds
     var visible = Set<Int>()
     for (idx, hint) in hints.enumerated() {
@@ -736,14 +738,35 @@ extension OverlayPanel {
       // string's weight — see the note in `display(hints:)`. Cheap;
       // CATextLayer compares font references and noops on equal.
       label.font = labelFont
-      label.string = Self.attributedLabel(
-        display: hint.display, typedPrefixLen: prefixLen, font: labelFont,
-        fgNS: hint.target.priority.usesAccentHintStyle ? importantFGNS : fgNS)
+      let accent = hint.target.priority.usesAccentHintStyle
+      label.string = cachedLabel(
+        display: hint.display, typedPrefixLen: prefixLen, accent: accent, font: labelFont,
+        fgNS: accent ? importantFGNS : fgNS)
     }
     if tracksBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()
+  }
+
+  /// Drop the cached label strings when the style they were built for changed.
+  private func resetHintLabelCache(for style: HintLabelStyle) {
+    guard hintLabelStyle != style else { return }
+    hintLabelStyle = style
+    hintLabelCache.removeAll(keepingCapacity: true)
+  }
+
+  /// The attributed label for a chip, built once per (label, prefix, accent)
+  /// under the current style; `NSAttributedString` is immutable and shared.
+  private func cachedLabel(
+    display: String, typedPrefixLen: Int, accent: Bool, font: NSFont, fgNS: NSColor
+  ) -> NSAttributedString {
+    let key = HintLabelKey(display: display, typedPrefixLen: typedPrefixLen, accent: accent)
+    if let cached = hintLabelCache[key] { return cached }
+    let built = Self.attributedLabel(
+      display: display, typedPrefixLen: typedPrefixLen, font: font, fgNS: fgNS)
+    if hintLabelCache.count < 4096 { hintLabelCache[key] = built }
+    return built
   }
 
   /// Centered paragraph style — immutable, allocated once.

@@ -14,6 +14,29 @@ enum StatusBarHoverGate: Equatable {
   func permits(_ name: String) -> Bool { self != .dismissed(name) }
 }
 
+/// What a click-window sync depends on, compared as values: no per-layout
+/// string of every band, link and popup body.
+struct StatusBarClickSignature: Equatable {
+  struct Link: Equatable {
+    var x: CGFloat
+    var y: CGFloat
+    var width: CGFloat
+    var url: URL
+  }
+  struct Popup: Equatable {
+    var x: CGFloat
+    var y: CGFloat
+    var width: CGFloat
+    var anchorX: CGFloat
+    var anchorWidth: CGFloat
+    var name: String
+    var content: String
+  }
+  var bands: [CGRect]
+  var links: [Link]
+  var popups: [Popup]
+}
+
 struct StatusBarPopupRegion: Equatable {
   /// The hover and click target: the whole span, across the bar's height.
   var rect: CGRect
@@ -740,16 +763,16 @@ extension OverlayPanel {
     links: [(rect: CGRect, url: URL)],
     popups: [StatusBarPopupRegion] = []
   ) {
-    let signature =
-      (bandRects.map { "\($0.origin.x),\($0.origin.y),\($0.width),\($0.height)" }
-      + links.map {
-        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.url.absoluteString)"
-      }
-      + popups.map {
-        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.anchor.minX),"
-          + "\($0.anchor.width)|\($0.name)|\($0.content)"
+    let signature = StatusBarClickSignature(
+      bands: bandRects,
+      links: links.map {
+        .init(x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width, url: $0.url)
+      },
+      popups: popups.map {
+        .init(
+          x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width, anchorX: $0.anchor.minX,
+          anchorWidth: $0.anchor.width, name: $0.name, content: $0.content)
       })
-      .joined(separator: ";")
     if signature == lastStatusBarClickSignature { return }
     lastStatusBarClickSignature = signature
 

@@ -145,6 +145,42 @@ enum HintAssigner {
     minLength: Int = 1
   ) -> [String] {
     guard count > 0 else { return [] }
+    // The label list is a pure function of the layout and the count, and
+    // counts repeat across walks of one page and across activations that
+    // relabel with the status bar's targets, so each list is computed once.
+    let key = LabelsKey(
+      layout: CacheKey(
+        alphabet: alphabet, leftHand: leftHand, keyScores: keyScores, keyRows: keyRows,
+        length: max(1, minLength)),
+      count: count)
+    os_unfair_lock_lock(&cacheLock)
+    if let cached = labelsCache.value(for: key) {
+      os_unfair_lock_unlock(&cacheLock)
+      return cached
+    }
+    os_unfair_lock_unlock(&cacheLock)
+    let computed = computeLabels(
+      count: count, alphabet: alphabet, leftHand: leftHand, keyScores: keyScores,
+      keyRows: keyRows, minLength: minLength)
+    os_unfair_lock_lock(&cacheLock)
+    labelsCache.set(key, value: computed)
+    os_unfair_lock_unlock(&cacheLock)
+    return computed
+  }
+
+  private struct LabelsKey: Hashable {
+    let layout: CacheKey
+    let count: Int
+  }
+
+  private static func computeLabels(
+    count: Int,
+    alphabet: [Character],
+    leftHand: Set<Character>,
+    keyScores: [Character: Int],
+    keyRows: [Character: Int],
+    minLength: Int
+  ) -> [String] {
     guard alphabet.count >= 2 else {
       return (0..<count).map { _ in String(alphabet.first ?? "a") }
     }
@@ -302,14 +338,14 @@ enum HintAssigner {
   /// session (the active alphabet preset at L=2 and L=3), so a
   /// capacity of 8 covers every realistic workload while preventing
   /// an unbounded grow under exotic config reloads.
-  private struct LRU {
+  private struct LRU<Key: Hashable> {
     let capacity: Int
-    private var dict: [CacheKey: [String]] = [:]
-    private var order: [CacheKey] = []
+    private var dict: [Key: [String]] = [:]
+    private var order: [Key] = []
 
     init(capacity: Int) { self.capacity = max(1, capacity) }
 
-    mutating func value(for key: CacheKey) -> [String]? {
+    mutating func value(for key: Key) -> [String]? {
       guard let value = dict[key] else { return nil }
       if let idx = order.firstIndex(of: key) {
         order.remove(at: idx)
@@ -318,7 +354,7 @@ enum HintAssigner {
       return value
     }
 
-    mutating func set(_ key: CacheKey, value: [String]) {
+    mutating func set(_ key: Key, value: [String]) {
       if dict[key] != nil {
         if let idx = order.firstIndex(of: key) { order.remove(at: idx) }
       } else if order.count >= capacity, let oldest = order.first {
@@ -331,7 +367,9 @@ enum HintAssigner {
   }
 
   private static let cacheCapacity = 8
-  private static var cache = LRU(capacity: cacheCapacity)
+  private static var cache = LRU<CacheKey>(capacity: cacheCapacity)
+  /// Finished label lists per count: a page's counts repeat across walks.
+  private static var labelsCache = LRU<LabelsKey>(capacity: 64)
   private static var cacheLock = os_unfair_lock_s()
 
   private enum Score {

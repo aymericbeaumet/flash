@@ -4,7 +4,7 @@ import FlashCore
 import Foundation
 import QuartzCore
 
-enum FlashStatusTextColor: Equatable {
+enum FlashStatusTextColor: Hashable {
   case defaultForeground
   case defaultBackground
   /// A numbered xterm-256 palette entry (`colourNNN` / `colorNNN`).
@@ -287,9 +287,11 @@ struct FlashStatusBarContext {
 }
 
 struct FlashStatusBarModel: Equatable {
-  var appText: String
-  var modeText: String
-  var rightText: String
+  /// The lanes in marker form, serialized from their documents on demand:
+  /// the resident reads the documents, so a tick never serializes them.
+  var appText: String { StatusFormatDocument.serialize(appDocument) }
+  var modeText: String { StatusFormatDocument.serialize(modeDocument) }
+  var rightText: String { StatusFormatDocument.serialize(rightDocument) }
   var popupTexts: [String: String]
   var popupDocuments: [String: [FlashStatusTextSegment]]
   var appDocument: [FlashStatusTextSegment] = []
@@ -308,9 +310,6 @@ struct FlashStatusBarModel: Equatable {
     rightDocument: [FlashStatusTextSegment]? = nil,
     document: StatusFormatDocument? = nil
   ) {
-    self.appText = appText
-    self.modeText = modeText
-    self.rightText = rightText
     self.popupTexts = popupTexts
     self.popupDocuments =
       popupDocuments.isEmpty
@@ -441,6 +440,8 @@ enum FlashStatusBarTemplateEngine {
       var dependencies: StatusFormatDependencies
       var inputs: EvaluationInputs
       var runs: [FlashStatusTextSegment]
+      /// `runs` in marker form, serialized once with them.
+      var serialized: String
     }
     var memos: [String: Memo] = [:]
   }
@@ -473,6 +474,7 @@ enum FlashStatusBarTemplateEngine {
     let centre = barRuns(.centre) + barRuns(.notch)
     let right = barRuns(.right)
     var popups: [String: [FlashStatusTextSegment]] = [:]
+    var popupTexts: [String: String] = [:]
     var jobs = result.jobs
     var dependencies = result.dependencies
     for name in popupTemplates.keys.sorted() {
@@ -483,13 +485,16 @@ enum FlashStatusBarTemplateEngine {
       {
         dependencies.formUnion(memo.dependencies)
         popups[name] = memo.runs
+        popupTexts[name] = memo.serialized
         continue
       }
       let expanded = evaluateDocument(popup, native: native)
       jobs.append(contentsOf: expanded.jobs)
       dependencies.formUnion(expanded.dependencies)
       let runs = trimmedPopupRuns(expanded.runs)
+      let serialized = StatusFormatDocument.serialize(runs)
       popups[name] = runs
+      popupTexts[name] = serialized
       if let popupCache, !expanded.dependencies.containsTime,
         !expanded.dependencies.containsJobs
       {
@@ -497,17 +502,18 @@ enum FlashStatusBarTemplateEngine {
           dependencies: expanded.dependencies,
           inputs: EvaluationInputs.capture(
             dependencies: expanded.dependencies, native: native),
-          runs: runs)
+          runs: runs, serialized: serialized)
       }
     }
-    for name in terminalPopupNames { popups[name] = [] }
+    for name in terminalPopupNames {
+      popups[name] = []
+      popupTexts[name] = ""
+    }
     let needs = Self.requirements(of: dependencies)
     return (
       FlashStatusBarModel(
-        appText: StatusFormatDocument.serialize(centre),
-        modeText: StatusFormatDocument.serialize(left),
-        rightText: StatusFormatDocument.serialize(right),
-        popupTexts: popups.mapValues(StatusFormatDocument.serialize),
+        appText: "", modeText: "", rightText: "",
+        popupTexts: popupTexts,
         popupDocuments: popups, appDocument: centre, modeDocument: left, rightDocument: right,
         document: StatusFormatDocument(
           runs: document.runs.map {
@@ -653,6 +659,9 @@ enum FlashStatusBarRenderer {
   /// queue.
   private static let dateFormatter = DateFormatter()
   private static var calendarCache: (valid: DateInterval, timeZone: TimeZone, text: String)?
+  /// `flash.date` shows minutes: one formatted string per minute, calendar
+  /// and locale, so a seconds clock does not reconfigure the formatter.
+  private static var dateTextCache: (minute: Int, calendar: Calendar, locale: Locale, text: String)?
 
   /// One calendar per local day and timezone; a daylight-saving transition
   /// inside the day ends it early, since the calendar shows the UTC offset.
@@ -676,12 +685,20 @@ enum FlashStatusBarRenderer {
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX")
   ) -> String {
+    let minute = Int((now.timeIntervalSince1970 / 60).rounded(.down))
+    if let cached = dateTextCache, cached.minute == minute, cached.calendar == calendar,
+      cached.locale == locale
+    {
+      return cached.text
+    }
     let formatter = Self.dateFormatter
     formatter.calendar = calendar
     formatter.locale = locale
     formatter.timeZone = calendar.timeZone
     formatter.dateFormat = "EEE MMM d HH:mm"
-    return formatter.string(from: now)
+    let text = formatter.string(from: now)
+    dateTextCache = (minute, calendar, locale, text)
+    return text
   }
 
   static func segments(
@@ -802,6 +819,7 @@ enum FlashStatusBarRenderer {
           abs(last.xOffset + last.width - x) < 0.5
         {
           last.width += width
+          if last.link == nil { last.link = segment.link }
           runs[runs.count - 1] = last
         } else {
           runs.append(
@@ -809,7 +827,8 @@ enum FlashStatusBarRenderer {
               xOffset: x, width: width, name: name, content: content,
               document: segment.popupContent.map {
                 StatusFormatDocument.parse($0, origin: .init("popup.\(name)")).runs
-              }))
+              },
+              link: segment.link))
         }
       }
       x += width

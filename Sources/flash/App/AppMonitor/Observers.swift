@@ -101,6 +101,7 @@ extension AppMonitor {
 
   func onAXEvent(
     pid: pid_t,
+    bundleIdentifier: String? = nil,
     notification: String,
     observedElementIsFocusedWindow: Bool,
     observedWindow: AXUIElement?
@@ -123,7 +124,7 @@ extension AppMonitor {
     if Self.notificationMayChangeFocusedElement(notification) {
       focusedElementMayHaveChanged?(pid)
     }
-    focusedElementDidChange?(pid, notification)
+    focusedElementDidChange?(pid, bundleIdentifier, notification)
   }
 
   func invalidateAfterUserAction(pid: pid_t, reason: String) {
@@ -219,10 +220,10 @@ extension AppMonitor {
     }
 
     let appEl = AXApp.make(pid: pid)
-    let ctx = ObserverContext(monitor: self, pid: pid)
+    let bundleIdentifier = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    let ctx = ObserverContext(monitor: self, pid: pid, bundleIdentifier: bundleIdentifier)
 
-    let notifications = Self.observedNotifications(
-      forBundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
+    let notifications = Self.observedNotifications(forBundleIdentifier: bundleIdentifier)
 
     AXObserverThread.shared.add(AXObserverGetRunLoopSource(observer))
 

@@ -32,7 +32,7 @@ extension NormalModeDispatcher {
     flags: CGEventFlags = [],
     to pid: pid_t
   ) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
@@ -99,13 +99,7 @@ extension NormalModeDispatcher {
     virtualKey: CGKeyCode,
     flags: CGEventFlags
   ) -> (down: CGEvent, up: CGEvent)? {
-    let source = CGEventSource(stateID: .privateState)
-    if let source {
-      source.localEventsSuppressionInterval = 0
-      if let session = CGEventSource(stateID: .combinedSessionState) {
-        source.keyboardType = session.keyboardType
-      }
-    }
+    let source = SyntheticEventSources.focusedKeyboardSource()
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
@@ -131,7 +125,7 @@ extension NormalModeDispatcher {
 
   @discardableResult
   static func typeText(_ text: String, to pid: pid_t) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     var ok = true
     for unit in text.utf16 {
       guard
@@ -157,7 +151,7 @@ extension NormalModeDispatcher {
   /// this carries the full UTF-16 in one event, so emoji insert correctly.
   @discardableResult
   static func insertUnicode(_ text: String, to pid: pid_t) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)

@@ -353,36 +353,86 @@ public final class AccessibilityProvider: FlashSource {
   // always succeeds. Compare CFTypeIDs explicitly.
   private static let axValueTypeID: CFTypeID = AXValueGetTypeID()
 
-  private static func axValue(_ v: Any) -> AXValue? {
-    let cf = v as CFTypeRef
-    guard CFGetTypeID(cf) == axValueTypeID else { return nil }
-    return (cf as! AXValue)
-  }
+  /// The batched attribute values of one element, read in place. Each
+  /// accessor is a `CFTypeID` comparison and bridges only the matched value,
+  /// so the per-node cost stays a few lookups rather than a boxed `[Any]`.
+  struct AXBatchValues {
+    private let array: CFArray
 
-  private static func stringValue(_ v: Any) -> String? {
-    guard let value = v as? String else { return nil }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
-  }
-
-  private static func urlValue(_ v: Any) -> String? {
-    if let url = v as? URL {
-      return url.absoluteString
+    init?(_ array: CFArray?) {
+      guard let array, CFArrayGetCount(array) == 12 else { return nil }
+      self.array = array
     }
-    let cf = v as CFTypeRef
-    if CFGetTypeID(cf) == CFURLGetTypeID() {
-      return (cf as! URL).absoluteString
+
+    @inline(__always)
+    private func ref(_ index: Int) -> CFTypeRef? {
+      guard let pointer = CFArrayGetValueAtIndex(array, index) else { return nil }
+      return Unmanaged<CFTypeRef>.fromOpaque(pointer).takeUnretainedValue()
     }
-    return stringValue(v)
+
+    func string(_ index: Int) -> String? {
+      guard let value = ref(index), CFGetTypeID(value) == CFStringGetTypeID() else {
+        return nil
+      }
+      return (value as! CFString) as String
+    }
+
+    /// `string` trimmed of surrounding whitespace, `nil` when nothing remains.
+    func trimmedString(_ index: Int) -> String? {
+      guard let value = string(index) else { return nil }
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func numberString(_ index: Int) -> String? {
+      guard let value = ref(index), CFGetTypeID(value) == CFNumberGetTypeID() else {
+        return nil
+      }
+      return (value as! NSNumber).stringValue
+    }
+
+    func bool(_ index: Int) -> Bool? {
+      guard let value = ref(index) else { return nil }
+      let typeID = CFGetTypeID(value)
+      if typeID == CFBooleanGetTypeID() {
+        return CFBooleanGetValue((value as! CFBoolean))
+      }
+      if typeID == CFNumberGetTypeID() {
+        return (value as! NSNumber).boolValue
+      }
+      return nil
+    }
+
+    func axValue(_ index: Int) -> AXValue? {
+      guard let value = ref(index), CFGetTypeID(value) == axValueTypeID else { return nil }
+      return (value as! AXValue)
+    }
+
+    func elements(_ index: Int) -> [AXUIElement]? {
+      guard let value = ref(index), CFGetTypeID(value) == CFArrayGetTypeID() else {
+        return nil
+      }
+      return (value as! CFArray) as? [AXUIElement]
+    }
+
+    /// A URL attribute as its absolute string, or the trimmed string the
+    /// attribute holds instead.
+    func url(_ index: Int) -> String? {
+      guard let value = ref(index) else { return nil }
+      if CFGetTypeID(value) == CFURLGetTypeID() {
+        return ((value as! CFURL) as URL).absoluteString
+      }
+      return trimmedString(index)
+    }
   }
 
-  private static func hintSnapshot(_ values: [Any], frame: CGRect) -> AXHintTargetSnapshot {
-    let value = stringValue(values[7]) ?? (values[7] as? NSNumber)?.stringValue
-    return AXHintTargetSnapshot(
-      role: values[0] as? String ?? "AXUnknown", subrole: values[10] as? String,
-      title: stringValue(values[5]), description: stringValue(values[6]), value: value,
-      url: urlValue(values[8]) ?? urlValue(values[11]),
-      enabled: values[3] as? Bool ?? true, hidden: values[9] as? Bool ?? false,
+  private static func hintSnapshot(_ values: AXBatchValues, frame: CGRect) -> AXHintTargetSnapshot {
+    AXHintTargetSnapshot(
+      role: values.string(0) ?? "AXUnknown", subrole: values.string(10),
+      title: values.trimmedString(5), description: values.trimmedString(6),
+      value: values.trimmedString(7) ?? values.numberString(7),
+      url: values.url(8) ?? values.url(11),
+      enabled: values.bool(3) ?? true, hidden: values.bool(9) ?? false,
       frame: frame)
   }
 
@@ -480,8 +530,7 @@ public final class AccessibilityProvider: FlashSource {
       // Scrolling targets their container, including its interactive children.
       // Click hints must not redirect to a different interactive child.
       if !allowsInteractiveDescendants, let role = AXAttribute.role(current),
-        ["AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuItem"]
-          .contains(role) || JumpTarget.textInputRoles.contains(role)
+        Self.foreignHitRoles.contains(role) || JumpTarget.textInputRoles.contains(role)
       {
         return .foreign
       }
@@ -490,6 +539,11 @@ public final class AccessibilityProvider: FlashSource {
     return .unavailable
   }
 
+  /// Roles that make a hit-tested ancestor a different control than the hint's.
+  private static let foreignHitRoles: Set<String> = [
+    "AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuItem",
+  ]
+
   private static func readHintSnapshot(_ element: AXUIElement, screenH: CGFloat)
     -> AXHintTargetSnapshot?
   {
@@ -497,10 +551,10 @@ public final class AccessibilityProvider: FlashSource {
     guard
       AXUIElementCopyMultipleAttributeValues(
         element, batchAttrs, AXCopyMultipleAttributeOptions(rawValue: 0), &raw) == .success,
-      let values = raw as? [Any], values.count == 12
+      let values = AXBatchValues(raw)
     else { return nil }
     let frame: CGRect
-    if let position = axValue(values[1]), let size = axValue(values[2]),
+    if let position = values.axValue(1), let size = values.axValue(2),
       let standardFrame = frameFromAX(pos: position, size: size, screenH: screenH)
     {
       frame = standardFrame
@@ -685,10 +739,14 @@ public final class AccessibilityProvider: FlashSource {
     // A surface that is not the focused window (a Picture in Picture player,
     // the Stage Manager strip) is found by its frame instead, and never falls
     // back to the focused window, whose targets would leak into its frame.
+    //
+    // A walk whose frame step already resolved that window (`walkedWindow`)
+    // walks the very element it measured, and asks the app for nothing.
     let roots: [AXUIElement]
     switch context.walkRoot {
     case .focusedWindow:
-      guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
+      guard let focusedWindow = context.walkedWindow ?? Self.focusedOrFirstWindow(in: app)
+      else { return [] }
       roots = [focusedWindow]
     case .elementsInFrame:
       roots = Self.topLevelElements(in: app, meeting: clip, screenH: screenH)
@@ -752,14 +810,20 @@ public final class AccessibilityProvider: FlashSource {
     }
   }
 
-  /// The frame (NSScreen coords) of the window a walk of `pid` covers — its
-  /// focused, main or first top-level surface — so the visible-area step can
+  /// The window a walk of `pid` covers — its focused, main or first top-level
+  /// surface — with its frame (NSScreen coords), so the visible-area step can
   /// scope hints to that same window rather than to whichever of the app's
   /// windows is frontmost: a tooltip or hover card above it has no targets,
-  /// and clipping the walk to it left none at all.
-  public static func walkedWindowFrame(
+  /// and clipping the walk to it left none at all. The walk then starts at
+  /// this element (`AppContext.walkedWindow`) instead of resolving it again.
+  public struct WalkedWindow {
+    public let element: AXUIElement
+    public let frame: CGRect
+  }
+
+  public static func walkedWindow(
     pid: pid_t, bundleIdentifier: String?, screenH: CGFloat
-  ) -> CGRect? {
+  ) -> WalkedWindow? {
     GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { app in
       guard let window = focusedOrFirstWindow(in: app) else { return nil }
       var pos: CFTypeRef?
@@ -768,9 +832,10 @@ public final class AccessibilityProvider: FlashSource {
         AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &pos) == .success,
         AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
         let pos, let size, CFGetTypeID(pos) == AXValueGetTypeID(),
-        CFGetTypeID(size) == AXValueGetTypeID()
+        CFGetTypeID(size) == AXValueGetTypeID(),
+        let frame = frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
       else { return nil }
-      return frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
+      return WalkedWindow(element: window, frame: frame)
     }
   }
 
@@ -949,18 +1014,28 @@ public final class AccessibilityProvider: FlashSource {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 12 else { return }
+    guard err == .success, let vals = AXBatchValues(valuesRef) else { return }
 
-    let role = vals[0] as? String
-    let posValue = Self.axValue(vals[1])
-    let sizeValue = Self.axValue(vals[2])
-    let enabled = (vals[3] as? Bool) ?? true
-    let allChildren = vals[4] as? [AXUIElement]
-    let label =
-      Self.stringValue(vals[5]) ?? Self.stringValue(vals[6]) ?? Self.stringValue(vals[7])
-    let url = Self.urlValue(vals[8]) ?? Self.urlValue(vals[11])
-    let hidden = (vals[9] as? Bool) ?? false
-    let subrole = vals[10] as? String
+    // Every per-node read below is a type-ID check on the batched CFArray;
+    // nothing is bridged into Swift until the role gate admits the node.
+    let role = vals.string(0)
+    let posValue = vals.axValue(1)
+    let sizeValue = vals.axValue(2)
+    let enabled = vals.bool(3) ?? true
+    let allChildren = vals.elements(4)
+    let hidden = vals.bool(9) ?? false
+    let subrole = vals.string(10)
+    // Decoded once; every gate below and the offscreen prune read this.
+    let frame: CGRect? =
+      if let posValue, let sizeValue {
+        Self.frameFromAX(pos: posValue, size: sizeValue, screenH: screenH)
+      } else {
+        nil
+      }
+    // The URL is read for every node: an extension document's scheme marks
+    // the subtree, and the AXWebArea that carries it is visited before
+    // `insideWebArea` is set. It is one CFURL type check plus a prefix test.
+    let url = vals.url(8) ?? vals.url(11)
     let currentOrAncestorInsideExtensionDocument =
       insideExtensionDocument || Self.isExtensionDocumentURL(url)
 
@@ -991,9 +1066,7 @@ public final class AccessibilityProvider: FlashSource {
     // dedup so a wrapper never displaces the link it wraps.
     var isAppWebPressContainer = false
     if insideWebArea, !environment.webAreasArePages,
-      let role, Self.webAppPressContainerRoles.contains(role),
-      let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+      let role, Self.webAppPressContainerRoles.contains(role), let frame
     {
       isAppWebPressContainer = Self.pressContainerFits(frame, in: visible)
     }
@@ -1002,9 +1075,7 @@ public final class AccessibilityProvider: FlashSource {
     // it is the click target, ranked below semantic controls in dedup.
     var isIOSContentCell = false
     if insideIOSContent, !insideWebArea, role == IOSContent.cellRole,
-      allChildren?.isEmpty ?? true,
-      let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+      allChildren?.isEmpty ?? true, let frame
     {
       isIOSContentCell = Self.pressContainerFits(frame, in: visible)
     }
@@ -1030,9 +1101,7 @@ public final class AccessibilityProvider: FlashSource {
     // invisible or non-pointer; we can't see CSS but the size is a
     // reliable proxy (real icon links are 16x16+, real text links
     // are taller than 13px).
-    if roleAllowed, insideWebArea, role == "AXLink",
-      let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+    if roleAllowed, insideWebArea, role == "AXLink", let frame,
       frame.width < 13, frame.height < 13
     {
       roleAllowed = false
@@ -1040,13 +1109,17 @@ public final class AccessibilityProvider: FlashSource {
     // `enabled` is checked per-branch below rather than in this gate: a
     // disabled row/cell can still be the real click target (see the
     // row/cell branch), whereas every other disabled element stays inert.
-    if let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+    if let frame,
       Self.acceptsHintCenter(
         CGPoint(x: frame.midX, y: frame.midY), visible: visible, subrole: subrole),
       roleAllowed, !hidden
     {
       state.idCounter += 1
+      // Only an admitted target bridges its strings out of the batch.
+      let title = vals.trimmedString(5)
+      let description = vals.trimmedString(6)
+      let valueText = vals.trimmedString(7)
+      let label = title ?? description ?? valueText
       let captured = element
       let capturedRole = role ?? "AXUnknown"
       // Browser tab strips report their entries either as native `AXTab` or as
@@ -1058,7 +1131,11 @@ public final class AccessibilityProvider: FlashSource {
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
-      let snapshot = Self.hintSnapshot(vals, frame: frame)
+      let snapshot = AXHintTargetSnapshot(
+        role: capturedRole, subrole: subrole,
+        title: title, description: description,
+        value: valueText ?? vals.numberString(7),
+        url: url, enabled: enabled, hidden: hidden, frame: frame)
       let resolveClickPoint: (CGPoint) -> CGPoint? = { preferred in
         GeckoAccessibility.withTree(
           pid: pid,
@@ -1111,11 +1188,8 @@ public final class AccessibilityProvider: FlashSource {
 
     // Descent pruning (`skipsOffscreenSubtree`): a native container wholly
     // outside the visible clip is not walked; a web container always is.
-    let elementFrame = posValue.flatMap { posV in
-      sizeValue.flatMap { sizeV in Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH) }
-    }
     if Self.skipsOffscreenSubtree(
-      frame: elementFrame, visible: visible, depth: depth, insideWebArea: insideWebArea)
+      frame: frame, visible: visible, depth: depth, insideWebArea: insideWebArea)
     {
       return
     }
@@ -1314,18 +1388,35 @@ public final class AccessibilityProvider: FlashSource {
     ScreenSpace.primaryHeight
   }
 
+  /// Whether `value` is an extension document URL. A scheme prefix test on
+  /// the raw string: this runs for every walked node, and parsing a `URL`
+  /// per node cost more than the rest of the node's CPU work.
   public static func isExtensionDocumentURL(_ value: String?) -> Bool {
-    guard let value,
-      let scheme = URL(string: value)?.scheme?.lowercased()
-    else { return false }
-    return extensionDocumentSchemes.contains(scheme)
+    guard let value else { return false }
+    let head = value.utf8.prefix(extensionDocumentSchemeMaxLength)
+    for scheme in extensionDocumentSchemePrefixes {
+      if head.count >= scheme.count,
+        zip(head, scheme).allSatisfy({ Self.asciiLowercase($0) == $1 })
+      {
+        return true
+      }
+    }
+    return false
   }
 
-  private static let extensionDocumentSchemes: Set<String> = [
-    "chrome-extension",
-    "moz-extension",
-    "safari-web-extension",
+  /// Scheme prefixes, lowercase, each ending in the `:` that closes a scheme.
+  private static let extensionDocumentSchemePrefixes: [[UInt8]] = [
+    Array("chrome-extension:".utf8),
+    Array("moz-extension:".utf8),
+    Array("safari-web-extension:".utf8),
   ]
+  private static let extensionDocumentSchemeMaxLength =
+    extensionDocumentSchemePrefixes.map(\.count).max() ?? 0
+
+  @inline(__always)
+  private static func asciiLowercase(_ byte: UInt8) -> UInt8 {
+    (byte >= 65 && byte <= 90) ? byte + 32 : byte
+  }
 
   /// The children a table or outline is walked through. A native table's
   /// scrolled-off rows (`kAXRowsAttribute` minus `kAXVisibleRowsAttribute`) are

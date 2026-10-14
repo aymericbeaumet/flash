@@ -893,6 +893,11 @@ struct Config {
     /// The physical key that enters HYPER, after `<leader>` substitution.
     /// Nil when `hyperKey` is `"<leader>"` and no leader is set.
     private(set) var resolvedHyperKey: String?
+    /// `resolvedHyperKey` prepared for the per-key test: its chord and the
+    /// characters that may spell it, parsed once here rather than per key.
+    private(set) var resolvedHyperMatcher: HyperKeyMatcher?
+    /// `normalLeader` in mapping-atom form, translated once per load.
+    private(set) var resolvedLeaderAtom: String?
 
     static let defaultNormalMappings: [ModeMapping] = makeDefaultNormalMappings()
 
@@ -1100,6 +1105,8 @@ struct Config {
 
     mutating func refreshLeaderDerivedDefaults() {
       resolvedHyperKey = Self.resolveHyperKey(hyperKey, leader: normalLeader)
+      resolvedHyperMatcher = resolvedHyperKey.map(HyperKeyMatcher.init(atom:))
+      resolvedLeaderAtom = normalLeader.flatMap(NormalModeInterpreter.translateLeader)
       guard let leaderRaw = normalLeader,
         let leaderInternal = NormalModeInterpreter.translateLeader(leaderRaw)
       else { return }

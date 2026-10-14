@@ -601,6 +601,13 @@ extension AppDelegate {
     return monitor.frontmostContext(excludingBundleIdentifier: flashBundleIdentifier)
   }
 
+  /// `currentNonFlashContext()` with the covering dialog resolved from the
+  /// same window-list read, for hint activations.
+  func currentNonFlashActivationContext() -> AppContext? {
+    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
+    return monitor.activationContext(excludingBundleIdentifier: flashBundleIdentifier)
+  }
+
   func focusedAboutContext() -> AppContext? {
     guard let frame = statusItemController.focusedAboutWindowFrame,
       let app = NSRunningApplication(processIdentifier: getpid())

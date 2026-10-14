@@ -47,7 +47,12 @@ extension AppDelegate {
     activatedPID ?? frontmostPID
   }
 
-  func updateActiveWindowBorder(reason: String, activated: NSRunningApplication? = nil) {
+  /// `reusesCachedFrame` paints the frame the AX notifications last reported
+  /// for the app and skips the WindowServer read: for a transition over the
+  /// same app and window (a HYPER hold), nothing could have moved it.
+  func updateActiveWindowBorder(
+    reason: String, activated: NSRunningApplication? = nil, reusesCachedFrame: Bool = false
+  ) {
     guard
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
@@ -72,6 +77,7 @@ extension AppDelegate {
       FlashLog.trace(
         "[mode] active_border_cached reason=\(reason) pid=\(pid) frame=\(Self.describe(cached))")
       applyActiveWindowBorder(frame: cached)
+      if reusesCachedFrame { return }
     }
     scheduleActiveWindowBorderRead(
       ActiveWindowBorderRead(

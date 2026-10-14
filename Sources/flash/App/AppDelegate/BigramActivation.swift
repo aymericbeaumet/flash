@@ -104,9 +104,9 @@ extension AppDelegate {
     if event.keyCode == 53, strict.isEmpty { return false }
     let keys = overlay.keyCharacters(for: event)
     let isLeader =
-      config.mode.resolvedHyperKey.map {
+      config.mode.resolvedHyperMatcher.map {
         NormalModeInterpreter.isHyperKey(
-          atom: $0,
+          matcher: $0,
           keyCode: event.keyCode,
           modifierFlags: event.modifierFlags,
           characters: keys.characters,

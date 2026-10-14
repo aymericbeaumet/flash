@@ -296,14 +296,20 @@ final class PollScheduler {
     }
     guard armedForMs != wakeup.atMs || timer == nil else { return }
     armedForMs = wakeup.atMs
-    timer?.cancel()
-    let timer = DispatchSource.makeTimerSource(queue: queue)
+    // One timer source for the process, rescheduled in place: a new deadline
+    // every second (a clock in the bar) must not create a kernel timer each.
+    let timer: DispatchSourceTimer
+    if let existing = self.timer {
+      timer = existing
+    } else {
+      timer = DispatchSource.makeTimerSource(queue: queue)
+      timer.setEventHandler { [weak self] in self?.fire() }
+      self.timer = timer
+      timer.resume()
+    }
     timer.schedule(
       deadline: .now() + .milliseconds(max(0, wakeup.atMs - now)),
       leeway: .milliseconds(wakeup.leewayMs))
-    timer.setEventHandler { [weak self] in self?.fire() }
-    self.timer = timer
-    timer.resume()
   }
 
   private func fire() {

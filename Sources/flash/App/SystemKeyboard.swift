@@ -95,7 +95,7 @@ enum SystemKeyboard {
   }
 
   static func postKey(_ key: CGKeyCode, flags: CGEventFlags = []) {
-    let source = CGEventSource(stateID: .hidSystemState)
+    let source = SyntheticEventSources.hid
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)

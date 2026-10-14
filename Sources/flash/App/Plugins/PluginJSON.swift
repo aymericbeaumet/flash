@@ -11,12 +11,21 @@ enum PluginJSON {
     return value.boolValue
   }
 
+  /// Objective-C type codes of the integer `NSNumber` encodings.
+  private static let integerTypeCodes: Set<CChar> = Set("csilqCSILQ".utf8.map { CChar($0) })
+  private static let unsignedLongLongTypeCode = CChar(UInt8(ascii: "Q"))
+
   static func integer(_ value: Any?) -> Int? {
     guard let value = value as? NSNumber,
-      CFGetTypeID(value) != CFBooleanGetTypeID(),
-      ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(String(cString: value.objCType))
+      CFGetTypeID(value) != CFBooleanGetTypeID()
     else { return nil }
-    return Int(value.stringValue)
+    let type = value.objCType.pointee
+    guard integerTypeCodes.contains(type) else { return nil }
+    if type == unsignedLongLongTypeCode {
+      let unsigned = value.uint64Value
+      return unsigned <= UInt64(Int.max) ? Int(unsigned) : nil
+    }
+    return Int(exactly: value.int64Value)
   }
 
   static func pid(_ value: Any?) -> pid_t? {

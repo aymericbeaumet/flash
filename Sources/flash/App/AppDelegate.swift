@@ -128,6 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The effective mode last handed to `MappingsCoordinator`, so a focus
   /// change only re-registers Carbon hotkeys when the chord set changed.
   var lastAppliedMappingMode: Config.Mode?
+  /// The selector cache key `lastAppliedMappingMode` was resolved for.
+  var lastAppliedMappingKey: String?
   /// The config error last shown: its message, so an unchanged error is not
   /// re-shown on every reload, and its toast, so clearing the error closes
   /// that toast and never another one.
@@ -373,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
     // Every observed AX notification reaches plugins exactly once, here.
-    monitor.focusedElementDidChange = { [weak self] pid, notification in
+    monitor.focusedElementDidChange = { [weak self] pid, bundleID, notification in
       if notification == kAXTitleChangedNotification as String {
         self?.windowLayoutManager.observedTitleChanged(pid: pid)
       }
@@ -381,9 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         return
       }
       self.pluginManager.emit(
-        .axChanged(
-          pid: pid, notification: notification,
-          bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier))
+        .axChanged(pid: pid, notification: notification, bundleID: bundleID))
     }
     monitor.activeWindowMayHaveChanged = { [weak self] pid, notification, window in
       self?.activeWindowMayHaveChanged(
@@ -1185,7 +1185,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     let tap = KeyboardCaptureTap(
       shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? false },
       handle: { [weak self] event in self?.routeTapCapturedKey(event) },
-      handleKeyUp: { [weak self] event in _ = self?.handleLeaderKeyUp(event) })
+      handleKeyUp: { [weak self] event in _ = self?.handleLeaderKeyUp(event) },
+      keyUpMatters: { [weak self] keyCode in
+        self?.config.mode.resolvedHyperMatcher?.mayMatch(keyCode: keyCode) ?? false
+      })
     guard tap.start() else { return }
     keyboardCaptureTap = tap
     overlay.keyboardCaptureActive = true
@@ -1284,9 +1287,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func routeTracedKey(_ event: NSEvent) {
     // HID timestamp → this main-thread turn: the tap-side latency budget.
-    FlashLog.debug(
-      "[latency] tap_to_route ms="
-        + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
+    if FlashLog.wouldEmit(.debug) {
+      FlashLog.debug(
+        "[latency] tap_to_route ms="
+          + String(
+            format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
+    }
     // HYPER is a hold on top of NORMAL routing. Claim the leader, and every
     // key while it is held, before a NORMAL chord or sequence can see them.
     if overlay.inputMode == .normal || modeStore.mode.isHyper {

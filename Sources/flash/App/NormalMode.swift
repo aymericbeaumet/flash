@@ -377,6 +377,32 @@ enum NormalModeInterpreter {
   /// True when this physical key is the hyper hold key. A chord atom matches
   /// with its modifiers. An unmodified named key still matches on key-up,
   /// when the event may carry no characters. Shift-Space is still Space.
+  ///
+  /// Every NORMAL key and every swallowed release asks this. The matcher's
+  /// prepared chord and characters settle the common miss without building
+  /// the event's atoms; only a key that can match runs the full test.
+  static func isHyperKey(
+    matcher: HyperKeyMatcher,
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> Bool {
+    let physicalMatch = matcher.chord.map { $0.key == CGKeyCode(keyCode) } ?? false
+    if !physicalMatch, matcher.chord != nil {
+      guard !matcher.characters.isEmpty else { return false }
+      let typed = firstCharacter(charactersIgnoringModifiers) ?? firstCharacter(characters)
+      guard let typed, matcher.characters.contains(typed) else { return false }
+    }
+    return isHyperKey(
+      atom: matcher.atom,
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers)
+  }
+
+  /// The full, layout-aware test behind `isHyperKey(matcher:)`.
   static func isHyperKey(
     atom: String,
     keyCode: UInt16,
