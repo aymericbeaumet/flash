@@ -69,7 +69,7 @@ reference bar on macOS, and it does more as a bar than Flash does.
 ```toml
 [statusbar]
 enabled = true
-template = "#[fg=yellow]CPU #[fg=default]#{flash.plugin.cpu.percent} #[fg=yellow]MEM #[fg=default]#{flash.plugin.memory.percent} #[align=right]#{flash.clock.time}"
+template = "#[fg=yellow]CPU #[fg=default]#{flash.plugin.cpu.percent} #[fg=yellow]MEM #[fg=default]#{flash.plugin.memory.percent} #[align=right]%H:%M"
 ```
 
 Running both bars on one display makes no sense; Flash users who want

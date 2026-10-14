@@ -59,9 +59,9 @@ and a 2026 issue asking whether it is maintained has no reply.
 
 ```toml
 [mode.all.mappings]
-"alt+meta+x" = ["flash", "mouse_target"]
-"alt+meta+g" = ["flash", "mouse_grid", "--bisect"]
-"alt+meta+c" = ["flash", "mouse_pointer"]
+"alt+ctrl+x" = ["flash", "mouse_target"]
+"alt+ctrl+g" = ["flash", "mouse_grid", "--bisect"]
+"alt+ctrl+c" = ["flash", "mouse_pointer"]
 ```
 
 *Checked 2026-10-14 against the warpd

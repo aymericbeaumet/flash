@@ -41,8 +41,8 @@ twenty releases since January 2025.
 
 ## Flash features you might like
 
-- `mouse_target --search` is Wooshy's input over the focused window;
-  `--scope=screen` widens it to every app on the screen.
+- `mouse_target --search` is Wooshy's input over the focused window, and
+  `mouse_target --scope=screen` labels every app on the screen.
 - `:flashlight @menus` finds menu items by name; `@windows` focuses by
   title; `@system.actions` lists system actions ([flashlight](../flashlight.md)).
 - `mouse_target --words --select` selects text between two words, where
@@ -53,7 +53,7 @@ twenty releases since January 2025.
 
 | Wooshy | Flash |
 | --- | --- |
-| Open the input | `["flash", "mouse_target", "--search"]`; add `--scope=screen` for every app |
+| Open the input | `["flash", "mouse_target", "--search"]` in the focused window; `mouse_target --scope=screen` labels every app |
 | Dock, menu bar, status bar targets | `mouse_dock`, `mouse_menubar`; status bar items through `mouse_menubar` |
 | Ctrl-Return right-click | `mouse_bigram --secondary`, or `cf` in NORMAL |
 | Shift-Cmd-Return move only | `mouse_target --move` |
@@ -63,7 +63,8 @@ twenty releases since January 2025.
 
 ```toml
 [mode.all.mappings]
-"cmd+shift+space" = ["flash", "mouse_target", "--search", "--scope=screen"]
+"cmd+shift+space" = ["flash", "mouse_target", "--search"]
+"cmd+shift+alt+space" = ["flash", "mouse_target", "--scope=screen"]
 ```
 
 *Checked 2026-10-14 against

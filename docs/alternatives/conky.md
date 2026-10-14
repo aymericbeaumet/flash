@@ -55,7 +55,7 @@ widgets exist for the people who left conky behind on Linux.
 | `${battery_percent}` | `#{flash.plugin.power.*}` |
 | `${top name 1}` | `#{flash.plugin.processes.top_cpu}` |
 | `${exec cmd}` | A named source running `cmd` |
-| `${time %H:%M}` | `#{flash.clock.time}` |
+| `${time %H:%M}` | `%H:%M`, expanded by `strftime` in the template |
 | `alignment = 'top_right'` | `anchor = "top_right"` |
 | Lua drawing | Not available |
 
