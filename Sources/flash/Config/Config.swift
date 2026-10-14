@@ -234,6 +234,9 @@ struct Config {
     var mouseGridKeys: [String] = []
     /// Move the pointer to the grid region's centre after every step.
     var mouseGridCursorFollow = false
+    /// Draw each cell's next step faintly inside it, labelled with the two
+    /// keys that reach each of its cells, so the next key can be read ahead.
+    var mouseGridPreview = true
     /// Put the pointer back where it was after a committed hint or grid
     /// click, drag or selection, and after `mouse_repeat` (`--move` and
     /// `mouse_pointer` still move it).
@@ -1544,6 +1547,7 @@ struct Config {
         "mouse_grid_cursor_follow": hints.mouseGridCursorFollow,
         "mouse_grid_keys": resolvedMouseGridKeys.map { String($0) },
         "mouse_grid_opacity": hints.mouseGridOpacity,
+        "mouse_grid_preview": hints.mouseGridPreview,
         "mouse_grid_steps": hints.mouseGridSteps,
         "restore_pointer": hints.restorePointer,
       ],

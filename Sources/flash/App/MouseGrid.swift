@@ -44,6 +44,11 @@ enum MouseGrid {
   /// chips form a glued cluster centred on (and covering) the region, and
   /// each click lands on its chip's centre. The renderer keys off this role.
   static let finalChipRole = "FlashMouseGridFinalChip"
+  /// A cell of the step that follows one of the current cells, drawn faint
+  /// under the current step's own labels and labelled with the two keys that
+  /// reach it (`qw`: `q`, then `w`), so the next key can be read before the
+  /// first is pressed. Never a key target of its own.
+  static let previewCellRole = "FlashMouseGridPreviewCell"
 
   static func cellSize(of region: CGRect, shape: Shape) -> CGSize {
     guard shape.rows > 0, shape.columns > 0 else { return .zero }
@@ -139,12 +144,19 @@ enum MouseGrid {
   /// the shape's keys. When the selection clicks and cells are smaller than a
   /// chip, the chips form a glued cluster instead, each slot at least one chip
   /// and one cell in size, so it covers the region without overlapping.
+  ///
+  /// With `previewChipSize` — the size of a two-letter chip — a step whose
+  /// selection drills further also returns the cells of the step that
+  /// follows each of its cells, first in the array so the step's own cells
+  /// render over them, labelled with the two keys that reach each one. A
+  /// step whose next cells could not hold such a chip previews nothing.
   static func hints(
     region: CGRect,
     depth: Int,
     shape: Shape,
     steps: Int,
-    chipSize: CGSize
+    chipSize: CGSize,
+    previewChipSize: CGSize? = nil
   ) -> [AssignedHint] {
     let keys = shape.keys
     guard shape.rows > 0, shape.columns > 0, keys.allSatisfy({ $0.count == shape.columns })
@@ -164,8 +176,8 @@ enum MouseGrid {
       slotRegion = region
     }
     let role = cluster ? finalChipRole : commits ? finalCellRole : cellRole
-    var out: [AssignedHint] = []
-    out.reserveCapacity(shape.rows * shape.columns)
+    var cells: [AssignedHint] = []
+    cells.reserveCapacity(shape.rows * shape.columns)
     for (row, rowKeys) in keys.enumerated() {
       for (column, key) in rowKeys.enumerated() {
         let target = JumpTarget(
@@ -173,10 +185,29 @@ enum MouseGrid {
           frame: cellFrame(in: slotRegion, row: row, column: column, shape: shape),
           role: role,
           providerID: "mouse_grid")
-        out.append(AssignedHint(target: target, label: String(key)))
+        cells.append(AssignedHint(target: target, label: String(key)))
       }
     }
-    return out
+    guard let previewChipSize, !commits else { return cells }
+    let next = cellSize(of: cells[0].target.frame, shape: shape)
+    guard next.width >= previewChipSize.width, next.height >= previewChipSize.height else {
+      return cells
+    }
+    var previews: [AssignedHint] = []
+    previews.reserveCapacity(cells.count * cells.count)
+    for (index, parent) in cells.enumerated() {
+      for (row, rowKeys) in keys.enumerated() {
+        for (column, key) in rowKeys.enumerated() {
+          let target = JumpTarget(
+            id: "mouse_grid_preview:\(depth):\(index):\(row * shape.columns + column)",
+            frame: cellFrame(in: parent.target.frame, row: row, column: column, shape: shape),
+            role: previewCellRole,
+            providerID: "mouse_grid")
+          previews.append(AssignedHint(target: target, label: parent.label + String(key)))
+        }
+      }
+    }
+    return previews + cells
   }
 
   /// The grid's root on one display. The usable frame stops at the Dock and,

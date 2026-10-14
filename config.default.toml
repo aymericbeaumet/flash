@@ -148,6 +148,12 @@ mouse_grid_cursor_follow = false
 # click, so a slight translucency keeps the underlying app visible.
 mouse_grid_opacity = 0.5
 
+# Draw the step that follows each cell faintly inside it, labelled with the
+# two keys that reach each of its cells (`qw` is `q`, then `w`), so the next
+# key can be read before the first is pressed. The step's own labels stay on
+# top; the clicking step and cells too small for a label show no preview.
+mouse_grid_preview = true
+
 [overlay]
 # Hint chip typography and colors. font_size drives the hint label size
 # (chip geometry derives from it); colors are #RRGGBB or #RRGGBBAA.

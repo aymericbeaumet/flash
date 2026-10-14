@@ -487,7 +487,7 @@ enum ConfigLoader {
         "position_history_size", "position_history_scope", "pointer_follows_focus",
         "pointer_step", "pointer_acceleration", "pointer_max_step",
         "mouse_grid_steps", "mouse_grid_opacity", "mouse_grid_keys", "mouse_grid_cursor_follow",
-        "restore_pointer",
+        "mouse_grid_preview", "restore_pointer",
       ],
       "plugins": [
         "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
@@ -788,6 +788,13 @@ enum ConfigLoader {
       locations: locations, into: &config,
       assign: { value, config in
         config.hints.mouseGridCursorFollow = value
+      })
+    applyBool(
+      table["mouse_grid_preview"], path: ["hints", "mouse_grid_preview"],
+      message: "hints.mouse_grid_preview must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.mouseGridPreview = value
       })
     applyBool(
       table["restore_pointer"], path: ["hints", "restore_pointer"],

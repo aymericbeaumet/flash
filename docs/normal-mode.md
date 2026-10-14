@@ -172,6 +172,13 @@ rows × 5 columns, each cell labelled with the key at the same position in the
 +---+---+---+---+---+
 ```
 
+Each cell also shows, faintly, the grid of the step that follows it, every
+sub-cell labelled with the two keys that reach it (`qw` is `q`, then `w`), so
+the next key can be read before the first is pressed; the step's own labels are
+drawn on top and stay the first thing to find. The clicking step and cells too
+small for a two-letter label show no preview. `hints.mouse_grid_preview =
+false` turns it off.
+
 Colemak uses `12345` / `qwfpg` / `arstd` / `zxcvb` and Dvorak `12345` /
 `',.py` / `aoeui` / `;qjkx`; a literal `hints.keys` gets the QWERTY block, and
 `hints.mouse_grid_keys` sets any other matrix. Press the key where you want to

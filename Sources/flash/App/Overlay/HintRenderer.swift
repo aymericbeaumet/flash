@@ -149,6 +149,8 @@ extension OverlayPanel {
       // translucent backdrop. Larger clicking cells stay tiles.
       let isMouseGridFinalChip =
         isMouseGridHint && hint.target.role == MouseGrid.finalChipRole
+      let isMouseGridPreview =
+        isMouseGridHint && hint.target.role == MouseGrid.previewCellRole
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -257,7 +259,10 @@ extension OverlayPanel {
         // tint — never the letter — so the hint stays readable on any
         // background (light or dark) without its contrast drifting.
         let tint = Self.mouseGridColor(index: idx)
-        let alpha = CGFloat(mouseGridOpacity)
+        // A preview cell — the step after this one, read ahead — is a faint
+        // tile with a dimmed label chip, so the step's own cells, drawn over
+        // it, stay the first thing the eye finds.
+        let alpha = CGFloat(mouseGridOpacity) * (isMouseGridPreview ? 0.35 : 1)
         chip.cornerRadius = 0
         chip.borderWidth = 1
         chip.colors = [
@@ -266,7 +271,8 @@ extension OverlayPanel {
           (tint.blended(withFraction: 0.40, of: .white) ?? tint)
             .withAlphaComponent(alpha).cgColor,
         ]
-        chip.borderColor = tint.withAlphaComponent(min(1, alpha + 0.3)).cgColor
+        chip.borderColor =
+          tint.withAlphaComponent(min(1, alpha + (isMouseGridPreview ? 0.12 : 0.3))).cgColor
 
         // Centred hint: the exact "f"-hint chip design (same gradient,
         // corner radius, border, glyph) so the letter is always crisp
@@ -292,6 +298,7 @@ extension OverlayPanel {
           y: labelAbs.minY - chipLocal.minY,
           width: labelAbs.width,
           height: labelAbs.height)
+        labelChip.opacity = isMouseGridPreview ? 0.5 : 1
         label.frame = CGRect(x: 0, y: labelYOffset, width: chipW, height: labelHeight)
         labelChip.addSublayer(label)
         chip.addSublayer(labelChip)

@@ -898,7 +898,12 @@ extension AppDelegate {
       depth: navigation.current.depth,
       shape: hintSession.gridShape,
       steps: config.hints.mouseGridSteps,
-      chipSize: chipSize)
+      chipSize: chipSize,
+      previewChipSize: config.hints.mouseGridPreview
+        ? CGSize(
+          width: OverlayPanel.chipWidth(forLabelLength: 2, fontSize: fontSize),
+          height: chipSize.height)
+        : nil)
     guard !hints.isEmpty else {
       applyModeOverlay()
       return
@@ -908,7 +913,9 @@ extension AppDelegate {
     session.grid = navigation
     session.hints = hints
     session.gridCellIndex.removeAll(keepingCapacity: true)
-    for (index, hint) in hints.enumerated() {
+    // Only the step's own cells answer a key; the preview is drawn, not typed.
+    for (index, hint) in hints.enumerated()
+    where hint.target.role != MouseGrid.previewCellRole {
       if let key = hint.label.first { session.gridCellIndex[key] = index }
     }
     session.prefix = ""
