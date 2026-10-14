@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { alphabetHeat, categoryOf, keycapLabel, phaseKeys, zoneOf, type BoardView, type CapBindings } from "./keyboard";
+  import { alphabetHeat, ansiRows, categoryOf, keycapLabel, phaseKeys, zoneOf, type BoardView, type CapBindings, type KeySlot } from "./keyboard";
   import type { KeyboardState } from "./types";
 
   let {
@@ -10,7 +10,9 @@
     view,
     selected,
     counts,
+    layer,
     onpick,
+    onmodifier,
   }: {
     keyboard: KeyboardState;
     /** What each key does at the current prefix and modifier layer. */
@@ -22,8 +24,16 @@
     selected: string | null;
     /** Unbound digits 1–9 are repeat counts here (NORMAL, VISUAL), not free keys. */
     counts: boolean;
+    /** The modifiers the chord layer holds; their keys are drawn pressed. */
+    layer: string[];
     onpick: (cap: string) => void;
+    onmodifier: (modifier: string) => void;
   } = $props();
+
+  const rows = $derived(ansiRows(keyboard));
+  const unit = 58;
+  const gap = 6;
+  const widthOf = (units: number) => `${units * unit + (units - 1) * gap}px`;
 
   // What a key does on a hint surface, independent of what Flash is doing now.
   const surface = $derived(phaseKeys(view === "grid" ? "grid" : view === "alphabet" ? "labels" : "idle", keyboard));
@@ -71,42 +81,48 @@
   }
 </script>
 
-{#snippet key(cap: string, label: string, extra: string)}
-  {@const entry = caps.get(cap)}
-  {@const note = noteFor(cap)}
-  <button
-    class="key {extra} {state(cap)}"
-    class:hit={hits.has(cap)}
-    class:selected={selected === cap}
-    data-category={view === "bindings" ? category(cap) : undefined}
-    style={style(cap)}
-    aria-pressed={selected === cap}
-    aria-label={`${cap}: ${note ?? (entry?.continues ? "starts longer bindings" : "free")}`}
-    onclick={() => onpick(cap)}>
-    <span class="cap">{label}{#if cap === "space" && leader}<span class="leader-mark"> · leader</span>{/if}</span>
-    {#if view === "bindings" && entry?.continues}<span class="more" title="Starts {entry.continues} longer bindings">›{entry.continues}</span>{/if}
-    {#if note}<span class="note">{note}</span>{/if}
-  </button>
+{#snippet key(slot: KeySlot)}
+  {#if slot.modifier}
+    <button
+      class="key modifier"
+      class:held={layer.includes(slot.modifier)}
+      style:width={widthOf(slot.units)}
+      aria-pressed={layer.includes(slot.modifier)}
+      aria-label={`${slot.label}: show the bindings held with it`}
+      onclick={() => onmodifier(slot.modifier ?? "")}><span class="cap">{slot.label}</span></button>
+  {:else if slot.inert}
+    <span class="key inert" style:width={widthOf(slot.units)}><span class="cap">{slot.label}</span></span>
+  {:else}
+    {@const cap = slot.cap}
+    {@const entry = caps.get(cap)}
+    {@const note = noteFor(cap)}
+    <button
+      class="key {state(cap)}"
+      class:hit={hits.has(cap)}
+      class:selected={selected === cap}
+      data-category={view === "bindings" ? category(cap) : undefined}
+      style={`${style(cap)};width:${widthOf(slot.units)}`}
+      aria-pressed={selected === cap}
+      aria-label={`${cap}: ${note ?? (entry?.continues ? "starts longer bindings" : "free")}`}
+      onclick={() => onpick(cap)}>
+      <span class="cap">{slot.label}{#if cap === "space" && leader}<span class="leader-mark"> · leader</span>{/if}</span>
+      {#if view === "bindings" && entry?.continues}<span class="more" title="Starts {entry.continues} longer bindings">›{entry.continues}</span>{/if}
+      {#if note}<span class="note">{note}</span>{/if}
+    </button>
+  {/if}
 {/snippet}
 
-<div class="rows">
-  {#each keyboard.rows as row, rowIndex}
-    <div class="row" style:--offset={rowIndex}>
-      {#if rowIndex === 0}{@render key("esc", "esc", "special")}{/if}
-      {#if rowIndex === 1}{@render key("tab", "tab", "special")}{/if}
-      {#each [...row] as cap}{@render key(cap, cap, "")}{/each}
-      {#if rowIndex === 0}{@render key("backspace", "⌫", "special wide")}{/if}
-      {#if rowIndex === 2}{@render key("return", "return", "special wide")}{/if}
-    </div>
+<div class="rows" style:--unit="{unit}px" style:--gap="{gap}px">
+  {#each rows as row, index}
+    <div class="row" class:escape-row={index === 0}>{#each row as slot}{@render key(slot)}{/each}</div>
   {/each}
-  <div class="row space-row">{@render key("space", "space", "special space")}</div>
 </div>
 
 <style>
-  .rows { display: flex; flex-direction: column; gap: 7px; min-width: 780px; }
-  .row { display: flex; gap: 7px; padding-left: calc(var(--offset, 0) * 18px); }
-  .space-row { padding-left: 190px; }
-  .key { --tint: #eef4e8; --edge: #c9d8bd; position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; width: 64px; height: 62px; min-height: 0; padding: 6px 7px; border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 8px; background: #fbfcf9; color: #8a948a; text-align: left; transition: background .2s, color .2s, border-color .2s, transform .15s, box-shadow .2s; }
+  .rows { display: flex; flex-direction: column; gap: var(--gap); width: max-content; }
+  .row { display: flex; gap: var(--gap); }
+  .escape-row { margin-bottom: 8px; }
+  .key { --tint: #eef4e8; --edge: #c9d8bd; position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; height: 60px; min-height: 0; flex: none; padding: 6px 7px; border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 8px; background: #fbfcf9; color: #8a948a; text-align: left; transition: background .2s, color .2s, border-color .2s, transform .15s, box-shadow .2s; }
   .key:hover { transform: translateY(-1px); }
   .key.free { border-style: dashed; background: transparent; color: #a8b0a6; }
   .key.bound { background: var(--tint); color: var(--text); border-color: var(--edge); }
@@ -123,9 +139,11 @@
   .key.zone { background: var(--zone, #f6f8f3); border-color: color-mix(in oklab, var(--zone, #ccc), #000 20%); color: #233; }
   .key.hit { box-shadow: 0 0 0 2px #e3be23; }
   .key.selected { box-shadow: 0 0 0 3px #6c875c; border-color: #6c875c; }
-  .key.special { width: 88px; }
-  .key.special.wide { width: 112px; }
-  .key.space { width: 360px; }
+  .key.modifier { justify-content: center; background: #f3f4f0; color: #6d7868; font-size: 12px; }
+  .key.modifier .cap { font-family: inherit; font-size: 12px; font-weight: 600; }
+  .key.modifier.held { background: #e4ecdb; border-color: #6c875c; color: #244f38; box-shadow: inset 0 2px 0 rgba(0, 0, 0, .06); }
+  .key.inert { border-style: dotted; background: transparent; color: #b4bbb2; cursor: default; }
+  .key.inert .cap { font-family: inherit; font-size: 12px; }
   .cap { font-family: var(--mono); font-size: 14px; font-weight: 600; }
   .leader-mark { font-size: 10px; font-weight: 500; color: var(--muted); }
   .more { position: absolute; top: 5px; right: 6px; padding: 0 5px; border-radius: 999px; background: #2e5b43; color: #eff6e7; font-size: 10px; font-weight: 700; }

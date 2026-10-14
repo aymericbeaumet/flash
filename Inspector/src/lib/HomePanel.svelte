@@ -170,7 +170,6 @@
 <style>
   .home { max-width: 880px; }
   .intro { padding: 8px 0 8px; }
-  .intro h1 { max-width: 16ch; }
   .lede { margin-top: 12px; max-width: 62ch; color: var(--muted); font-size: 15px; line-height: 1.6; }
   .progress { height: 8px; margin-top: 22px; border-radius: 99px; background: var(--panel-strong); overflow: hidden; }
   .progress span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }

@@ -79,6 +79,46 @@ function capFor(token: string, leader: string): string | null {
   return null;
 }
 
+/** One key of the drawn keyboard: its cap, its width in key units, and the
+ * modifier it is when it is one (pressing it shows that chord layer). */
+export interface KeySlot {
+  cap: string;
+  label: string;
+  units: number;
+  modifier?: "shift" | "ctrl" | "alt" | "cmd";
+  /** Drawn for the shape only (Caps Lock). */
+  inert?: boolean;
+}
+
+/** The punctuation a layout puts beside its ten-key block on a US ANSI board. */
+const ansiExtras: Record<string, { number: [string, string]; top: [string, string, string]; home: string }> = {
+  qwerty: { number: ["-", "="], top: ["[", "]", "\\"], home: "'" },
+  colemak: { number: ["-", "="], top: ["[", "]", "\\"], home: "'" },
+  dvorak: { number: ["[", "]"], top: ["/", "=", "\\"], home: "-" },
+};
+
+/** A US ANSI keyboard, whatever the layout: the layout's ten-key rows from
+ * the snapshot, its punctuation around them, and the standard key widths, so
+ * every main row spans 15 units. */
+export function ansiRows(keyboard: KeyboardState): KeySlot[][] {
+  const extras = ansiExtras[keyboard.layout] ?? ansiExtras.qwerty;
+  const key = (cap: string, units = 1): KeySlot => ({ cap, label: cap, units });
+  const block = (row: number) => [...(keyboard.rows[row] ?? "")].map((cap) => key(cap));
+  const modifier = (name: KeySlot["modifier"] & string, label: string, units: number): KeySlot => ({ cap: name, label, units, modifier: name });
+  return [
+    [key("esc")],
+    [key("`"), ...block(0), key(extras.number[0]), key(extras.number[1]), { cap: "backspace", label: "⌫", units: 2 }],
+    [{ cap: "tab", label: "tab", units: 1.5 }, ...block(1), key(extras.top[0]), key(extras.top[1]), key(extras.top[2], 1.5)],
+    [{ cap: "caps", label: "caps", units: 1.75, inert: true }, ...block(2), key(extras.home), { cap: "return", label: "return", units: 2.25 }],
+    [modifier("shift", "⇧ shift", 2.25), ...block(3), modifier("shift", "⇧ shift", 2.75)],
+    [
+      modifier("ctrl", "⌃ control", 1.5), modifier("alt", "⌥ option", 1.25), modifier("cmd", "⌘ command", 1.5),
+      { cap: "space", label: "space", units: 6.5 },
+      modifier("cmd", "⌘ command", 1.5), modifier("alt", "⌥ option", 1.25), modifier("ctrl", "⌃ control", 1.5),
+    ],
+  ];
+}
+
 /** What the key-mappings keyboard draws: bindings, or a hint surface's keys. */
 export type BoardView = "bindings" | "alphabet" | "grid" | "zones";
 

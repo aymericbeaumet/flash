@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { alphabetHeat, bindingsByCap, capsAt, categoryOf, keycapLabel, keySteps, stepsToKey, mappingModes, mappingSnippet, parseKey, phaseKeys, rowsForMode, rowsUnder, scopesForMode, zoneOf } from "./src/lib/keyboard.ts";
+import { ansiRows, alphabetHeat, bindingsByCap, capsAt, categoryOf, keycapLabel, keySteps, stepsToKey, mappingModes, mappingSnippet, parseKey, phaseKeys, rowsForMode, rowsUnder, scopesForMode, zoneOf } from "./src/lib/keyboard.ts";
 import type { KeyboardState, MappingRow } from "./src/lib/types.ts";
 
 const keyboard: KeyboardState = {
@@ -176,4 +176,22 @@ test("heat spans the alphabet and zones follow the zone rows", () => {
   assert.deepEqual(zoneOf(keyboard, "a"), { row: 1, column: 0, rows: 2, columns: 9 });
   assert.equal(zoneOf(keyboard, "z"), null);
   assert.equal(zoneOf({ ...keyboard, label_order: "reading" }, "a"), null);
+});
+
+test("the board is a US ANSI keyboard whatever the layout", () => {
+  const width = (row: { units: number }[]) => row.reduce((sum, slot) => sum + slot.units, 0);
+  const rows = ansiRows(keyboard);
+  assert.equal(rows.length, 6, "escape, numbers, top, home, bottom, modifiers");
+  for (const row of rows.slice(1)) assert.equal(width(row), 15);
+  assert.deepEqual(rows[1].map((slot) => slot.cap).join(" "), "` 1 2 3 4 5 6 7 8 9 0 - = backspace");
+  assert.deepEqual(rows[2].map((slot) => slot.cap).join(" "), "tab q w e r t y u i o p [ ] \\");
+  assert.deepEqual(rows[3].map((slot) => slot.cap).join(" "), "caps a s d f g h j k l ; ' return");
+  assert.deepEqual(rows[4].map((slot) => slot.cap).join(" "), "shift z x c v b n m , . / shift");
+  assert.equal(rows[5].find((slot) => slot.cap === "space")?.units, 6.5);
+  assert.deepEqual(rows[5].filter((slot) => slot.modifier).map((slot) => slot.modifier), ["ctrl", "alt", "cmd", "cmd", "alt", "ctrl"]);
+  const dvorak = ansiRows({ ...keyboard, layout: "dvorak", rows: ["1234567890", "',.pyfgcrl", "aoeuidhtns", ";qjkxbmwvz"] });
+  assert.deepEqual(dvorak[1].slice(-3).map((slot) => slot.cap), ["[", "]", "backspace"]);
+  assert.deepEqual(dvorak[2].slice(-4).map((slot) => slot.cap), ["l", "/", "=", "\\"]);
+  assert.deepEqual(dvorak[3].slice(-2).map((slot) => slot.cap), ["-", "return"]);
+  for (const row of dvorak.slice(1)) assert.equal(width(row), 15);
 });

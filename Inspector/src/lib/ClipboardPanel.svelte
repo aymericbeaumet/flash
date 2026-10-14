@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import { linkSegments } from "./linkify";
   import type { ClipboardEntry } from "./types";
 
   let { entries }: { entries: ClipboardEntry[] } = $props();
@@ -8,7 +9,20 @@
   let copying = $state<string | null>(null);
   let removed = $state<string[]>([]);
   let notice = $state("");
+  let zoomed = $state<{ src: string; alt: string } | null>(null);
   let requestID = 0;
+
+  // The zoomed image closes with Escape as well as a click.
+  $effect(() => {
+    if (!zoomed) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      zoomed = null;
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  });
 
   const visible = $derived(entries.filter((entry) => entry.id && !removed.includes(entry.id)));
   const filtered = $derived.by(() => {
@@ -80,6 +94,8 @@
   }
 </script>
 
+{#snippet linked(text: string)}{#each linkSegments(text) as segment}{#if segment.href}<a href={segment.href} target="_blank" rel="noopener noreferrer">{segment.text}</a>{:else}{segment.text}{/if}{/each}{/snippet}
+
 <div class="page">
   <div class="page-heading"><p class="eyebrow">Inspect</p><h1>Clipboard</h1><p>Find something you copied earlier and put it back on your clipboard, or delete it from this history. Images, formatted text, and files are kept along with plain text.</p></div>
   <div class="privacy-note"><Icon name="shield" size={16} /><span>History is provided by your local Flash instance.</span><a href="/docs/privacy">About clipboard privacy</a></div>
@@ -93,12 +109,12 @@
           <article class="entry" class:copied={copied === entry.id}>
             <span class="entry-number">{String(entry.index + 1).padStart(2, "0")}</span>
             <div class="entry-content">
-              <p class="preview">{entry.preview || entry.value || kindLabel(entry.kind)}</p>
+              <p class="preview">{@render linked(entry.preview || entry.value || kindLabel(entry.kind))}</p>
               <div class="entry-meta"><span class="badge neutral">{kindLabel(entry.kind)}</span>{#if entry.mime}<span>{entry.mime}</span>{/if}{#if entry.value}<span>{entry.value.length.toLocaleString()} characters</span>{/if}{#if entry.files?.length}<span>{entry.files.length} {entry.files.length === 1 ? "file" : "files"}</span>{/if}</div>
-              {#if imageURL(entry)}<img class="clip-image" src={imageURL(entry)} alt={entry.preview || "Copied image"} />{/if}
+              {#if imageURL(entry)}{@const src = imageURL(entry) ?? ""}<button type="button" class="image-button" aria-label="Zoom into this image" onclick={() => (zoomed = { src, alt: entry.preview || "Copied image" })}><img class="clip-image" {src} alt={entry.preview || "Copied image"} /></button>{/if}
               {#if entry.kind === "html" && entry.html}<iframe class="clip-html" sandbox="" srcdoc={entry.html} title="Formatted clipboard entry" referrerpolicy="no-referrer"></iframe>{/if}
               {#if entry.files?.length}<ul class="files">{#each entry.files as file (file)}<li>{file}</li>{/each}</ul>{/if}
-              {#if entry.value}<details><summary>View plain text</summary><pre>{entry.value}</pre></details>{/if}
+              {#if entry.value}<details><summary>View plain text</summary><pre>{@render linked(entry.value)}</pre></details>{/if}
             </div>
             <div class="entry-actions">
               <button type="button" class="copy-button" disabled={copying !== null} onclick={() => copy(entry)} aria-label={copied === entry.id ? "Entry copied" : `Copy clipboard entry ${entry.index + 1}`}><Icon name={copied === entry.id ? "check" : "clipboard"} size={14} />{copying === entry.id ? "Copying…" : copied === entry.id ? "Copied" : "Copy"}</button>
@@ -113,6 +129,10 @@
   </div>
 </div>
 
+{#if zoomed}
+  <button type="button" class="zoom" aria-label="Close the zoomed image" onclick={() => (zoomed = null)}><img src={zoomed.src} alt={zoomed.alt} /></button>
+{/if}
+
 <style>
   .privacy-note { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 11px; margin-bottom: 22px; }
   .privacy-note :global(svg) { flex-shrink: 0; margin-top: 1px; }
@@ -124,6 +144,10 @@
   .entry-number { color: #9aa59b; font: 11px var(--mono); padding-top: 4px; }
   .preview { font: 12px/1.7 var(--mono); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .entry-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 10px; color: var(--muted); margin-top: 8px; }
+  .preview a, pre a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  .image-button { display: block; padding: 0; margin: 0; min-height: 0; border: 0; background: none; cursor: zoom-in; }
+  .zoom { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 32px; margin: 0; border: 0; border-radius: 0; background: rgba(24, 28, 22, .82); cursor: zoom-out; }
+  .zoom img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 18px 48px rgba(0, 0, 0, .35); background: #fff; }
   .clip-image { display: block; max-width: 100%; max-height: 240px; margin-top: 12px; border: 1px solid var(--border-soft); border-radius: 7px; object-fit: contain; background: #fff; }
   .clip-html { display: block; width: 100%; height: 180px; margin-top: 12px; border: 1px solid var(--border-soft); border-radius: 7px; background: #fff; }
   .files { margin: 12px 0 0; padding-left: 18px; font: 11px/1.6 var(--mono); overflow-wrap: anywhere; }

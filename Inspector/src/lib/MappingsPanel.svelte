@@ -53,7 +53,9 @@
   const caps = $derived(capsAt(modeRows, path, layer, leader));
   const modeInfo = $derived(mappingModes.find((item) => item.id === mode) ?? mappingModes[0]);
   const appName = $derived(mappings.localized_name ?? mappings.bundle_id ?? "the current application");
-  const layers: [string[], string][] = [[[], "No modifier"], [["shift"], "⇧ Shift"], [["ctrl"], "⌃ Control"], [["alt"], "⌥ Option"], [["cmd"], "⌘ Command"]];
+  // Zones exist only with `label_order = "zones"`: the first key of a label
+  // names a keyboard-shaped region of the window.
+  const boardViews = $derived<[string, string][]>([["bindings", "Bindings"], ["alphabet", "Hint keys"], ["grid", "Grid"], ...(keyboard?.label_order === "zones" ? [["zones", "Zones"] as [string, string]] : [])]);
   const freeRule: Record<string, string> = {
     all: "Pick a mode to see which keys are free in it.",
     normal: "A free key is swallowed in NORMAL, so it is yours to map.",
@@ -81,6 +83,11 @@
       return;
     }
     picked = picked && picked.cap === cap && sameLayer(picked.modifiers, layer) ? null : step;
+  }
+  /** A modifier key on the board toggles it in the chord layer. */
+  function toggleModifier(modifier: string) {
+    layer = layer.includes(modifier) ? layer.filter((item) => item !== modifier) : [...layer, modifier];
+    picked = null;
   }
   function back(to: number) {
     path = path.slice(0, to);
@@ -177,7 +184,7 @@
 </script>
 
 <div class="page">
-  <div class="page-heading"><p class="eyebrow">Your Flash</p><h1>A key for every move.</h1><p>Ask what a key does, or how to do something. Pick a mode under the keyboard, then a key: a key that starts longer bindings opens what can follow it. Search by what a binding does; the keys it matches light up.</p></div>
+  <div class="page-heading"><p class="eyebrow">Your Flash</p><h1>A key for every move.</h1><p>Ask what a key does, or how to do something. Pick a mode under the keyboard, then a key: a key that starts longer bindings opens what can follow it, and Shift, Control, Option or Command shows the chords held with it. Search by what a binding does; the keys it matches light up.</p></div>
 
   <div class="ask surface"><Icon name="search" size={18} /><input type="search" aria-label="Search mappings" placeholder="What do you want to do? Try brightness, window left, ctrl-f…" bind:this={searchInput} bind:value={query} />{#if mappings.normal_leader}<span class="leader">Leader <kbd>{mappings.normal_leader}</kbd></span>{/if}<div class="segmented" aria-label="Mapping source"><button class:active={view === "effective"} aria-pressed={view === "effective"} title="Resolved for {appName}, with active plugins" onclick={() => (view = "effective")}>In {appName}</button><button class:active={view === "configured"} aria-pressed={view === "configured"} title="From your configuration, before plugins and app overrides" onclick={() => (view = "configured")}>Configured</button></div></div>
 
@@ -186,11 +193,10 @@
       <div class="board-head">
         <nav class="trail" aria-label="Key sequence"><button class:here={!path.length} onclick={() => back(0)}>Keys</button>{#each path as step, index}<span>›</span><button class:here={index === path.length - 1} onclick={() => back(index + 1)}><kbd>{stepText(step)}</kbd></button>{/each}{#if path.length}<span class="muted">then…</span>{/if}</nav>
         <div class="controls">
-          {#if boardView === "bindings"}<div class="segmented" aria-label="Modifier held">{#each layers as [mods, label]}<button class:active={sameLayer(layer, mods)} aria-pressed={sameLayer(layer, mods)} onclick={() => { layer = mods; picked = null; }}>{label}</button>{/each}</div>{/if}
-          <div class="segmented" aria-label="What the keyboard shows">{#each [["bindings", "Bindings"], ["alphabet", "Hint keys"], ["grid", "Grid"], ["zones", "Zones"]] as [value, label]}<button class:active={boardView === value} aria-pressed={boardView === value} onclick={() => (boardView = value as BoardView)}>{label}</button>{/each}</div>
+          <div class="segmented" aria-label="What the keyboard shows">{#each boardViews as [value, label]}<button class:active={boardView === value} aria-pressed={boardView === value} onclick={() => (boardView = value as BoardView)}>{label}</button>{/each}</div>
         </div>
       </div>
-      <div class="board-keys"><KeyboardBoard {keyboard} {caps} {hits} {leader} view={boardView} selected={picked?.cap ?? null} counts={countsHere} onpick={pick} /></div>
+      <div class="board-keys"><KeyboardBoard {keyboard} {caps} {hits} {leader} view={boardView} selected={picked?.cap ?? null} counts={countsHere} {layer} onpick={pick} onmodifier={toggleModifier} /></div>
       <div class="modes" role="radiogroup" aria-label="Mode">{#each mappingModes as item}<button role="radio" class="mode mode-{item.id}" class:active={mode === item.id} aria-checked={mode === item.id} onclick={() => chooseMode(item.id)}>{item.label}<span>{rowsForMode(rows, item.id).length}</span></button>{/each}</div>
       <p class="mode-summary"><strong>{modeInfo.label}.</strong> {modeInfo.summary} {#if boardView === "bindings"}{freeRule[mode]}{:else if boardView === "alphabet"}The hint alphabet while labels are up: warmer keys are handed out first.{:else if boardView === "grid"}The mouse grid's keys while it is up, laid out like the screen.{:else}With <code>label_order = "zones"</code>, a label's first key names the zone of the window.{/if}</p>
       {#if boardView === "bindings"}<div class="legend">{#each categories.filter((category) => [...caps.values()].some((entry) => entry.bindings.some((row) => categoryOf(row.action) === category.id))) as category}<span><i data-category={category.id}></i>{category.label}</span>{/each}<span><i class="prefix"></i>starts longer bindings</span><span><i class="free"></i>free</span></div>{/if}
