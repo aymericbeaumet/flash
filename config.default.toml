@@ -687,8 +687,10 @@ hyper = "<leader>"
 "cs" = ["flash", "mouse_bigram", "--secondary"]
 "u" = ["flash", "app_undo"]
 "ctrl+r" = ["flash", "app_redo"]
-# x closes the current tab (tmux: its window, after tmux's confirmation) and X
-# reopens the last closed one. r reloads and R hard-reloads (tmux: refreshes
+# x closes the current tab (tmux: its window, after Flash asks [y]es/[n]o,
+# because the tmux plugin declares the action destructive) and X reopens the
+# last closed one. Gate any command the same way with
+# ["flash", "confirm", "--prompt=Really?", "--command=<verb [--arg=value]>"]. r reloads and R hard-reloads (tmux: refreshes
 # the client); apps without a reload, terminals included, do nothing.
 # y/p use the system clipboard unless prefixed with a register, e.g. "ay / "ap
 # for register a. y resolves immediately.

@@ -102,6 +102,7 @@ final class PluginManager {
     var wildcardShebangTargets: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
     var actionBindings = ActionBindingIndex()
+    var actionConfirmations = ActionConfirmationIndex()
     var helpTopics: [HelpTopic] = []
   }
 
@@ -233,6 +234,7 @@ final class PluginManager {
     var wildcardShebangs: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
     var actionBindings = ActionBindingIndex()
+    var actionConfirmations = ActionConfirmationIndex()
     var terminalEmulators: Set<String> = []
     var onDemandHintApps: Set<String> = []
     var helpTopics: [HelpTopic] = []
@@ -307,6 +309,7 @@ final class PluginManager {
       onDemandHintApps.formUnion(manifest.onDemandHints)
 
       actionBindings.add(manifest)
+      actionConfirmations.add(manifest)
 
       for registration in manifest.mappings {
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(registration.key) else {
@@ -360,6 +363,7 @@ final class PluginManager {
       wildcardShebangTargets: wildcardShebangs,
       verbIndex: verbIndex,
       actionBindings: actionBindings,
+      actionConfirmations: actionConfirmations,
       helpTopics: helpTopics)
     // Declared before the snapshot is visible, so every selector resolved
     // against it already sees these apps as terminals.
@@ -780,6 +784,14 @@ final class PluginManager {
     _ action: SourceActionName, index: Int? = nil, in context: PluginSelectorContext
   ) -> ActionBinding? {
     readHotSnapshot().actionBindings.binding(action, index: index, in: context)
+  }
+
+  /// The question an applicable plugin asks before `action` in the focused
+  /// app (`action_confirmations`), or nil when none gates it.
+  func actionConfirmation(_ action: SourceActionName, in context: PluginSelectorContext)
+    -> String?
+  {
+    readHotSnapshot().actionConfirmations.prompt(for: action, in: context)
   }
 
   /// Every action a plugin binds in the focused app, with its winner.

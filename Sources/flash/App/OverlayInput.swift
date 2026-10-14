@@ -29,15 +29,31 @@ enum HintKeyRoute: Equatable {
   case pointer
   /// `mouse_bigram`: the letter being searched, before its hint label.
   case bigram
+  /// `confirm`: the next key answers the question on screen.
+  case confirmation
 
   /// Pointer mode and a cursor-following grid steer the cursor, so it stays
-  /// visible; every other route hides it behind the labels.
+  /// visible; a question has no labels to hide it behind; every other route
+  /// hides it behind the labels.
   var showsCursor: Bool {
     switch self {
-    case .pointer: return true
+    case .pointer, .confirmation: return true
     case .grid(_, let cursorFollows): return cursorFollows
     case .labels, .search, .adjustment, .bigram: return false
     }
+  }
+}
+
+/// The one keystroke a confirmation reads. Only `y` on the reference layout,
+/// bare or shifted, accepts; every other key — Escape, `n`, Return, a chord —
+/// closes the question without running anything.
+enum ConfirmationInterpreter {
+  static func accepts(charactersIgnoringModifiers: String?, modifierFlags: NSEvent.ModifierFlags)
+    -> Bool
+  {
+    let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    guard flags.subtracting(.shift).isEmpty else { return false }
+    return charactersIgnoringModifiers?.lowercased() == "y"
   }
 }
 
@@ -651,6 +667,14 @@ extension OverlayPanel {
       {
         coordinator.overlayDidBigram(command)
       }
+      return true
+    case .confirmation:
+      // The question owns every key, mapped chords included: nothing else may
+      // fire while the user is deciding.
+      coordinator.overlayDidConfirm(
+        accepted: ConfirmationInterpreter.accepts(
+          charactersIgnoringModifiers: keys.ignoringModifiers,
+          modifierFlags: event.modifierFlags))
       return true
     }
 

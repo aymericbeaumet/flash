@@ -156,6 +156,9 @@ extension URLCommand {
       return alertExplanation(alert)
     case .dismissAlert:
       return "Dismisses the alert."
+    case .confirm(let request):
+      return
+        "Asks \"\(request.prompt)\" first; y then \(request.command.explanation.lowercasedFirst)"
     case .showUsage(let topic):
       if let topic, !topic.isEmpty { return "Opens the \(topic) help topic." }
       return "Opens the help homepage."
@@ -383,5 +386,14 @@ private func systemKeyExplanation(_ key: SystemKeyboard.RowKey) -> String {
   case .mute: return "Mutes or unmutes the volume."
   case .volumeDown: return "Lowers the volume."
   case .volumeUp: return "Raises the volume."
+  }
+}
+
+extension String {
+  /// The sentence with its first letter lowercased, so one explanation can
+  /// continue another ("y then closes the current tab.").
+  fileprivate var lowercasedFirst: String {
+    guard let first = first else { return self }
+    return first.lowercased() + dropFirst()
   }
 }

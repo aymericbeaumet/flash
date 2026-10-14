@@ -585,6 +585,12 @@ struct PluginManifest: Decodable, Equatable {
   /// so app knowledge lives in the plugin that knows the app, never in the
   /// host.
   var actionBindings: [SourceActionName: [String: ActionBindingSpec]]
+  /// The question the host asks before an action this plugin performs
+  /// destructively (`actions` must name it): action name → prompt. The host
+  /// shows it as a confirmation in the apps the plugin's selector matches,
+  /// and dispatches the action only on `y`; the plugin then performs it
+  /// without a prompt of its own.
+  var actionConfirmations: [SourceActionName: String]
   /// Bundle ids of apps this plugin declares as terminal emulators; the
   /// union across plugins is `TerminalEmulators`.
   var terminalEmulators: [String]
@@ -705,6 +711,7 @@ struct PluginManifest: Decodable, Equatable {
     case sources
     case navigation, verbs
     case actionBindings = "action_bindings"
+    case actionConfirmations = "action_confirmations"
     case terminalEmulators = "terminal_emulators"
     case onDemandHints = "on_demand_hints"
   }
@@ -724,6 +731,7 @@ struct PluginManifest: Decodable, Equatable {
     navigation: [String] = [],
     verbs: [PluginVerbRegistration] = [],
     actionBindings: [SourceActionName: [String: ActionBindingSpec]] = [:],
+    actionConfirmations: [SourceActionName: String] = [:],
     terminalEmulators: [String] = [],
     onDemandHints: [String] = [],
     priority: Int = 25,
@@ -751,6 +759,7 @@ struct PluginManifest: Decodable, Equatable {
     self.navigation = navigation
     self.verbs = verbs
     self.actionBindings = actionBindings
+    self.actionConfirmations = actionConfirmations
     self.terminalEmulators = Self.uniqueTrimmed(terminalEmulators)
     self.onDemandHints = Self.uniqueTrimmed(onDemandHints)
     self.priority = priority
@@ -792,6 +801,15 @@ struct PluginManifest: Decodable, Equatable {
           "manifest.json action_bindings names an unknown action: \(entry.key)")
       }
       table[name] = entry.value
+    }
+    let confirmations =
+      try c.decodeIfPresent([String: String].self, forKey: .actionConfirmations) ?? [:]
+    self.actionConfirmations = try confirmations.reduce(into: [:]) { table, entry in
+      guard let name = SourceActionName(rawValue: entry.key) else {
+        throw PluginError.failure(
+          "manifest.json action_confirmations names an unknown action: \(entry.key)")
+      }
+      table[name] = entry.value.trimmed
     }
     self.terminalEmulators = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .terminalEmulators) ?? [])
@@ -980,6 +998,18 @@ struct PluginManifest: Decodable, Equatable {
           throw PluginError.failure(
             "manifest.json action_bindings \(name.rawValue) for \"\(bundle)\": \(error)")
         }
+      }
+    }
+    for (name, prompt) in actionConfirmations {
+      // Only an action this plugin performs can be gated by it: a binding
+      // another plugin dispatches is that plugin's to describe.
+      guard actions.contains(name.rawValue) else {
+        throw PluginError.failure(
+          "manifest.json action_confirmations \(name.rawValue) is not in this plugin's actions")
+      }
+      guard !prompt.isEmpty else {
+        throw PluginError.failure(
+          "manifest.json action_confirmations \(name.rawValue) needs a non-empty prompt")
       }
     }
     if let sandbox {

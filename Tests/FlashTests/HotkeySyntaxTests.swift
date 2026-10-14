@@ -414,6 +414,56 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(alert.style, .error)
   }
 
+  func testParseFlashConfirmWrapsAVerbLine() throws {
+    let action = parseMappingCommand(argv: [
+      "flash", "confirm", "--prompt=Close this window?", "--command=tab_close",
+    ])
+    guard case .flashCommand(.confirm(let request)) = action else {
+      return XCTFail("expected .confirm")
+    }
+    XCTAssertEqual(request.prompt, "Close this window?")
+    XCTAssertEqual(request.command, .tabClose)
+    XCTAssertEqual(
+      URLCommand.confirm(request).argv,
+      ["flash", "confirm", "--prompt=Close this window?", "--command=tab_close"],
+      "the verb line round-trips through argv")
+
+    // The wrapped line takes the same words a mapping would after `flash`:
+    // arguments, and a plugin command.
+    let withArgs = parseMappingCommand(argv: [
+      "flash", "confirm", "--prompt=Jump?", "--command=tab_select --index=2",
+    ])
+    guard case .flashCommand(.confirm(let selected)) = withArgs else {
+      return XCTFail("expected .confirm")
+    }
+    XCTAssertEqual(selected.command, .tabSelect(index: 2))
+    XCTAssertEqual(selected.commandText, "tab_select --index=2")
+    XCTAssertEqual(
+      URLCommand.confirm(selected).explanation,
+      "Asks \"Jump?\" first; y then " + URLCommand.tabSelect(index: 2).explanation.lowercasedFirst)
+  }
+
+  func testParseFlashConfirmRejectsAMissingQuestionOrCommand() {
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "confirm"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "confirm", "--prompt=Close?"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "confirm", "--command=tab_close"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "confirm", "--prompt= ", "--command=tab_close"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "confirm", "--prompt=Close?", "--command="]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "confirm", "--prompt=Close?", "--command=no_such_verb"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "confirm", "--prompt=Close?", "--command=tab_select --index=zero",
+      ]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "confirm", "--prompt=Twice?",
+        "--command=confirm --prompt=Again? --command=tab_close",
+      ]), "a confirmation cannot wrap another one")
+  }
+
   func testParseFlashDismissAlert() {
     let action = parseMappingCommand(argv: ["flash", "alert_dismiss"])
     guard case .flashCommand(.dismissAlert) = action else {
@@ -767,4 +817,11 @@ final class HotkeySyntaxTests: XCTestCase {
       ]))
   }
 
+}
+
+extension String {
+  fileprivate var lowercasedFirst: String {
+    guard let first = first else { return self }
+    return first.lowercased() + dropFirst()
+  }
 }

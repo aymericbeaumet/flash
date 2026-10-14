@@ -1795,6 +1795,8 @@ extension URLCommand {
     case .clipboardPaste: return verb("clipboard_paste")
     case .showAlert(let alert): return verb("alert_show", alert.argTokens)
     case .dismissAlert: return verb("alert_dismiss")
+    case .confirm(let request):
+      return verb("confirm", [kv("prompt", request.prompt), kv("command", request.commandText)])
     case .showUsage(let topic):
       if let topic, !topic.isEmpty { return verb("help_show", [kv("topic", topic)]) }
       return verb("help_show")

@@ -4412,29 +4412,16 @@ async fn tab_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
         .await,
     );
     let target = window_id.clone().unwrap_or_else(|| client.session.clone());
-    // Destructive kills always go through `confirm-before` on the client the
-    // user is looking at — matching the user's own prefix bindings (`bind &
-    // confirm-before … kill-window`), so a Flash-initiated close is never
-    // more dangerous than a tmux-native one. The command returns once the
-    // prompt is posted; the kill itself only runs on `y`.
-    // `-t` targets the client the user is looking at (`-c` is tmux's
-    // CONFIRM-KEY flag, not target-client); `-b` posts the prompt without
-    // blocking this invocation until the user answers.
-    let ok = run_tmux_for_client(
-        plugin,
-        client,
-        &[
-            "confirm-before",
-            "-b",
-            "-t",
-            &client.tty,
-            "-p",
-            "kill window \"#W\"? (y/n)",
-            &format!("kill-window -t {target}"),
-        ],
-    )
-    .await
-    .is_some();
+    // The kill runs straight away: the host already asked. A destructive
+    // action is gated by the manifest's `action_confirmations`, shown as
+    // Flash's own confirmation before the action reaches this plugin, so a
+    // Flash-initiated close is never more dangerous than the user's own
+    // `bind & confirm-before … kill-window`. A tmux-side `confirm-before`
+    // would ask a second time, on a prompt NORMAL mode's capture swallows
+    // the `y` for.
+    let args = kill_window_args(&target);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    let ok = run_tmux_for_client(plugin, client, &args).await.is_some();
     ctx.log_fields(
         "debug",
         "[tmux] tab close",
@@ -4461,24 +4448,11 @@ async fn pane_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
         ctx.log("warn", "[tmux] pane close could not resolve current pane");
         return false;
     };
-    // Same confirmation contract as tab_close: destructive, so prompt on
-    // the user's client first (their own `bind x` does exactly this).
-    // `-b` = non-blocking post, `-t` = target-client.
-    let ok = run_tmux_for_client(
-        plugin,
-        client,
-        &[
-            "confirm-before",
-            "-b",
-            "-t",
-            &client.tty,
-            "-p",
-            "kill pane #P \"#{pane_current_command}\"? (y/n)",
-            &format!("kill-pane -t {pane_id}"),
-        ],
-    )
-    .await
-    .is_some();
+    // Same contract as tab_close: the host confirmed before dispatching
+    // (`action_confirmations`), so the pane is killed without a tmux prompt.
+    let args = kill_pane_args(&pane_id);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    let ok = run_tmux_for_client(plugin, client, &args).await.is_some();
     ctx.log_fields(
         "debug",
         "[tmux] pane close",
@@ -4633,6 +4607,25 @@ async fn tab_move(plugin: &Tmux, client: &TmuxClient, direction: &str) -> bool {
     let args = tab_move_args(&client.session, direction);
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     run_tmux_for_client(plugin, client, &args).await.is_some()
+}
+
+/// `kill-window` pinned to the client's own window id (or its session when
+/// the id lookup failed). No `confirm-before`: the host asked already.
+fn kill_window_args(target: &str) -> Vec<String> {
+    vec![
+        "kill-window".to_string(),
+        "-t".to_string(),
+        target.to_string(),
+    ]
+}
+
+/// `kill-pane` pinned to the client's current pane id, host-confirmed.
+fn kill_pane_args(pane_id: &str) -> Vec<String> {
+    vec![
+        "kill-pane".to_string(),
+        "-t".to_string(),
+        pane_id.to_string(),
+    ]
 }
 
 fn tab_move_args(session: &str, direction: &str) -> Vec<String> {
@@ -5678,6 +5671,15 @@ esac"#,
         for action in ["tab_select", "tab_new", "tab_close", "pane_close"] {
             assert!(!source_action_prefers_warm_client(action), "{action}");
         }
+    }
+
+    #[test]
+    fn destructive_kills_run_without_a_tmux_prompt() {
+        // Flash asks through the manifest's `action_confirmations`; a tmux
+        // `confirm-before` would ask again on a prompt NORMAL mode swallows.
+        assert_eq!(kill_window_args("@17"), ["kill-window", "-t", "@17"]);
+        assert_eq!(kill_window_args("work"), ["kill-window", "-t", "work"]);
+        assert_eq!(kill_pane_args("%3"), ["kill-pane", "-t", "%3"]);
     }
 
     #[test]

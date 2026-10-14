@@ -932,6 +932,9 @@ protocol OverlayCoordinator: AnyObject {
   /// One keystroke of the mouse grid. Only called while `hintKeyRoute` is
   /// `.grid`.
   func overlayDidGrid(_ command: MouseGridKeyCommand)
+  /// The answer to the question on screen. Only called while `hintKeyRoute`
+  /// is `.confirmation`; every keystroke answers, most with `false`.
+  func overlayDidConfirm(accepted: Bool)
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   /// Leader key-down on the key-window fallback. The tap path does not come

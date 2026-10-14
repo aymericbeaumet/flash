@@ -1148,7 +1148,7 @@ final class StatusBarTests: XCTestCase {
 
     // An error has to stay readable: a dismiss observer firing during the
     // restart churn used to wipe it within the same event loop.
-    panel.displayAlert("Something broke", duration: 30, style: .error)
+    panel.displayAlert(.message("Something broke", duration: .seconds(30), style: .error))
     let error = try? XCTUnwrap(panel.toast?.layer)
     panel.hide()
     XCTAssertTrue(panel.toast?.layer === error, "an error outlives a transient teardown")
@@ -1158,14 +1158,19 @@ final class StatusBarTests: XCTestCase {
     XCTAssertFalse(panel.contentLayer.sublayers?.contains { $0 === error } ?? false)
 
     // An informational toast keeps the get-out-of-the-way behaviour.
-    panel.displayAlert("Sleep ON", duration: 30, style: .standard)
+    panel.displayAlert(.message("Sleep ON", duration: .seconds(30)))
+    let message = try XCTUnwrap(panel.toast?.layer)
+    XCTAssertEqual(message.sublayers?.count, 1, "a message is one line")
+    panel.hide()
+    XCTAssertNil(panel.toast)
     XCTAssertEqual(StatusAlert.volume(6).value, "6%")
     XCTAssertEqual(StatusAlert.volume(50).value, "50%")
     XCTAssertEqual(StatusAlert.volume(100).value, "100%")
     XCTAssertEqual(StatusAlert.volume(6).title, "volume")
-    panel.displayAlert(StatusAlert.volume(6), duration: 30)
+    panel.displayAlert(StatusAlert.volume(6))
     let volumeNarrow = try XCTUnwrap(panel.toast?.layer.frame.width)
-    panel.displayAlert(StatusAlert.volume(100), duration: 30)
+    XCTAssertEqual(panel.toast?.layer.sublayers?.count, 2, "a value is its own line")
+    panel.displayAlert(StatusAlert.volume(100))
     let volumeWide = try XCTUnwrap(panel.toast?.layer.frame.width)
     XCTAssertEqual(
       StatusAlert.caffeinate(on: true),
@@ -1173,14 +1178,50 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(
       StatusAlert.caffeinate(on: false),
       StatusAlert(title: "caffeinate", value: "off", valueAnchor: "off"))
-    panel.displayAlert(StatusAlert.caffeinate(on: true), duration: 30)
+    panel.displayAlert(StatusAlert.caffeinate(on: true))
     let caffeinateOn = try XCTUnwrap(panel.toast?.layer.frame.width)
-    panel.displayAlert(StatusAlert.caffeinate(on: false), duration: 30)
+    panel.displayAlert(StatusAlert.caffeinate(on: false))
     let caffeinateOff = try XCTUnwrap(panel.toast?.layer.frame.width)
     XCTAssertEqual(volumeNarrow, volumeWide)
     XCTAssertEqual(caffeinateOn, caffeinateOff)
     XCTAssertNotEqual(volumeWide, caffeinateOff)
     XCTAssertNotNil(panel.toast)
+    panel.hide()
+    XCTAssertNil(panel.toast)
+  }
+
+  /// `alert_show`, a plugin result and a confirmation all draw through the
+  /// one alert: the verb's dwell and style map onto it, and a question stays
+  /// up with no expiry until the session that asked it is torn down.
+  func testEveryAlertIsTheOneConfigurableAlert() throws {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissAlert()
+      panel.orderOut(nil)
+    }
+    XCTAssertEqual(
+      AlertCommand(message: "Wi-Fi OFF", duration: nil, style: .standard).alert,
+      .message("Wi-Fi OFF"))
+    XCTAssertEqual(
+      AlertCommand(message: "Broke", duration: 0.75, style: .error).alert,
+      StatusAlert(title: "Broke", style: .error, duration: .seconds(0.75)))
+    XCTAssertEqual(
+      OverlayPanel.alertDurationMs(.standard, style: .standard),
+      Int((FlashTunables.alertDuration * 1000).rounded()))
+    XCTAssertEqual(OverlayPanel.alertDurationMs(.standard, style: .error), 10_000)
+    XCTAssertEqual(OverlayPanel.alertDurationMs(.seconds(0.75), style: .error), 750)
+    XCTAssertNil(OverlayPanel.alertDurationMs(.untilDismissed, style: .standard))
+
+    let question = StatusAlert.confirmation("Close this tmux window?")
+    XCTAssertEqual(question.title, "Close this tmux window?")
+    XCTAssertEqual(question.value, StatusAlert.confirmationChoices)
+    XCTAssertEqual(question.duration, .untilDismissed)
+    XCTAssertEqual(question.style, .standard)
+    panel.displayAlert(question)
+    let asked = try XCTUnwrap(panel.toast)
+    XCTAssertFalse(asked.outlivesTeardown, "the question goes with its session")
+    XCTAssertEqual(asked.layer.sublayers?.count, 2)
     panel.hide()
     XCTAssertNil(panel.toast)
   }
@@ -1251,7 +1292,7 @@ final class StatusBarTests: XCTestCase {
       panel.dismissToast()
       panel.orderOut(nil)
     }
-    panel.displayAlert("config error", duration: 30, style: .error)
+    panel.displayAlert(.message("config error", duration: .seconds(30), style: .error))
     let configError = panel.toastToken
     panel.displayBanner("Copied", durationMs: 0)
     let banner = panel.toast?.layer

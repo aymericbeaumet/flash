@@ -1140,11 +1140,15 @@ extension AppDelegate {
     flags.intersection(normalModeKeyModifierMask).isEmpty
   }
 
-  func performMappedCommand(_ command: URLCommand, repeatCount: Int = 1) {
+  /// `confirmed` marks a command the user has already answered `y` to, so a
+  /// plugin's `action_confirmations` gate does not ask again.
+  func performMappedCommand(_ command: URLCommand, repeatCount: Int = 1, confirmed: Bool = false) {
     let repeatCount = normalizedRepeatCount(repeatCount)
     FlashLog.debug(
       "[mappings] action=\(command.diagnosticDescription) repeat=\(repeatCount)")
     switch command {
+    case .confirm(let request):
+      presentConfirmation(request.prompt, command: request.command, repeatCount: repeatCount)
     case .insertMode:
       enterInsertMode(reason: .normalModeInput)
     case .normalMode:
@@ -1183,7 +1187,7 @@ extension AppDelegate {
       .paneSplitVertical, .paneSplitHorizontal, .paneClose, .tabReopen, .historyBack,
       .historyForward, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
       .clipboardCopy, .clipboardCut, .clipboardPaste:
-      performAppAction(command, repeatCount: repeatCount)
+      performAppAction(command, repeatCount: repeatCount, confirmed: confirmed)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .enterCommand(let input, let restoreMode):
@@ -1262,9 +1266,16 @@ extension AppDelegate {
   /// A verb that asks the focused app to perform an action: sources, then
   /// the Flash-owned primitive (`window_close`'s close button), then the
   /// app's binding. Find and a new tab hand typing to the app once they
-  /// reached it.
-  private func performAppAction(_ command: URLCommand, repeatCount: Int) {
+  /// reached it. An action a plugin declares destructive for this app
+  /// (`action_confirmations`) asks first, unless the user already said `y`.
+  private func performAppAction(_ command: URLCommand, repeatCount: Int, confirmed: Bool) {
     guard let action = command.sourceAction else { return }
+    if !confirmed, let context = normalModeDispatchContext(),
+      let prompt = sourceActionConfirmation(action, context: context)
+    {
+      presentConfirmation(prompt, command: command, repeatCount: repeatCount)
+      return
+    }
     let primitive: ((AppContext, @escaping (Bool) -> Void) -> Void)? =
       action == .windowClose
       ? { context, done in

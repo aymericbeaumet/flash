@@ -14,6 +14,8 @@ enum HintActivationRequest {
   case notifications
   case repeatLast(Int)
   case bigram(MouseCommand, AppContext?)
+  /// A question gating a command; see `Confirmation.swift`.
+  case confirm(HintSession.Confirmation)
 }
 
 extension AppDelegate {
@@ -190,6 +192,9 @@ extension AppDelegate {
     case .bigram(let command, let context):
       activateMouseBigram(
         command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
+    case .confirm(let confirmation):
+      presentConfirmation(
+        confirmation.prompt, command: confirmation.command, repeatCount: confirmation.repeatCount)
     }
   }
 

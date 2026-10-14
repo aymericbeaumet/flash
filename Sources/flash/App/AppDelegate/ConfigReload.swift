@@ -264,7 +264,7 @@ extension AppDelegate {
       return
     }
     guard message != shownConfigError?.message else { return }
-    overlay.displayAlert(message, style: .error)
+    overlay.displayAlert(.message(message, style: .error))
     shownConfigError = ShownConfigError(message: message, toastToken: overlay.toastToken)
   }
 }

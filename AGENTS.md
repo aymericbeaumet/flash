@@ -235,6 +235,12 @@ Surface requests that would violate these constraints before implementing them.
   (`defaults` carries the macOS ones), never host chords or conditionals; a
   guardrail rejects `kVK_` chord synthesis outside the binding dispatcher. Vertical scroll bindings send configurable line-based wheel
   events system-wide, without AX fallback. Keep guides in sync.
+- Every centred alert is one `StatusAlert` drawn by `displayAlert`: a message,
+  a title over a value, or a confirmation. A destructive command asks through
+  it — `confirm` wraps a verb line, and a source action a plugin performs
+  destructively declares manifest `action_confirmations` — as a hint-session
+  phase that owns the keyboard in every mode. Plugins never post their own
+  prompt: NORMAL capture would swallow the answer.
 - Log diagnostics through the serial log writer. XCTest disk logging uses only
   temporary destinations. Never capture a handle that rotation can invalidate.
 - Test windows never cover the user's screen: `TestWindowHygiene` makes every

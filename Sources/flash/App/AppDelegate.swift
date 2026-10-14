@@ -601,10 +601,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMappedCommand(cmd)
     case .showAlert(let alert):
       shownConfigError = nil
-      overlay.displayAlert(
-        alert.message,
-        duration: alert.duration,
-        style: .from(alert.style))
+      overlay.displayAlert(alert.alert)
+    case .confirm(let request):
+      presentConfirmation(request.prompt, command: request.command)
     case .dismissAlert:
       shownConfigError = nil
       overlay.dismissAlert()
@@ -737,7 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func displayCommandWarning(_ message: String) {
     FlashLog.warn(message, source: "core:Command")
-    overlay.displayAlert(message, style: .error)
+    overlay.displayAlert(.message(message, style: .error))
   }
 
   private func installDismissObservers() {

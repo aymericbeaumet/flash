@@ -18,7 +18,7 @@ import FlashCore
 // so the in-process path and the AppleEvent path share one source of
 // truth.
 
-enum URLCommand: Hashable {
+indirect enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
   /// One letter of visible text in the focused window and on its status bar,
   /// then a hint bigram, then a click (`s`). Only `.click` and `.move`.
@@ -145,6 +145,9 @@ enum URLCommand: Hashable {
   case clipboardPaste
   case showAlert(AlertCommand)
   case dismissAlert
+  /// Ask before running a command the user cannot undo: the question is the
+  /// alert, `y` runs the wrapped command, any other key closes it.
+  case confirm(ConfirmCommand)
   case showUsage(topic: String?)
   case showMappings
   case showPlugins
@@ -235,14 +238,15 @@ extension URLCommand {
 }
 
 struct AlertCommand: Hashable {
-  enum Style: String, Hashable {
-    case standard
-    case error
-  }
-
   let message: String
   let duration: TimeInterval?
-  let style: Style
+  let style: StatusAlert.Style
+
+  /// The alert the verb shows: one line, for the style's default dwell
+  /// unless the call passed `--duration`.
+  var alert: StatusAlert {
+    .message(message, duration: duration.map { .seconds($0) } ?? .standard, style: style)
+  }
 
   var argTokens: [String] {
     var tokens = ["--message=\(message)"]
@@ -253,6 +257,20 @@ struct AlertCommand: Hashable {
       tokens.append("--style=\(style.rawValue)")
     }
     return tokens
+  }
+}
+
+/// `confirm --prompt=<text> --command=<verb [--arg=value ...]>`: the question
+/// and the Flash command it gates. The wrapped command is any verb a mapping
+/// could name after `flash`, a plugin command included; a confirmation
+/// cannot wrap another confirmation.
+struct ConfirmCommand: Hashable {
+  let prompt: String
+  let command: URLCommand
+
+  /// The `--command` value: the wrapped verb and its arguments, space-joined.
+  var commandText: String {
+    command.argv.dropFirst().joined(separator: " ")
   }
 }
 
@@ -834,6 +852,12 @@ final class URLEventHandler: NSObject {
 
     "alert_dismiss": .init(parse: { _ in .dismissAlert }),
 
+    "confirm": .init(
+      [
+        .text("prompt", "question", required: true),
+        .text("command", "verb [--arg=value ...]", required: true),
+      ], parse: { confirmCommand($0) }),
+
     "help_show": .init(
       [.text("topic", "topic")], parse: { a in .showUsage(topic: a.value("topic")) }),
 
@@ -1018,9 +1042,24 @@ private func alertCommand(_ a: VerbArgs) -> URLCommand? {
     duration = nil
   }
 
-  let styleRaw = a.value("style") ?? AlertCommand.Style.standard.rawValue
-  guard let style = AlertCommand.Style(rawValue: styleRaw) else { return nil }
+  let styleRaw = a.value("style") ?? StatusAlert.Style.standard.rawValue
+  guard let style = StatusAlert.Style(rawValue: styleRaw) else { return nil }
   return .showAlert(AlertCommand(message: message, duration: duration, style: style))
+}
+
+/// `--command` holds the wrapped verb line as the words after `flash` in a
+/// mapping: `tab_close`, `tab_select --index=2`, `caffeinate toggle`. The
+/// words are split on spaces, so an argument value cannot contain one.
+private func confirmCommand(_ a: VerbArgs) -> URLCommand? {
+  guard let prompt = a.value("prompt")?.trimmed, !prompt.isEmpty,
+    let line = a.value("command")
+  else { return nil }
+  let words = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+  guard !words.isEmpty,
+    case .flashCommand(let command)? = parseMappingCommand(argv: ["flash"] + words)
+  else { return nil }
+  if case .confirm = command { return nil }
+  return .confirm(ConfirmCommand(prompt: prompt, command: command))
 }
 
 /// Read the optional `--register=<name>` arg shared by `yank_selection` and

@@ -321,6 +321,34 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.cancelCount, 0, "the grid owns its cancel")
   }
 
+  /// A question owns every key: only `y` (bare or shifted, on the reference
+  /// layout) accepts; `n`, Escape, Return and a mapped chord all answer no,
+  /// and none of them reaches a mapping or the cancel path.
+  func testConfirmationRouteAnswersWithTheFirstKeyAndOwnsEveryOther() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.keyboardLayout = .usANSI
+    panel.inputMode = .hints
+    panel.hintKeyRoute = .confirmation
+    defer { panel.inputMode = .passive }
+    XCTAssertTrue(HintKeyRoute.confirmation.showsCursor, "a question hides no labels")
+
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_Y, characters: "y"))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_Y, characters: "Y", modifierFlags: [.shift]))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_Y, characters: "н"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_N, characters: "n"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Escape, characters: ""))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Return, characters: "\r"))
+    coordinator.mappingEventsToHandle = 1
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_Y, characters: "y", modifierFlags: [.command]))
+
+    XCTAssertEqual(coordinator.confirmations, [true, true, true, false, false, false, false])
+    XCTAssertEqual(coordinator.mappingEventsToHandle, 1, "no mapping fires over a question")
+    XCTAssertEqual(coordinator.cancelCount, 0, "the question owns its own no")
+  }
+
   /// Under a Russian source the F key types "а"; with a reference layout
   /// every positional interpreter reads it as `f`, while `--search` keeps
   /// the typed text it matches against.
@@ -1028,6 +1056,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var pointerCommands: [PointerModeCommand] = []
   var searchCommands: [HintSearchCommand] = []
   var bigramCommands: [HintBigramCommand] = []
+  var confirmations: [Bool] = []
 
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
@@ -1043,6 +1072,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   }
   func overlayDidBigram(_ command: HintBigramCommand) { bigramCommands.append(command) }
   func overlayDidGrid(_ command: MouseGridKeyCommand) { gridCommands.append(command) }
+  func overlayDidConfirm(accepted: Bool) { confirmations.append(accepted) }
   func overlayDidUpdatePrefix(_ prefix: String) {}
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
     if action != nil {

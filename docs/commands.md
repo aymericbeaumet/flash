@@ -55,6 +55,7 @@ flash arrow --direction=left             # one arrow; --shift holds Shift. HYPER
 flash caffeinate toggle                  # plugin command, same words as :caffeinate toggle
 flash clipboard show                     # plugin command, same words as :clipboard show
 flash clipboard delete <id>              # remove one history entry; <id> is 32 hex characters
+flash confirm --prompt='Close it?' --command='tab_close' # ask first: y runs the verb line, any other key closes the question
 flash enter_command_mode                 # open the command line
 flash enter_terminal_mode                # show and focus the terminal popup; see docs/popups.md
 flash enter_terminal_mode --name=btop    # show a [popup.<name>] centred and focused

@@ -85,6 +85,7 @@ struct FlashStatusReport: Equatable {
     case .adjustment: return "adjusting"
     case .pointer: return "pointer"
     case .bigram: return "bigram"
+    case .confirmation: return "confirming"
     }
   }
 

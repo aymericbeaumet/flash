@@ -60,6 +60,7 @@ enum FlashCLI {
       flash app_open --name=Firefox
       flash window_move --position=lefthalf
       flash window_move --x=10% --y=10% --width=80% --height=80%
+      flash confirm --prompt='Close it?' --command=tab_close
       flash help_show
       flash mappings_show
       flash media volumedown

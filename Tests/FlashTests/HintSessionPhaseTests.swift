@@ -27,6 +27,11 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertEqual(session.keyRoute, .bigram)
     XCTAssertNil(session.search, "entering one phase leaves the others")
     XCTAssertNil(session.anchor)
+    let question = HintSession.Confirmation(prompt: "Close?", command: .tabClose, repeatCount: 2)
+    session.phase = .confirming(question)
+    XCTAssertEqual(session.keyRoute, .confirmation)
+    XCTAssertEqual(session.confirmation, question)
+    XCTAssertNil(session.pointer)
   }
 
   func testLabelTypingNeedsHintsWhileTheOtherPhasesOwnInputRegardless() {
@@ -37,6 +42,7 @@ final class HintSessionPhaseTests: XCTestCase {
     session.hints = []
     for phase: HintSession.Phase in [
       .search(.init()), .adjusting(hint: hint("a"), point: .zero), .pointer(.init()), .bigram,
+      .confirming(.init(prompt: "Close?", command: .tabClose)),
     ] {
       session.phase = phase
       XCTAssertTrue(session.isActive)

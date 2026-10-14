@@ -62,9 +62,18 @@ struct HintSession {
     var lastMoveAt: Date?
   }
 
+  /// A question gating a command: `y` runs it, any other key closes the
+  /// question. `repeatCount` is the NORMAL count the command was asked with.
+  struct Confirmation: Equatable {
+    var prompt: String
+    var command: URLCommand
+    var repeatCount: Int = 1
+  }
+
   /// What keys do in this session. The phases exclude one another — a session
   /// types a bigram, types labels, filters by text, refines a matched point,
-  /// or steers the pointer — so they are one value, never a set of flags.
+  /// steers the pointer, or waits for a yes — so they are one value, never a
+  /// set of flags.
   enum Phase {
     /// Typing hint labels; `anchor` once a two-phase gesture chose its first
     /// point.
@@ -75,6 +84,8 @@ struct HintSession {
     /// `--adjust`: the matched hint and the point the commit key clicks.
     case adjusting(hint: AssignedHint, point: CGPoint)
     case pointer(Pointer)
+    /// `confirm`: the question is up and the next key answers it.
+    case confirming(Confirmation)
   }
 
   var phase = Phase.labels(anchor: nil)
@@ -93,6 +104,7 @@ struct HintSession {
     case .search: return .search
     case .adjusting: return .adjustment
     case .pointer: return .pointer
+    case .confirming: return .confirmation
     }
   }
 
@@ -111,6 +123,11 @@ struct HintSession {
     return nil
   }
 
+  var confirmation: Confirmation? {
+    if case .confirming(let confirmation) = phase { return confirmation }
+    return nil
+  }
+
   /// EasyMotion (`mouse_bigram`): the query, or the hint labels that follow it.
   /// `bigramQuery` stays set while those labels are typed, so Backspace can
   /// return to the letter. Nil for every other session.
@@ -119,8 +136,8 @@ struct HintSession {
     return bigramQuery != nil
   }
 
-  /// Search, adjustment, pointer and bigram phases own the keyboard even with
-  /// no hint on screen; typing labels needs hints.
+  /// Search, adjustment, pointer, bigram and confirmation phases own the
+  /// keyboard even with no hint on screen; typing labels needs hints.
   var isActive: Bool {
     if case .labels = phase { return !hints.isEmpty }
     return true
