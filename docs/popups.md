@@ -224,9 +224,12 @@ or Option-click pins their popup. Pinning leaves a preview where it is, and a
 pinned popup stays hung from its label while the pointer moves. When that
 popup loses focus — another app comes forward, a click lands outside Flash,
 or the panel loses key, as when newsboat opens an article in the browser —
-it leaves the screen instead of floating above the new window. A persistent
-popup is hidden and keeps its process; a fresh one is closed and its process
-stops.
+it leaves the screen instead of floating above the new window. A focused
+popup makes Flash the active app, so bringing any app forward counts, the
+one the popup covers included (clicking back into the browser behind it, or
+`open` raising it). A persistent popup is hidden and keeps its process; a
+fresh one is closed and its process stops. A popup is otherwise only up while
+the pointer hovers its label.
 
 **`enter_terminal_mode --name=<name>`** shows a popup standalone, centred on
 the focused application's screen and focused. Without a name it opens

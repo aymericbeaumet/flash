@@ -321,9 +321,25 @@ final class StatusPopupController {
   private func activateTerminalInput() {
     endFirstFrameWait()
     guard windowActionsEnabled else { return }
-    NSApp.activate()
+    Self.activateFlash()
     panel.makeKeyAndOrderFront(nil)
     panel.makeFirstResponder(terminalView)
+  }
+
+  /// Make Flash the active app while a popup has the keyboard. Activation
+  /// is cooperative since macOS 14: a plain `NSApp.activate()` from Flash is
+  /// declined while another app is frontmost, and the popup then had the
+  /// keyboard while that app stayed active, so bringing it forward again
+  /// changed nothing Flash could see and the popup stayed up. Activating
+  /// from the frontmost app hands the activation over, so any app coming
+  /// forward afterwards (the covered one included) is an app switch the
+  /// popup closes on.
+  static func activateFlash() {
+    if let front = NSWorkspace.shared.frontmostApplication, front != .current {
+      _ = NSRunningApplication.current.activate(from: front, options: [])
+    } else {
+      NSApp.activate()
+    }
   }
 
   private func diagnosticState() -> [String: String] {
