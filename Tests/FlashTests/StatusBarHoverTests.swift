@@ -33,13 +33,15 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertEqual(selected.count, 1)
   }
 
-  func testPopupClicksPreserveLinksAndAllowOptionToFocus() throws {
+  func testLeftClickDoesNotPinPopupWithoutLink() throws {
     let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 25))
     view.popups = [.init(rect: view.bounds, name: "article", content: "Preview")]
     var selected: [String] = []
+    var actions: [String] = []
     view.onPopupClick = { popup, _ in
       selected.append(popup.name)
     }
+    view.onStatusBarAction = { actions.append($0) }
     func click(_ modifiers: NSEvent.ModifierFlags, upX: CGFloat = 30) throws {
       let down = try XCTUnwrap(
         NSEvent.mouseEvent(
@@ -53,15 +55,17 @@ final class StatusBarHoverTests: XCTestCase {
       view.mouseUp(with: up)
     }
     try click([])
-    XCTAssertEqual(selected, ["article"])
-    view.links = [(view.bounds, URL(string: "https://example.com/article")!)]
+    XCTAssertTrue(selected.isEmpty)
+    XCTAssertTrue(actions.isEmpty)
+    view.links = [
+      (view.bounds, try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "open-article")))
+    ]
     try click(.option)
-    XCTAssertEqual(selected, ["article", "article"])
+    XCTAssertTrue(selected.isEmpty)
+    XCTAssertEqual(actions, ["open-article"])
     try click(.option, upX: 50)
-    XCTAssertEqual(selected.count, 2, "Dragging must not focus a popup")
-    XCTAssertFalse(StatusBarClickView.focusesPopup(overLink: true, modifiers: []))
-    XCTAssertTrue(StatusBarClickView.focusesPopup(overLink: false, modifiers: []))
-    XCTAssertTrue(StatusBarClickView.focusesPopup(overLink: true, modifiers: .option))
+    XCTAssertTrue(selected.isEmpty, "Dragging must not focus a popup")
+    XCTAssertEqual(actions, ["open-article"], "Dragging must not activate a link")
   }
 
   func testConfiguredLeftClickActionTakesPrecedenceWhileRightClickPins() throws {

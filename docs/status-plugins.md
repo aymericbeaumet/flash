@@ -314,8 +314,8 @@ Hovering a `summary` title, domain, or arrow opens a terminal-rendered preview o
 lines from `content:encoded`, falling back to `description`. Paragraph breaks,
 headings, lists, quotations, emphasis, and code retain their structure. The
 excerpt is bounded to 12 logical lines and 900 visible characters; longer
-articles end with an ellipsis. Option-click any of its links to pin the
-preview; normal clicks preserve each link destination.
+articles end with an ellipsis. Right-click a linked span to pin the
+preview; left-click preserves each link destination.
 
 For AGGR, the feed's article body is also the content of its Markdown export.
 The plugin prepares the excerpt during the background feed refresh; hovering

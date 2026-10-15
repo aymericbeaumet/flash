@@ -67,10 +67,10 @@ points, 80 columns, room for the calendar). The pager reserves one footer row.
 Longer external values wrap, and taller content scrolls in the pager. Terminal
 popups use their `size`.
 
-Hover previews a popup. Either unbound mouse button pins it open; repeated clicks
-keep it pinned. Existing left-click actions and links win, with right-click or
-Option-left-click available to pin. The configuration has no separate right-click
-binding. Hovered pagers refresh when the collected values change. Focused pagers
+Hover previews a popup. Right-click pins it open; repeated right-clicks keep it
+pinned. Left-click follows an action or link where present and otherwise leaves
+the preview unchanged. The configuration has no separate right-click binding.
+Hovered pagers refresh when the collected values change. Focused pagers
 hold content and search stable; reopening or Command-R shows the latest collected
 data. The shared terminal-mode mappings apply, and `leave_mode` restores the
 prior mode and app.

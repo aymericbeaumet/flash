@@ -1,7 +1,7 @@
 # Popups
 
 A popup is a small window Flash shows over your apps: under a status-bar label
-while you hover it, pinned by a click, or standalone in the middle of the
+while you hover it, pinned by a right-click, or standalone in the middle of the
 screen through `enter_terminal_mode`. Every popup runs in a real PTY terminal.
 There is one namespace, `[popup.<name>]`, and each popup is one of two kinds:
 
@@ -217,10 +217,10 @@ empty box; it waits 150 ms at most. A persistent popup kept parsing its output
 while hidden, and showing it draws that current screen at once rather than the
 one it had when it was hidden.
 
-**Click** a popup label, left or right, to pin it and focus its terminal;
-repeated clicks keep it open, and clicking another label switches popups.
-Labels with a click action or link keep their left-click action; right-click
-or Option-click pins their popup. Pinning leaves a preview where it is, and a
+**Right-click** a popup label to pin it and focus its terminal;
+repeated clicks keep it open, and right-clicking another label switches popups.
+Left-click follows a link or configured click action when present; otherwise it
+leaves the hover preview unchanged. Pinning leaves a preview where it is, and a
 pinned popup stays hung from its label while the pointer moves. When that
 popup loses focus — another app comes forward, a click lands outside Flash,
 or the panel loses key, as when newsboat opens an article in the browser —

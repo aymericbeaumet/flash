@@ -183,10 +183,6 @@ final class StatusBarClickView: NSView {
   /// pointer is over plain text or has left) so the bar can wash it.
   var onHoverHighlight: ((CGRect?) -> Void)?
 
-  static func focusesPopup(overLink: Bool, modifiers: NSEvent.ModifierFlags) -> Bool {
-    !overLink || modifiers.contains(.option)
-  }
-
   /// The wash follows the narrowest interactive span under the pointer. A
   /// whole-row popup — a feed row wraps its label, title, domain and arrow in
   /// one region so they share one preview — must not wash the entire row when
@@ -204,7 +200,6 @@ final class StatusBarClickView: NSView {
   private var mouseDownLocation: NSPoint?
   private var rightMouseDownLocation: NSPoint?
   private var mouseDownURL: URL?
-  private var mouseDownPopup: StatusBarPopupRegion?
   private var rightMouseDownPopup: StatusBarPopupRegion?
 
   /// Movement past this (points) counts as a drag, not a click.
@@ -225,18 +220,15 @@ final class StatusBarClickView: NSView {
     // being replayed as a synthetic click into this window, so there is no
     // pending gesture to reconcile against whatever the bar published since.
     mouseDownURL = links.first(where: { $0.rect.contains(local) })?.url
-    mouseDownPopup = popups.first(where: { $0.rect.contains(local) })
     FlashLog.trace(
       "[statusbar] click_down at=\(local) links=\(links.count) popups=\(popups.count) "
-        + "url=\(mouseDownURL?.absoluteString ?? "nil") "
-        + "popup=\(mouseDownPopup?.name ?? "nil")")
+        + "url=\(mouseDownURL?.absoluteString ?? "nil")")
   }
 
   override func mouseUp(with event: NSEvent) {
     defer {
       mouseDownLocation = nil
       mouseDownURL = nil
-      mouseDownPopup = nil
     }
     guard let start = mouseDownLocation,
       Self.isClick(from: start, to: event.locationInWindow)
@@ -246,16 +238,7 @@ final class StatusBarClickView: NSView {
       return
     }
     let url = mouseDownURL
-    FlashLog.trace(
-      "[statusbar] click_up url=\(url?.absoluteString ?? "nil") "
-        + "popup=\(mouseDownPopup?.name ?? "nil")")
-    if let popup = mouseDownPopup,
-      Self.focusesPopup(overLink: url != nil, modifiers: event.modifierFlags)
-    {
-      let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
-      onPopupClick?(popup, point)
-      return
-    }
+    FlashLog.trace("[statusbar] click_up url=\(url?.absoluteString ?? "nil")")
     if let url {
       onLinkActivated?()
       activate(url: url)

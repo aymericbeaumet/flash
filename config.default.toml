@@ -392,7 +392,7 @@ template = "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B
 "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
 
 # Popups: every popup runs in a real PTY and shares this chrome, whether it
-# previews under a #[popup=<name>] status label, is pinned by a click, or shows
+# previews under a #[popup=<name>] status label, is pinned by a right-click, or shows
 # standalone through `enter_terminal_mode --name=<name>`. Colours are #RRGGBB
 # or #RRGGBBAA; sizes are points.
 [popup]
