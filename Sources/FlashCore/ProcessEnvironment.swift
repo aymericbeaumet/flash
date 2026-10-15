@@ -215,27 +215,30 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     process.standardError = err
     process.standardInput = FileHandle.nullDevice
 
+    // Nothing here waits on the shared dispatch pool: exit arrives through
+    // the process's own termination handler and stdout drains on a dedicated
+    // thread, so a saturated pool (a busy launch) cannot starve the resolver
+    // into its timeout.
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
     do {
       try process.run()
     } catch {
       return nil
     }
 
-    // Drain stdout on a background queue so a chatty rc file (a few KB) can't
-    // deadlock by filling the pipe buffer while we wait on exit.
+    // Drain stdout so a chatty rc file (a few KB) can't deadlock by filling
+    // the pipe buffer while we wait on exit.
     let collected = DispatchSemaphore(value: 0)
-    var data = Data()
-    DispatchQueue.global(qos: .userInitiated).async {
-      data = out.fileHandleForReading.readDataToEndOfFile()
+    let drained = DrainedOutput()
+    let reader = Thread {
+      drained.data = out.fileHandleForReading.readDataToEndOfFile()
       collected.signal()
     }
+    reader.name = "flash.login_environment.drain"
+    reader.start()
 
     let deadline = DispatchTime.now() + timeout
-    let exited = DispatchSemaphore(value: 0)
-    DispatchQueue.global(qos: .userInitiated).async {
-      process.waitUntilExit()
-      exited.signal()
-    }
     if exited.wait(timeout: deadline) == .timedOut {
       process.terminate()
       _ = exited.wait(timeout: .now() + 0.5)
@@ -248,8 +251,13 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     _ = try? err.fileHandleForReading.readToEnd()
 
     guard process.terminationStatus == 0 else { return nil }
-    let parsed = parse(environmentOutput: data)
+    let parsed = parse(environmentOutput: drained.data)
     return parsed.isEmpty ? nil : parsed
+  }
+
+  /// The drain thread's result, read only after its semaphore signals.
+  private final class DrainedOutput: @unchecked Sendable {
+    var data = Data()
   }
 
   // MARK: - Parsing

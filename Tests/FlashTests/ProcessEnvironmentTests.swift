@@ -113,6 +113,25 @@ final class ProcessEnvironmentTests: XCTestCase {
     XCTAssertEqual(env["MULTI"], "one\ntwo")
   }
 
+  /// The resolver waits on its own threads: a saturated shared dispatch pool
+  /// (a busy launch, a parallel test run) must not starve it into a timeout.
+  func testResolveDoesNotWaitOnTheSharedDispatchPool() throws {
+    let release = DispatchSemaphore(value: 0)
+    let blockers = 256
+    for _ in 0..<blockers {
+      DispatchQueue.global(qos: .userInitiated).async { release.wait() }
+    }
+    defer { for _ in 0..<blockers { release.signal() } }
+    let home = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-login-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let resolved = FlashProcessEnvironment.resolveLoginShellEnvironment(
+      shellPath: "/bin/sh", timeout: 3,
+      environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"])
+    XCTAssertNotNil(resolved?["PATH"])
+  }
+
   func testResolveMissingShellReturnsNil() {
     let resolved = FlashProcessEnvironment.resolveLoginShellEnvironment(
       shellPath: "/nonexistent/shell", timeout: 2)
