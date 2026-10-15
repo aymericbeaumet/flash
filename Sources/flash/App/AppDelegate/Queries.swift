@@ -20,10 +20,16 @@ extension AppDelegate {
       focusedApp: lastFocusedApplicationPID.flatMap {
         NSRunningApplication(processIdentifier: $0)?.bundleIdentifier
       },
+      frontmostApp: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+      flashActive: NSRunningApplication.current.isActive,
       accessibility: PermissionCheck.isAccessibilityTrusted,
       capture: FlashStatusReport.capture(
         tapInstalled: keyboardCaptureTap != nil, secureInputEnabled: secure,
         session: sessionRunning ? hintSession.capture : nil),
+      chordRouting: FlashStatusReport.chordRouting(
+        keyboardCaptureTap?.isEnabled == true ? modifiedChordDecision() : nil),
+      heldModifiers: FlashStatusReport.modifierNames(
+        CGEventSource.flagsState(.combinedSessionState)),
       secureInput: secure,
       globalChords: mappings.registeredHotkeys,
       inputSource: keyboardLayoutMonitor.state.inputSourceID,

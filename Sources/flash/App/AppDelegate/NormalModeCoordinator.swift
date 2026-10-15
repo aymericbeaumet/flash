@@ -687,6 +687,37 @@ extension AppDelegate {
         capturesInput: capture),
       render: !entersCommand)
     updateActiveWindowBorder(reason: "apply_mode_overlay", reusesCachedFrame: reusesWindowFrame)
+    handBackActivationIfIdle(reason: "mode_overlay")
+  }
+
+  /// INSERT with Flash still active (see `IdleActivation`): give activation
+  /// back to the app Flash tracks as focused, so the keys the tap passes
+  /// reach it. Checked on every overlay application and whenever Flash
+  /// becomes active.
+  func handBackActivationIfIdle(reason: String) {
+    guard idleActivationHandsBack() else { return }
+    // Off the key's turn: the request is a system round trip. Decided again
+    // there, since the turn in between may have changed either side.
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.idleActivationHandsBack() else { return }
+      self.handBackIdleActivation(reason: reason)
+    }
+  }
+
+  private func idleActivationHandsBack() -> Bool {
+    IdleActivation.handsBack(
+      flashActive: NSApp.isActive, mode: modeStore.mode, aboutWindowVisible: aboutWindowVisible,
+      hintSessionActive: hintSession.isActive || activationInFlight,
+      pointerClickPending: pointerInsertHandoffRecaptureSuppressedUntil.map { $0 > Date() }
+        ?? false)
+  }
+
+  private func handBackIdleActivation(reason: String) {
+    guard let pid = lastFocusedApplicationPID,
+      let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+      app != .current
+    else { return }
+    yieldActivation(to: app, reason: "insert_while_active_\(reason)")
   }
 
   /// Key codes for the arrow and function-key mapping commands, resolved once

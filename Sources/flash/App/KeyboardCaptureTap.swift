@@ -184,6 +184,9 @@ final class KeyboardCaptureTap {
     }
   }
 
+  /// Installed and enabled: the system has not switched it off.
+  var isEnabled: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
+
   /// Create + install the tap. Returns false if the OS refused it (no
   /// Accessibility grant), so the caller can fall back to key-window capture.
   @discardableResult

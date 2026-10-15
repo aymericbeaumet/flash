@@ -1037,7 +1037,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.overlay.relinquishShownStatusPopup(reason: "app_resigned")
       }
     }
-    localNotificationTokens = [screenParameters, appResigned]
+    // Flash active in INSERT sends the keys the tap passes to Flash; a
+    // surface of its own that needs them keeps it (`IdleActivation`).
+    let appActivated = NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.handBackActivationIfIdle(reason: "became_active")
+    }
+    localNotificationTokens = [screenParameters, appResigned, appActivated]
 
     resignKeyToken = NotificationCenter.default.addObserver(
       forName: NSWindow.didResignKeyNotification,
@@ -1261,7 +1270,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `routeTapCapturedKey` unless the decision already acted on it here.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> KeyboardCaptureTap.KeyDownOutcome {
     let flags = event.flags
-    let decision = KeyboardCaptureTap.decide(
+    let decision = tapDecision(
+      isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
+        || flags.contains(.maskAlternate),
+      isBareEscape: event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
+        && flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty)
+    return keyDownOutcome(for: decision, event: event)
+  }
+
+  /// What the tap would decide for a Command chord now: `flash status`
+  /// reads it to say where such a chord goes.
+  func modifiedChordDecision() -> KeyboardCaptureTap.Decision {
+    tapDecision(isModifiedChord: true, isBareEscape: false)
+  }
+
+  /// The tap's decision from the live state, for a key of that shape.
+  private func tapDecision(isModifiedChord: Bool, isBareEscape: Bool)
+    -> KeyboardCaptureTap.Decision
+  {
+    KeyboardCaptureTap.decide(
       isTerminal: modeStore.mode.isTerminal,
       flashMode: flashMode,
       inputMode: overlay.inputMode,
@@ -1274,11 +1301,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       nativeSurfaceSuspended: NativeSurfaceOwnership.ownsKeyboard(
         owned: nativeSurfaceSuspended, hintSessionActive: hintSession.isActive,
         activationInFlight: activationInFlight, tapLive: true),
-      isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
-        || flags.contains(.maskAlternate),
-      isBareEscape: event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
-        && flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty,
+      isModifiedChord: isModifiedChord,
+      isBareEscape: isBareEscape,
       ephemeralPopupShown: overlay.statusPopupController.presentation.ephemeralName != nil)
+  }
+
+  private func keyDownOutcome(for decision: KeyboardCaptureTap.Decision, event: CGEvent)
+    -> KeyboardCaptureTap.KeyDownOutcome
+  {
+    let flags = event.flags
     switch decision {
     case .pass:
       return .pass

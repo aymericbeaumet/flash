@@ -1190,6 +1190,12 @@ extension AppDelegate {
       let app = NSRunningApplication(processIdentifier: context.processID),
       !app.isTerminated
     else { return }
+    yieldActivation(to: app, reason: reason)
+  }
+
+  /// The one request that moves activation from Flash to `app` on this
+  /// macOS: yield, then activate it from Flash.
+  func yieldActivation(to app: NSRunningApplication, reason: String) {
     NSApp.yieldActivation(to: app)
     let accepted = app.activate(from: .current, options: [])
     FlashLog.trace(

@@ -794,3 +794,9 @@ Use `leave_mode` / `enter_normal_mode` to return from INSERT to NORMAL.
 ```
 
 Closing a popup or command surface may restore its saved INSERT mode.
+
+INSERT's keys belong to the focused app, so Flash never stays the active app
+in INSERT. Whenever Flash shows INSERT or becomes active while in it, it hands
+activation back to the app it tracks as focused. Otherwise every key the tap
+passes, Command chords included, would reach Flash instead. About, a hint
+session and a physical click that is still activating its own app keep it.

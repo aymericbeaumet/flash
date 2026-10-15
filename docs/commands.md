@@ -100,18 +100,22 @@ flash config_check --file=~/dotfiles/flash.toml
 ```
 
 `flash status` asks the running resident. `--json` prints this object; the keys
-are fixed for `"schema": 3`:
+are fixed for `"schema": 4`:
 
 | Key | Value |
 | --- | --- |
-| `schema` | `3` |
+| `schema` | `4` |
 | `version`, `build` | The app's version and build number |
 | `mode` | `disabled`, `insert`, `normal`, `visual`, `drag`, `hyper`, `command` or `terminal` |
 | `mapping_scope` | The mapping table the mode reads and whose chords Flash registers: `insert`, `normal`, `visual`, `drag`, `command` or `terminal`. It always follows `mode` |
 | `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer` or `bigram` |
 | `focused_app` | The focused app's bundle identifier, or `null` |
+| `frontmost_app` | The app macOS has frontmost, which receives every key Flash passes, or `null` |
+| `flash_active` | Whether Flash itself is the active app. While it is, keys Flash passes reach Flash instead of the window that looks focused |
 | `accessibility` | Whether Flash has the Accessibility grant |
 | `capture` | How hint keys arrive: `tap`, or `key_window` without a tap or under secure input |
+| `chord_routing` | What the keyboard tap does with a Command, Control or Option chord right now: `pass` (it reaches the app), `mapped_only` (INSERT: only chords a mapping claims are taken), `native_surface` (a menu or About owns input: only mapped keys are taken), `swallowed` (NORMAL and hints take every chord) or `tap_off` (no live tap: only `global_chords` are taken) |
+| `held_modifiers` | Modifiers the session's event state holds down: `cmd`, `ctrl`, `alt`, `shift`, `fn`, `caps_lock`. Empty unless a key is held, so an entry while nothing is pressed is a stuck key that rides every keystroke |
 | `secure_input` | Whether secure input is on (a password field has focus, or an app left the hold on) |
 | `global_chords` | The configured mapping keys Flash holds as system-wide hotkeys right now. Those chords never reach the focused app, so a native shortcut that stops working shows up here |
 | `input_source` | The selected input source's ID |
@@ -123,6 +127,11 @@ are fixed for `"schema": 3`:
 | `hints` | Recent target activations (`f` and its variants) per app, keyed by bundle identifier: `{ "count", "empty", "p50_ms", "p95_ms" }`. Each app keeps its last 50 activations, for the 32 most recently used apps; `empty` counts those whose app yielded no hints, and the nearest-rank percentiles (milliseconds from the trigger to the hints on screen) cover the others, or are `null` when none showed hints. Empty until hints are asked for; nothing is persisted |
 
 The text rendering lists the three busiest apps under `hints`.
+
+When a native shortcut stops reaching an app, run `flash status` while it
+happens. `chord_routing`, `flash_active`, `frontmost_app`, `held_modifiers`
+and `global_chords` together say whether Flash took the chord, sent it
+elsewhere, or never saw it.
 
 `flash doctor` runs every check `:doctor` runs and prints one line per check:
 Accessibility, the keyboard tap, secure input (and which app holds it; a stuck
