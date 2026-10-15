@@ -3,9 +3,10 @@
 ## Build from source
 
 Development is verified on macOS 26 with Xcode 26.6 and mise; the built app
-targets macOS 14+. The repository's `mise.toml` pins Python, Rust, Node, pnpm,
-uv, and Zig; `mise install` installs those tools. Xcode, libevent, ncurses, and
-pkg-config are native macOS build prerequisites for the tmux oracle.
+targets macOS 14+. The repository's `mise.toml` pins Python, Rust with rustfmt
+and clippy, Node, pnpm, uv, and Zig; `mise install` installs those tools.
+Xcode, libevent, ncurses, and pkg-config are native macOS build prerequisites
+for the tmux oracle.
 
 ```bash
 git clone https://github.com/aymericbeaumet/flash.git

@@ -2,7 +2,7 @@
 # the official plugins; Node and pnpm build the inspector and Electron fixture.
 [tools]
 python = "3.15.0"
-rust = "1.99.0"
+rust = { version = "1.99.0", components = ["rustfmt", "clippy"] }
 node = "26.12.0"
 pnpm = "12.11.2"
 # uv runs the pinned mkdocs toolchain for the documentation site (mkdocs.yml).
