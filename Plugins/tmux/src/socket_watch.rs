@@ -49,7 +49,10 @@ pub(crate) struct SocketDirWatch {
 impl SocketDirWatch {
     pub(crate) async fn new(socket_directory: PathBuf) -> io::Result<Self> {
         // Readable only: a kqueue descriptor rejects a write filter.
-        let queue = AsyncFd::with_interest(Queue(Kqueue::new()?), Interest::READABLE)?;
+        // SAFETY: Queue owns the kqueue descriptor and never replaces it while
+        // AsyncFd is alive, so its AsRawFd value remains valid and stable.
+        let queue =
+            unsafe { AsyncFd::register_with_interest(Queue(Kqueue::new()?), Interest::READABLE)? };
         let watched = watch(&queue, &socket_directory).await?;
         Ok(Self {
             queue,

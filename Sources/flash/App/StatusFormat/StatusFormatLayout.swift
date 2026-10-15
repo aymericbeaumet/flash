@@ -254,7 +254,9 @@ enum StatusFormatLayout {
       while column < output.count {
         let cell = output[column]
         if cell.isContinuation {
-          output[column] = Cell(segment: blank)
+          var padding = blank
+          padding.background = cell.segment.background
+          output[column] = Cell(segment: padding)
         }
         if cell.columns > 1, column + 1 < output.count {
           var padding = cell.segment

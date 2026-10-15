@@ -2,7 +2,10 @@
 
 ## Build from source
 
-You will need macOS 14+, Xcode command-line tools, mise, Rust, and either pnpm or npm.
+Development is verified on macOS 26 with Xcode 26.6 and mise; the built app
+targets macOS 14+. The repository's `mise.toml` pins Python, Rust, Node, pnpm,
+uv, and Zig; `mise install` installs those tools. Xcode, libevent, ncurses, and
+pkg-config are native macOS build prerequisites for the tmux oracle.
 
 ```bash
 git clone https://github.com/aymericbeaumet/flash.git
@@ -19,13 +22,13 @@ Run the unit and guardrail suites, then install the real app before manual UI ve
 
 ```bash
 mise install
-./Scripts/build-ghostty.sh --dev
-export TMUX_ORACLE="$(./Scripts/build-tmux-oracle.sh)"
-swift test
-./Scripts/test-plugins.sh --lane all   # plugin lint + units + dev builds
-./Scripts/benchmark-plugins.py --build # report plugin startup, ping, RSS, and threads
-./Scripts/check-guardrails.sh
-./Scripts/install.sh --dev
+mise exec -- ./Scripts/build-ghostty.sh --dev
+export TMUX_ORACLE="$(mise exec -- ./Scripts/build-tmux-oracle.sh)"
+mise exec -- swift test
+mise exec -- ./Scripts/test-plugins.sh --lane all   # plugin lint + units + dev builds
+mise exec -- ./Scripts/benchmark-plugins.py --build # startup, ping, RSS, threads
+mise exec -- ./Scripts/check-guardrails.sh
+mise exec -- ./Scripts/install.sh --dev
 ```
 
 `swift test` runs on the same desktop as the installed resident, and many tests
@@ -41,9 +44,9 @@ zero over a display. Keep test windows behind it; do not restore their alpha.
 Browser, native AppKit, and Electron integration suites are available separately:
 
 ```bash
-./Scripts/test-integration-browser.sh
-./Scripts/test-integration-native.sh
-./Scripts/test-integration-electron.sh
+mise exec -- ./Scripts/test-integration-browser.sh
+mise exec -- ./Scripts/test-integration-native.sh
+mise exec -- ./Scripts/test-integration-electron.sh
 ```
 
 Electron setup installs both the pinned npm package and its binary. Native
@@ -55,12 +58,12 @@ The same fixtures time the installed resident's hint activations (see
 [performance](performance.md)):
 
 ```bash
-./Scripts/benchmark-hints.sh --class=all --runs=30
-python3 Scripts/test-hints-latency-summary.py   # the log parser's unit tests
+mise exec -- ./Scripts/benchmark-hints.sh --class=all --runs=30
+mise exec -- python3 Scripts/test-hints-latency-summary.py   # parser unit tests
 ```
 
 `flash doctor` checks an installed resident's permissions, key capture, config,
 hotkeys and plugins; `flash config_check --file=<path>` validates a config file
 without it.
 
-`swift build` alone does not update the resident app in `/Applications`. CI publishes releases; [release.md](release.md) explains versioning, signing and notarization. The manual is `docs/` built by mkdocs (`mkdocs.yml`); preview it with `uvx --with mkdocs-material==9.7.7 mkdocs serve` and keep `mkdocs build` free of warnings, since the Docs workflow runs it in strict mode. See [AGENTS.md](https://github.com/aymericbeaumet/flash/blob/main/AGENTS.md) for the architecture, source contracts, and repository guardrails.
+`swift build` alone does not update the resident app in `/Applications`. CI publishes releases; [release.md](release.md) explains versioning, signing and notarization. The manual is `docs/` built by mkdocs (`mkdocs.yml`); preview it with `mise exec -- uv run --locked mkdocs serve` and keep `mkdocs build` free of warnings, since the Docs workflow runs it in strict mode. The committed `uv.lock` pins the docs toolchain. See [AGENTS.md](https://github.com/aymericbeaumet/flash/blob/main/AGENTS.md) for the architecture, source contracts, and repository guardrails.

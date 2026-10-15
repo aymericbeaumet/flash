@@ -7,12 +7,16 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "mise.toml"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
       - "mise.toml"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -28,9 +32,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5.1.2
+        with:
+          version: 2026.10.11
+          install_args: python uv
       - name: Build with mkdocs
-        run: uvx --with mkdocs-material==9.7.7 mkdocs build
+        run: uv run --locked mkdocs build
       - uses: actions/upload-pages-artifact@v4
         with:
           path: build/site

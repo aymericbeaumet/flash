@@ -14,8 +14,8 @@
 # building on macOS, which drops any -Dcpu model before compilation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-revision=b40acce58dcf77df52231c3798ea58e924647c89
-checksum=206f6e301bc96443020114390eddc68c8ce648f6195c50a4fae43b350531e2b1
+revision=b3dc3d794513c11633e7c3347935693957744e83
+checksum=7534350a9782bf1f5891891316320789dd6e2c1eb4f8a9baa56aec1b0ccccac7
 zig_version=0.16.0
 mode=${1:---dev}
 [[ "$mode" == --dev || "$mode" == --release ]] || { echo "Usage: $0 [--dev|--release]" >&2; exit 2; }

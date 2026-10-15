@@ -789,7 +789,8 @@ private struct StatusFormatEvaluator {
     if names.contains("d") { value = Self.pathPart(value, basename: false) }
     let quotes = modifiers.filter { $0.name == "q" }
     if quotes.contains(where: { $0.arguments.isEmpty }) {
-      value = value.map { "|&;<>()$`\\\"'*?[# =%".contains($0) ? "\\\($0)" : String($0) }.joined()
+      value = value.map { "|&;<>(){}$`\\\"'*?[# =%\n\t".contains($0) ? "\\\($0)" : String($0) }
+        .joined()
     }
     let quoteFlags = quotes.compactMap { $0.arguments.first }
     if quoteFlags.contains(where: { $0.contains("e") || $0.contains("h") }) {
@@ -1043,7 +1044,7 @@ enum StatusFormatPOSIX {
       let start = offset + Int(matches[0].rm_so)
       let end = offset + Int(matches[0].rm_eo)
       output += bytes[last..<start].map { UInt8(bitPattern: $0) }
-      if !previousEmpty, start == last, start == end {
+      if !previousEmpty, start == last, start == end, !pattern.hasPrefix("^") {
         last = end
         offset = end + 1
         previousEmpty = true

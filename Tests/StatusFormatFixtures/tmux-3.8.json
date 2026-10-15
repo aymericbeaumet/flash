@@ -218,7 +218,7 @@
     "options": {
       "@value": "ab"
     },
-    "expected": "b"
+    "expected": "xab"
   },
   {
     "format": "#{s/$/x/:@value}",
@@ -4382,7 +4382,7 @@
     "options": {
       "@value": "a\nb\tc"
     },
-    "expected": "a\nb\tc"
+    "expected": "a\\\nb\\\tc"
   },
   {
     "format": "#{q/h:@value}",
