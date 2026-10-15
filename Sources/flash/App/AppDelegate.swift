@@ -598,6 +598,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMouseNudge(direction, distance: distance)
     case .mouseJump(let jump):
       performMouseJump(jump)
+    case .trackpadGesture(let fingers, let motion):
+      performGesture(fingers: fingers, motion: motion)
     case .selection(let action):
       performSelection(action)
     case .mousePosition(let request):
@@ -643,7 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
       .quitApp, .saveAndQuit, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste,
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp,
       .sendKey, .sendKeys, .systemKey, .functionKey, .arrow:
       performMappedCommand(cmd)
     case .showAlert(let alert):

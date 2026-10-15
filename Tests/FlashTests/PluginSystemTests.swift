@@ -1100,7 +1100,7 @@ final class PluginSystemTests: XCTestCase {
       }
     }
     XCTAssertEqual(SourceAction.byWireName["tab_previous"], .tabPrev)
-    XCTAssertEqual(SourceAction.byWireName.count, 34, "one entry per action")
+    XCTAssertEqual(SourceAction.byWireName.count, 35, "one entry per action")
     XCTAssertEqual(
       Set(SourceAction.byWireName.values.map(\.name.rawValue)).union(["app_reload_force"]),
       Set(SourceActionName.allCases.map(\.rawValue)), "every bindable action is claimable")

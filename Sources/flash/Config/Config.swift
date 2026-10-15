@@ -1995,6 +1995,9 @@ extension URLCommand {
     case .clipboardCopy: return verb("clipboard_copy")
     case .clipboardCut: return verb("clipboard_cut")
     case .clipboardPaste: return verb("clipboard_paste")
+    case .lookUp: return verb("look_up")
+    case .trackpadGesture(let fingers, let motion):
+      return verb("gesture", ["--fingers=\(fingers)", "--motion=\(motion.rawValue)"])
     case .showAlert(let alert): return verb("alert_show", alert.argTokens)
     case .dismissAlert: return verb("alert_dismiss")
     case .confirm(let request):
@@ -2071,6 +2074,8 @@ extension MouseCommand {
     switch self {
     case .move:
       return ["--move"]
+    case .gesture(let gesture):
+      return ["--gesture=\(gesture.rawValue)"]
     case .drag(let modifiers):
       var tokens = ["--drag"]
       if !modifiers.isEmpty {

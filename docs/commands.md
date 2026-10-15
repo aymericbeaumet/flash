@@ -25,6 +25,7 @@ flash mouse_target --words --select      # highlight the text between two words
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
 flash mouse_target --search              # type visible text to pick the target (seek & click)
+flash mouse_target --gesture=look_up     # Look Up the word at the target (smart_zoom: two-finger double tap there)
 flash mouse_bigram                       # type a visible character (v/V and 3/# match) in the window or status bar, then its hint bigram
 flash mouse_bigram --secondary           # right-click that letter
 flash mouse_bigram --double              # double-click that letter
@@ -46,6 +47,8 @@ flash mouse_button --state=cancel        # put a drag back where it was grabbed
 flash mouse_nudge --direction=down --distance=16 # move the pointer (and a drag) a few points
 flash mouse_step --to=next_word          # jump to a word or line edge (previous_word, word_end, line_start, line_end)
 flash selection --action=copy            # copy the selection, ending VISUAL (cut, change, paste)
+flash gesture --fingers=3 --motion=swipe_up # a trackpad gesture: tap, double_tap, pinch, spread, rotate_*, swipe_*
+flash look_up                            # the focused app's Look Up on the word under the pointer
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
 flash mouse_grid                         # target any screen position (keyboard-shaped grid)
@@ -183,6 +186,34 @@ text instead of its controls; it takes the click flags, `--move`, `--drag` and
 up, `Tab` restarts the same click on the grid and `Shift-Tab` widens it to
 every app on the screen (and back); `Backspace` with nothing typed returns to
 the surface the session came from.
+
+`mouse_target`, `mouse_bigram` and `mouse_grid` take
+`--gesture=look_up|smart_zoom` alone: the pointer lands on the pick as with
+`--move`, then Flash runs that trackpad gesture there. In NORMAL a count
+before a mouse finisher is a finger count, as on a trackpad: `2f` (or `2F`,
+`2s`) secondary-clicks, `3f` looks up and `2df` smart-zooms at the pick.
+Other counts change nothing.
+
+`gesture --fingers=2..5 --motion=<motion>` performs what that trackpad
+gesture does under the default macOS trackpad settings, where the pointer is:
+
+| Fingers | Motion | Effect |
+|---------|--------|--------|
+| 2 | `tap`, `double_tap` | secondary click, smart zoom |
+| 2 | `pinch`, `spread`, `rotate_left`, `rotate_right` | zoom out, zoom in, rotate |
+| 2 | `swipe_right`, `swipe_left` | back, forward (`history_back`, `history_forward`) |
+| 3 | `tap` | Look Up (`look_up`) |
+| 3, 4 | `swipe_up`, `swipe_down` | Mission Control, App Exposé |
+| 3, 4 | `swipe_left`, `swipe_right` | the Space to the right, to the left |
+| 4, 5 | `pinch`, `spread` | Launchpad, show desktop |
+
+Zoom, rotate and smart zoom post the same gesture events a trackpad does, so
+an app that ignores a real trackpad's gesture ignores Flash's too. Look Up
+and history are app actions; Spaces use the system shortcuts; Mission
+Control, App Exposé and show desktop ask the Dock directly. Launchpad opens
+the Apps launcher that replaced it in macOS 26, or asks the Dock before it.
+A combination macOS gives no meaning to, such as a three-finger pinch, is a
+config error.
 
 `mouse_screens` labels the centre of every display; committing moves the
 pointer there. `mouse_warp` moves the pointer to the centre or a side of the

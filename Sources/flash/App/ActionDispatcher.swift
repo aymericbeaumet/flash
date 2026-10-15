@@ -20,7 +20,8 @@ enum ActionDispatcher {
   /// requirement — so they must never run on the main run loop, which also
   /// services the keyboard capture tap. Serial so concurrent commits can't
   /// interleave their cursor warp/restore.
-  private static let clickQueue = DispatchQueue(label: "flash.action.click", qos: .userInitiated)
+  /// Every synthesized pointer event and gesture posts here, in order.
+  static let clickQueue = DispatchQueue(label: "flash.action.click", qos: .userInitiated)
 
   /// Termination must allow an already-posted mouse-down to reach its mouse-up.
   /// This barrier is shutdown-only; ordinary input never waits on the main thread.

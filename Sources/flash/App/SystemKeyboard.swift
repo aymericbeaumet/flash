@@ -5,7 +5,8 @@ import AppKit
 /// Hyper+1…9, 0, -, + follow the icons: brightness, Mission Control,
 /// Spotlight, Dictation, Focus, media, mute, and volume. Alt+Hyper sends
 /// F1–F12. Special keys are posted as system events, the same path as the
-/// keyboard. F-keys are ordinary keystrokes to the focused app.
+/// keyboard, except Mission Control, which asks the Dock. F-keys are
+/// ordinary keystrokes to the focused app.
 enum SystemKeyboard {
   /// One macOS function-row action, in F1…F12 order.
   enum RowKey: String, CaseIterable {
@@ -39,14 +40,27 @@ enum SystemKeyboard {
     static let previous = 18
   }
 
-  /// Window-server key the Apple keyboard's Mission Control key produces.
-  private static let missionControlKey: CGKeyCode = 160
+  /// Mission Control is the Dock's: a posted Mission Control key (160)
+  /// reaches nothing on recent macOS, so Flash asks the Dock directly.
+  private static let missionControlNotification = "com.apple.expose.awake"
+
+  private typealias DockNotificationFunction = @convention(c) (CFString, Int32) -> Void
+
+  /// Send `name` to the Dock through the private `CoreDockSendNotification`,
+  /// resolved at run time. False when this macOS does not export it.
+  @discardableResult
+  static func sendDockNotification(_ name: String) -> Bool {
+    guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CoreDockSendNotification")
+    else { return false }
+    unsafeBitCast(symbol, to: DockNotificationFunction.self)(name as CFString, 0)
+    return true
+  }
 
   static func perform(_ key: RowKey) {
     switch key {
     case .brightnessDown: postAuxiliary(Auxiliary.brightnessDown)
     case .brightnessUp: postAuxiliary(Auxiliary.brightnessUp)
-    case .missionControl: postKey(missionControlKey)
+    case .missionControl: sendDockNotification(missionControlNotification)
     case .spotlight: postNamedKey("space", flags: .maskCommand)
     case .dictation: postNamedKey("f5", flags: .maskSecondaryFn)
     case .focus: postNamedKey("f6", flags: .maskSecondaryFn)
@@ -57,6 +71,12 @@ enum SystemKeyboard {
     case .volumeDown: postAuxiliary(Auxiliary.soundDown)
     case .volumeUp: postAuxiliary(Auxiliary.soundUp)
     }
+  }
+
+  /// Move to the Space on the left or right: the system's Control-arrow
+  /// shortcut, what a three-finger horizontal swipe does.
+  static func switchSpace(toTheRight: Bool) {
+    postNamedKey(toTheRight ? "right" : "left", flags: .maskControl)
   }
 
   private static func postNamedKey(_ name: String, flags: CGEventFlags = []) {

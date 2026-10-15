@@ -115,6 +115,27 @@ extension AppDelegate {
     }
   }
 
+  /// `gesture`: a trackpad gesture at the pointer, by the means
+  /// `TrackpadGesture` documents for it.
+  func performGesture(fingers: Int, motion: TrackpadGesture.Motion) {
+    guard let action = TrackpadGesture.action(fingers: fingers, motion: motion) else { return }
+    let pointer = NSEvent.mouseLocation
+    switch action {
+    case .secondaryClick: ActionDispatcher.synthesizeClick(at: pointer, action: .rightClick)
+    case .smartZoom: TrackpadGesture.post(.smartMagnify, at: pointer)
+    case .zoom(let zoomIn): TrackpadGesture.post(.magnify(zoomIn ? 0.5 : -0.5), at: pointer)
+    case .rotate(let left): TrackpadGesture.post(.rotate(left ? 15 : -15), at: pointer)
+    case .historyBack: performMappedCommand(.historyBack)
+    case .historyForward: performMappedCommand(.historyForward)
+    case .lookUp: performMappedCommand(.lookUp)
+    case .missionControl: SystemKeyboard.perform(.missionControl)
+    case .appExpose, .launchpad, .showDesktop: TrackpadGesture.dock(action)
+    case .spaceLeft: SystemKeyboard.switchSpace(toTheRight: false)
+    case .spaceRight: SystemKeyboard.switchSpace(toTheRight: true)
+    }
+    FlashLog.trace("[gesture] fingers=\(fingers) motion=\(motion.rawValue) action=\(action)")
+  }
+
   /// How long a released selection settles before the action that reads it:
   /// the app sees the button go up first.
   static let selectionSettleMs = 60

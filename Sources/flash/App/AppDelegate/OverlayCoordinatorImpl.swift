@@ -278,6 +278,10 @@ extension AppDelegate {
       resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
         owner.movePointerAndFinish(to: points[0])
       }
+    case .gesture(let gesture):
+      resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
+        owner.performTargetGestureAndFinish(gesture, at: points[0])
+      }
     case .click, .multi, .search, .sticky:
       resolveHintPoints([(hint.target, preferredPoint)]) { owner, points in
         owner.performTargetClick(hint: hint, at: points[0], clickModifiers: held)
@@ -456,6 +460,18 @@ extension AppDelegate {
     activationLifecycle.invalidate()
     _ = ActionDispatcher.moveCursor(to: point)
     applyModeOverlay()
+  }
+
+  /// `--gesture`: the pointer lands on the point as with `--move`, then the
+  /// trackpad gesture runs there. Look Up is the focused app's own action on
+  /// the word under the pointer; smart zoom posts the two-finger double tap.
+  /// Neither types into the app, so NORMAL recaptures as for a move.
+  private func performTargetGestureAndFinish(_ gesture: TargetGesture, at point: CGPoint) {
+    movePointerAndFinish(to: point)
+    switch gesture {
+    case .lookUp: performMappedCommand(.lookUp)
+    case .smartZoom: TrackpadGesture.post(.smartMagnify, at: point)
+    }
   }
 
   /// One pointer gesture, resolved from the session and the modifiers held on
@@ -971,6 +987,8 @@ extension AppDelegate {
       }
     case .move:
       movePointerAndFinish(to: point)
+    case .gesture(let gesture):
+      performTargetGestureAndFinish(gesture, at: point)
     case .click, .multi, .adjust, .search, .path, .sticky:
       let command = hintSession.command
       // `--multi` restarts on the same display; its clicks moved the pointer,

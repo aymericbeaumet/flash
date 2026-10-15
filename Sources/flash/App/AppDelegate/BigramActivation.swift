@@ -38,7 +38,7 @@ extension AppDelegate {
       return
     }
     switch command {
-    case .click, .move: break
+    case .click, .move, .gesture: break
     default:
       endHintActivationEmpty(
         bundleIdentifier: context.bundleIdentifier, path: "bad_command", surface: "bigram",

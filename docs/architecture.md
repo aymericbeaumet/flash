@@ -357,6 +357,15 @@ the session tap reads keys. At launch `BackgroundCursor` sets the window
 server's private `SetsCursorInBackground` connection property, resolved at
 run time, so a macOS without it only leaves the pointer visible.
 
+`TrackpadGesture` emulates trackpad gestures the same way, through private
+interfaces resolved at run time. Zoom, rotate and smart zoom post gesture
+CGEvents with the undocumented gesture fields set (event type 29, the gesture
+subtype, magnification, rotation and phase). Mission Control (the gesture
+and `system_key --key=mission_control`), App Exposé, show desktop and, before
+macOS 26, Launchpad send Dock notifications through
+`CoreDockSendNotification`. A macOS
+that drops either only makes those gestures do nothing.
+
 Targets use global NSScreen coordinates: primary-screen bottom-left origin,
 positive Y upward. Accessibility and CGEvent use the primary-screen top-left
 origin, positive Y downward. Convert with the primary screen's height, never the

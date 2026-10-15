@@ -376,6 +376,7 @@ public enum SourceAction: Sendable, Equatable {
   case clipboardCopy
   case clipboardCut
   case clipboardPaste
+  case lookUp
 
   /// Capability flag a source must advertise to be considered for this action.
   public var requiredCapability: FlashSourceCapabilities {
@@ -395,7 +396,7 @@ public enum SourceAction: Sendable, Equatable {
     case .scrollTop, .scrollBottom: return .scrollExtremes
     case .historyBack, .historyForward: return .historyNavigation
     case .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste:
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp:
       return .appCommands
     }
   }
@@ -446,6 +447,7 @@ public enum SourceAction: Sendable, Equatable {
     case .clipboardCopy: return "clipboard_copy"
     case .clipboardCut: return "clipboard_cut"
     case .clipboardPaste: return "clipboard_paste"
+    case .lookUp: return "look_up"
     }
   }
 
@@ -459,7 +461,7 @@ public enum SourceAction: Sendable, Equatable {
       .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
       .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom, .historyBack, .historyForward,
       .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste,
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp,
     ].map { ($0.wireName, $0) })
 
   /// Extra wire-protocol fields the plugin needs to dispatch this action.
@@ -512,6 +514,7 @@ public enum SourceActionName: String, CaseIterable, Sendable {
   case clipboardCopy = "clipboard_copy"
   case clipboardCut = "clipboard_cut"
   case clipboardPaste = "clipboard_paste"
+  case lookUp = "look_up"
 }
 
 public struct SourceActionResult: Sendable {

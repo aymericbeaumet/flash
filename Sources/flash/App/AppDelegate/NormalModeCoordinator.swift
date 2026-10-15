@@ -1247,7 +1247,7 @@ extension AppDelegate {
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabMovePrev, .tabMoveNext, .paneNext, .panePrev,
       .paneSplitVertical, .paneSplitHorizontal, .paneClose, .tabReopen, .historyBack,
       .historyForward, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste:
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp:
       performAppAction(command, repeatCount: repeatCount, confirmed: confirmed)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
@@ -1256,14 +1256,15 @@ extension AppDelegate {
         initialText: input,
         candidateFinderScope: .all,
         restoreMode: restoreMode)
+    // A count before a mouse finisher is a finger count (`2f`, `3s`, `2dF`).
     case .mouseTarget(let command):
-      activateMouseTarget(command, contextOverride: normalModeContext())
+      activateMouseTarget(command.withFingers(repeatCount), contextOverride: normalModeContext())
     case .mouseBigram(let command):
-      activateMouseBigram(command, contextOverride: normalModeContext())
+      activateMouseBigram(command.withFingers(repeatCount), contextOverride: normalModeContext())
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
     case .mouseTargetWords(let command):
-      activateWordHints(command, contextOverride: normalModeContext())
+      activateWordHints(command.withFingers(repeatCount), contextOverride: normalModeContext())
     case .mouseScreens:
       activateScreenHints()
     case .mouseWarp(let request):
@@ -1274,11 +1275,14 @@ extension AppDelegate {
       performMouseNudge(direction, distance: distance * normalizedRepeatCount(repeatCount))
     case .mouseJump(let jump):
       for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseJump(jump) }
+    case .trackpadGesture(let fingers, let motion):
+      performGesture(fingers: fingers, motion: motion)
     case .selection(let action):
       performSelection(action)
     case .mousePosition(let request):
       performMousePosition(request)
-    case .mouseGrid(let request):
+    case .mouseGrid(var request):
+      request.mouse = request.mouse.withFingers(repeatCount)
       activateMouseGrid(request, contextOverride: normalModeContext())
     case .mouseRepeat:
       performMouseRepeat(repeatCount: repeatCount)

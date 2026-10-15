@@ -187,6 +187,10 @@ extension URLCommand {
       return "Cuts with the focused app's cut command."
     case .clipboardPaste:
       return "Pastes with the focused app's paste command."
+    case .lookUp:
+      return "Looks up the word under the pointer with the focused app's Look Up."
+    case .trackpadGesture(let fingers, let motion):
+      return gestureExplanation(fingers: fingers, motion: motion)
     case .showAlert(let alert):
       return alertExplanation(alert)
     case .dismissAlert:
@@ -251,6 +255,10 @@ private func gesture(_ command: MouseCommand, object: String, plural: String) ->
   switch command {
   case .move:
     return "moves the pointer onto \(object)"
+  case .gesture(.lookUp):
+    return "looks up the word at \(object)"
+  case .gesture(.smartZoom):
+    return "smart-zooms at \(object)"
   case .drag:
     return "drags from \(object)\(held)"
   case .select:
@@ -470,4 +478,26 @@ extension String {
     guard let first = first else { return self }
     return first.lowercased() + dropFirst()
   }
+}
+
+private func gestureExplanation(fingers: Int, motion: TrackpadGesture.Motion) -> String {
+  let what: String
+  switch TrackpadGesture.action(fingers: fingers, motion: motion) {
+  case .secondaryClick: what = "right-clicks at the pointer"
+  case .smartZoom: what = "smart-zooms at the pointer"
+  case .zoom(let zoomIn): what = zoomIn ? "zooms in at the pointer" : "zooms out at the pointer"
+  case .rotate(let left):
+    what = left ? "rotates left at the pointer" : "rotates right at the pointer"
+  case .historyBack: what = "goes back a page"
+  case .historyForward: what = "goes forward a page"
+  case .lookUp: what = "looks up the word under the pointer"
+  case .missionControl: what = "opens Mission Control"
+  case .appExpose: what = "shows the app's windows (App Exposé)"
+  case .launchpad: what = "opens Launchpad"
+  case .showDesktop: what = "shows the desktop"
+  case .spaceLeft: what = "moves to the Space on the left"
+  case .spaceRight: what = "moves to the Space on the right"
+  case nil: what = "does nothing"
+  }
+  return "A \(fingers)-finger \(motion.rawValue.replacingOccurrences(of: "_", with: " ")): \(what)."
 }

@@ -166,6 +166,12 @@ indirect enum URLCommand: Hashable {
   case clipboardCopy
   case clipboardCut
   case clipboardPaste
+  /// `gesture`: a trackpad gesture by finger count and motion, emulated at
+  /// the pointer (`TrackpadGesture`).
+  case trackpadGesture(fingers: Int, motion: TrackpadGesture.Motion)
+  /// `look_up`: the focused app's Look Up (definition, data detectors) on the
+  /// word under the pointer, a three-finger tap on a trackpad.
+  case lookUp
   case showAlert(AlertCommand)
   case dismissAlert
   /// Ask before running a command the user cannot undo: the question is the
@@ -246,6 +252,7 @@ extension URLCommand {
     case .clipboardCopy: return .clipboardCopy
     case .clipboardCut: return .clipboardCut
     case .clipboardPaste: return .clipboardPaste
+    case .lookUp: return .lookUp
     default: return nil
     }
   }
@@ -418,9 +425,21 @@ enum WindowFocusRequest: Hashable {
   }
 }
 
+/// `--gesture`: a trackpad gesture performed at the picked point instead of
+/// a click. The pointer lands on the point first, as with `--move`.
+enum TargetGesture: String, CaseIterable, Hashable {
+  /// Look Up (three-finger tap): the app's look-up action on the word under
+  /// the pointer.
+  case lookUp = "look_up"
+  /// Smart zoom (two-finger double tap) at the point.
+  case smartZoom = "smart_zoom"
+}
+
 enum MouseCommand: Hashable {
   case click(JumpAction, modifiers: ClickModifiers)
   case move
+  /// The pointer lands on the point, then the trackpad gesture runs there.
+  case gesture(TargetGesture)
   /// Two-phase drag: the first commit picks the grab point, the second picks
   /// the drop point, then the dispatcher synthesizes one continuous
   /// down→dragged…→up gesture. Modifiers are held for the whole gesture
@@ -457,7 +476,7 @@ enum MouseCommand: Hashable {
     case .search(let action, _): return action
     case .path(let action, _): return action
     case .sticky(let action, _): return action
-    case .move, .drag, .select: return .leftClick
+    case .move, .gesture, .drag, .select: return .leftClick
     }
   }
 
@@ -471,7 +490,7 @@ enum MouseCommand: Hashable {
     case .search(_, let modifiers): return modifiers
     case .path(_, let modifiers): return modifiers
     case .sticky(_, let modifiers): return modifiers
-    case .move: return []
+    case .move, .gesture: return []
     }
   }
 
@@ -489,12 +508,26 @@ enum MouseCommand: Hashable {
   /// surface) performs.
   var asClick: MouseCommand {
     switch self {
-    case .move: return .move
+    case .move, .gesture: return self
     case .drag(let modifiers): return .drag(modifiers: modifiers)
     case .select(let modifiers): return .select(modifiers: modifiers)
     case .multi: return self
     case .click, .adjust, .search, .path, .sticky:
       return .click(action, modifiers: modifiers)
+    }
+  }
+
+  /// A count typed before a mouse finisher is a finger count, the way a
+  /// trackpad reads it: two fingers turn a click into a secondary click and a
+  /// double click into smart zoom; three fingers turn a click into Look Up.
+  /// Every other count, and every other command, is unchanged.
+  func withFingers(_ fingers: Int) -> MouseCommand {
+    switch (fingers, self) {
+    case (2, .click(.leftClick, let modifiers)): return .click(.rightClick, modifiers: modifiers)
+    case (2, .click(.doubleClick, let modifiers)) where modifiers.isEmpty:
+      return .gesture(.smartZoom)
+    case (3, .click(.leftClick, let modifiers)) where modifiers.isEmpty: return .gesture(.lookUp)
+    default: return self
     }
   }
 
@@ -765,7 +798,7 @@ final class URLEventHandler: NSObject {
     .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
     .flag("move"), .flag("drag"), .flag("select"), .flag("multi"),
     .flag("adjust"), .flag("search"), .flag("path"), .flag("sticky"),
-    .text("modifiers", "cmd+ctrl+alt+shift"),
+    .text("gesture", "look_up|smart_zoom"), .text("modifiers", "cmd+ctrl+alt+shift"),
   ]
 
   /// The click flags alone: no session shape.
@@ -786,7 +819,7 @@ final class URLEventHandler: NSObject {
           // controls again (`--multi`) or filter by control text do not apply.
           guard a.value("scope") == nil, let command = mouseCommand(a) else { return nil }
           switch command {
-          case .click, .move, .drag, .select: return .mouseTargetWords(command)
+          case .click, .move, .gesture, .drag, .select: return .mouseTargetWords(command)
           default: return nil
           }
         }
@@ -872,12 +905,13 @@ final class URLEventHandler: NSObject {
     "mouse_bigram": .init(
       [
         .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
-        .flag("move"), .text("modifiers", "cmd+ctrl+alt+shift"),
+        .flag("move"), .text("gesture", "look_up|smart_zoom"),
+        .text("modifiers", "cmd+ctrl+alt+shift"),
       ],
       parse: { a in
         guard let command = mouseCommand(a, allowAdjust: false) else { return nil }
         switch command {
-        case .click, .move: return .mouseBigram(command)
+        case .click, .move, .gesture: return .mouseBigram(command)
         default: return nil
         }
       }),
@@ -1081,6 +1115,22 @@ final class URLEventHandler: NSObject {
     "clipboard_cut": .init(parse: { _ in .clipboardCut }),
 
     "clipboard_paste": .init(parse: { _ in .clipboardPaste }),
+    "look_up": .init(parse: { a in a.args.isEmpty ? .lookUp : nil }),
+    "gesture": .init(
+      [
+        .text("fingers", "2|3|4|5", required: true),
+        .text(
+          "motion",
+          "tap|double_tap|pinch|spread|rotate_left|rotate_right|swipe_left|swipe_right|swipe_up|swipe_down",
+          required: true),
+      ],
+      parse: { a in
+        guard let fingers = a.value("fingers").flatMap(Int.init),
+          let motion = a.value("motion").flatMap(TrackpadGesture.Motion.init(rawValue:)),
+          TrackpadGesture.action(fingers: fingers, motion: motion) != nil
+        else { return nil }
+        return .trackpadGesture(fingers: fingers, motion: motion)
+      }),
 
     "alert_show": .init(
       [
@@ -1344,8 +1394,14 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
     a.bool("middle") ? .middleClick : nil,
     a.bool("triple") ? .tripleClick : nil,
   ].compactMap { $0 }
+  let shaped = drag || select || multi || adjust || search || path || sticky
+  if let raw = a.value("gesture") {
+    guard let gesture = TargetGesture(rawValue: raw), !a.bool("move"), modifiers.isEmpty,
+      variants.isEmpty, !shaped
+    else { return nil }
+    return .gesture(gesture)
+  }
   if a.bool("move") {
-    let shaped = drag || select || multi || adjust || search || path || sticky
     return (modifiers.isEmpty && variants.isEmpty && !shaped) ? .move : nil
   }
   if drag { return variants.isEmpty ? .drag(modifiers: modifiers) : nil }

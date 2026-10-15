@@ -268,6 +268,14 @@ final class NormalModeTests: XCTestCase {
     let leadingZero = transition(chars: "0")
     XCTAssertNil(leadingZero.command)
     XCTAssertEqual(leadingZero.pending, "")
+
+    // A count before a mouse finisher reaches it as a finger count.
+    let threeFingers = transition(pending: "3", chars: "f")
+    XCTAssertEqual(threeFingers.command, .mouseTarget(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(threeFingers.repeatCount, 3)
+    let smartZoom = transition(pending: "2d", chars: "f")
+    XCTAssertEqual(smartZoom.command, .mouseTarget(.click(.doubleClick, modifiers: [])))
+    XCTAssertEqual(smartZoom.repeatCount, 2)
   }
 
   func testRepeatableMappingRepeatsOnItsFinalKey() {

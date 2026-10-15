@@ -114,6 +114,11 @@ mappings.
   then fires on its second key with no timeout. A pending sequence is dropped
   when the focused app or the effective mappings change, and its timeout
   never fires a mapping from the previous table.
+- A count before `f`, `F` or `s` is a finger count, as on a trackpad. `2f`
+  secondary-clicks the pick, `2df` smart-zooms there and `3f` looks up the
+  word there (`mouse_target --gesture=look_up|smart_zoom`). The gestures move
+  the pointer like `mf` and keep NORMAL. `flash gesture` performs the other
+  trackpad gestures; see [commands](commands.md).
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
   NORMAL. Everything in a terminal emulator (an app a plugin declares in
   `terminal_emulators`) is an input target, so a primary click on a hint
