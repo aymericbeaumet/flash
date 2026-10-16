@@ -11,6 +11,15 @@ extension AppDelegate {
   /// and every eligible plugin's in-memory location catalog are then frozen into
   /// one deterministic snapshot and revealed exactly once. Nothing is retained
   /// in the host after the session closes.
+  /// The session's frozen selector context, resolved now for a session that
+  /// opened cold (typed `:` without a flashlight entry).
+  private func sessionSelectorContext() -> PluginSelectorContext {
+    if let context = finder.selectorContext { return context }
+    let context = pluginSelectorContext()
+    finder.selectorContext = context
+    return context
+  }
+
   func openCandidateFinderSession(scope: CandidateScope) {
     let startedNs = DispatchTime.now().uptimeNanoseconds
     // Advisory: the flashlight opened. Eager plugins may refresh their
@@ -20,6 +29,7 @@ extension AppDelegate {
         PluginEvent(name: "core:session.opened", payload: [:], bundleID: nil))
     }
     finder.precedenceTable = buildCandidateFinderPrecedenceTable()
+    finder.selectorContext = pluginSelectorContext()
     finder.scope = scope
     finder.sessionGeneration &+= 1
     finder.liveQuery.cancel()
@@ -27,6 +37,7 @@ extension AppDelegate {
     let generation = finder.sessionGeneration
     finder.fetchedNonLocationSourceIDs.removeAll()
     finder.deferredNonLocationSnapshots.removeAll()
+    finder.snapshotOrdering = CandidateSnapshotOrdering()
     finder.resetInitialSnapshot()
     finder.submissionDeferral.cancel()
     finder.candidates = []
@@ -305,7 +316,7 @@ extension AppDelegate {
     } else if let bang = CandidateFinder.parseBangState(parsed.text.trimmed),
       bang.confirmed,
       let candidateSource = pluginManager.shebangCandidateSource(
-        token: bang.token, in: pluginSelectorContext())
+        token: bang.token, in: sessionSelectorContext())
     {
       filter = candidateSource
       text = bang.remainder
@@ -368,13 +379,16 @@ extension AppDelegate {
     generation: UInt64
   ) {
     let sourceID = source.identifier
+    // Stamped before the preparation that may reorder replies for one source.
+    let stamp = finder.snapshotOrdering.stamp(sourceID)
     finder.preparationQueue.async { [weak self] in
       let prepared = CandidateFinder.prepare(candidates)
       DispatchQueue.main.async { [weak self] in
         self?.receivePreparedCandidateSnapshot(
           prepared,
           sourceID: sourceID,
-          generation: generation)
+          generation: generation,
+          stamp: stamp)
       }
     }
   }
@@ -382,9 +396,14 @@ extension AppDelegate {
   private func receivePreparedCandidateSnapshot(
     _ candidates: [Candidate],
     sourceID: String,
-    generation: UInt64
+    generation: UInt64,
+    stamp: UInt64
   ) {
     guard generation == finder.sessionGeneration else { return }
+    guard finder.snapshotOrdering.accept(sourceID, stamp: stamp) else {
+      FlashLog.trace("[candidate_finder] merge_superseded source=\(sourceID) stamp=\(stamp)")
+      return
+    }
     switch overlay.inputMode {
     case .commandLine: break
     default: return
@@ -781,14 +800,13 @@ extension AppDelegate {
     if usesTransientCompletionPool {
       invalidateCandidateQueryEvaluation()
       let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
-      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+      let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: normalizedQuery)
       let scored = CandidateFinder.scoreMatches(
         pool: pool,
         normalizedQuery: normalizedQuery,
         fuzzyScore: fuzzy,
         allowParallel: false)
-      let sorted = CandidateFinder.sortedMatches(
-        scored, precedence: precedenceTable(), normalizedQuery: normalizedQuery)
+      let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
       // Bang / source-completion pools are disjoint from the main flashlight
       // pool, so a saved incremental cache from a previous keystroke must
       // not survive into the next plain-query keystroke.
@@ -799,7 +817,7 @@ extension AppDelegate {
 
     if scoringText.trimmed.isEmpty {
       invalidateCandidateQueryEvaluation()
-      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+      let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: "")
       let scored = CandidateFinder.scoreMatches(
         pool: pool,
         normalizedQuery: "",
@@ -844,7 +862,7 @@ extension AppDelegate {
     // empty query and lists every glyph unranked.
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(
       NormalModeDispatcher.expandEmoticons(scoringText))
-    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: normalizedQuery)
     let signature = parsed.sourceFilter ?? ""
     // Incremental narrowing: if the new query extends the previous one
     // and neither the pool nor the attribute filters have changed since
@@ -880,9 +898,16 @@ extension AppDelegate {
     // work that's pure waste here.
     let store = self.frecencyStore
     if let store, !store.isEmpty {
+      // One copy of the table per keystroke; the key was derived at prepare.
+      let boosts = store.boosts()
       for index in scored.indices {
-        if let key = FrecencyMapper.itemKey(for: scored[index].candidate) {
-          scored[index].score += store.boost(forKey: key)
+        let candidate = scored[index].candidate
+        let key =
+          candidate.sortKey.isEmpty
+          ? FrecencyMapper.itemKey(for: candidate)
+          : (candidate.frecencyKey.isEmpty ? nil : candidate.frecencyKey)
+        if let key, let boost = boosts[key] {
+          scored[index].score += boost
         }
       }
     }
@@ -894,7 +919,7 @@ extension AppDelegate {
     // top-K for "t" can become the best match for "tmux".
     let sortLimit = max(commandBarSuggestionCount * 3, 30)
     let ranked = CandidateFinder.displayAndIncrementalMatches(
-      scored, precedence: precedenceTable(), limit: sortLimit, normalizedQuery: normalizedQuery)
+      scored, precedence: precedenceTable(), limit: sortLimit)
     let sorted = ranked.display
     let tSorted = CFAbsoluteTimeGetCurrent()
     // Re-check the generation — a re-entrant call (e.g. caches landing
@@ -925,7 +950,7 @@ extension AppDelegate {
   /// Build a `PrecedenceTable` from the live source descriptors and config
   /// overrides. Frozen once with the candidate snapshot so query-time sorting
   /// uses a prepared table.
-  private func buildCandidateFinderPrecedenceTable() -> CandidateFinder.PrecedenceTable {
+  func buildCandidateFinderPrecedenceTable() -> CandidateFinder.PrecedenceTable {
     CandidateFinder.PrecedenceTable(
       sources: registry.registeredCandidateSourceDescriptors(),
       overrides: config.flashlight.precedence,
@@ -1022,7 +1047,7 @@ extension AppDelegate {
   /// which land in the session pool once the non-location sources are read on
   /// the first `@source`/`!` keystroke.
   private func bangListCandidates() -> [Candidate] {
-    pluginManager.shebangCandidates(in: pluginSelectorContext())
+    pluginManager.shebangCandidates(in: sessionSelectorContext())
       + finder.candidates.filter { $0.kind == CandidateFinder.bangKind }
   }
 
@@ -1030,7 +1055,7 @@ extension AppDelegate {
   /// `[statusbar.click]` action map — tmux's status-line mouse model: the
   /// span names the action, the binding lives in config. URLs open
   /// activating; action arrays run through the mapping-command dispatcher
-  /// (same power as a keybinding, e.g. ["flash", "plugin_command", …]).
+  /// (same power as a keybinding, e.g. ["flash", "media", "volumedown"]).
   func performStatusBarClickAction(named name: String) {
     guard let action = config.statusBar.clickActions[name] else {
       FlashLog.warn(
@@ -1080,16 +1105,18 @@ extension AppDelegate {
     rawQuery: String,
     sourceFilter: String?
   ) -> (pool: [Candidate], scoringText: String) {
-    let availableCandidates = finder.candidates + finder.liveQuery.rows
+    // Joined only by the branches that read it: the cache hit below, the
+    // common keystroke, copies nothing.
+    func availableCandidates() -> [Candidate] { finder.candidates + finder.liveQuery.rows }
     if let bang = CandidateFinder.parseBangState(trimmed),
       bang.confirmed,
       let candidateSource = pluginManager.shebangCandidateSource(
         token: bang.token,
-        in: pluginSelectorContext())
+        in: sessionSelectorContext())
     {
       // Confirmed bang bound to a candidate source: swap the pool to that
       // source's live candidates. Selection routes back through the bang.
-      let scoped = availableCandidates.filter { candidate in
+      let scoped = availableCandidates().filter { candidate in
         guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
         return CandidateFinder.candidateMatchesSourceFilter(candidate, filter: candidateSource)
       }
@@ -1131,13 +1158,14 @@ extension AppDelegate {
       // `@<source>` opts in to whatever source the user names. Without an
       // explicit source filter, keep the default flashlight focused on locations.
       let userOptedIntoSource = sourceFilter != nil
-      let pool = availableCandidates.filter { candidate in
+      let precedence = precedenceTable()
+      let pool = availableCandidates().filter { candidate in
         guard candidate.kind != CandidateFinder.bangKind,
           candidate.kind != CandidateFinder.sourceKind
         else { return false }
         guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
         if !userOptedIntoSource,
-          !CandidateFinder.isDefaultFlashlightCandidate(candidate, precedence: precedenceTable())
+          !CandidateFinder.isDefaultFlashlightCandidate(candidate, precedence: precedence)
         {
           return false
         }
@@ -1168,40 +1196,6 @@ extension AppDelegate {
   /// produced a tab snapshot for this flashlight session.
   private func knownSourceCompletionCandidates() -> [Candidate] {
     registry.registeredCandidateSourceLabels().map(CandidateFinder.sourceCompletionCandidate)
-  }
-
-  /// Dispatch a selected bang row: route the live query's remainder to the
-  /// owning plugin via `invokeShebang`. Returns false for non-bang
-  /// candidates so callers fall through to the normal open path.
-  func dispatchBangCandidate(_ candidate: Candidate, query: String) -> Bool {
-    guard candidate.kind == CandidateFinder.bangKind,
-      let token = candidate.sourcePayload, !token.isEmpty
-    else { return false }
-    let remainder: String
-    if let bang = CandidateFinder.parseBang(query),
-      bang.token.lowercased() == token.lowercased()
-    {
-      remainder = bang.remainder
-    } else {
-      remainder = ""
-    }
-    return pluginManager.invokeShebang(
-      token: token,
-      query: remainder,
-      in: pluginSelectorContext()
-    ) { [weak self] ok, pid, stdout, navigationURL in
-      guard let self else { return }
-      guard ok else {
-        // A failed bang (unknown token, blocked open, plugin error) must
-        // say so — a submit that does visibly nothing reads as Flash
-        // being broken.
-        self.overlay.displayBanner("!\(token) failed")
-        return
-      }
-      self.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-      guard let stdout, !stdout.isEmpty else { return }
-      self.overlay.displayBanner(stdout)
-    }
   }
 
   func candidateFinderDisplayItems(windowSize: Int? = nil) -> [CandidateDisplayItem] {
@@ -1307,11 +1301,12 @@ extension AppDelegate {
       performCommandLineCommand(command)
       return
     }
-    // Bare `:clipboard` opens the dashboard's Clipboard tab rather than firing
+    // `:clipboard show` opens the dashboard's Clipboard tab rather than firing
     // a fire-and-forget plugin command; the host caches the history and the web
-    // UI renders it. `:clipboard <arg>` falls through below.
+    // UI renders it. `:clipboard show <arg>` falls through below.
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
-      plugin.command.lowercased() == "clipboard", plugin.subcommand.isEmpty, plugin.args.isEmpty
+      plugin.command.lowercased() == "clipboard", plugin.subcommand.lowercased() == "show",
+      plugin.args.isEmpty
     {
       finishCommandLineInteraction(reason: "clipboard_submit")
       openClipboardDashboard()
@@ -1329,6 +1324,8 @@ extension AppDelegate {
             self?.warnCommandFailure(raw)
             return
           }
+          self?.noteClipboardDelete(
+            command: plugin.command, subcommand: plugin.subcommand, ok: true)
           self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
           guard let stdout, !stdout.isEmpty else { return }
           if captureOutput {
@@ -1339,7 +1336,7 @@ extension AppDelegate {
           }
         })
     {
-      finishCommandLineInteraction(reason: "plugin_command_submit")
+      finishCommandLineInteraction(reason: "plugin_submit")
       return
     }
     let topLevelEmpty =
@@ -1633,6 +1630,7 @@ extension AppDelegate {
 
   func resetCommandLineState() {
     finder.invocationTargetPID = nil
+    finder.selectorContext = nil
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
     finder.scope = .all

@@ -11,9 +11,19 @@ extension AppDelegate {
   /// registrations.
   func refreshEffectiveMappings(for bundleID: String?) {
     MainThreadActivity.note("effective_mappings")
-    let effective = effectiveMode(
-      for: pluginSelectorContext(fallbackBundleID: bundleID))
-    overlay?.normalModeMappings = effective.compiledNormal
+    let context = pluginSelectorContext(fallbackBundleID: bundleID)
+    let effective = effectiveMode(for: context)
+    overlay?.normalModeMappings = Self.interpreterTable(
+      for: modeStore.mode.mappingScope, in: effective)
+    overlay?.hyperModeMappings = effective.compiledHyper
+    // The cache hands back one value per selector key, so a focus change
+    // that lands on the key already applied skips the six-table compare.
+    let selectorChanged = lastAppliedMappingKey != context.cacheKey || lastAppliedMappingMode == nil
+    guard selectorChanged else { return }
+    lastAppliedMappingKey = context.cacheKey
+    // A half-typed sequence and the timeout armed for it were resolved
+    // against the table this replaces; neither may complete against this one.
+    resetPendingNormalSequence(reason: "mappings_refreshed")
     if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
       terminalInputMappings?.replaceMappings(
         effective.compiledTerminal,
@@ -24,11 +34,32 @@ extension AppDelegate {
     }
   }
 
+  /// The NORMAL interpreter's table for `scope`: VISUAL's entries over
+  /// NORMAL's while a button is held, NORMAL's otherwise. A half-typed
+  /// sequence belongs to the table it was typed against, so a switch drops it.
+  func applyInterpreterTable(for scope: MappingScope) {
+    guard let overlay, let effective = lastAppliedMappingMode else { return }
+    let table = Self.interpreterTable(for: scope, in: effective)
+    guard overlay.normalModeMappings != table else { return }
+    overlay.normalModeMappings = table
+    resetPendingNormalSequence(reason: "mapping_scope")
+  }
+
+  /// VISUAL's and DRAG's own tables; NORMAL's for every other scope.
+  static func interpreterTable(for scope: MappingScope, in mode: Config.Mode) -> CompiledMappings {
+    switch scope {
+    case .visual: return mode.compiledVisual
+    case .drag: return mode.compiledDrag
+    case .normal, .insert, .command, .terminal: return mode.compiledNormal
+    }
+  }
+
   /// Drop cached effective modes and force the next refresh to re-apply the
   /// coordinator. Called when the base config or any plugin's mappings change.
   func invalidateEffectiveMappings() {
     effectiveMappingCache.removeAll()
     lastAppliedMappingMode = nil
+    lastAppliedMappingKey = nil
   }
 
   /// Selectors only need a bundle id. A caller that already knows the
@@ -61,6 +92,7 @@ extension AppDelegate {
   private func mappingModeChanged(from old: Config.Mode?, to new: Config.Mode) -> Bool {
     guard let old else { return true }
     return old.all != new.all || old.normal != new.normal || old.insert != new.insert
-      || old.command != new.command || old.terminal != new.terminal
+      || old.command != new.command || old.terminal != new.terminal || old.hyper != new.hyper
+      || old.visual != new.visual || old.drag != new.drag
   }
 }

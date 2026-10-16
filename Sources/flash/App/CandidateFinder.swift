@@ -4,6 +4,10 @@ import Foundation
 struct CandidateMatch {
   var candidate: Candidate
   var score: Int
+  /// How the query hit the candidate's own name. Compared before every other
+  /// signal in `CandidateFinder.sortedMatches`, so an exact tab title beats a
+  /// partial app match whatever their sources weigh.
+  var tier: CandidateFinder.MatchTier = .none
 }
 
 struct CommandLineCompletionMatch {
@@ -12,6 +16,28 @@ struct CommandLineCompletionMatch {
 }
 
 enum CandidateFinder {
+  /// Coarse match quality against the candidate's own name (title and
+  /// aliases) or its source label. Strictly ordered ahead of source
+  /// precedence and score: a row whose name is what the user typed is the
+  /// deliberate hit, whichever category it belongs to.
+  enum MatchTier: Int, Comparable, Sendable {
+    /// Matched only through secondary text (URL, subtitle, display label) or
+    /// the typo-tolerant fuzzy ladder; also the empty query.
+    case none = 0
+    /// The query appears inside the name, not at a word start.
+    case contains
+    /// The query starts a word inside the name, or every query word starts a
+    /// word of the name (any order).
+    case word
+    /// The name, or an alias, starts with the query.
+    case prefix
+    /// The name or an alias equals the query, or the query names the source
+    /// (`tmux` for `tmux.windows`).
+    case exact
+
+    static func < (lhs: MatchTier, rhs: MatchTier) -> Bool { lhs.rawValue < rhs.rawValue }
+  }
+
   static func displayTitle(source: String, name: String) -> String {
     "[\(source)] \(name)"
   }
@@ -93,7 +119,7 @@ enum CandidateFinder {
     _ candidate: Candidate,
     precedence: PrecedenceTable = .default
   ) -> Bool {
-    precedence.defaultFlashlightSourceRank(for: candidate) != nil
+    precedence.isDefaultFlashlightSource(candidate)
   }
 
   /// The half-open slice of `count` matches a display surface shows: at most
@@ -372,6 +398,8 @@ enum CandidateFinder {
     normalize: (String) -> String = NormalModeDispatcher.normalizedSearchText
   ) -> Candidate {
     var prepared = candidate
+    prepared.loweredSource = candidate.source.lowercased()
+    prepared.frecencyKey = FrecencyMapper.itemKey(for: candidate) ?? ""
     let display = displayTitle(candidate)
     prepared.displayTitle = display
     let normalizedSearchText = normalize(searchText(candidate))
@@ -559,17 +587,42 @@ enum CandidateFinder {
     return score(normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
   }
 
-  /// Hot path used by the live ranker. The caller pre-normalizes the
-  /// query once and reuses the candidate's pre-normalized scoring
-  /// fields (populated in `prepare`). Saves O(fields × candidates)
-  /// `normalizedSearchText` calls per keystroke; matters at ~1k
-  /// candidates with notes/contacts/reminders all in the pool.
+  static func tier(
+    query: String,
+    candidate: Candidate,
+    normalize: (String) -> String = NormalModeDispatcher.normalizedSearchText,
+    fuzzyScore: (String, String) -> Int? = NormalModeDispatcher.fuzzyScore(
+      normalizedQuery:normalizedCandidate:)
+  ) -> MatchTier? {
+    evaluate(
+      normalizedQuery: normalize(query.trimmed), candidate: candidate, fuzzyScore: fuzzyScore
+    )?.tier
+  }
+
   static func score(
     normalizedQuery: String,
     candidate: Candidate,
     fuzzyScore: (String, String) -> Int?
   ) -> Int? {
-    if normalizedQuery.isEmpty { return 0 }
+    evaluate(normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)?.score
+  }
+
+  /// Hot path used by the live ranker. The caller pre-normalizes the
+  /// query once and reuses the candidate's pre-normalized scoring
+  /// fields (populated in `prepare`). Saves O(fields × candidates)
+  /// `normalizedSearchText` calls per keystroke; matters at ~1k
+  /// candidates with notes/contacts/reminders all in the pool.
+  ///
+  /// Returns the fine-grained score plus the coarse `MatchTier` of the best
+  /// name-level hit. Only the title, its aliases and the source label can
+  /// raise the tier; secondary fields (URL, subtitle, display label) and the
+  /// fuzzy ladder stay at `.none` however well they score.
+  static func evaluate(
+    normalizedQuery: String,
+    candidate: Candidate,
+    fuzzyScore: (String, String) -> Int?
+  ) -> (score: Int, tier: MatchTier)? {
+    if normalizedQuery.isEmpty { return (0, .none) }
     // Algolia-style typeahead gate (1–2 char queries only). When the
     // user has barely started typing, prune candidates that don't have
     // a word starting with the query's first character — they can't
@@ -581,59 +634,88 @@ enum CandidateFinder {
     else { return nil }
     let fields = candidate.normalizedScoringFields
     var best: Int?
-    if let titleScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.title, base: 10_000, fuzzyScore: fuzzyScore)
-    {
-      best = max(best ?? titleScore, titleScore)
+    var tier = MatchTier.none
+    func consider(_ match: (score: Int, tier: MatchTier)?) {
+      guard let match else { return }
+      best = max(best ?? match.score, match.score)
+      tier = max(tier, match.tier)
     }
+    consider(
+      fieldMatch(
+        query: normalizedQuery, normalized: fields.title, base: 10_000, fuzzyScore: fuzzyScore))
     // Aliases score on a dedicated tier above the title so a literal
     // shortcode hit (`pray` → `🙏`) outranks UCD-name prefixes like
     // `prayer beads`. The match is per token (aliases are pre-tokenized
     // at prepare time) so an exact token equality earns the full `equal`
     // bonus instead of the `prefix` tier that joining would otherwise
     // force.
-    var aliasBest: Int?
     for token in fields.aliases {
-      if let tokenScore = fieldScoreNormalized(
-        query: normalizedQuery, normalized: token, base: 11_000, fuzzyScore: fuzzyScore)
-      {
-        aliasBest = max(aliasBest ?? tokenScore, tokenScore)
+      consider(
+        fieldMatch(query: normalizedQuery, normalized: token, base: 11_000, fuzzyScore: fuzzyScore)
+      )
+    }
+    // Multi-word queries name the row by its words in any order: `flash
+    // github` finds `GitHub - aymericbeaumet/flash`. Every query word must
+    // start a title word or alias; the match ranks as a word hit, below a
+    // literal word-prefix of the whole query and above a mid-word substring.
+    let queryTokens: [Substring] =
+      normalizedQuery.contains(" ") ? normalizedQuery.split(separator: " ") : []
+    if queryTokens.count >= 2, tier < .word,
+      tokensCover(queryTokens: queryTokens, tokens: fields.titleTokens + fields.aliases)
+    {
+      consider(
+        (
+          10_000 + 1_200 - min(300, max(0, fields.title.count - normalizedQuery.count)),
+          .word
+        ))
+    }
+    consider(
+      fieldMatch(
+        query: normalizedQuery, normalized: fields.sourceTitle, base: 3_000,
+        fuzzyScore: fuzzyScore
+      ).map { ($0.score, .none) })
+    consider(
+      sourceMatch(query: normalizedQuery, normalizedSource: fields.source, fuzzyScore: fuzzyScore))
+    consider(
+      fieldMatch(
+        query: normalizedQuery, normalized: fields.secondary, base: 4_000, fuzzyScore: fuzzyScore
+      ).map { ($0.score, .none) })
+    consider(
+      fieldMatch(
+        query: normalizedQuery, normalized: fields.url, base: 4_000, fuzzyScore: fuzzyScore
+      ).map { ($0.score, .none) })
+    consider(
+      fieldMatch(
+        query: normalizedQuery, normalized: fields.displayTitle, base: 2_000,
+        fuzzyScore: fuzzyScore
+      ).map { ($0.score, .none) })
+    if queryTokens.count >= 2, best.map({ $0 < 4_000 + 1_200 }) ?? true {
+      // Same any-order word cover over the whole searchable text (URL,
+      // subtitle, source): `aymericbeaumet pulls` still finds the tab, just
+      // not as a name hit.
+      let tokens =
+        fields.titleTokens + fields.aliases
+        + fields.secondary.split(separator: " ").map(String.init)
+        + fields.source.split(separator: " ").map(String.init)
+      if tokensCover(queryTokens: queryTokens, tokens: tokens) {
+        consider((4_000 + 1_200, .none))
       }
     }
-    if let aliasBest {
-      best = max(best ?? aliasBest, aliasBest)
-    }
-    if let sourceTitleScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.sourceTitle, base: 3_000, fuzzyScore: fuzzyScore)
-    {
-      best = max(best ?? sourceTitleScore, sourceTitleScore)
-    }
-    if let sourceScore = sourceScoreNormalized(
-      query: normalizedQuery,
-      normalizedSource: fields.source,
-      fuzzyScore: fuzzyScore)
-    {
-      best = max(best ?? sourceScore, sourceScore)
-    }
-    if let secondaryScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.secondary, base: 4_000, fuzzyScore: fuzzyScore)
-    {
-      best = max(best ?? secondaryScore, secondaryScore)
-    }
-    if let urlScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.url, base: 4_000, fuzzyScore: fuzzyScore)
-    {
-      best = max(best ?? urlScore, urlScore)
-    }
-    if let displayScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.displayTitle, base: 2_000, fuzzyScore: fuzzyScore)
-    {
-      best = max(best ?? displayScore, displayScore)
-    }
     if let searchScore = fuzzyScore(normalizedQuery, candidate.normalizedSearchText) {
-      best = max(best ?? searchScore, searchScore)
+      consider((searchScore, .none))
     }
-    return best
+    guard let best else { return nil }
+    return (best, tier)
+  }
+
+  /// True when every query token is a prefix of some token in `tokens`.
+  /// Order-free: the user types the words they remember, not the title.
+  static func tokensCover(queryTokens: [Substring], tokens: [String]) -> Bool {
+    guard !queryTokens.isEmpty else { return false }
+    for query in queryTokens {
+      guard tokens.contains(where: { $0.hasPrefix(query) }) else { return false }
+    }
+    return true
   }
 
   /// Live-ranker entry point: score a prepared pool against a normalized
@@ -701,53 +783,38 @@ enum CandidateFinder {
     fuzzyScore: (String, String) -> Int?
   ) -> CandidateMatch? {
     guard passesPrefilter(prefilter, candidateMask: candidate.scoringMask) else { return nil }
-    // `score` applies the word-start gate, so a short query that misses
+    // `evaluate` applies the word-start gate, so a short query that misses
     // the candidate's word-start bitmap short-circuits inside the scorer.
     guard
-      let score = score(
+      let match = evaluate(
         normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
     else { return nil }
-    return CandidateMatch(candidate: candidate, score: score)
+    return CandidateMatch(candidate: candidate, score: match.score, tier: match.tier)
   }
 
   static func isAlive(_ candidate: Candidate) -> Bool {
     candidate.pid != nil
   }
 
-  /// True when `normalizedQuery` is a non-empty exact match or full-string
-  /// prefix of the candidate's own (already-normalized) name, or exactly one
-  /// of its aliases. Drives the cross-band promotion in `recordPrecedes`.
-  /// Both name fields are normalized at `prepare` time with the same pipeline
-  /// as the query, so this is a like-for-like prefix test. Aliases only count
-  /// on an exact hit — they are short deliberate tokens, and prefix-matching
-  /// them would promote half the list on a single letter.
-  static func titleMatchesPrefix(_ candidate: Candidate, normalizedQuery: String) -> Bool {
-    guard !normalizedQuery.isEmpty else { return false }
-    let fields = candidate.normalizedScoringFields
-    return (!fields.title.isEmpty && fields.title.hasPrefix(normalizedQuery))
-      || (!fields.displayTitle.isEmpty && fields.displayTitle.hasPrefix(normalizedQuery))
-      || fields.aliases.contains(normalizedQuery)
-  }
-
-  /// Decorated record so each candidate's tier / alive / key fields are
+  /// Decorated record so each candidate's tier / band / weight fields are
   /// computed once, not on every comparator call. With ~2k tied emojis
   /// the comparator fires ~20k times; recomputing `source.lowercased()`
   /// and the fallback display title inside it dominated the cost.
   private struct SortRecord {
     var index: Int
     var score: Int
-    /// The query exactly matches / is a full-string prefix of this
-    /// candidate's own name. Lifts the row above the location band in
-    /// `recordPrecedes` so a deliberate name hit (e.g. `safa` → Safari.app)
-    /// isn't buried under that family's rows (Safari's tabs).
-    var titlePrefixMatch: Bool
-    var defaultFlashlightSourceRank: Int?
-    /// Precedence weight from `PrecedenceTable`. Higher is better.
-    /// Bangs carry the sentinel `bangWeight` so the comparator can
-    /// fast-path the strict top band without a separate flag.
+    /// How the query hit the row's own name; see `MatchTier`.
+    var tier: MatchTier
+    /// The row belongs to the default flashlight pool (a location source).
+    /// Only matters for mixed pools: explicit `@source` sets are homogeneous.
+    var inDefaultBand: Bool
+    /// Precedence weight from `PrecedenceTable`: source kind + manifest
+    /// `sources[].priority` + `[flashlight.precedence]` override + alive
+    /// bonus. Higher is better. Bangs carry the sentinel `bangWeight` so the
+    /// comparator can fast-path the strict top band without a separate flag.
     var weight: Int
     /// Source-provided same-score nudge. This is deliberately below match
-    /// quality and source-band ranking so salient rows never outrank a better
+    /// quality and source precedence so salient rows never outrank a better
     /// textual match.
     var priority: FlashPriority
     var alive: Bool
@@ -758,8 +825,7 @@ enum CandidateFinder {
   static func sortedMatches(
     _ matches: [CandidateMatch],
     precedence: PrecedenceTable = .default,
-    limit: Int? = nil,
-    normalizedQuery: String = ""
+    limit: Int? = nil
   ) -> [CandidateMatch] {
     if let limit, limit <= 0 { return [] }
     let records = matches.enumerated().map { offset, match -> SortRecord in
@@ -769,8 +835,8 @@ enum CandidateFinder {
       return SortRecord(
         index: offset,
         score: match.score,
-        titlePrefixMatch: titleMatchesPrefix(match.candidate, normalizedQuery: normalizedQuery),
-        defaultFlashlightSourceRank: precedence.defaultFlashlightSourceRank(for: match.candidate),
+        tier: match.tier,
+        inDefaultBand: precedence.isDefaultFlashlightSource(match.candidate),
         weight: precedence.weight(for: match.candidate),
         priority: match.candidate.priority,
         alive: isAlive(match.candidate),
@@ -789,12 +855,10 @@ enum CandidateFinder {
   static func displayAndIncrementalMatches(
     _ matches: [CandidateMatch],
     precedence: PrecedenceTable = .default,
-    limit: Int,
-    normalizedQuery: String = ""
+    limit: Int
   ) -> (display: [CandidateMatch], incremental: [CandidateMatch]) {
     (
-      display: sortedMatches(
-        matches, precedence: precedence, limit: limit, normalizedQuery: normalizedQuery),
+      display: sortedMatches(matches, precedence: precedence, limit: limit),
       incremental: matches
     )
   }
@@ -822,54 +886,34 @@ enum CandidateFinder {
   }
 
   private static func recordPrecedes(_ lhs: SortRecord, _ rhs: SortRecord) -> Bool {
-    // Banded design:
+    // Banded design, every band strict over the next:
     //
-    // 1. Bangs (`!<token>`) are a strict top band — they carry the
-    //    sentinel `bangWeight` so they're easy to detect. A user
-    //    typing a registered bang has expressed an explicit dispatch
-    //    intent; we surface it above anything else regardless of
-    //    how the fuzzy match would score.
+    // 1. Bangs (`!<token>`) carry the sentinel `bangWeight`. A user typing
+    //    a registered bang has expressed an explicit dispatch intent; it
+    //    surfaces above anything else regardless of how the fuzzy match
+    //    would score.
     //
-    // 2. Location rows are the default flashlight band, internally laddered
-    //    by category (tmux windows > running apps > installed apps > browser
-    //    tabs > remaining locations — see `locationBandRank`). Match quality
-    //    is authoritative inside one category, never across categories; the
-    //    only cross-category promotion is a deliberate name hit (below).
-    //    Other sources are normally hidden from the default pool, but when
-    //    sorted explicitly (for example through `@source`) they stay below
-    //    locations unless both compared rows are outside the band.
+    // 2. Match tier: how the query hit the row's own name (exact > prefix >
+    //    word > contains > secondary/fuzzy). An exact tab title beats every
+    //    partial app match; `mes` still puts Messages.app (prefix) above a
+    //    tab that merely contains "mes".
     //
-    // 3. Everything inside the same category is ranked by match quality
-    //    first. The precedence weight is the tiebreaker once scores cluster.
+    // 3. Default-band rows (locations) lead rows from hidden sources when a
+    //    pool mixes them.
+    //
+    // 4. Source precedence: the `PrecedenceTable` weight. Within one tier
+    //    this is where bundled manifests and `[flashlight.precedence]` order
+    //    tmux windows, running apps, tabs and installed apps.
+    //
+    // 5. Match score (fine-grained field tiers plus frecency), then the
+    //    row's own `priority`, alive before dead, and the stable key.
     let lhsIsBang = lhs.weight == PrecedenceTable.bangWeight
     let rhsIsBang = rhs.weight == PrecedenceTable.bangWeight
     if lhsIsBang != rhsIsBang { return lhsIsBang }
-
-    // A query that exactly matches / is a full-string prefix of a
-    // candidate's own name (or exactly one of its aliases) is a deliberate
-    // hit on THAT item, so it crosses the category ladder below: `safa`
-    // surfaces Safari.app above tmux windows and tabs, `mes` surfaces
-    // Messages.app above a tab that merely contains "mes", and an exact
-    // alias keeps the alias tier meaningful across categories. Without it
-    // the ladder would bury the item no matter how strong its name match is.
-    if lhs.titlePrefixMatch != rhs.titlePrefixMatch { return lhs.titlePrefixMatch }
-
-    switch (lhs.defaultFlashlightSourceRank, rhs.defaultFlashlightSourceRank) {
-    case (let l?, let r?) where l != r:
-      return l > r
-    case (_?, nil):
-      return true
-    case (nil, _?):
-      return false
-    default:
-      break
-    }
-
-    if lhs.score != rhs.score { return lhs.score > rhs.score }
-
-    // Score-tied tiebreakers: precedence weight (higher first),
-    // source-provided priority, alive vs dead, then the stable composite key.
+    if lhs.tier != rhs.tier { return lhs.tier > rhs.tier }
+    if lhs.inDefaultBand != rhs.inDefaultBand { return lhs.inDefaultBand }
     if lhs.weight != rhs.weight { return lhs.weight > rhs.weight }
+    if lhs.score != rhs.score { return lhs.score > rhs.score }
     if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
     if lhs.alive != rhs.alive { return lhs.alive }
     if lhs.key != rhs.key { return lhs.key < rhs.key }
@@ -897,6 +941,9 @@ enum CandidateFinder {
   struct PrecedenceTable: Sendable {
     private struct Entry: Sendable {
       var pattern: String
+      /// `pattern + "."`, built once: the table is consulted per match per
+      /// keystroke.
+      var prefix: String
       var weight: Int
       /// Non-nil only for registry-declared sources. Override-only entries
       /// can change ranking weight, but cannot opt hidden sources into default
@@ -939,10 +986,10 @@ enum CandidateFinder {
     /// list; everything else is `base + (alive ? bonus : 0)`.
     public func weight(for candidate: Candidate) -> Int {
       if candidate.kind == bangKind { return Self.bangWeight }
-      let lowered = candidate.source.lowercased()
+      let lowered = Self.loweredSource(of: candidate)
       var base: Int?
       for entry in entries {
-        if lowered == entry.pattern || lowered.hasPrefix(entry.pattern + ".") {
+        if lowered == entry.pattern || lowered.hasPrefix(entry.prefix) {
           base = entry.weight
           break
         }
@@ -952,25 +999,25 @@ enum CandidateFinder {
       return resolvedBase + bonus
     }
 
-    /// Strict default flashlight entity rank. Live source descriptors are the
+    /// Default flashlight band membership. Live source descriptors are the
     /// primary signal; location metadata covers offline tests and sources that
-    /// have not registered descriptors. Location-kind candidates return their
-    /// category ladder rank; standard sources return nil (below the band).
-    public func defaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
-      let lowered = candidate.source.lowercased()
+    /// have not registered descriptors. Location-kind sources are in the band;
+    /// standard sources are hidden until named with `@source`.
+    public func isDefaultFlashlightSource(_ candidate: Candidate) -> Bool {
+      let lowered = Self.loweredSource(of: candidate)
       for entry in entries {
-        guard lowered == entry.pattern || lowered.hasPrefix(entry.pattern + ".") else {
+        guard lowered == entry.pattern || lowered.hasPrefix(entry.prefix) else {
           continue
         }
         guard let kind = entry.kind else { continue }
         switch kind {
         case .locations:
-          return Self.locationBandRank(for: candidate)
+          return true
         case .standard:
-          return nil
+          return false
         }
       }
-      return Self.fallbackDefaultFlashlightSourceRank(for: candidate)
+      return candidate.isLocation
     }
 
     /// Sentinel ceiling reserved for bang rows so the comparator
@@ -986,11 +1033,19 @@ enum CandidateFinder {
       overrides: [:],
       aliveBonus: 10)
 
+    /// The prepared lowercase source, or the lowercasing for an unprepared row.
+    private static func loweredSource(of candidate: Candidate) -> String {
+      candidate.loweredSource.isEmpty ? candidate.source.lowercased() : candidate.loweredSource
+    }
+
     private static func sortedEntries(
       _ records: [String: (weight: Int, kind: CandidateSourceKind?)]
     ) -> [Entry] {
       records
-        .map { Entry(pattern: $0.key, weight: $0.value.weight, kind: $0.value.kind) }
+        .map {
+          Entry(
+            pattern: $0.key, prefix: $0.key + ".", weight: $0.value.weight, kind: $0.value.kind)
+        }
         .sorted { lhs, rhs in
           if lhs.pattern.count != rhs.pattern.count {
             return lhs.pattern.count > rhs.pattern.count
@@ -1008,20 +1063,6 @@ enum CandidateFinder {
       }
     }
 
-    /// Category ladder inside the default (location) band, highest first:
-    /// tmux windows > running apps > installed apps > browser tabs > the
-    /// remaining plugin-provided locations. Compared before match
-    /// score in `recordPrecedes`, so the ladder is strict: a weak tmux match
-    /// still leads a strong tab match. Deliberate name hits
-    /// (`titlePrefixMatch`) are the only cross-category promotion, which
-    /// keeps `safa` → Safari.app and exact aliases working.
-    static func locationBandRank(for candidate: Candidate) -> Int {
-      if candidate.kind == tmuxWindowKind { return 5 }
-      if candidate.kind == .app { return candidate.pid != nil ? 4 : 3 }
-      if candidate.kind == browserTabKind { return 2 }
-      return 1
-    }
-
     private static func fallbackSourceKind(for candidate: Candidate) -> CandidateSourceKind {
       if candidate.isLocation { return .locations }
       switch candidate.kind {
@@ -1030,11 +1071,6 @@ enum CandidateFinder {
       case .plugin:
         return .standard
       }
-    }
-
-    private static func fallbackDefaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
-      if candidate.isLocation { return locationBandRank(for: candidate) }
-      return nil
     }
   }
 
@@ -1118,68 +1154,69 @@ enum CandidateFinder {
     return tokens.map { "\($0).\(suffix)" }.joined(separator: " ")
   }
 
-  /// Same scoring rules as `fieldScore`, but the caller has already
-  /// normalized the field. Used by the live ranking path.
+  /// Score one pre-normalized field and report the coarse tier of the hit.
+  /// Used by the live ranking path.
   ///
-  /// Match quality is the primary sort key in `sortedMatches` (with
-  /// registered `!<bang>` candidates pinned above everything else). The
-  /// motivating case: typing `mes` must surface the `Messages` app
-  /// (full-string prefix on the app name) ahead of a browser tab that
-  /// happens to contain `mes` somewhere — and typing `safari` must
-  /// surface Safari.app above an unrelated Firefox tab.
+  /// The tier is the primary sort key in `sortedMatches` (with registered
+  /// `!<bang>` candidates pinned above everything else) when the field is
+  /// the row's own name. The motivating case: typing `mes` must surface the
+  /// `Messages` app (full-string prefix on the app name) ahead of a browser
+  /// tab that happens to contain `mes` somewhere — and typing a tab's exact
+  /// title must surface that tab above every partial app match.
   ///
   /// Tier layout:
-  ///   - Equal              base + 5000
-  ///   - String prefix      base + 3000  ("messages" matches `mes`)
-  ///   - Word prefix        base + 1500  ("iOS Messages" matches `mes`)
-  ///   - Substring          base +  800
-  ///   - Fuzzy              base +  500 max
-  private static func fieldScoreNormalized(
+  ///   - Equal              base + 5000  `.exact`
+  ///   - String prefix      base + 3000  `.prefix`   ("messages" matches `mes`)
+  ///   - Word prefix        base + 1500  `.word`     ("iOS Messages" matches `mes`)
+  ///   - Substring          base +  800  `.contains`
+  ///   - Fuzzy              base +  500 max  `.none`
+  private static func fieldMatch(
     query: String,
     normalized: String,
     base: Int,
     fuzzyScore: (String, String) -> Int?
-  ) -> Int? {
+  ) -> (score: Int, tier: MatchTier)? {
     guard !normalized.isEmpty else { return nil }
-    if normalized == query { return base + 5_000 }
+    if normalized == query { return (base + 5_000, .exact) }
     if normalized.hasPrefix(query) {
-      return base + 3_000 - min(500, normalized.count - query.count)
+      return (base + 3_000 - min(500, normalized.count - query.count), .prefix)
     }
     if hasWordPrefix(normalized: normalized, query: query) {
-      return base + 1_500 - min(300, normalized.count - query.count)
+      return (base + 1_500 - min(300, normalized.count - query.count), .word)
     }
     if let range = normalized.range(of: query) {
       let offset = normalized.distance(from: normalized.startIndex, to: range.lowerBound)
-      return base + 800 - min(300, offset * 4) - min(120, normalized.count - query.count)
+      return (
+        base + 800 - min(300, offset * 4) - min(120, normalized.count - query.count), .contains
+      )
     }
     guard let fuzzy = fuzzyScore(query, normalized) else { return nil }
-    return base + min(500, fuzzy)
+    return (base + min(500, fuzzy), .none)
   }
 
-  /// Direct source-label matches are more intentional than generic title
-  /// matches from unrelated sources. This is especially important for dotted
-  /// source labels such as `tmux.windows`: typing `tmux` should surface rows
-  /// from that source even when another source has an exact title `tmux`.
-  ///
-  /// Plain exact source labels stay just below exact title matches so an app
-  /// named `Finder` can still beat a hypothetical source literally named
-  /// `finder`.
-  private static func sourceScoreNormalized(
+  /// Naming a source is a deliberate hit on all of its rows: typing `tmux`
+  /// ranks every `tmux.windows` row in the `.exact` tier, so the source's
+  /// precedence weight orders them against other exact hits. The score stays
+  /// just below an exact title so `firefox` opens Firefox.app first and lists
+  /// its tabs right after, and an app named `Finder` beats a hypothetical
+  /// source literally named `finder`.
+  private static func sourceMatch(
     query: String,
     normalizedSource: String,
     fuzzyScore: (String, String) -> Int?
-  ) -> Int? {
+  ) -> (score: Int, tier: MatchTier)? {
     guard !normalizedSource.isEmpty else { return nil }
-    if normalizedSource == query { return 14_900 }
+    if normalizedSource == query { return (14_900, .exact) }
     let firstComponent = normalizedSource.split(separator: " ").first.map(String.init) ?? ""
     if firstComponent == query, normalizedSource.contains(" ") {
-      return 16_000 - min(300, normalizedSource.count - query.count)
+      return (14_950 - min(300, normalizedSource.count - query.count), .exact)
     }
-    return fieldScoreNormalized(
+    return fieldMatch(
       query: query,
       normalized: normalizedSource,
       base: 8_000,
-      fuzzyScore: fuzzyScore)
+      fuzzyScore: fuzzyScore
+    ).map { ($0.score, .none) }
   }
 
   /// True when `query` starts at the head of some word inside

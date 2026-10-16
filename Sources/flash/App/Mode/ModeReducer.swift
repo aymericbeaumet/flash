@@ -7,11 +7,13 @@ import Foundation
 // Invariants guaranteed here (and pinned by `ModeReducerTests`):
 //  - Insert stickiness: only explicit keyboard requests and disabling
 //    advanced mode leave `.insert`.
-//  - Mouse enters only: `.clickResolved` acts only from `.normal`; it can move
-//    NORMAL→insert but can never move insert→anything.
+//  - Mouse enters only: `.clickResolved` acts only from `.normal` or
+//    a held-button mode (`.visual`, `.drag`); it can move NORMAL→insert but can
+//    never move insert→anything.
 //  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
 //  - Advanced gate: `.enterNormal` is refused while `.disabled`.
 enum ModeReducer {
+
   static func reduce(_ state: Mode, _ event: ModeEvent) -> (Mode, [ModeEffect]) {
     switch event {
     case .enterInsert(let targetPID):
@@ -21,27 +23,31 @@ enum ModeReducer {
       let next = Mode.insert
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: targetPID))
 
-    case .enterNormal(let targetPID):
+    case .enterNormal:
       // The advanced gate: cannot enter NORMAL when the feature is off.
-      guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: targetPID) }
+      guard state.advancedEnabled else { return closeDisabledSurface(state, targetPID: nil) }
       let departure: [ModeEffect] =
         state.isTerminal
-        ? [.hideTerminalPopup, .activateFocusedApp(pid: targetPID)] : []
-      return (.normal, departure + enterEffects(for: .normal, targetPID: targetPID))
+        ? [.hideTerminalPopup, .activateFocusedApp(pid: state.terminalReturnPID)] : []
+      return (.normal, departure + enterEffects(for: .normal, targetPID: nil))
 
-    case .leaveMode(let hasHints, let targetPID):
+    case .leaveMode(let hasHints):
       switch state {
       case .terminal:
-        return reduce(state, .closeTerminal(targetPID: targetPID))
+        return reduce(state, .closeTerminal(restoresApp: true))
       case .command:
         return reduce(state, .closeCommand(reason: "leave_mode"))
       case .insert where !hasHints:
-        return reduce(state, .enterNormal(targetPID: targetPID))
+        return reduce(state, .enterNormal)
+      case .hyper:
+        return reduce(state, .exitHyper)
+      case .visual, .drag:
+        return reduce(state, .buttonReleased)
       case .insert, .normal, .disabled:
         // Active hints are dismissed in place; without hints there is no
         // enclosing mode to leave, so nothing re-renders.
         guard hasHints else { return (state, []) }
-        return (state, enterEffects(for: state, targetPID: targetPID))
+        return (state, enterEffects(for: state, targetPID: nil))
       }
 
     case .openCommand(let restoreMode):
@@ -49,18 +55,21 @@ enum ModeReducer {
       let next = Mode.command(restoreTo: restoreTo)
       return (next, terminalDeparture(state) + enterEffects(for: next, targetPID: nil))
 
-    case .openTerminal:
+    case .openTerminal(let returnPID):
+      // A popup focused from TERMINAL replaces the shown one and keeps the
+      // app captured first: the mode value already holds it.
       guard !state.isTerminal else { return (state, []) }
-      let next = Mode.terminal(restoreTo: state.asReturnMode)
+      let next = Mode.terminal(restoreTo: state.asReturnMode, returnPID: returnPID)
       return (next, enterEffects(for: next, targetPID: nil))
 
-    case .closeTerminal(let targetPID):
-      guard case .terminal(let restoreTo) = state else { return (state, []) }
+    case .closeTerminal(let restoresApp):
+      guard case .terminal(let restoreTo, let returnPID) = state else { return (state, []) }
       let effects = enterEffects(for: restoreTo.mode, targetPID: nil).filter {
         if case .activateFocusedApp = $0 { return false }
         return true
       }
-      let activation: [ModeEffect] = targetPID.map { [.activateFocusedApp(pid: $0)] } ?? []
+      let activation: [ModeEffect] =
+        restoresApp ? returnPID.map { [.activateFocusedApp(pid: $0)] } ?? [] : []
       return (restoreTo.mode, [.hideTerminalPopup] + activation + effects)
 
     case .closeCommand:
@@ -69,8 +78,9 @@ enum ModeReducer {
       return (next, enterEffects(for: next, targetPID: nil))
 
     case .clickResolved(let entersInsert, let targetPID):
-      // The mouse only acts in NORMAL and can never leave INSERT.
-      guard case .normal = state else { return (state, []) }
+      // The mouse only acts in NORMAL (a held button included) and can never
+      // leave INSERT.
+      guard state == .normal || state.buttonHold != nil else { return (state, []) }
       if entersInsert {
         let next = Mode.insert
         return (next, enterEffects(for: next, targetPID: targetPID))
@@ -84,11 +94,11 @@ enum ModeReducer {
         let base: ReturnMode = enabled ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
         return (.command(restoreTo: base), [.renderSurface])
       }
-      if case .terminal(let restoreTo) = state {
+      if case .terminal(let restoreTo, let returnPID) = state {
         let base: ReturnMode =
           enabled
           ? (restoreTo == .disabled ? .normal : restoreTo) : .disabled
-        return (.terminal(restoreTo: base), [.renderSurface])
+        return (.terminal(restoreTo: base, returnPID: returnPID), [.renderSurface])
       }
       if enabled {
         // Enabling advanced mode starts persistent NORMAL, as startup does.
@@ -109,11 +119,40 @@ enum ModeReducer {
       // Sticky/global: never flips the mode. Only the command surfaces need to
       // reclaim key focus after an app switch.
       switch state {
-      case .normal, .command:
+      case .normal, .command, .hyper, .visual, .drag:
         return (state, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         return (state, [])
       }
+
+    case .enterHyper:
+      // HYPER is entered from idle NORMAL. INSERT keeps typing the key,
+      // and command / terminal surfaces keep their own input.
+      guard case .normal = state else { return (state, []) }
+      let next = Mode.hyper(restoreTo: .normal)
+      return (next, enterEffects(for: next, targetPID: nil))
+
+    case .exitHyper:
+      guard case .hyper(let restoreTo) = state else { return (state, []) }
+      // Paint the restored label only. The full enter-effects of NORMAL
+      // would dismiss hints and recapture on every leader release.
+      return (restoreTo.mode, [.renderSurface])
+
+    case .buttonHeld(let hold):
+      // VISUAL and DRAG are NORMAL with a button held: the pill and the
+      // mapping table (`Mode.mappingScope`) change, nothing else — a pointer
+      // or grid session that pressed the button keeps its keys. From INSERT
+      // (an all-mode `enter_drag_mode` chord) the hold takes the keyboard as
+      // NORMAL entry does; the release still returns to NORMAL.
+      switch state {
+      case .normal: return (hold.mode, [.renderSurface])
+      case .insert: return (hold.mode, enterEffects(for: .normal, targetPID: nil))
+      default: return (state, [])
+      }
+
+    case .buttonReleased:
+      guard state.buttonHold != nil else { return (state, []) }
+      return (.normal, [.renderSurface])
     }
   }
 
@@ -124,31 +163,36 @@ enum ModeReducer {
     switch mode {
     case .normal:
       return [
-        .prepareModeEntry, .setMappingScope(.normal), .clearTransientHintState, .renderSurface,
+        .prepareModeEntry, .clearTransientHintState, .renderSurface,
         .scheduleRecapture,
       ]
     case .insert:
       // Hide transient hint content BEFORE rendering so the surface (badge +
       // active-window border) is drawn last and survives the hide.
       return [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .prepareModeEntry, .clearTransientHintState, .hideOverlayIfIdle,
         .renderSurface,
         .activateFocusedApp(pid: targetPID),
       ]
     case .disabled:
       return [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .prepareModeEntry, .clearTransientHintState, .hideOverlayIfIdle,
         .renderSurface,
       ]
     case .command:
       // Command surfaces keep all-mode and command-specific modified mappings.
       // Hint cleanup belongs to their content setup (`enterCommandLineMode`).
-      return [.prepareModeEntry, .setMappingScope(.command), .renderSurface, .scheduleRecapture]
+      return [.prepareModeEntry, .renderSurface, .scheduleRecapture]
     case .terminal:
       return [
-        .prepareModeEntry, .setMappingScope(.terminal), .clearTransientHintState,
+        .prepareModeEntry, .clearTransientHintState,
         .hideOverlayIfIdle, .renderSurface,
       ]
+    case .hyper, .visual, .drag:
+      // Keep the NORMAL mapping scope and the hint session. The pill is the
+      // only thing that changes; Carbon registrations stay put so a hold does
+      // not churn hotkey registrations.
+      return [.renderSurface]
     }
   }
 
@@ -167,10 +211,12 @@ enum ModeReducer {
   private static func closeDisabledSurface(_ state: Mode, targetPID: pid_t?) -> (Mode, [ModeEffect])
   {
     switch state {
-    case .terminal: return reduce(state, .closeTerminal(targetPID: targetPID))
+    case .terminal: return reduce(state, .closeTerminal(restoresApp: true))
     case .command: return reduce(state, .closeCommand(reason: "advanced_disabled"))
+    case .hyper: return (.disabled, enterEffects(for: .disabled, targetPID: targetPID))
     case .disabled: return (state, [])
-    case .normal, .insert: preconditionFailure("Enabled mode has disabled eligibility")
+    case .normal, .insert, .visual, .drag:
+      preconditionFailure("Enabled mode has disabled eligibility")
     }
   }
 }

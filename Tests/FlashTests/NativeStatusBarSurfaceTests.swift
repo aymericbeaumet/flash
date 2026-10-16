@@ -178,6 +178,20 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(hits.hints[2].textBounds, cpu.textBounds)
   }
 
+  func testHeadlinePopupCarriesTheArticleLinkAndTheNamePopupDoesNot() throws {
+    let surface = render(
+      "#[popup=feed]#[link=https://aggr.example]aggr#[nolink]#[nopopup] "
+        + "#[popup=feed-article]#[link=https://article.example/a]Headline#[nopopup]",
+      columns: 40)
+    let hits = surface.interactionRects(
+      panelFrame: .zero, popupTexts: ["feed": "", "feed-article": ""], popupDocuments: [:])
+    let name = try XCTUnwrap(hits.popups.first { $0.name == "feed" })
+    let headline = try XCTUnwrap(hits.popups.first { $0.name == "feed-article" })
+    XCTAssertEqual(name.link, "https://aggr.example")
+    XCTAssertEqual(headline.link, "https://article.example/a")
+    XCTAssertGreaterThan(headline.rect.minX, name.rect.maxX)
+  }
+
   func testWideHoverWashRemainsSubtle() {
     let title = String(repeating: "a", count: NativeStatusBarSurface.wideHoverCells + 1)
     let surface = render(title, columns: 40)
@@ -212,11 +226,11 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(pill.pill.borderWidth, 1)
   }
 
-  func testPooledLayersDrawNativeListsFillAndAbsoluteCentreAtCellPositions() {
+  func testPooledLayersDrawNativeListsFillAndNotchAtCellPositions() {
     for source in [
       "#[align=left,list=on]012345#[list=focus]678#[list=on]9ABCDEF"
         + "#[list=left-marker]<#[list=right-marker]>#[nolist]",
-      "LLLL#[align=centre]CC#[align=right]RRRR#[align=absolute-centre]AB",
+      "LLLL#[align=centre]CC#[align=right]RRRR#[align=notch]AB",
       "A#[fill=red]",
     ] {
       let surface = render(source, columns: 10)
@@ -227,7 +241,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
         XCTAssertEqual(
           layers.container.frame.minX,
           OverlayPanel.statusBarEdgePadding + CGFloat(run.column) * surface.cellWidth,
-          accuracy: 0.001)
+          accuracy: 0.01)
         XCTAssertEqual(
           layers.container.frame.width, CGFloat(run.columns) * surface.cellWidth, accuracy: 0.001)
         XCTAssertEqual((layers.text.string as? NSAttributedString)?.string, run.segment.text)
@@ -286,7 +300,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual((surface.runLayers[0].text.string as? NSAttributedString)?.string, " N ")
   }
 
-  func testPillPointSpacingKeepsRightAnchorAndUnrelatedAbsoluteCentre() {
+  func testPillPointSpacingKeepsRightAnchorAndUnrelatedNotch() {
     let right = render("#[align=right,pill]N#[nopill]tail", columns: 40)
     let index = right.visibleRuns.firstIndex { $0.segment.text == "tail" }!
     XCTAssertEqual(
@@ -296,19 +310,23 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(
       right.runLayers[index - 1].container.frame.maxX,
       right.runLayers[index].container.frame.minX, accuracy: 0.001)
-    let plain = render("#[align=absolute-centre]CENTER", columns: 40)
-    let pill = render("#[pill]N#[nopill] tail#[align=absolute-centre]CENTER", columns: 40)
+    let plain = render("#[align=notch]CENTER", columns: 40)
+    let pill = render("#[pill]N#[nopill] tail#[align=notch]CENTER", columns: 40)
     let plainIndex = plain.visibleRuns.firstIndex { $0.segment.text == "CENTER" }!
     let pillIndex = pill.visibleRuns.firstIndex { $0.segment.text == "CENTER" }!
     XCTAssertEqual(plain.runFrames[plainIndex], pill.runFrames[pillIndex])
   }
 
-  func testNotchHidesCentreAndClipsBothDrawnCellsAndInteractionRects() {
+  func testNotchHidesTheNotchLaneAndClipsCellsOnTheHousing() {
     let notch = CGRect(x: 160, y: 0, width: 45, height: 30)
     let surface = render(
       "#[link=https://example.com]abcdefghijklmnopqrstuvwxyz0123456789"
-        + "#[align=centre]HIDDEN#[align=right]RIGHT", columns: 50, notch: notch)
-    XCTAssertFalse(surface.visibleRuns.map(\.segment.text).joined().contains("HIDDEN"))
+        + "#[align=centre]HIDDEN#[align=notch]NOTCH#[align=right]RIGHT",
+      columns: 50, notch: notch)
+    let drawn = surface.visibleRuns.map(\.segment.text).joined()
+    XCTAssertFalse(drawn.contains("NOTCH"), drawn)
+    XCTAssertFalse(drawn.contains("HIDDEN"), drawn)
+    XCTAssertTrue(drawn.contains("RIGHT"), drawn)
     let excluded = notch.insetBy(dx: -OverlayPanel.statusBarNotchMargin, dy: -100)
     for run in surface.runLayers.prefix(surface.visibleRuns.count) {
       XCTAssertFalse(run.container.frame.intersects(excluded))
@@ -449,13 +467,15 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let surface = render(source(right: "CPU 9%"), columns: 50)
     let cyclic = surface.visibleRuns.indices.filter { surface.visibleRuns[$0].segment.cycle }
     XCTAssertGreaterThan(cyclic.count, 1)
-    let full = surface.visibleRuns[cyclic[0]].segment.text
-    // The right lane grows: the elastic title contracts and the row's tail
-    // gives way, but it is the same article — no vertical push.
+    let full = surface.visibleRuns.filter(\.segment.cycle).map(\.segment.text).joined()
+    XCTAssertTrue(full.contains("…"), full)
+    // The two side segments share the bar. A longer right value is cut inside
+    // the right segment; it does not take columns from the article, and the
+    // same article does not push.
     redraw(surface, source(right: "CPU 10% MEM 40% NET 1.2MiB"), columns: 50)
     let contracted = surface.visibleRuns.filter(\.segment.cycle).map(\.segment.text).joined()
-    XCTAssertNotEqual(contracted, full)
-    XCTAssertTrue(contracted.contains("…"))
+    XCTAssertEqual(contracted, full)
+    XCTAssertTrue(text(surface, .right).hasPrefix("…"))
     XCTAssertTrue(surface.runLayers.allSatisfy { $0.text.animation(forKey: cycleKey) == nil })
     // A new article still pushes.
     redraw(
@@ -471,20 +491,41 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
   /// Moving an overflow cut onto a one-cell glyph swaps it for the ellipsis
   /// in the same cell: a re-budget, not a new value, so it snaps.
   func testCutLandingOnAGlyphSnapsInsteadOfCrossfading() {
-    let surface = render("#[shrink]éé#[noshrink]#[align=right]RRRR", columns: 6)
+    let surface = render("#[shrink]éé", columns: 2)
     XCTAssertEqual(surface.visibleRuns.first?.segment.text, "é")
-    redraw(surface, "#[shrink]éé#[noshrink]#[align=right]RRRRR", columns: 6)
+    redraw(surface, "#[shrink]éé", columns: 1)
     XCTAssertEqual(surface.visibleRuns.first?.segment.text, "…")
     XCTAssertNil(surface.runLayers[0].text.animation(forKey: crossfadeKey))
     XCTAssertNil(surface.runLayers[0].outgoing.animation(forKey: crossfadeKey))
+  }
+
+  /// A right segment that gains a leading ellipsis is the same value cut
+  /// shorter, so it snaps. The frame stays put because the tail still fills
+  /// the segment.
+  func testRightSegmentReBudgetSnapsInsteadOfCrossfading() {
+    let surface = render("#[align=right]abcdefghij", columns: 10)
+    XCTAssertEqual(text(surface, .right), "abcdefghij")
+    redraw(surface, "#[align=right]abcdefghijk", columns: 10)
+    XCTAssertEqual(text(surface, .right), "…cdefghijk")
+    XCTAssertTrue(
+      surface.runLayers.allSatisfy {
+        $0.text.animation(forKey: crossfadeKey) == nil
+          && $0.outgoing.animation(forKey: crossfadeKey) == nil
+      })
   }
 
   func testTruncationEquivalenceIgnoresEllipsisAndTrailingSpaceOnly() {
     XCTAssertTrue(NativeStatusBarSurface.truncationEquivalent("Hello wor…", "Hello world"))
     XCTAssertTrue(NativeStatusBarSurface.truncationEquivalent("Hello world ", "Hello"))
     XCTAssertTrue(NativeStatusBarSurface.truncationEquivalent("", "Hello"))
+    XCTAssertTrue(NativeStatusBarSurface.truncationEquivalent("…fghij", "abcdefghij"))
+    XCTAssertTrue(NativeStatusBarSurface.truncationEquivalent("…234567890", "AB 1234567890"))
     XCTAssertFalse(NativeStatusBarSurface.truncationEquivalent("first", "other"))
     XCTAssertFalse(NativeStatusBarSurface.truncationEquivalent("Hello…", "Help"))
+    XCTAssertFalse(NativeStatusBarSurface.truncationEquivalent(" Hello", "Hello"))
+    XCTAssertTrue(StatusRunRenderer.onlyCutMoved("abcdefghij", "…bcdefghij"))
+    XCTAssertTrue(StatusRunRenderer.onlyCutMoved("Hello world", "Hello wor…"))
+    XCTAssertFalse(StatusRunRenderer.onlyCutMoved("abcdefghij", "xyz"))
   }
 
   func testDrawnNotchTracesTheHousingOutline() {
@@ -526,6 +567,57 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(squat.boundingBox.height, 4, accuracy: 0.001)
   }
 
+  /// A full right lane on the 16-inch menu bar starts a fraction of a point
+  /// inside a 6pt notch margin. That overlap used to discard the whole first
+  /// glyph (the C of Cld). The 4pt default keeps it, still outside the housing.
+  func testOnePointLessNotchMarginKeepsTheGlyphBesideTheHousing() throws {
+    XCTAssertEqual(Config.StatusBar().notchMargin, 4)
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
+    let screenWidth: CGFloat = 1728
+    let notch = CGRect(x: 771, y: 0, width: 185, height: 32)
+    let padding = OverlayPanel.statusBarEdgePadding
+    let columns = Int((screenWidth - padding * 2) / cellWidth)
+    let previous = FlashTunables.statusBarNotchMargin
+    defer { FlashTunables.statusBarNotchMargin = previous }
+
+    let boundary = (0..<columns).first { column in
+      let x = padding + CGFloat(column) * cellWidth
+      let overlap = notch.maxX + 6 - x
+      return overlap > 0 && overlap < 1
+    }
+    let column = try XCTUnwrap(
+      boundary, "the 16-inch housing no longer clips a cell by under a point")
+    let text = "C" + String(repeating: "x", count: columns - column - 1)
+    let document = StatusFormatDocument.parse("#[align=right]\(text)")
+
+    func paint(margin: Double) -> NativeStatusBarSurface {
+      FlashTunables.statusBarNotchMargin = margin
+      let surface = NativeStatusBarSurface()
+      surface.render(
+        document: document,
+        barFrame: CGRect(x: 0, y: 0, width: screenWidth, height: 32),
+        screenFrame: CGRect(x: 0, y: 0, width: screenWidth, height: 1117),
+        scale: 2, notch: notch, font: font,
+        labels: .init(normal: "N", insert: "INSERT", command: "COMMAND"),
+        palette: OverlayPanel.normalPalette, modeStyle: .normal, modeText: "N")
+      return surface
+    }
+
+    let clipped = paint(margin: 6).visibleRuns.map(\.segment.text).joined()
+    XCTAssertFalse(clipped.contains("C"), clipped)
+
+    let kept = paint(margin: 4)
+    let drawn = kept.visibleRuns.map(\.segment.text).joined()
+    XCTAssertTrue(drawn.contains("C"), drawn)
+    let index = try XCTUnwrap(kept.visibleRuns.firstIndex { $0.segment.text.contains("C") })
+    let runText = kept.visibleRuns[index].segment.text
+    let mark = try XCTUnwrap(runText.firstIndex(of: "C"))
+    let offset = runText.distance(from: runText.startIndex, to: mark)
+    let glyphX = kept.runFrames[index].minX + CGFloat(offset) * kept.cellWidth
+    XCTAssertGreaterThanOrEqual(glyphX, notch.maxX)
+  }
+
   func testDrawnAndRealNotchesReserveTheSameClearance() {
     // A drawn recess is the real housing's width, so the lanes have to clear
     // it by the housing's margin too — otherwise the bar would lay out
@@ -548,39 +640,41 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(NativeStatusBarSurface.centreMarginColumns(cellWidth: 0), 0)
   }
 
-  func testAbsoluteCentreDrawsARecessedNotchOfTheRealHousingWidth() throws {
+  func testNotchDrawsARecessedNotchOfTheRealHousingWidth() throws {
     let columns = 60
     let notchWidth: CGFloat = 185
     let source =
-      String(repeating: "L", count: 40) + "#[align=absolute-centre]CENTRE#[align=right]"
+      String(repeating: "L", count: 40) + "#[align=notch]CENTRE#[align=right]"
       + String(repeating: "R", count: 40)
     let surface = render(source, columns: columns, notchWidth: notchWidth)
     XCTAssertFalse(surface.centreNotch.isHidden)
     let notch = try XCTUnwrap(surface.centreNotch.path).boundingBox
-    let notchColumns = Int(ceil(notchWidth / surface.cellWidth))
-    let reserve = StatusBarOverflow.reserve(
-      centre: 6,
-      in: NativeStatusBarSurface.overflowGeometry(
-        columns: columns, cellWidth: surface.cellWidth, notchWidth: notchWidth, leftColumns: nil))
-    XCTAssertEqual(reserve.count, notchColumns)
-    XCTAssertEqual(notch.width, CGFloat(notchColumns) * surface.cellWidth, accuracy: 0.51)
-    XCTAssertEqual(
-      notch.minX, surface.runFrames[0].minX + CGFloat(reserve.lowerBound) * surface.cellWidth,
-      accuracy: 0.51)
-    XCTAssertEqual(notch.height, surface.backgroundLayer.frame.height, accuracy: 0.001)
+    let bar = surface.backgroundLayer.frame
+    let margin = OverlayPanel.statusBarNotchMargin
+    let edge = OverlayPanel.statusBarEdgePadding
+    XCTAssertEqual(notch.width, notchWidth, accuracy: 0.51)
+    XCTAssertEqual(notch.midX, bar.midX, accuracy: 0.51)
+    XCTAssertEqual(notch.height, bar.height, accuracy: 0.001)
     let centre = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "CENTRE" })
     XCTAssertTrue(notch.contains(surface.runFrames[centre]))
+    let left = try glyphSpan(surface, alignments: [.left, .default])
+    let right = try glyphSpan(surface, alignments: [.right])
+    XCTAssertEqual(left.minX, edge, accuracy: 0.01)
+    // The fixture bar is a fraction over an integral column grid. The right
+    // segment ends on that requested edge; the background layer is snapped.
+    let requested = surface.cellWidth * CGFloat(columns) + edge * 2 + 0.001
+    XCTAssertEqual(right.maxX, requested - edge, accuracy: 0.01)
+    let leftGap = notch.minX - left.maxX
+    let rightGap = right.minX - notch.maxX
+    XCTAssertGreaterThanOrEqual(leftGap, margin - 0.51)
+    XCTAssertGreaterThanOrEqual(rightGap, margin - 0.51)
+    XCTAssertEqual(leftGap, rightGap, accuracy: 0.51, "the two notch gaps differ")
     for (index, run) in surface.visibleRuns.enumerated()
-    where index != centre && !run.segment.text.allSatisfy(\.isWhitespace) {
+    where run.segment.alignment != .notch && !run.segment.text.allSatisfy(\.isWhitespace) {
       let frame = surface.runFrames[index]
-      // The recess is snapped to the pixel grid, so allow half a device pixel.
-      let margin =
-        CGFloat(NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth))
-        * surface.cellWidth
       XCTAssertTrue(
         frame.maxX <= notch.minX - margin + 0.51 || frame.minX >= notch.maxX + margin - 0.51,
-        "run '\(run.segment.text)' col=\(run.column)+\(run.columns) frame=\(frame) "
-          + "crowds the notch \(notch) reserve=\(reserve)")
+        "run '\(run.segment.text)' frame=\(frame) crowds the notch \(notch)")
     }
     XCTAssertEqual(
       surface.centreNotch.fillColor,
@@ -595,10 +689,8 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       sublayers.suffix(from: washIndex + 1).allSatisfy { layer in
         surface.runLayers.contains { $0.container === layer }
       })
-    // The recess is at least the housing. A longer centre could widen it, but
-    // these lanes need every column: once the centre is the longest section
-    // it gives way with the lanes, down to the housing's interior and no
-    // further, where it is clipped with an ellipsis.
+    // A longer centre label is cut inside the housing. The recess stays the
+    // housing width.
     redraw(
       surface,
       source.replacingOccurrences(
@@ -606,11 +698,14 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       columns: columns, notchWidth: notchWidth)
     let fixed = try XCTUnwrap(surface.centreNotch.path).boundingBox
     XCTAssertEqual(fixed.width, notch.width, accuracy: 0.001)
-    let clipped = surface.visibleRuns.filter { $0.segment.alignment == .absoluteCentre }
+    let clipped = surface.visibleRuns.filter { $0.segment.alignment == .notch }
     XCTAssertTrue(clipped.contains { $0.segment.text.hasSuffix("…") })
+    let interior =
+      notchWidth
+      - CGFloat(NativeStatusBarSurface.centreGutterColumns * 2) * surface.cellWidth
     XCTAssertLessThanOrEqual(
       clipped.reduce(0) { $0 + $1.columns },
-      notchColumns - NativeStatusBarSurface.centreGutterColumns * 2)
+      Int(floor(interior / surface.cellWidth)))
     // No centre, or a physical notch (which hides the centre): no recess.
     redraw(surface, "LEFT#[align=right]RIGHT", columns: columns, notchWidth: notchWidth)
     XCTAssertTrue(surface.centreNotch.isHidden)
@@ -618,6 +713,34 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
       surface, source, columns: columns, notch: CGRect(x: 200, y: 0, width: 45, height: 30),
       notchWidth: notchWidth)
     XCTAssertTrue(surface.centreNotch.isHidden)
+  }
+
+  func testFeedLabelTitleAndDomainSlideAsOneArticle() throws {
+    func line(_ title: String, _ domain: String, _ url: String) -> String {
+      "#[fg=#EBCB8B]AGGR#[fg=colour245] #[cyc]#[link=\(url)]#[shrink]\(title)"
+        + "#[noshrink] (\(domain))#[nolink]#[nocyc]"
+    }
+    let surface = render(
+      line("Hi café", "one.example", "https://aggr.example/1"), columns: 80)
+    let articleRuns = surface.visibleRuns.filter(\.segment.cycle)
+    XCTAssertEqual(articleRuns.map(\.segment.text), ["Hi café (one.example)"])
+    redraw(
+      surface, line("A much longer headline", "two.example", "https://aggr.example/2"), columns: 80)
+    let article = try XCTUnwrap(
+      surface.visibleRuns.enumerated().first {
+        $0.element.segment.cycle && $0.element.segment.text.contains("two.example")
+      })
+    XCTAssertTrue(article.element.segment.text.contains("A much longer headline"))
+    XCTAssertEqual(surface.visibleRuns.filter(\.segment.cycle).count, 1)
+    let layers = surface.runLayers[article.offset]
+    let motion = try XCTUnwrap(layers.text.animation(forKey: cycleKey) as? CAAnimationGroup)
+    let paths = (motion.animations ?? []).compactMap { ($0 as? CABasicAnimation)?.keyPath }
+    XCTAssertTrue(paths.contains("transform.translation.y"))
+    XCTAssertFalse(paths.contains("transform.translation.x"))
+    XCTAssertNil(layers.container.animation(forKey: cycleKey))
+    let outgoing = (layers.outgoing.string as? NSAttributedString)?.string ?? ""
+    XCTAssertTrue(outgoing.contains("Hi café"))
+    XCTAssertTrue(outgoing.contains("one.example"))
   }
 
   func testIndependentCarouselGroupsDoNotAnimateEachOther() {
@@ -658,122 +781,99 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(unmarked.layout.text, "abcdefghijklm…")
   }
 
-  /// A right lane with nothing marked loses its tail (the clock goes before
-  /// the CPU), and only once every `#[shrink]` span elsewhere is exhausted.
-  func testUnmarkedRightLaneLosesItsTailOnlyAfterMarkedSpansAreExhausted() {
+  /// Each segment is cut to its own width. An unmarked right segment starts
+  /// with an ellipsis; a shrink span elsewhere does not spend the right
+  /// segment's budget.
+  func testUnmarkedRightSegmentStartsWithEllipsisInsideItsOwnWidth() {
     let right = "CPU 10% MEM 20% 12:34"
-    XCTAssertEqual(
-      render(
-        "HN #[shrink]" + String(repeating: "a", count: 30) + "#[noshrink]#[align=right]" + right,
-        columns: 30
-      ).layout.text,
-      "HN aaaaa…" + right, "the marked title gives way while the right lane fits")
-    XCTAssertEqual(
-      render(
-        "HN #[shrink]" + String(repeating: "a", count: 30) + "#[noshrink]#[align=right]" + right,
-        columns: 20
-      ).layout.text,
-      "HN …CPU 10% MEM 20%…")
-
-    // With a drawn recess the centred span narrows to the housing first; the
-    // right lane's tail goes only after that.
-    let housing = 24
-    let columns = 80
-    let longRight = "CPU 10% · MEM 20% · NET 1.2k · Wed 12:34"
+    let columns = 30
     let surface = render(
-      "N#[align=absolute-centre]#[shrink]" + String(repeating: "c", count: 30)
-        + "#[noshrink]#[align=right]" + longRight,
-      columns: columns, notchWidth: housingWidth(columns: housing))
-    let margin = NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth)
-    let interior = housing - NativeStatusBarSurface.centreGutterColumns * 2
-    XCTAssertEqual(
-      text(surface, .absoluteCentre), String(repeating: "c", count: interior - 1) + "…")
-    let rightBudget = (columns - housing + 1) / 2 - margin
-    XCTAssertEqual(text(surface, .right), String(longRight.prefix(rightBudget - 1)) + "…")
-    XCTAssertEqual(
-      try XCTUnwrap(surface.centreNotch.path).boundingBox.width,
-      CGFloat(housing) * surface.cellWidth, accuracy: 0.51)
+      "HN #[shrink]" + String(repeating: "a", count: 30) + "#[noshrink]#[align=right]" + right,
+      columns: columns)
+    XCTAssertTrue(text(surface, .left).hasSuffix("…"))
+    XCTAssertTrue(text(surface, .left).hasPrefix("HN a"))
+    XCTAssertTrue(text(surface, .right).hasPrefix("…"))
+    XCTAssertTrue(text(surface, .right).hasSuffix("12:34"))
+    XCTAssertFalse(text(surface, .right).contains(right))
   }
 
-  /// A long centred name uses the columns the lanes leave free, with no
-  /// fixed `#{=/N/…:}` width in the template, and the recess widens to hold
-  /// it; a short name keeps the housing's width.
-  func testLongCentredLabelUsesFreeColumnsAndWidensTheRecess() throws {
+  /// A centred name stays inside the housing. A long one ends with an ellipsis;
+  /// the recess keeps the housing width for a short name too.
+  func testLongCentredLabelStaysInsideTheHousing() throws {
     let columns = 200
-    let housing = 24
+    let housing = housingWidth(columns: 24)
     let label = "Microsoft Visual Studio Code — flash (ab/dev)"
     XCTAssertEqual(label.count, 45)
     func source(_ label: String) -> String {
-      "#[pill]N#[nopill] FEED#[align=absolute-centre]#[shrink]\(label)#[noshrink]"
+      "#[pill]N#[nopill] FEED#[align=notch]#[shrink]\(label)#[noshrink]"
         + "#[align=right]CPU 10% 12:34"
     }
-    let surface = render(
-      source(label), columns: columns, notchWidth: housingWidth(columns: housing))
-    XCTAssertEqual(text(surface, .absoluteCentre), label)
+    let surface = render(source(label), columns: columns, notchWidth: housing)
+    XCTAssertTrue(text(surface, .notch).hasSuffix("…"))
+    XCTAssertFalse(text(surface, .notch).contains(label))
     let recess = try XCTUnwrap(surface.centreNotch.path).boundingBox
-    let gutter = NativeStatusBarSurface.centreGutterColumns
-    XCTAssertEqual(recess.width, CGFloat(45 + gutter * 2) * surface.cellWidth, accuracy: 0.51)
+    XCTAssertEqual(recess.width, housing, accuracy: 0.51)
     let centre = surface.visibleRuns.indices.filter {
-      surface.visibleRuns[$0].segment.alignment == .absoluteCentre
+      surface.visibleRuns[$0].segment.alignment == .notch
     }.map { surface.runFrames[$0] }.reduce(CGRect.null) { $0.union($1) }
-    XCTAssertEqual(centre.minX - recess.minX, CGFloat(gutter) * surface.cellWidth, accuracy: 0.51)
-    XCTAssertEqual(recess.maxX - centre.maxX, CGFloat(gutter) * surface.cellWidth, accuracy: 0.51)
+    let gutter = CGFloat(NativeStatusBarSurface.centreGutterColumns) * surface.cellWidth
+    XCTAssertGreaterThanOrEqual(centre.minX - recess.minX, gutter - 0.51)
+    XCTAssertGreaterThanOrEqual(recess.maxX - centre.maxX, gutter - 0.51)
+    XCTAssertEqual(centre.minX - recess.minX, recess.maxX - centre.maxX, accuracy: 0.51)
 
-    redraw(
-      surface, source("Finder"), columns: columns, notchWidth: housingWidth(columns: housing))
-    XCTAssertEqual(text(surface, .absoluteCentre), "Finder")
+    redraw(surface, source("Finder"), columns: columns, notchWidth: housing)
+    XCTAssertEqual(text(surface, .notch), "Finder")
     XCTAssertEqual(
-      try XCTUnwrap(surface.centreNotch.path).boundingBox.width,
-      CGFloat(housing) * surface.cellWidth, accuracy: 0.51)
+      try XCTUnwrap(surface.centreNotch.path).boundingBox.width, housing, accuracy: 0.51)
   }
 
-  /// A centred `#[shrink]` label contracts (with an ellipsis) before either
-  /// side lane's unmarked text loses a character.
-  func testCentredShrinkLabelContractsBeforeASideLaneIsCut() throws {
-    let columns = 100
-    let lane = 30
+  /// A centred label longer than the housing ends with an ellipsis. Side
+  /// segments that fit their own width are not cut to make the centre room.
+  func testCentredLabelEndsWithEllipsisWithoutCuttingSideSegments() throws {
+    let lane = 20
     let surface = render(
-      String(repeating: "L", count: lane) + "#[align=absolute-centre]#[shrink]"
+      String(repeating: "L", count: lane) + "#[align=notch]#[shrink]"
         + String(repeating: "c", count: 40) + "#[noshrink]#[align=right]"
         + String(repeating: "R", count: lane),
-      columns: columns, notchWidth: housingWidth(columns: 24))
+      columns: 120, notchWidth: housingWidth(columns: 24))
     XCTAssertEqual(text(surface, .left), String(repeating: "L", count: lane))
     XCTAssertEqual(text(surface, .right), String(repeating: "R", count: lane))
-    let margin = NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth)
-    let centre = columns - 2 * (lane + margin) - NativeStatusBarSurface.centreGutterColumns * 2
-    XCTAssertEqual(
-      text(surface, .absoluteCentre), String(repeating: "c", count: centre - 1) + "…")
+    XCTAssertTrue(text(surface, .notch).hasSuffix("…"))
+    XCTAssertLessThan(text(surface, .notch).count, 40)
     try assertLanesClearTheRecess(surface)
   }
 
-  /// Unmarked centred text is fixed while a lane's `#[shrink]` group can
-  /// still give way.
-  func testUnmarkedCentreStaysIntactWhileALaneGroupCanContract() throws {
-    let label = "Unmarked centred application"
+  /// A centre label that fits the housing stays whole while a side segment's
+  /// last shrink span takes that segment's ellipsis.
+  func testAFittingCentreStaysIntactWhileTheLaneShrinkIsCut() throws {
+    let label = "Finder"
     let surface = render(
       "FEED #[shrink]" + String(repeating: "t", count: 80)
-        + "#[noshrink]#[align=absolute-centre]\(label)#[align=right]CPU 10%",
+        + "#[noshrink]#[align=notch]\(label)#[align=right]CPU 10%",
       columns: 100, notchWidth: housingWidth(columns: 24))
-    XCTAssertEqual(text(surface, .absoluteCentre), label)
+    XCTAssertEqual(text(surface, .notch), label)
     XCTAssertTrue(text(surface, .left).hasPrefix("FEED t"))
     XCTAssertTrue(text(surface, .left).hasSuffix("…"))
     XCTAssertEqual(text(surface, .right), "CPU 10%")
     try assertLanesClearTheRecess(surface)
   }
 
-  /// The widest marked span gives way first, whichever section it is in;
-  /// level spans then alternate in template order.
-  func testLongestShrinkGroupContractsFirstAcrossCentreAndLane() {
+  /// Two shrink spans in one segment: only the last one is cut. The other
+  /// segment is cut to its own budget, not by whichever span is widest.
+  func testOnlyTheLastShrinkInASegmentIsCut() {
     let surface = render(
-      "F #[shrink]" + String(repeating: "t", count: 50)
-        + "#[noshrink]#[align=absolute-centre]#[shrink]" + String(repeating: "a", count: 30)
-        + "#[noshrink]#[align=right]" + String(repeating: "R", count: 20),
-      columns: 90, notchWidth: housingWidth(columns: 24))
-    XCTAssertEqual(
-      NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth), 1)
-    XCTAssertEqual(text(surface, .left), "F " + String(repeating: "t", count: 25) + "…")
-    XCTAssertEqual(text(surface, .absoluteCentre), String(repeating: "a", count: 26) + "…")
-    XCTAssertEqual(text(surface, .right), String(repeating: "R", count: 20))
+      "F #[shrink]KEEP#[noshrink] #[shrink]" + String(repeating: "t", count: 80)
+        + "#[noshrink] END#[align=notch]#[shrink]"
+        + String(repeating: "a", count: 40)
+        + "#[noshrink]#[align=right]" + String(repeating: "R", count: 12),
+      columns: 140, notchWidth: housingWidth(columns: 24))
+    let left = text(surface, .left)
+    XCTAssertTrue(left.contains("KEEP"), left)
+    XCTAssertTrue(left.hasSuffix("END") || left.contains("… END"), left)
+    XCTAssertTrue(left.contains("…"), left)
+    XCTAssertFalse(left.contains(String(repeating: "t", count: 80)), left)
+    XCTAssertTrue(text(surface, .notch).hasSuffix("…"))
+    XCTAssertEqual(text(surface, .right), String(repeating: "R", count: 12))
   }
 
   /// The absolute centre owns its columns plus a gutter: side lanes with
@@ -782,7 +882,7 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let columns = 60
     let surface = render(
       String(repeating: "L", count: 40)
-        + "#[align=absolute-centre]CENTRE"
+        + "#[align=notch]CENTRE"
         + "#[align=right]" + String(repeating: "R", count: 40),
       columns: columns)
     let reserve = StatusBarOverflow.reserve(
@@ -793,20 +893,27 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let centre = try XCTUnwrap(surface.visibleRuns.firstIndex { $0.segment.text == "CENTRE" })
     let centreFrame = surface.runFrames[centre]
     for (index, run) in surface.visibleRuns.enumerated() where index != centre {
+      let text = run.segment.text
+      guard let first = text.firstIndex(where: { !$0.isWhitespace }),
+        let last = text.lastIndex(where: { !$0.isWhitespace })
+      else { continue }
       let frame = surface.runFrames[index]
+      let minX =
+        frame.minX + CGFloat(text.distance(from: text.startIndex, to: first)) * surface.cellWidth
+      let maxX =
+        frame.minX + CGFloat(text.distance(from: text.startIndex, to: last) + 1) * surface.cellWidth
       XCTAssertTrue(
-        frame.maxX <= centreFrame.minX || frame.minX >= centreFrame.maxX,
-        "run \(run.segment.text) overlaps the reserved centre")
+        maxX <= centreFrame.minX || minX >= centreFrame.maxX,
+        "run \(text) overlaps the reserved centre")
     }
     XCTAssertTrue(surface.layout.text.contains("CENTRE"))
   }
 
-  /// With nothing marked, every section loses its own tail: the right lane
-  /// used to lose its head ("…fghij") to keep the end away from the centre,
-  /// and the default truncation point is now the end of each section.
-  func testUnmarkedLanesLoseTheirOwnTail() {
+  /// With nothing marked, the left and the centre lose their ends and the right
+  /// loses its head. A centre label inside the housing is kept.
+  func testUnmarkedLanesCutAtTheirOwnEdge() {
     let document = StatusFormatDocument.parse(
-      "ABCDEFGHIJ#[align=absolute-centre]C#[align=right]abcdefghij")
+      "ABCDEFGHIJ#[align=notch]C#[align=right]abcdefghij")
     func fitted(columns: Int) -> (texts: [String], reserve: Range<Int>) {
       let fitted = NativeStatusBarSurface.fitted(
         document,
@@ -822,24 +929,57 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     let narrow = fitted(columns: 20)
     XCTAssertEqual(narrow.reserve, 6..<14)
     XCTAssertEqual(
-      narrow.texts, ["ABCDE…", "C", "abcde…"], "the centre within the housing is kept")
+      narrow.texts, ["ABCDE…", "C", "…fghij"], "the centre within the housing is kept")
   }
 
-  /// A template without an absolute centre reserves nothing.
-  func testNoAbsoluteCentreReservesNothing() {
-    let document = StatusFormatDocument.parse("LEFT#[align=centre]MID#[align=right]RIGHT")
-    let fitted = NativeStatusBarSurface.fitted(
-      document,
-      in: NativeStatusBarSurface.overflowGeometry(
-        columns: 40, cellWidth: 8, notchWidth: 185, leftColumns: nil))
-    XCTAssertTrue(fitted.reserve.isEmpty)
-    XCTAssertEqual(fitted.document.runs.map(\.text), document.runs.map(\.text))
+  /// `#[align=centre]` reserves the same housing as `#[align=notch]`.
+  func testCentreReservesTheSameHousingAsTheNotch() {
+    let geometry = NativeStatusBarSurface.overflowGeometry(
+      columns: 40, cellWidth: 8, notchWidth: 185, leftColumns: nil)
+    let centre = NativeStatusBarSurface.fitted(
+      StatusFormatDocument.parse("LEFT#[align=centre]MID#[align=right]RIGHT"), in: geometry)
+    let notch = NativeStatusBarSurface.fitted(
+      StatusFormatDocument.parse("LEFT#[align=notch]MID#[align=right]RIGHT"), in: geometry)
+    XCTAssertEqual(centre.reserve, notch.reserve)
+    XCTAssertEqual(centre.reserve.count, Int(ceil(185 / 8)))
+    XCTAssertEqual(centre.document.runs.map(\.text), notch.document.runs.map(\.text))
+  }
+
+  /// The centred label and its recess stay at the middle of the bar. A wider
+  /// right lane does not move either, and the same holds for `#[align=notch]`.
+  func testTheNotchStaysAtTheMiddleWhenTheSidesDiffer() throws {
+    let housing: CGFloat = 185
+    for alignment in ["centre", "notch"] {
+      func draw(_ right: String) -> NativeStatusBarSurface {
+        render(
+          "LEFT#[align=\(alignment)]APP#[align=right]\(right)",
+          columns: 80, notchWidth: housing)
+      }
+      let balanced = draw("RIGHT")
+      let heavy = draw(String(repeating: "R", count: 30))
+      let lane: StatusFormatAlignment = alignment == "centre" ? .centre : .notch
+      var recesses: [CGRect] = []
+      for surface in [balanced, heavy] {
+        XCTAssertFalse(surface.centreNotch.isHidden, alignment)
+        let recess = try XCTUnwrap(surface.centreNotch.path).boundingBox
+        XCTAssertEqual(recess.width, housing, accuracy: 0.51, alignment)
+        XCTAssertEqual(
+          recess.midX, surface.backgroundLayer.frame.midX, accuracy: 0.51, alignment)
+        let label = try glyphSpan(surface, alignments: [lane])
+        XCTAssertEqual(label.midX, recess.midX, accuracy: 0.51, alignment)
+        XCTAssertEqual(text(surface, lane), "APP", alignment)
+        try assertLanesClearTheRecess(surface)
+        recesses.append(recess)
+      }
+      XCTAssertEqual(recesses[0].midX, recesses[1].midX, accuracy: 0.51, alignment)
+      XCTAssertEqual(recesses[0].width, recesses[1].width, accuracy: 0.51, alignment)
+    }
   }
 
   /// A bar too narrow for both lanes and the centre gives the centre up rather
   /// than erasing a lane.
   func testNarrowBarDropsTheCentreReservationInsteadOfStarvingALane() {
-    let document = StatusFormatDocument.parse("L#[align=absolute-centre]CENTRE#[align=right]R")
+    let document = StatusFormatDocument.parse("L#[align=notch]CENTRE#[align=right]R")
     func reserve(columns: Int) -> Range<Int> {
       NativeStatusBarSurface.fitted(
         document,
@@ -862,6 +1002,27 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     (CGFloat(columns) - 0.5) * cellWidth
   }
 
+  /// The glyph bounds of the given alignments, ignoring the blank fill.
+  private func glyphSpan(
+    _ surface: NativeStatusBarSurface, alignments: [StatusFormatAlignment]
+  ) throws -> CGRect {
+    var span = CGRect.null
+    for (index, run) in surface.visibleRuns.enumerated()
+    where alignments.contains(run.segment.alignment) {
+      let text = run.segment.text
+      guard let first = text.firstIndex(where: { !$0.isWhitespace }),
+        let last = text.lastIndex(where: { !$0.isWhitespace })
+      else { continue }
+      let frame = surface.runFrames[index]
+      let minX =
+        frame.minX + CGFloat(text.distance(from: text.startIndex, to: first)) * surface.cellWidth
+      let maxX =
+        frame.minX + CGFloat(text.distance(from: text.startIndex, to: last) + 1) * surface.cellWidth
+      span = span.union(CGRect(x: minX, y: 0, width: maxX - minX, height: 1))
+    }
+    return try XCTUnwrap(span.isNull ? nil : span)
+  }
+
   /// The drawn text of one lane; the left lane includes the default one, and
   /// the blank fill (which carries the default alignment) is trimmed away.
   private func text(_ surface: NativeStatusBarSurface, _ alignment: StatusFormatAlignment)
@@ -878,11 +1039,9 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     _ surface: NativeStatusBarSurface, file: StaticString = #filePath, line: UInt = #line
   ) throws {
     let recess = try XCTUnwrap(surface.centreNotch.path, file: file, line: line).boundingBox
-    let margin =
-      CGFloat(NativeStatusBarSurface.centreMarginColumns(cellWidth: surface.cellWidth))
-      * surface.cellWidth
+    let margin = OverlayPanel.statusBarNotchMargin
     for (index, run) in surface.visibleRuns.enumerated()
-    where run.segment.alignment != .absoluteCentre {
+    where run.segment.alignment != .notch && run.segment.alignment != .centre {
       let text = run.segment.text
       guard let first = text.firstIndex(where: { !$0.isWhitespace }),
         let last = text.lastIndex(where: { !$0.isWhitespace })
@@ -917,6 +1076,9 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .normal: modeText = labels.normal
     case .insert: modeText = labels.insert
     case .command: modeText = labels.command
+    case .hyper: modeText = labels.hyper
+    case .visual: modeText = labels.visual
+    case .drag: modeText = labels.drag
     }
     redraw(
       surface, document: StatusFormatDocument.parse(source), columns: columns, notch: notch,
@@ -938,6 +1100,9 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .normal: palette = OverlayPanel.normalPalette
     case .insert: palette = OverlayPanel.insertPalette
     case .command: palette = OverlayPanel.commandPaletteValue
+    case .hyper: palette = OverlayPanel.hyperPalette
+    case .visual: palette = OverlayPanel.visualPalette
+    case .drag: palette = OverlayPanel.dragPalette
     }
     surface.render(
       document: document,

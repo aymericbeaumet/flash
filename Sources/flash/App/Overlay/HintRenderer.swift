@@ -99,6 +99,7 @@ extension OverlayPanel {
     // `attributedLabel(...)`; the weight stays bold so glyph advance
     // and therefore chip width don't change across keystrokes.
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    resetHintLabelCache(for: HintLabelStyle(fontSize: fontSize, fg: fg, importantFG: importantFG))
     let chipHeight = Self.chipHeight(forFontSize: fontSize)
     let labelYOffset = (chipHeight - fontSize - 2) / 2
     let labelHeight = fontSize + 2
@@ -148,6 +149,7 @@ extension OverlayPanel {
       // translucent backdrop. Larger clicking cells stay tiles.
       let isMouseGridFinalChip =
         isMouseGridHint && hint.target.role == MouseGrid.finalChipRole
+      let gridAppearance = MouseGrid.Appearance.of(role: hint.target.role)
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -165,10 +167,10 @@ extension OverlayPanel {
       // Without this reset, the next activation pulls hidden chips out
       // of the pool and the user sees only the debug outlines.
       chip.isHidden = false
-      // Every chip layer stays at full opacity. Mouse-grid cell
-      // translucency rides on the tint's colour alpha instead (set
-      // below), so the opaque label chip nested inside each cell — and
-      // therefore the letter — never inherits the see-through tint.
+      // Chip layers start at full opacity. Mouse-grid cell translucency
+      // rides on the tint's colour alpha instead (set below), so the label
+      // chip nested inside each cell never inherits the see-through tint;
+      // only the clicking step dims its label on purpose.
       chip.opacity = 1
       let label = dequeueLabelLayer()
       label.isHidden = false
@@ -181,9 +183,8 @@ extension OverlayPanel {
       // a stale regular-weight font from a previous render.
       label.font = labelFont
       label.fontSize = fontSize
-      label.string = Self.attributedLabel(
-        display: hint.display, typedPrefixLen: 0,
-        font: labelFont, fgNS: fg)
+      label.string = cachedLabel(
+        display: hint.display, typedPrefixLen: 0, accent: false, font: labelFont, fgNS: fg)
       label.foregroundColor = fg.cgColor
 
       let labelLen = hint.display.count
@@ -257,7 +258,10 @@ extension OverlayPanel {
         // tint — never the letter — so the hint stays readable on any
         // background (light or dark) without its contrast drifting.
         let tint = Self.mouseGridColor(index: idx)
-        let alpha = CGFloat(mouseGridOpacity)
+        // A preview cell (the step after this one, read ahead) is a faint
+        // tile with a faint label chip, so the step's own cells, drawn over
+        // it, stay the first thing the eye finds (`MouseGrid.Appearance`).
+        let alpha = CGFloat(mouseGridOpacity) * gridAppearance.tint
         chip.cornerRadius = 0
         chip.borderWidth = 1
         chip.colors = [
@@ -266,7 +270,7 @@ extension OverlayPanel {
           (tint.blended(withFraction: 0.40, of: .white) ?? tint)
             .withAlphaComponent(alpha).cgColor,
         ]
-        chip.borderColor = tint.withAlphaComponent(min(1, alpha + 0.3)).cgColor
+        chip.borderColor = tint.withAlphaComponent(min(1, alpha + gridAppearance.border)).cgColor
 
         // Centred hint: the exact "f"-hint chip design (same gradient,
         // corner radius, border, glyph) so the letter is always crisp
@@ -292,6 +296,8 @@ extension OverlayPanel {
           y: labelAbs.minY - chipLocal.minY,
           width: labelAbs.width,
           height: labelAbs.height)
+        // The clicking step's label lets its centre, the click point, show.
+        labelChip.opacity = Float(gridAppearance.label)
         label.frame = CGRect(x: 0, y: labelYOffset, width: chipW, height: labelHeight)
         labelChip.addSublayer(label)
         chip.addSublayer(labelChip)
@@ -299,6 +305,8 @@ extension OverlayPanel {
         chip.cornerRadius = 3
         chip.borderWidth = 1
         if isMouseGridFinalChip {
+          // The chip sits on its click point, so it is see-through.
+          chip.opacity = Float(gridAppearance.label)
           // Mouse-grid cluster only: make the chip background
           // slightly translucent so the user can see what's behind the
           // cluster while picking the precise click target. The label
@@ -319,9 +327,9 @@ extension OverlayPanel {
           chip.colors = importantGradientColors
           chip.borderColor = importantBorderCG
           label.foregroundColor = importantFGCG
-          label.string = Self.attributedLabel(
-            display: hint.display, typedPrefixLen: 0,
-            font: labelFont, fgNS: importantFG)
+          label.string = cachedLabel(
+            display: hint.display, typedPrefixLen: 0, accent: true, font: labelFont,
+            fgNS: importantFG)
         } else {
           chip.colors = gradientColors
           chip.borderColor = borderCG
@@ -391,6 +399,8 @@ extension OverlayPanel {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
+    adjustmentMarkerLayer.strokeColor = Self.nordFrost2CG
+    adjustmentMarkerLayer.lineWidth = 1.5
     adjustmentMarkerLayer.isHidden = false
     attachSelectionMarker()
     CATransaction.commit()
@@ -419,18 +429,37 @@ extension OverlayPanel {
   }
 
   /// Pointer-mode feedback: a ring around the cursor, on the adjustment
-  /// marker layer (the two states are mutually exclusive).
+  /// marker layer (the two states are mutually exclusive). The ring takes the
+  /// colour of the button Flash holds, and grows while one is held, so a
+  /// drag in progress is visible at the pointer.
   func movePointerMarker(to point: CGPoint) {
     let origin = frame.origin
     let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+    let held = ActionDispatcher.heldButton
+    let radius: CGFloat = held == nil ? 11 : 14
     let path = CGMutablePath()
-    path.addEllipse(in: CGRect(x: local.x - 11, y: local.y - 11, width: 22, height: 22))
+    path.addEllipse(
+      in: CGRect(x: local.x - radius, y: local.y - radius, width: radius * 2, height: radius * 2))
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     adjustmentMarkerLayer.path = path
+    adjustmentMarkerLayer.strokeColor = Self.pointerMarkerColor(held: held)
+    adjustmentMarkerLayer.lineWidth = held == nil ? 1.5 : 2.5
     adjustmentMarkerLayer.isHidden = false
     attachSelectionMarker()
     CATransaction.commit()
+  }
+
+  /// The pointer ring's colour: Flash's frost blue at rest, green while the
+  /// primary button is held, orange for the secondary one, purple for the
+  /// middle one.
+  static func pointerMarkerColor(held: MouseButtonKind?) -> CGColor {
+    switch held {
+    case nil: return nordFrost2CG
+    case .primary: return NSColor(red: 0.64, green: 0.75, blue: 0.55, alpha: 1).cgColor
+    case .secondary: return NSColor(red: 0.82, green: 0.53, blue: 0.44, alpha: 1).cgColor
+    case .middle: return NSColor(red: 0.71, green: 0.56, blue: 0.68, alpha: 1).cgColor
+    }
   }
 
   func hide() {
@@ -520,6 +549,47 @@ extension OverlayPanel {
         guard let self, self.commandLineCaretRearmGeneration == generation else { return }
         self.rearmCommandLineCaret()
       }
+    }
+  }
+
+  static func shouldRecoverCommandLineFocus(
+    scheduledGeneration: UInt64,
+    currentGeneration: UInt64,
+    inputMode: OverlayInputMode,
+    fieldIsLaidOut: Bool,
+    panelIsVisible: Bool,
+    holdsKeyboardFocus: Bool,
+    otherFlashWindowIsKey: Bool
+  ) -> Bool {
+    scheduledGeneration == currentGeneration
+      && inputMode == .commandLine
+      && fieldIsLaidOut
+      && panelIsVisible
+      && !holdsKeyboardFocus
+      && !otherFlashWindowIsKey
+  }
+
+  func recoverCommandLineFocusAfterKeyLoss() {
+    let generation = commandLineKeyRecoveryGeneration
+    // A prior INSERT/NORMAL activation handoff can finish after the command
+    // panel has already acquired key focus. The open-time retry then stops,
+    // and the field editor loses its caret until another key event. Reclaim
+    // focus when AppKit reports that loss, after any intentional close has
+    // finished its mode transition.
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let otherFlashWindowIsKey = NSApp.keyWindow.map { $0 !== self } ?? false
+      guard
+        Self.shouldRecoverCommandLineFocus(
+          scheduledGeneration: generation,
+          currentGeneration: self.commandLineKeyRecoveryGeneration,
+          inputMode: self.inputMode,
+          fieldIsLaidOut: self.commandTextFieldIsLaidOut,
+          panelIsVisible: self.isVisible,
+          holdsKeyboardFocus: self.commandLineHoldsKeyboardFocus,
+          otherFlashWindowIsKey: otherFlashWindowIsKey)
+      else { return }
+      self.captureKeyboardInput()
     }
   }
 
@@ -717,11 +787,13 @@ extension OverlayPanel {
     CATransaction.setDisableActions(true)
     let upper = prefix.uppercased()
     let prefixLen = upper.count
-    let labelFont = NSFont.monospacedSystemFont(
-      ofSize: CGFloat(overlayConfig.fontSize), weight: .bold)
+    let fontSize = CGFloat(overlayConfig.fontSize)
+    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let colors = hintColors
     let fgNS = nsColor(fromHex: colors.fg) ?? .black
     let importantFGNS = nsColor(fromHex: colors.importantFG) ?? fgNS
+    resetHintLabelCache(
+      for: HintLabelStyle(fontSize: fontSize, fg: fgNS, importantFG: importantFGNS))
     let tracksBounds = debugConfig.showHintsBounds
     var visible = Set<Int>()
     for (idx, hint) in hints.enumerated() {
@@ -736,14 +808,35 @@ extension OverlayPanel {
       // string's weight — see the note in `display(hints:)`. Cheap;
       // CATextLayer compares font references and noops on equal.
       label.font = labelFont
-      label.string = Self.attributedLabel(
-        display: hint.display, typedPrefixLen: prefixLen, font: labelFont,
-        fgNS: hint.target.priority.usesAccentHintStyle ? importantFGNS : fgNS)
+      let accent = hint.target.priority.usesAccentHintStyle
+      label.string = cachedLabel(
+        display: hint.display, typedPrefixLen: prefixLen, accent: accent, font: labelFont,
+        fgNS: accent ? importantFGNS : fgNS)
     }
     if tracksBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()
+  }
+
+  /// Drop the cached label strings when the style they were built for changed.
+  private func resetHintLabelCache(for style: HintLabelStyle) {
+    guard hintLabelStyle != style else { return }
+    hintLabelStyle = style
+    hintLabelCache.removeAll(keepingCapacity: true)
+  }
+
+  /// The attributed label for a chip, built once per (label, prefix, accent)
+  /// under the current style; `NSAttributedString` is immutable and shared.
+  private func cachedLabel(
+    display: String, typedPrefixLen: Int, accent: Bool, font: NSFont, fgNS: NSColor
+  ) -> NSAttributedString {
+    let key = HintLabelKey(display: display, typedPrefixLen: typedPrefixLen, accent: accent)
+    if let cached = hintLabelCache[key] { return cached }
+    let built = Self.attributedLabel(
+      display: display, typedPrefixLen: typedPrefixLen, font: font, fgNS: fgNS)
+    if hintLabelCache.count < 4096 { hintLabelCache[key] = built }
+    return built
   }
 
   /// Centered paragraph style — immutable, allocated once.

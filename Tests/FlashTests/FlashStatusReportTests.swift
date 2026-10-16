@@ -6,8 +6,11 @@ import XCTest
 final class FlashStatusReportTests: XCTestCase {
   private func report() -> FlashStatusReport {
     FlashStatusReport(
-      version: "1.2.3", build: "45", mode: "normal", hintSession: "idle",
-      focusedApp: "com.apple.Safari", accessibility: true, capture: .tap, secureInput: false,
+      version: "1.2.3", build: "45", mode: "normal", mappingScope: "normal", hintSession: "idle",
+      focusedApp: "com.apple.Safari", frontmostApp: "com.apple.Safari", flashActive: false,
+      accessibility: true, capture: .tap, chordRouting: "mapped_only", heldModifiers: ["ctrl"],
+      secureInput: false,
+      globalChords: ["cmd+<right>", "ctrl+e"],
       inputSource: "com.apple.keylayout.Russian", keyboardLayout: "auto",
       referenceLayout: "com.apple.keylayout.ABC", configPath: "/tmp/flash.toml",
       configDiagnostics: 2, plugins: .init(loaded: 3, ready: 2, error: 1), statusBar: true,
@@ -22,21 +25,33 @@ final class FlashStatusReportTests: XCTestCase {
 
   /// Scripts parse this object; a key added, renamed or dropped is a schema
   /// change and must bump `schema`.
-  func testSchemaV2KeysArePinned() throws {
-    XCTAssertEqual(FlashStatusReport.schema, 2)
+  func testSchemaV4KeysArePinned() throws {
+    XCTAssertEqual(FlashStatusReport.schema, 4)
     XCTAssertEqual(
       FlashStatusReport.keys,
       [
-        "schema", "version", "build", "mode", "hint_session", "focused_app", "accessibility",
-        "capture", "secure_input", "input_source", "keyboard_layout", "reference_layout",
-        "config_path", "config_diagnostics", "plugins", "statusbar", "autostart", "hints",
+        "schema", "version", "build", "mode", "mapping_scope", "hint_session", "focused_app",
+        "frontmost_app", "flash_active", "accessibility", "capture", "chord_routing",
+        "held_modifiers", "secure_input", "global_chords", "input_source",
+        "keyboard_layout", "reference_layout", "config_path", "config_diagnostics", "plugins",
+        "statusbar", "autostart", "hints",
       ])
     let object = try XCTUnwrap(
       JSONSerialization.jsonObject(with: report().data) as? [String: Any])
     XCTAssertEqual(Set(object.keys), Set(FlashStatusReport.keys))
     XCTAssertEqual(
       Set((object["plugins"] as? [String: Any] ?? [:]).keys), ["loaded", "ready", "error"])
-    XCTAssertEqual(object["schema"] as? Int, 2)
+    XCTAssertEqual(object["schema"] as? Int, 4)
+    XCTAssertEqual(object["chord_routing"] as? String, "mapped_only")
+    XCTAssertEqual(object["held_modifiers"] as? [String], ["ctrl"])
+    XCTAssertEqual(object["flash_active"] as? Bool, false)
+    XCTAssertEqual(object["mapping_scope"] as? String, "normal")
+    XCTAssertEqual(object["global_chords"] as? [String], ["cmd+<right>", "ctrl+e"])
+    let text = FlashStatusReport.render(object)
+    XCTAssertTrue(text.contains("mapping scope"), text)
+    XCTAssertTrue(text.contains("cmd+<right> ctrl+e"), text)
+    XCTAssertTrue(text.contains("chord routing"), text)
+    XCTAssertTrue(text.contains("held modifiers"), text)
     XCTAssertEqual(object["capture"] as? String, "tap")
     XCTAssertEqual(object["reference_layout"] as? String, "com.apple.keylayout.ABC")
 
@@ -69,6 +84,19 @@ final class FlashStatusReportTests: XCTestCase {
     XCTAssertEqual(notes?["count"] as? Int, 1)
   }
 
+  /// Status names where a Command chord goes, so a chord that never reaches
+  /// the app can be pinned on the mode, a native surface or a dead tap.
+  func testChordRoutingNamesWhereAModifiedChordGoes() {
+    typealias R = FlashStatusReport
+    XCTAssertEqual(R.chordRouting(nil), "tap_off")
+    XCTAssertEqual(R.chordRouting(.pass), "pass")
+    XCTAssertEqual(R.chordRouting(.swallowIfInsertChordIsMapped), "mapped_only")
+    XCTAssertEqual(R.chordRouting(.swallowIfNativeSurfaceKeyIsMapped), "native_surface")
+    XCTAssertEqual(R.chordRouting(.swallow), "swallowed")
+    XCTAssertEqual(R.modifierNames([]), [])
+    XCTAssertEqual(R.modifierNames([.maskControl, .maskCommand]), ["cmd", "ctrl"])
+  }
+
   func testHintSessionPhaseNamesWhoOwnsTheKeys() {
     typealias R = FlashStatusReport
     XCTAssertEqual(R.hintSessionPhase(route: .labels, active: false, discovering: false), "idle")
@@ -77,12 +105,15 @@ final class FlashStatusReportTests: XCTestCase {
     XCTAssertEqual(R.hintSessionPhase(route: .labels, active: true, discovering: false), "labels")
     XCTAssertEqual(
       R.hintSessionPhase(
-        route: .grid(.bisect, cursorFollows: false), active: true, discovering: false),
+        route: .grid(.qwertyBisect, cursorFollows: false), active: true, discovering: false),
       "grid")
     XCTAssertEqual(R.hintSessionPhase(route: .search, active: true, discovering: false), "search")
     XCTAssertEqual(
       R.hintSessionPhase(route: .adjustment, active: true, discovering: false), "adjusting")
+    XCTAssertEqual(
+      R.hintSessionPhase(route: .confirmation, active: true, discovering: false), "confirming")
     XCTAssertEqual(R.hintSessionPhase(route: .pointer, active: true, discovering: false), "pointer")
+    XCTAssertEqual(R.hintSessionPhase(route: .bigram, active: true, discovering: false), "bigram")
   }
 
   func testCaptureIsTheSessionsOrWhatASessionStartingNowGets() {

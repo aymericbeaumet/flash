@@ -5,7 +5,28 @@ final class DebugServer {
   let host: String
   let port: Int
   private(set) var listeningPort: UInt16?
+  /// `GET` and `DELETE /api/clipboard/<id>`. Nil answers those routes with
+  /// 503. Invoked on the server queue; the completion may run on any queue.
+  typealias ClipboardHTTPHandler = (
+    _ method: String, _ id: String,
+    _ completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) -> Void
+  /// `GET /api/clipboard/history?offset=N`, one bounded page at a time.
+  typealias ClipboardHistoryHTTPHandler = (
+    _ offset: Int,
+    _ completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) -> Void
+  /// `GET`/`PUT /api/config` and `POST /api/config/purge`. Nil answers 503.
+  /// Invoked on the server queue; the completion may run on any queue.
+  typealias ConfigHTTPHandler = (
+    _ method: String, _ purge: Bool, _ body: Data,
+    _ completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) -> Void
+
   private let stateProvider: () -> [String: Any]
+  private let clipboardHTTP: ClipboardHTTPHandler?
+  private let clipboardHistoryHTTP: ClipboardHistoryHTTPHandler?
+  private let configHTTP: ConfigHTTPHandler?
   /// How long the first change of a burst waits for the rest: every change
   /// inside the window joins one snapshot.
   private let coalescingWindowMs: Int
@@ -60,11 +81,17 @@ final class DebugServer {
 
   init(
     host: String, port: Int, coalescingWindowMs: Int = 100,
+    clipboardHTTP: ClipboardHTTPHandler? = nil,
+    clipboardHistoryHTTP: ClipboardHistoryHTTPHandler? = nil,
+    configHTTP: ConfigHTTPHandler? = nil,
     stateProvider: @escaping () -> [String: Any]
   ) {
     self.host = host
     self.port = port
     self.coalescingWindowMs = coalescingWindowMs
+    self.clipboardHTTP = clipboardHTTP
+    self.clipboardHistoryHTTP = clipboardHistoryHTTP
+    self.configHTTP = configHTTP
     self.stateProvider = stateProvider
   }
 
@@ -267,41 +294,119 @@ final class DebugServer {
       return
     }
     connection.start(queue: queue)
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) {
-      [weak self] data, _, _, _ in
+    readRequest(connection, buffer: Data())
+  }
+
+  /// Headers plus `Content-Length` bytes, capped so a Save can carry a real
+  /// config. A GET with no length is complete at the header break. An empty
+  /// chunk that has not ended the connection is not the end of the request.
+  static let maxRequestBytes = 256 * 1024
+
+  enum AssembledRequest: Equatable {
+    case incomplete
+    case tooLarge
+    case ready(headers: String, body: Data)
+  }
+
+  static func assembleRequest(_ data: Data) -> AssembledRequest {
+    if data.count > maxRequestBytes { return .tooLarge }
+    let marker = Data([13, 10, 13, 10])
+    guard let range = data.range(of: marker) else { return .incomplete }
+    let headerData = data.subdata(in: 0..<range.lowerBound)
+    guard let headers = String(data: headerData, encoding: .utf8) else { return .tooLarge }
+    let body = data.subdata(in: range.upperBound..<data.endIndex)
+    guard let length = contentLength(in: headers) else {
+      return .ready(headers: headers, body: Data())
+    }
+    if length < 0 || range.upperBound + length > maxRequestBytes { return .tooLarge }
+    if body.count < length { return .incomplete }
+    return .ready(headers: headers, body: Data(body.prefix(length)))
+  }
+
+  static func contentLength(in headers: String) -> Int? {
+    for line in headers.split(whereSeparator: \.isNewline) {
+      guard line.lowercased().hasPrefix("content-length:") else { continue }
+      let raw = line.dropFirst("content-length:".count)
+        .trimmingCharacters(in: .whitespaces)
+      return Int(raw)
+    }
+    return nil
+  }
+
+  private func readRequest(_ connection: NWConnection, buffer: Data) {
+    connection.receive(minimumIncompleteLength: 1, maximumLength: Self.maxRequestBytes) {
+      [weak self] data, _, isComplete, _ in
       guard let self else {
         connection.cancel()
         return
       }
-      guard let data, let request = String(data: data, encoding: .utf8) else {
-        connection.cancel()
-        return
+      var buffer = buffer
+      if let data, !data.isEmpty { buffer.append(data) }
+      switch Self.assembleRequest(buffer) {
+      case .ready(let headers, let body):
+        self.respond(headers: headers, body: body, connection: connection)
+      case .tooLarge:
+        self.sendText("payload too large", status: "413 Payload Too Large", connection: connection)
+      case .incomplete:
+        guard !isComplete else {
+          connection.cancel()
+          return
+        }
+        self.readRequest(connection, buffer: buffer)
       }
-      // A loopback peer is not enough: a web page can rebind its own hostname
-      // to 127.0.0.1 and read /api/state (clipboard, hints) and /api/logs through the
-      // victim's browser. That request carries the attacker's hostname.
-      guard Self.hostIsLoopback(request: request, port: self.listeningPort) else {
-        FlashLog.warn("[debug] http inspector refused a request for a foreign host")
-        self.sendText("forbidden", status: "403 Forbidden", connection: connection)
-        return
-      }
-      switch Self.route(path: Self.requestPath(request)) {
-      case .app(let found):
-        self.sendHTML(found: found, connection: connection)
-      case .state:
-        self.sendState(
-          refresh: Self.queryValue("refresh", in: request) == "1", connection: connection)
-      case .logs:
-        let trace = Self.queryValue("trace", in: request)
-        let logs =
-          trace.map { id in self.logs.filter { $0["trace"] as? String == id } } ?? self.logs
-        self.sendJSON(["logs": logs], connection: connection)
-      case .traces:
-        self.sendJSON(["traces": Self.traceSummaries(self.logs)], connection: connection)
-      case .events:
-        self.startEvents(connection)
-      case .missingEndpoint:
-        self.sendText("not found", status: "404 Not Found", connection: connection)
+    }
+  }
+
+  private func respond(headers: String, body: Data, connection: NWConnection) {
+    // A loopback peer is not enough: a web page can rebind its own hostname
+    // to 127.0.0.1 and read /api/state (clipboard, hints) and /api/logs through the
+    // victim's browser. That request carries the attacker's hostname.
+    guard Self.hostIsLoopback(request: headers, port: listeningPort) else {
+      FlashLog.warn("[debug] http inspector refused a request for a foreign host")
+      sendText("forbidden", status: "403 Forbidden", connection: connection)
+      return
+    }
+    switch Self.route(path: Self.requestPath(headers)) {
+    case .app(let found):
+      sendHTML(found: found, connection: connection)
+    case .state:
+      sendState(refresh: Self.queryValue("refresh", in: headers) == "1", connection: connection)
+    case .logs:
+      let trace = Self.queryValue("trace", in: headers)
+      let logs = trace.map { id in self.logs.filter { $0["trace"] as? String == id } } ?? self.logs
+      sendJSON(["logs": logs], connection: connection)
+    case .traces:
+      sendJSON(["traces": Self.traceSummaries(self.logs)], connection: connection)
+    case .events:
+      startEvents(connection)
+    case .clipboardItem(let id):
+      serveClipboardItem(id, request: headers, connection: connection)
+    case .clipboardHistory:
+      serveClipboardHistory(request: headers, connection: connection)
+    case .config:
+      serveConfig(purge: false, request: headers, body: body, connection: connection)
+    case .configPurge:
+      serveConfig(purge: true, request: headers, body: body, connection: connection)
+    case .missingEndpoint:
+      sendText("not found", status: "404 Not Found", connection: connection)
+    }
+  }
+
+  private func serveConfig(purge: Bool, request: String, body: Data, connection: NWConnection) {
+    let method = Self.requestMethod(request)
+    let allowed = purge ? method == "POST" : method == "GET" || method == "PUT"
+    guard allowed else {
+      sendText("method not allowed", status: "405 Method Not Allowed", connection: connection)
+      return
+    }
+    guard let configHTTP else {
+      sendText("unavailable", status: "503 Service Unavailable", connection: connection)
+      return
+    }
+    configHTTP(method, purge, body) { [weak self] status, contentType, body in
+      guard let self else { return }
+      self.queue.async {
+        self.sendBytes(body, status: status, contentType: contentType, connection: connection)
       }
     }
   }
@@ -319,14 +424,21 @@ final class DebugServer {
   }
 
   /// The inspector UI is a Svelte app built in `Inspector/` and shipped as
-  /// a single self-contained HTML resource (`Scripts/build-inspector.sh`
-  /// regenerates it). Loaded once and cached; the fallback only fires if
-  /// the resource is somehow missing from the bundle.
-  private static let pageHTML: String = {
-    if let url = Bundle.module.url(forResource: "inspector", withExtension: "html"),
-      let html = try? String(contentsOf: url, encoding: .utf8)
-    {
-      return html
+  /// one self-contained HTML file. A dev install replaces the copy inside
+  /// the app bundle after SwiftPM has already copied the committed resource
+  /// into the build directory. The generated `Bundle.module` lookup misses
+  /// `Contents/Resources` and then reads that build directory, so the app
+  /// copy has to win. Loaded once and cached.
+  private static let pageHTML: String = inspectorPage(
+    appCopy: Bundle.main.resourceURL?
+      .appendingPathComponent("Flash_flash.bundle/inspector.html"),
+    moduleCopy: Bundle.module.url(forResource: "inspector", withExtension: "html"))
+
+  static func inspectorPage(appCopy: URL?, moduleCopy: URL?) -> String {
+    for url in [appCopy, moduleCopy].compactMap({ $0 }) {
+      if let html = try? String(contentsOf: url, encoding: .utf8), !html.isEmpty {
+        return html
+      }
     }
     return """
       <!doctype html><html><head><meta charset="utf-8"><title>Flash Inspector</title></head>
@@ -335,7 +447,7 @@ final class DebugServer {
       <p>UI bundle missing. Run <code>Scripts/build-inspector.sh</code> and rebuild.</p>
       </body></html>
       """
-  }()
+  }
 
   private func sendJSON(_ object: Any, connection: NWConnection) {
     let body = Self.jsonString(object)
@@ -343,6 +455,67 @@ final class DebugServer {
       Self.response(body: body, contentType: "application/json; charset=utf-8"),
       connection: connection,
       close: true)
+  }
+
+  private func serveClipboardItem(_ id: String, request: String, connection: NWConnection) {
+    let method = Self.requestMethod(request)
+    guard method == "GET" || method == "DELETE" else {
+      sendText("method not allowed", status: "405 Method Not Allowed", connection: connection)
+      return
+    }
+    guard let clipboardHTTP else {
+      sendText("unavailable", status: "503 Service Unavailable", connection: connection)
+      return
+    }
+    clipboardHTTP(method, id) { [weak self] status, contentType, body in
+      guard let self else { return }
+      self.queue.async {
+        self.sendBytes(body, status: status, contentType: contentType, connection: connection)
+      }
+    }
+  }
+
+  private func serveClipboardHistory(request: String, connection: NWConnection) {
+    guard Self.requestMethod(request) == "GET" else {
+      sendText("method not allowed", status: "405 Method Not Allowed", connection: connection)
+      return
+    }
+    guard let offset = Self.clipboardHistoryOffset(request) else {
+      sendText("invalid offset", status: "400 Bad Request", connection: connection)
+      return
+    }
+    guard let clipboardHistoryHTTP else {
+      sendText("unavailable", status: "503 Service Unavailable", connection: connection)
+      return
+    }
+    clipboardHistoryHTTP(offset) { [weak self] status, contentType, body in
+      guard let self else { return }
+      self.queue.async {
+        self.sendBytes(body, status: status, contentType: contentType, connection: connection)
+      }
+    }
+  }
+
+  private func sendBytes(
+    _ body: Data, status: String, contentType: String, connection: NWConnection
+  ) {
+    let type =
+      contentType.contains(where: \.isNewline) ? "application/octet-stream" : contentType
+    let header =
+      [
+        "HTTP/1.1 \(status)",
+        "Content-Type: \(type)",
+        "Content-Length: \(body.count)",
+        "Cache-Control: no-store",
+        "X-Content-Type-Options: nosniff",
+      ].joined(separator: "\r\n") + "\r\n\r\n"
+    var bytes = Data(header.utf8)
+    bytes.append(body)
+    connection.send(
+      content: bytes,
+      completion: .contentProcessed { _ in
+        connection.cancel()
+      })
   }
 
   private func sendText(_ text: String, status: String, connection: NWConnection) {
@@ -357,13 +530,15 @@ final class DebugServer {
     let id = UUID()
     eventConnections[id] = connection
     DispatchQueue.main.async { [weak self] in self?.streamsDidChange(by: 1) }
-    let headers = """
-      HTTP/1.1 200 OK\r
-      Content-Type: text/event-stream\r
-      Cache-Control: no-cache\r
-      Connection: keep-alive\r
-      \r
-      """
+    // A multiline string drops the newline before its closing delimiter, so
+    // the blank line has to be an ordinary string. A bare CR here makes
+    // strict clients reject the stream and the inspector stays disconnected.
+    let headers =
+      "HTTP/1.1 200 OK\r\n"
+      + "Content-Type: text/event-stream\r\n"
+      + "Cache-Control: no-cache\r\n"
+      + "Connection: keep-alive\r\n"
+      + "\r\n"
     send(headers, connection: connection, close: false)
     // A stale cache is not sent: the publish this stream arms delivers the
     // current state instead.
@@ -509,6 +684,20 @@ final class DebugServer {
     return nil
   }
 
+  static func clipboardHistoryOffset(_ request: String) -> Int? {
+    let first = request.split(whereSeparator: \.isNewline).first ?? ""
+    let parts = first.split(separator: " ")
+    guard parts.count >= 2 else { return nil }
+    let target = parts[1].split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+    guard target.count == 2 else { return target.count == 1 ? 0 : nil }
+    guard target[1].hasPrefix("offset=") else { return nil }
+    let raw = target[1].dropFirst("offset=".count)
+    guard !raw.isEmpty, raw.utf8.allSatisfy({ (48...57).contains($0) }),
+      let offset = Int(raw), offset <= 10_000
+    else { return nil }
+    return offset
+  }
+
   /// How the server answers a request path. Data endpoints live under
   /// `/api/`; every other path belongs to the help app, found or not.
   enum Route: Equatable {
@@ -517,6 +706,10 @@ final class DebugServer {
     case logs
     case traces
     case events
+    case clipboardHistory
+    case clipboardItem(id: String)
+    case config
+    case configPurge
     case missingEndpoint
   }
 
@@ -526,10 +719,31 @@ final class DebugServer {
     case "/api/logs": return .logs
     case "/api/traces": return .traces
     case "/api/events": return .events
+    case "/api/clipboard/history": return .clipboardHistory
+    case "/api/config": return .config
+    case "/api/config/purge": return .configPurge
     default:
+      if let id = clipboardItemID(path: path) { return .clipboardItem(id: id) }
       if path == "/api" || path.hasPrefix("/api/") { return .missingEndpoint }
       return .app(found: Page(path: path) != nil)
     }
+  }
+
+  /// `/api/clipboard/<32 lowercase hex>` is one history entry. Anything else
+  /// under `/api/` stays missing, so a crafted id cannot escape that shape.
+  static func clipboardItemID(path: String) -> String? {
+    let prefix = "/api/clipboard/"
+    guard path.hasPrefix(prefix) else { return nil }
+    let id = path.dropFirst(prefix.count)
+    guard id.utf8.count == 32,
+      id.utf8.allSatisfy({ byte in (48...57).contains(byte) || (97...102).contains(byte) })
+    else { return nil }
+    return String(id)
+  }
+
+  static func requestMethod(_ request: String) -> String {
+    let line = request.split(whereSeparator: \.isNewline).first ?? ""
+    return String(line.split(separator: " ").first ?? "GET").uppercased()
   }
 
   private static func requestPath(_ request: String) -> String {
@@ -578,8 +792,8 @@ extension DebugServer {
   /// API; the server recognizes the same paths so a direct load or reload of
   /// any page receives the app. `Inspector/src/lib/routes.ts` mirrors this
   /// table: `/`, `/docs[/<topic>]`, `/mappings`, `/commands`,
-  /// `/plugins[/<id>]`, `/state`, `/logs` and `/clipboard`. Fragments stay
-  /// free for in-page anchors.
+  /// `/plugins[/<id>]`, `/state`, `/logs`, `/clipboard` and
+  /// `/search`. Fragments stay free for in-page anchors.
   enum Page: Equatable {
     case home
     case docs(topic: String?)
@@ -589,11 +803,15 @@ extension DebugServer {
     case state
     case logs
     case clipboard
+    /// Search results across guides, commands, mappings and plugins; the
+    /// query travels in `?q=` so a search can be reloaded and shared.
+    case search
 
     /// Pages that accept one detail segment, such as a topic or plugin id.
     private static let detailPages: Set<String> = ["docs", "plugins"]
     private static let pages: Set<String> = [
       "docs", "mappings", "commands", "plugins", "state", "logs", "clipboard",
+      "search",
     ]
     /// RFC 3986 unreserved characters: everything else in a detail segment,
     /// including `/`, `?` and `#`, is percent-encoded.
@@ -611,6 +829,7 @@ extension DebugServer {
       case .state: return "/state"
       case .logs: return "/logs"
       case .clipboard: return "/clipboard"
+      case .search: return "/search"
       }
     }
 
@@ -636,6 +855,7 @@ extension DebugServer {
       case "plugins": self = .plugins(id: detail)
       case "state": self = .state
       case "logs": self = .logs
+      case "search": self = .search
       default: self = .clipboard
       }
     }

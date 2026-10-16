@@ -6,7 +6,8 @@ import CoreGraphics
 /// marks a discovered hint target as one (`JumpTarget.isTextInput`, in UIKit
 /// content `IOSContent.canTakeKeyboardFocus`, and anywhere in a declared
 /// terminal emulator), so a grid click and a hint click enter INSERT under one
-/// rule.
+/// rule. A discovered terminal link hint opts out: opening a link stays in
+/// NORMAL.
 public enum AXTextInputProbe {
   /// The deepest element under a point is often a text run inside the field
   /// (web editors expose AXStaticText children), so a few ancestors are checked.

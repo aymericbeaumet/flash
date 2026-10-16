@@ -491,6 +491,26 @@ impl Context {
         self.call_host("host.audio_devices", params).await
     }
 
+    /// Move the default output one macOS volume-key tick in the sign of
+    /// `delta_percent` and clear mute. The host applies the 16-tick scale
+    /// through CoreAudio; a sandboxed plugin cannot run AppleScript
+    /// `set volume`. Requires the `audio_devices` capability.
+    pub async fn adjust_output_volume(&self, delta_percent: i32) -> bool {
+        ok(&self
+            .call_host(
+                "host.audio_devices",
+                json!({ "volume_delta": delta_percent }),
+            )
+            .await)
+    }
+
+    /// Toggle mute on the default output. Requires the `audio_devices` capability.
+    pub async fn toggle_output_mute(&self) -> bool {
+        ok(&self
+            .call_host("host.audio_devices", json!({ "mute": "toggle" }))
+            .await)
+    }
+
     /// Read the host's process table (`host.process_table`), optionally
     /// sampling CPU over `sample_window_ms`. Returns the raw result object
     /// (rows under `"processes"`). Requires the `process_control` capability.
@@ -1336,6 +1356,18 @@ mod tests {
                 "host.audio_devices",
                 json!({ "direction": "input" }),
                 call!(|ctx| ctx.audio_devices("input", None).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "volume_delta": 10 }),
+                call!(|ctx| ctx.adjust_output_volume(10).await),
+                json!(true),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "mute": "toggle" }),
+                call!(|ctx| ctx.toggle_output_mute().await),
                 json!(true),
             ),
             (

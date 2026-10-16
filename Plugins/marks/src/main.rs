@@ -55,8 +55,8 @@ impl FlashPlugin for Marks {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "set_mark" => set_mark_command(self, &ctx, &command).await,
-            "jump_to_mark" => jump_to_mark_command(self, &ctx, &command).await,
+            "set" => set_mark_command(self, &ctx, &command).await,
+            "jump" => jump_to_mark_command(self, &ctx, &command).await,
             other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
     }
@@ -73,23 +73,28 @@ fn replace_running_apps(plugin: &Marks, ctx: &Context) {
     }
 }
 
-/// Pull `letter=X` from `args`. Verb args arrive as positional `["letter=a"]`
-/// strings — same convention the host uses for all plugin-verb dispatches. The
-/// letter is normalised to a single lowercase char/digit; anything else is
-/// rejected so a typo doesn't quietly create a `letter=` slot.
+/// A letter is one alphanumeric character: `flash marks set a`, or
+/// `--letter=a`. Anything else is rejected so a typo does not create a slot.
 fn parse_letter(command: &CommandRequest) -> Option<String> {
-    for arg in &command.args {
-        if let Some(value) = arg.strip_prefix("letter=") {
-            let trimmed = value.trim();
-            if trimmed.chars().count() != 1 {
-                return None;
-            }
-            let ch = trimmed.chars().next()?;
-            if !ch.is_alphanumeric() {
-                return None;
-            }
-            return Some(ch.to_lowercase().to_string());
+    fn one_letter(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.chars().count() != 1 {
+            return None;
         }
+        let ch = trimmed.chars().next()?;
+        if !ch.is_alphanumeric() {
+            return None;
+        }
+        Some(ch.to_lowercase().to_string())
+    }
+    for arg in &command.args {
+        let body = arg.strip_prefix("--").unwrap_or(arg.as_str());
+        if let Some(value) = body.strip_prefix("letter=") {
+            return one_letter(value);
+        }
+    }
+    if command.args.len() == 1 {
+        return one_letter(&command.args[0]);
     }
     None
 }
@@ -100,7 +105,7 @@ async fn set_mark_command(
     command: &CommandRequest,
 ) -> PerformResponse {
     let Some(letter) = parse_letter(command) else {
-        return PerformResponse::fail("set_mark requires letter=<a-z|0-9>");
+        return PerformResponse::fail("usage: marks set <a-z|0-9>");
     };
     let Some(target) = ctx.normal_mode_target().await else {
         return PerformResponse::fail("no focused non-flash app");
@@ -133,7 +138,7 @@ async fn jump_to_mark_command(
     command: &CommandRequest,
 ) -> PerformResponse {
     let Some(letter) = parse_letter(command) else {
-        return PerformResponse::fail("jump_to_mark requires letter=<a-z|0-9>");
+        return PerformResponse::fail("usage: marks jump <a-z|0-9>");
     };
     let mark = plugin
         .state

@@ -319,7 +319,7 @@ impl FlashPlugin for Network {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "" => current_response(),
+            "show" => current_response(),
             "refresh" => {
                 let wifi_ssid = ctx.wifi_ssid(true).await;
                 try_refresh_network(&ctx, STARTUP, wifi_ssid).await;
@@ -656,7 +656,9 @@ fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<Rend
     );
     Some(RenderedStatus {
         summary: visible_summary(state, summary_mode),
-        label: Markup::colored("NET", Color::TITLE) + " " + Markup::colored(rate, Color::MUTED),
+        // The template owns the name and the width (`#[label]NET #[default]#{p-4:…}`).
+        // The host trims a status value, so the reserved cells live in `p-4`.
+        label: Markup::text(rate.trim()),
         details,
         raw: raw_metrics(state),
     })
@@ -912,9 +914,9 @@ mod tests {
     #[test]
     fn label_keeps_aggregate_rate_width_across_units_and_sampling() {
         for (rate, expected) in [
-            (None, "   —"),
-            (Some(0.0), "  0B"),
-            (Some(9.0), "  9B"),
+            (None, "—"),
+            (Some(0.0), "0B"),
+            (Some(9.0), "9B"),
             (Some(999.0), "999B"),
             (Some(999.96), "1.0K"),
             (Some(1200.0), "1.2K"),
@@ -931,10 +933,8 @@ mod tests {
                 ..NetworkState::default()
             };
             let status = render_status(&state, SummaryMode::Full).unwrap();
-            assert_eq!(
-                status.label.as_str(),
-                format!("#[fg=#EBCB8B]NET#[default] #[fg=colour245]{expected}#[default]")
-            );
+            assert_eq!(status.label.as_str(), expected);
+            assert!(!status.label.as_str().contains("#["));
             let wire = wire(&status);
             assert!(wire["summary"].contains("popup="));
             assert_eq!(wire["label"], status.label.as_str());
@@ -1229,10 +1229,7 @@ default fe80::%utun6 UGcIg utun6\n";
         emit_status_if_changed(&ctx);
         let frames = harness.drain_status();
         assert_eq!(frames.len(), 1);
-        assert_eq!(
-            frames[0]["label"],
-            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]   —#[default]"
-        );
+        assert_eq!(frames[0]["label"], "—");
         assert!(frames[0]["summary"].starts_with("#[popup=inline:"));
         assert!(frames[0]["details"].starts_with("#[fg=#EBCB8B]Network#[default]\n"));
         for raw in [
@@ -1252,10 +1249,7 @@ default fe80::%utun6 UGcIg utun6\n";
         emit_status_if_changed(&ctx);
         let frames = harness.drain_status();
         assert_eq!(frames.len(), 1);
-        assert_eq!(
-            frames[0]["label"],
-            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]1.2M#[default]"
-        );
+        assert_eq!(frames[0]["label"], "1.2M");
         assert_eq!(frames[0]["down_bps"], "600000");
         assert_eq!(frames[0]["up_bps"], "600000");
     }
@@ -1280,7 +1274,7 @@ default fe80::%utun6 UGcIg utun6\n";
                 .unwrap()
                 .label
                 .as_str(),
-            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]   —#[default]"
+            "—"
         );
         state.rates = Some(TransferRates {
             received: 600_000.0,
@@ -1291,7 +1285,7 @@ default fe80::%utun6 UGcIg utun6\n";
                 .unwrap()
                 .label
                 .as_str(),
-            "#[fg=#EBCB8B]NET#[default] #[fg=colour245]1.2M#[default]"
+            "1.2M"
         );
     }
 
@@ -1442,9 +1436,9 @@ default fe80::%utun6 UGcIg utun6\n";
             "{details}"
         );
 
-        let bare = Network.on_command(harness.context(), command("")).await;
-        assert!(bare.is_ok());
-        let message = bare.toast_message().expect("toast").to_string();
+        let show = Network.on_command(harness.context(), command("show")).await;
+        assert!(show.is_ok());
+        let message = show.toast_message().expect("toast").to_string();
         assert!(message.contains("Network"), "{message}");
 
         // An explicit refresh asks for authorization and reflects the new SSID.

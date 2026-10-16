@@ -58,18 +58,21 @@ final class TerminalConfigTests: XCTestCase {
 
   func testPopupSizeParsesCellsAndPercentagesPerSide() {
     XCTAssertEqual(Config.PopupSize.default.description, "100x28")
-    for raw in ["100x28", "90%x85%", "120x50%", "1x1", "1000x1000", "100%x1%"] {
+    for raw in [
+      "100x28", "90%x85%", "120x50%", "1x1", "1000x1000", "100%x1%", "78.615%x78.615%",
+      "90%x78.615%", "1.5%x100%",
+    ] {
       XCTAssertEqual(Config.PopupSize(raw)?.description, raw, raw)
     }
     for raw in [
       "", "100", "100X28", "0x28", "1001x28", "0%x10%", "101%x10%", "100 x 28", "-1x28",
-      "10.5x28", "x28", "100x", "100x28x3", "%x28",
+      "10.5x28", "x28", "100x", "100x28x3", "%x28", "0.5%x10%", "100.1%x50%", "78.615.1%x10%",
     ] {
       XCTAssertNil(Config.PopupSize(raw), raw)
     }
   }
 
-  func testPopupSizeGridsFitTheScreen() {
+  func testPopupSizeGridsFitTheScreen() throws {
     let cell = CGSize(width: 8, height: 16)
     let screen = CGSize(width: 1000, height: 820)
     // Cells are exact until the screen is too small.
@@ -85,6 +88,13 @@ final class TerminalConfigTests: XCTestCase {
     XCTAssertTrue(
       Config.PopupSize(columns: .percent(1), rows: .percent(1)).grid(
         visible: screen, cell: cell, inset: 10) == (1, 1))
+    // A fractional percentage is not truncated to a whole percent: 78.615% of
+    // 1000 points is 786 cells of 1 point, where 78% would be 780.
+    let fraction = try XCTUnwrap(Config.PopupSize("78.615%x78.615%"))
+    XCTAssertTrue(
+      fraction.grid(
+        visible: CGSize(width: 1000, height: 1000), cell: CGSize(width: 1, height: 1), inset: 0)
+        == (786, 786))
     XCTAssertTrue(percent.followsScreen)
     XCTAssertFalse(cells.followsScreen)
     XCTAssertTrue(percent.unplacedGrid == (100, 28))
@@ -180,26 +190,6 @@ final class TerminalConfigTests: XCTestCase {
         $0.message.contains("popup.editor.persistent must be true or false")
       })
     XCTAssertTrue(config.invalidPopupNames.contains("editor"))
-  }
-
-  func testRetiredTerminalKeysPointAtTheirReplacements() {
-    let config = ConfigLoader.parse(
-      """
-      [popup.feed]
-      command = ["newsboat"]
-      working_directory = "."
-      """)
-    XCTAssertTrue(
-      config.diagnostics.contains {
-        $0.message == "popup.feed: unknown key 'working_directory' — did you mean 'cwd'?"
-      }, "\(config.diagnostics)")
-    for key in ["columns", "rows"] {
-      let sized = ConfigLoader.parse("[popup.feed]\ncommand = [\"newsboat\"]\n\(key) = 30")
-      XCTAssertTrue(
-        sized.diagnostics.contains {
-          $0.message == "popup.feed: unknown key '\(key)' — did you mean 'size'?"
-        }, "\(sized.diagnostics)")
-    }
   }
 
   func testResolvedDiagnosticsDoNotExposeTerminalCommandsOrEnvironment() {

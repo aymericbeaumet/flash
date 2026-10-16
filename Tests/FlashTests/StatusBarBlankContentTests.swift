@@ -6,7 +6,7 @@ final class StatusBarBlankContentTests: XCTestCase {
   private let template = FlashStatusBarTemplate(
     template: """
       #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
-      #[align=absolute-centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
+      #[align=notch]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
       #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
       #[popup=quota]#{flash.plugin.quota.label}#[nopopup]
       #[fg=colour245] · #{flash.plugin.cpu.label} #{flash.plugin.memory.label}
@@ -106,7 +106,7 @@ final class StatusBarBlankContentTests: XCTestCase {
     _ document: StatusFormatDocument, columns: Int, physicalNotch: Bool
   ) -> [StatusFormatLayout.PositionedRun] {
     let prepared = NativeStatusBarSurface.preparedDocument(
-      document, pillColumns: 10, hideCentre: physicalNotch)
+      document, pillColumns: 10, hideNotch: physicalNotch)
     let notch = (columns / 2 - 12)..<(columns / 2 + 12)
     let fitted = NativeStatusBarSurface.fitted(
       prepared,

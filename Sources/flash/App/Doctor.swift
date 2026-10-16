@@ -137,7 +137,8 @@ enum Doctor {
             + (holders.isEmpty ? "an unknown process" : holders.joined(separator: ", ")),
           details: [
             "The keyboard tap sees no keys while it lasts; hints read keys through the key window.",
-            "It usually means a password field has focus, or an app left secure input on.",
+            "A focused password field is left alone. When the flag stays on without one, "
+              + "Flash asks the holding app to release it.",
           ]))
     } else {
       checks.append(Check(id: "secure_input", status: .ok, summary: "secure input is off"))

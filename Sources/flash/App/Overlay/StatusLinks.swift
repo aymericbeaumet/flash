@@ -14,6 +14,29 @@ enum StatusBarHoverGate: Equatable {
   func permits(_ name: String) -> Bool { self != .dismissed(name) }
 }
 
+/// What a click-window sync depends on, compared as values: no per-layout
+/// string of every band, link and popup body.
+struct StatusBarClickSignature: Equatable {
+  struct Link: Equatable {
+    var x: CGFloat
+    var y: CGFloat
+    var width: CGFloat
+    var url: URL
+  }
+  struct Popup: Equatable {
+    var x: CGFloat
+    var y: CGFloat
+    var width: CGFloat
+    var anchorX: CGFloat
+    var anchorWidth: CGFloat
+    var name: String
+    var content: String
+  }
+  var bands: [CGRect]
+  var links: [Link]
+  var popups: [Popup]
+}
+
 struct StatusBarPopupRegion: Equatable {
   /// The hover and click target: the whole span, across the bar's height.
   var rect: CGRect
@@ -24,6 +47,9 @@ struct StatusBarPopupRegion: Equatable {
   /// bar's height: the bounds the hover wash hugs. Nil when no bar measured
   /// the span.
   var textBounds: CGRect? = nil
+  /// The first `#[link]` on the span. A fresh popup whose command names
+  /// `$FLASH_STATUS_LINK` receives it when the hover starts the process.
+  var link: String? = nil
 
   /// What the popup hangs from (`OverlayPanel.statusBarPopupFrame`).
   var anchor: CGRect { textBounds ?? rect }
@@ -66,6 +92,24 @@ struct StatusBarScreenInteractions {
   /// The bar's hint regions (`OverlayPanel.statusBarHintRegions`), measured
   /// with the same layout as `links` and `popups`.
   var hints: [StatusBarHintRegion] = []
+}
+
+/// One drawn status-bar run, in screen coordinates, for a letter search.
+struct StatusBarLetterRun: Equatable {
+  /// The glyphs. A pill run is its label; the padded cells are not searchable.
+  var text: String
+  /// The run's screen rect. A left-aligned run starts at `minX`. A centred
+  /// run (the mode pill) draws `text` in the middle of the rect.
+  var frame: CGRect
+  var cellWidth: CGFloat
+  var centered: Bool
+}
+
+/// The status bar on one screen: its glyphs and the interactive spans `f` hints.
+struct StatusBarLetterSurface: Equatable {
+  var screenFrame: CGRect
+  var runs: [StatusBarLetterRun]
+  var regions: [StatusBarHintRegion]
 }
 
 /// The status bar's click surface: one window per screen spanning the menu-bar
@@ -139,10 +183,6 @@ final class StatusBarClickView: NSView {
   /// pointer is over plain text or has left) so the bar can wash it.
   var onHoverHighlight: ((CGRect?) -> Void)?
 
-  static func focusesPopup(overLink: Bool, modifiers: NSEvent.ModifierFlags) -> Bool {
-    !overLink || modifiers.contains(.option)
-  }
-
   /// The wash follows the narrowest interactive span under the pointer. A
   /// whole-row popup — a feed row wraps its label, title, domain and arrow in
   /// one region so they share one preview — must not wash the entire row when
@@ -160,7 +200,6 @@ final class StatusBarClickView: NSView {
   private var mouseDownLocation: NSPoint?
   private var rightMouseDownLocation: NSPoint?
   private var mouseDownURL: URL?
-  private var mouseDownPopup: StatusBarPopupRegion?
   private var rightMouseDownPopup: StatusBarPopupRegion?
 
   /// Movement past this (points) counts as a drag, not a click.
@@ -181,18 +220,15 @@ final class StatusBarClickView: NSView {
     // being replayed as a synthetic click into this window, so there is no
     // pending gesture to reconcile against whatever the bar published since.
     mouseDownURL = links.first(where: { $0.rect.contains(local) })?.url
-    mouseDownPopup = popups.first(where: { $0.rect.contains(local) })
     FlashLog.trace(
       "[statusbar] click_down at=\(local) links=\(links.count) popups=\(popups.count) "
-        + "url=\(mouseDownURL?.absoluteString ?? "nil") "
-        + "popup=\(mouseDownPopup?.name ?? "nil")")
+        + "url=\(mouseDownURL?.absoluteString ?? "nil")")
   }
 
   override func mouseUp(with event: NSEvent) {
     defer {
       mouseDownLocation = nil
       mouseDownURL = nil
-      mouseDownPopup = nil
     }
     guard let start = mouseDownLocation,
       Self.isClick(from: start, to: event.locationInWindow)
@@ -202,16 +238,7 @@ final class StatusBarClickView: NSView {
       return
     }
     let url = mouseDownURL
-    FlashLog.trace(
-      "[statusbar] click_up url=\(url?.absoluteString ?? "nil") "
-        + "popup=\(mouseDownPopup?.name ?? "nil")")
-    if let popup = mouseDownPopup,
-      Self.focusesPopup(overLink: url != nil, modifiers: event.modifierFlags)
-    {
-      let point = window?.convertPoint(toScreen: event.locationInWindow) ?? .zero
-      onPopupClick?(popup, point)
-      return
-    }
+    FlashLog.trace("[statusbar] click_up url=\(url?.absoluteString ?? "nil")")
     if let url {
       onLinkActivated?()
       activate(url: url)
@@ -369,6 +396,34 @@ final class StatusBarClickPanel: NSPanel {
   var clickView: StatusBarClickView { contentView as! StatusBarClickView }
 }
 
+/// The hover dwell before a terminal popup's child is forked: idle, or one
+/// named popup waiting with its pending work item. One value, so a move that
+/// arrives while the dwell is pending can only keep waiting or cancel it,
+/// never present early.
+enum StatusBarSpawnDwell {
+  case idle
+  case dwelling(name: String, work: DispatchWorkItem)
+
+  var pendingName: String? {
+    if case .dwelling(let name, _) = self { return name }
+    return nil
+  }
+
+  /// Cancel the pending work, returning the popup it was waiting for.
+  mutating func cancel() -> String? {
+    guard case .dwelling(let name, let work) = self else { return nil }
+    work.cancel()
+    self = .idle
+    return name
+  }
+}
+
+/// The reveal probe's last verdict and the tracking cycle it belongs to.
+struct MenuBarRevealProbeState: Equatable {
+  var generation: UInt64 = 0
+  var revealed = false
+}
+
 extension OverlayPanel {
   func statusLinkRects(
     raw: String, font: NSFont, labelFrame: CGRect, alignment: CATextLayerAlignmentMode,
@@ -521,7 +576,8 @@ extension OverlayPanel {
           height: barFrame.height),
         name: run.name,
         content: run.content,
-        document: run.document ?? statusBarPopupDocuments[run.name])
+        document: run.document ?? statusBarPopupDocuments[run.name],
+        link: run.link)
     }
   }
 
@@ -582,28 +638,36 @@ extension OverlayPanel {
     // hover. Sweeping the pointer across the bar must not spawn one child per
     // span, so such a popup waits for a short dwell with the pointer still on
     // it before it is prepared; document popups and running sessions show
-    // immediately as before.
-    if statusBarTerminalNeedsSpawnHandler?(popup.name) == true,
-      statusBarHoverDwellName != popup.name
-    {
-      statusBarHoverDwellWork?.cancel()
-      statusBarHoverDwellName = popup.name
+    // immediately as before. While the dwell is pending every further move
+    // on that span keeps waiting: only the dwell's own work item presents.
+    if statusBarTerminalNeedsSpawnHandler?(popup.name) == true {
+      if statusBarSpawnDwell.pendingName == popup.name { return }
+      _ = statusBarSpawnDwell.cancel()
       let work = DispatchWorkItem { [weak self] in
-        guard let self, self.statusBarHoverDwellName == popup.name,
-          popup.rect.contains(NSEvent.mouseLocation)
-        else {
-          self?.statusBarHoverDwellName = nil
-          return
-        }
-        self.showStatusBarPopup(
+        guard let self, self.statusBarSpawnDwell.pendingName == popup.name else { return }
+        self.statusBarSpawnDwell = .idle
+        guard popup.rect.contains(NSEvent.mouseLocation) else { return }
+        self.presentStatusBarPopup(
           popup, at: pointer, screenSnapshot: snapshot, preservingContent: preservingContent)
       }
-      statusBarHoverDwellWork = work
+      statusBarSpawnDwell = .dwelling(name: popup.name, work: work)
       DispatchQueue.main.asyncAfter(
         deadline: .now() + .milliseconds(Self.statusBarHoverDwellMs), execute: work)
       return
     }
-    statusBarHoverDwellName = nil
+    _ = statusBarSpawnDwell.cancel()
+    presentStatusBarPopup(
+      popup, at: pointer, screenSnapshot: snapshot, preservingContent: preservingContent)
+  }
+
+  /// Show `popup` now: the hover gate, the display, the terminal preparation
+  /// and the preview. `showStatusBarPopup` decides whether this waits.
+  private func presentStatusBarPopup(
+    _ popup: StatusBarPopupRegion,
+    at pointer: CGPoint,
+    screenSnapshot snapshot: ScreenSnapshot,
+    preservingContent: Bool
+  ) {
     statusBarHoverGate = statusBarHoverGate.hovering(popup.name)
     guard statusBarHoverGate.permits(popup.name) else { return }
     // The popup shows on the display whose bar draws its label.
@@ -618,7 +682,7 @@ extension OverlayPanel {
     if let current = statusPopupController.presentation.name, current != popup.name {
       hideStatusBarPopup(reason: "anchor_changed")
     }
-    guard statusBarTerminalPrepareHandler?(popup.name) ?? true else {
+    guard statusBarTerminalPrepareHandler?(popup.name, popup.link) ?? true else {
       hideStatusBarPopup(reason: "terminal_missing")
       return
     }
@@ -683,11 +747,20 @@ extension OverlayPanel {
   }
 
   func hideStatusBarPopup(reason: String = "overlay_hidden") {
-    statusBarHoverDwellWork?.cancel()
-    statusBarHoverDwellWork = nil
-    statusBarHoverDwellName = nil
+    _ = statusBarSpawnDwell.cancel()
     statusPopupController.dismiss(reason: reason)
     activeStatusBarPopupName = nil
+  }
+
+  /// The bars `f` can reach, with the glyphs currently drawn on each.
+  func statusBarLetterSurfaces() -> [StatusBarLetterSurface] {
+    let surfaces = [primaryStatusBarSurface] + secondaryStatusBars
+    return zip(statusBarInteractionsByScreen, surfaces).map { interactions, surface in
+      StatusBarLetterSurface(
+        screenFrame: interactions.screenFrame,
+        runs: surface.letterRuns(panelFrame: frame),
+        regions: interactions.hints)
+    }
   }
 
   /// Route a hovered segment (screen coordinates) to the surface drawing it;
@@ -711,16 +784,16 @@ extension OverlayPanel {
     links: [(rect: CGRect, url: URL)],
     popups: [StatusBarPopupRegion] = []
   ) {
-    let signature =
-      (bandRects.map { "\($0.origin.x),\($0.origin.y),\($0.width),\($0.height)" }
-      + links.map {
-        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.url.absoluteString)"
-      }
-      + popups.map {
-        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.anchor.minX),"
-          + "\($0.anchor.width)|\($0.name)|\($0.content)"
+    let signature = StatusBarClickSignature(
+      bands: bandRects,
+      links: links.map {
+        .init(x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width, url: $0.url)
+      },
+      popups: popups.map {
+        .init(
+          x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width, anchorX: $0.anchor.minX,
+          anchorWidth: $0.anchor.width, name: $0.name, content: $0.content)
       })
-      .joined(separator: ";")
     if signature == lastStatusBarClickSignature { return }
     lastStatusBarClickSignature = signature
 
@@ -790,7 +863,11 @@ extension OverlayPanel {
     at pointer: CGPoint,
     screenSnapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
-    statusPopupController.refresh(popups)
+    statusPopupController.refresh(popups) { anchor in
+      let centre = CGPoint(x: anchor.midX, y: anchor.midY)
+      return screenSnapshot.screens.first { $0.frame.contains(centre) }?.visibleFrame
+        ?? screenSnapshot.screens.first { $0.frame.intersects(anchor) }?.visibleFrame
+    }
     activeStatusBarPopupName = statusPopupController.presentation.name
     activeStatusBarPopupContent = statusPopupController.content
     hitTestStatusBarHover(popups: popups, links: links, at: pointer, screenSnapshot: screenSnapshot)
@@ -851,23 +928,32 @@ extension OverlayPanel {
   /// near the band (armed by `mouseEntered`, self-stopping otherwise), and hops
   /// to main only when the state flips. Call on the main thread.
   func startMenuBarRevealTracking() {
-    guard !menuBarRevealProbeArmed else { return }
-    FlashLog.debug("Status menu reveal tracking started", source: "core:StatusLinks.menuReveal")
+    if !menuBarRevealProbeArmed {
+      FlashLog.debug("Status menu reveal tracking started", source: "core:StatusLinks.menuReveal")
+    }
+    // Every start is a new tracking cycle: a stop a previous tick queued, or
+    // a verdict it was still delivering, belongs to the old one and is
+    // dropped, so a pointer that re-entered the band keeps its probe.
     menuBarRevealProbeArmed = true
-    menuBarRevealedShadow = false
+    menuBarRevealGeneration &+= 1
+    let generation = menuBarRevealGeneration
     PollScheduler.shared.register(
       Self.menuBarRevealClientID, everyMs: Self.menuBarRevealIntervalMs, priority: .system,
       on: Self.menuBarRevealProbeQueue
-    ) { [weak self] in self?.probeMenuBarReveal() }
+    ) { [weak self] in self?.probeMenuBarReveal(generation: generation) }
   }
 
-  func stopMenuBarRevealTracking() {
+  /// `ifGeneration` is the cycle a probe tick asked from; a stop from a cycle
+  /// already left is dropped. Without it, this is the owner stopping.
+  func stopMenuBarRevealTracking(ifGeneration generation: UInt64? = nil) {
+    if let generation, !(menuBarRevealProbeArmed && generation == menuBarRevealGeneration) {
+      return
+    }
     if menuBarRevealProbeArmed {
       FlashLog.debug("Status menu reveal tracking stopped", source: "core:StatusLinks.menuReveal")
     }
     menuBarRevealProbeArmed = false
     PollScheduler.shared.unregister(Self.menuBarRevealClientID)
-    menuBarRevealedShadow = false
     // Leave the windows catching and the bar on top (the defaults) so a stale
     // click-through or yielded state can't survive a hide/show.
     for window in statusBarClickWindows where window.ignoresMouseEvents {
@@ -879,22 +965,29 @@ extension OverlayPanel {
     updateStatusBarHover(nativeMenuBarRevealed: false)
   }
 
-  /// One probe tick, on the probe queue.
-  private func probeMenuBarReveal() {
+  /// One probe tick, on the probe queue, for the cycle it was armed under.
+  private func probeMenuBarReveal(generation: UInt64) {
+    if menuBarRevealProbeState.generation != generation {
+      menuBarRevealProbeState = MenuBarRevealProbeState(generation: generation)
+    }
     let pointerNearBand = Self.pointerIsInMenuBarBand()
     let revealed =
       pointerNearBand
       && Self.nativeMenuBarIsRevealed(
         mainScreenWidth: CGDisplayBounds(CGMainDisplayID()).width)
-    let changed = revealed != menuBarRevealedShadow
-    menuBarRevealedShadow = revealed
+    let changed = revealed != menuBarRevealProbeState.revealed
+    menuBarRevealProbeState.revealed = revealed
     if changed {
-      DispatchQueue.main.async { [weak self] in self?.nativeMenuBarRevealDidChange(revealed) }
+      DispatchQueue.main.async { [weak self] in
+        self?.nativeMenuBarRevealDidChange(revealed, generation: generation)
+      }
     }
     if !pointerNearBand && !revealed {
       // Pointer left the band with the menu bar folded: nothing to watch.
       // `mouseEntered` re-arms on the next hover.
-      DispatchQueue.main.async { [weak self] in self?.stopMenuBarRevealTracking() }
+      DispatchQueue.main.async { [weak self] in
+        self?.stopMenuBarRevealTracking(ifGeneration: generation)
+      }
     }
   }
 
@@ -902,7 +995,14 @@ extension OverlayPanel {
   /// the bar's level go to the native menu bar, and so does hover — whatever
   /// hover feedback the reveal lands on is cleared, and a fold re-hit-tests
   /// the pointer where it rests.
-  func nativeMenuBarRevealDidChange(_ revealed: Bool, pointer: CGPoint = NSEvent.mouseLocation) {
+  func nativeMenuBarRevealDidChange(
+    _ revealed: Bool, generation: UInt64? = nil, pointer: CGPoint = NSEvent.mouseLocation
+  ) {
+    // A verdict from a cycle already left — the probe was stopped, or the
+    // band re-entered since — would yield the bar with no probe to fold it.
+    if let generation, !(menuBarRevealProbeArmed && generation == menuBarRevealGeneration) {
+      return
+    }
     for window in statusBarClickWindows where window.ignoresMouseEvents != revealed {
       window.ignoresMouseEvents = revealed
     }

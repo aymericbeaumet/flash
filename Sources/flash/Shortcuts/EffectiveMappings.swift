@@ -9,9 +9,9 @@ import Foundation
 /// entries are stable-sorted by priority descending, so `CompiledMappings`'
 /// first-writer-wins hands each key to the highest-priority claimant.
 ///
-/// The merge is per scope. Mode-specific mappings override `all` fallbacks;
-/// plugin priority resolves collisions within each scope. Command mappings
-/// are config-owned and are preserved unchanged. A key the config removed
+/// The merge is per scope, every scope a config can fill. Mode-specific
+/// mappings override `all` fallbacks; plugin priority resolves collisions
+/// within each scope. A key the config removed
 /// from a scope (`"<key>" = false`) stays removed: plugin mappings on it are
 /// dropped.
 enum EffectiveMappings {
@@ -26,7 +26,11 @@ enum EffectiveMappings {
       effective.all = mergeScope(base: base.all, plugin: plugin, scope: .all)
       effective.normal = mergeScope(base: base.normal, plugin: plugin, scope: .normal)
       effective.insert = mergeScope(base: base.insert, plugin: plugin, scope: .insert)
+      effective.command = mergeScope(base: base.command, plugin: plugin, scope: .command)
       effective.terminal = mergeScope(base: base.terminal, plugin: plugin, scope: .terminal)
+      effective.hyper = mergeScope(base: base.hyper, plugin: plugin, scope: .hyper)
+      effective.visual = mergeScope(base: base.visual, plugin: plugin, scope: .visual)
+      effective.drag = mergeScope(base: base.drag, plugin: plugin, scope: .drag)
     }
     if let bundleID, let app = base.appMappings[bundleID] {
       effective.all = apply(app: app, scope: .all, to: effective.all)
@@ -34,6 +38,9 @@ enum EffectiveMappings {
       effective.insert = apply(app: app, scope: .insert, to: effective.insert)
       effective.terminal = apply(app: app, scope: .terminal, to: effective.terminal)
       effective.command = apply(app: app, scope: .command, to: effective.command)
+      effective.hyper = apply(app: app, scope: .hyper, to: effective.hyper)
+      effective.visual = apply(app: app, scope: .visual, to: effective.visual)
+      effective.drag = apply(app: app, scope: .drag, to: effective.drag)
     }
     effective.recompileMappings()
     return effective

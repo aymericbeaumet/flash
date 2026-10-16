@@ -1,85 +1,259 @@
 <script lang="ts">
+  import { flushSync, onDestroy, onMount } from "svelte";
+  import { fetchHistory, type ClipboardPage } from "./clipboard-history";
   import Icon from "./Icon.svelte";
+  import { linkSegments } from "./linkify";
   import type { ClipboardEntry } from "./types";
 
-  let { entries }: { entries: ClipboardEntry[] } = $props();
+  let { entries, nextOffset, total }: { entries: ClipboardEntry[]; nextOffset: number | null; total: number } = $props();
+  let history = $state<ClipboardEntry[]>([]);
+  let retained = $state(0);
+  let loading = $state(false);
+  let loadError = $state(false);
+  let displayLimit = $state(100);
   let query = $state("");
   let copied = $state<string | null>(null);
   let copying = $state<string | null>(null);
-  let copyError = $state("");
+  let removed = $state<string[]>([]);
+  let notice = $state("");
+  let zoomed = $state<{ src: string; alt: string } | null>(null);
   let requestID = 0;
+  let historyGeneration = 0;
+  let historyRequest: AbortController | null = null;
+  let firstPageKey = "";
+  let initialized = false;
 
+  $effect(() => {
+    const key = `${entries.map((entry) => entry.id).join(",")}:${nextOffset ?? "end"}:${total}`;
+    if (key === firstPageKey) return;
+    firstPageKey = key;
+    if (!initialized) {
+      initialized = true;
+      history = [...entries];
+      retained = total;
+    }
+    void refresh();
+  });
+  onDestroy(() => { historyGeneration += 1; historyRequest?.abort(); });
+  onMount(() => {
+    const showAll = () => flushSync(() => { displayLimit = Number.MAX_SAFE_INTEGER; });
+    const restore = () => { displayLimit = 100; };
+    window.addEventListener("beforeprint", showAll);
+    window.addEventListener("afterprint", restore);
+    return () => {
+      window.removeEventListener("beforeprint", showAll);
+      window.removeEventListener("afterprint", restore);
+    };
+  });
+
+  function beginRequest(): { generation: number; signal: AbortSignal } {
+    historyRequest?.abort();
+    historyRequest = new AbortController();
+    historyGeneration += 1;
+    loading = true;
+    loadError = false;
+    return { generation: historyGeneration, signal: historyRequest.signal };
+  }
+
+  async function page(offset: number, signal: AbortSignal): Promise<ClipboardPage> {
+    const response = await fetch(`/api/clipboard/history?offset=${offset}`, { signal });
+    if (!response.ok) throw new Error(String(response.status));
+    const result: unknown = await response.json();
+    if (typeof result !== "object" || result === null || !("entries" in result) || !("next_offset" in result) || !("total" in result)
+      || !Array.isArray(result.entries)
+      || !(result.next_offset === null || (Number.isSafeInteger(result.next_offset) && Number(result.next_offset) >= 0))
+      || !Number.isSafeInteger(result.total) || Number(result.total) < 0) {
+      throw new Error("Invalid clipboard history page");
+    }
+    return result as ClipboardPage;
+  }
+
+  async function refresh() {
+    const { generation, signal } = beginRequest();
+    try {
+      await fetchHistory((offset) => page(offset, signal), (loaded, _cursor, count) => {
+        if (generation !== historyGeneration) return;
+        history = loaded;
+        retained = count;
+      }, signal);
+      if (generation === historyGeneration) {
+        removed = removed.filter((id) => history.some((entry) => entry.id === id));
+      }
+    } catch {
+      if (generation === historyGeneration && !signal.aborted) {
+        loadError = true;
+      }
+    } finally {
+      if (generation === historyGeneration) loading = false;
+    }
+  }
+
+  // The zoomed image closes with Escape as well as a click.
+  $effect(() => {
+    if (!zoomed) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      zoomed = null;
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  });
+
+  const visible = $derived(history.filter((entry) => entry.id && !removed.includes(entry.id)));
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    return entries.map((entry, index) => ({ ...entry, index })).filter((entry) => !q || (entry.preview + " " + entry.value).toLowerCase().includes(q));
+    return visible.map((entry, index) => ({ ...entry, index })).filter((entry) => !q || haystack(entry).includes(q));
   });
+  const displayed = $derived(filtered.slice(0, displayLimit));
+  $effect(() => { void query; displayLimit = 100; });
+
+  function haystack(entry: ClipboardEntry): string {
+    return [entry.kind, entry.preview, entry.value, entry.mime ?? "", ...(entry.files ?? [])].join("\n").toLowerCase();
+  }
+
+  function imageURL(entry: ClipboardEntry): string | null {
+    if (!entry.mime || !/^[0-9a-f]{32}$/.test(entry.id)) return null;
+    return `/api/clipboard/${entry.id}`;
+  }
+
+  function kindLabel(kind: string): string {
+    switch (kind) {
+      case "image": return "Image";
+      case "html": return "Formatted";
+      case "files": return "Files";
+      default: return "Text";
+    }
+  }
 
   async function copy(entry: ClipboardEntry) {
     const request = ++requestID;
-    copying = entry.value;
+    copying = entry.id;
     copied = null;
-    copyError = "";
+    notice = "";
     try {
-      await navigator.clipboard.writeText(entry.value);
-      if (request === requestID) copied = entry.value;
+      const mime = entry.mime;
+      const url = imageURL(entry);
+      if (mime && url && (entry.kind === "image" || entry.kind === "files")) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("missing image");
+        const blob = await response.blob();
+        await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+      } else if (entry.kind === "html" && entry.html) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/html": new Blob([entry.html], { type: "text/html" }),
+            "text/plain": new Blob([entry.value], { type: "text/plain" }),
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(entry.value);
+      }
+      if (request === requestID) copied = entry.id;
     } catch {
-      if (request === requestID) copyError = "The browser could not copy this entry. Allow clipboard access, or expand the entry and select its text to copy manually.";
+      if (request === requestID) notice = "The browser could not copy this entry. Allow clipboard access, or expand the entry and select its text to copy manually.";
     } finally {
       if (request === requestID) copying = null;
     }
   }
+
+  async function remove(entry: ClipboardEntry) {
+    if (!/^[0-9a-f]{32}$/.test(entry.id) || removed.includes(entry.id)) return;
+    removed = [...removed, entry.id];
+    notice = "";
+    copied = null;
+    try {
+      const response = await fetch(`/api/clipboard/${entry.id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(String(response.status));
+      void refresh();
+    } catch {
+      removed = removed.filter((id) => id !== entry.id);
+      notice = "Could not delete this entry.";
+    }
+  }
 </script>
 
+{#snippet linked(text: string)}{#each linkSegments(text) as segment}{#if segment.href}<a href={segment.href} target="_blank" rel="noopener noreferrer">{segment.text}</a>{:else}{segment.text}{/if}{/each}{/snippet}
+
 <div class="page">
-  <div class="page-heading"><p class="eyebrow">Inspect</p><h1>Clipboard</h1><p>Find something you copied earlier and put it back on your clipboard. This history comes from your running clipboard plugin.</p></div>
+  <div class="page-heading"><p class="eyebrow">Inspect</p><h1>Clipboard</h1><p>Find something you copied earlier and put it back on your clipboard, or delete it from this history. Images, formatted text, and files are kept along with plain text.</p></div>
   <div class="privacy-note"><Icon name="shield" size={16} /><span>History is provided by your local Flash instance.</span><a href="/docs/privacy">About clipboard privacy</a></div>
-  {#if copyError}<div class="notice error" role="alert">{copyError}</div>{/if}
+  {#if notice}<div class="notice error" role="alert">{notice}</div>{/if}
   <div class="sr-status" role="status" aria-live="polite">{copied !== null ? "Entry copied to your clipboard." : ""}</div>
   <div class="surface clipboard">
-    <div class="toolbar"><input type="search" aria-label="Search clipboard history" placeholder="Search clipboard history…" bind:value={query} /><span class="count">{filtered.length} of {entries.length} entries</span></div>
+    <div class="toolbar"><input type="search" aria-label="Search clipboard history" placeholder="Search clipboard history…" bind:value={query} /><span class="count">{filtered.length} matching · {visible.length} of {retained} retained</span><button type="button" class="refresh-button" onclick={refresh} disabled={loading}>Refresh</button></div>
+    {#if loading}<div class="history-status" role="status">Loading older clipboard entries…</div>{/if}
+    {#if loadError}<div class="history-status error" role="alert">Could not load the full history. <button type="button" onclick={refresh}>Retry</button></div>{/if}
     {#if filtered.length}
       <div class="entries">
-        {#each filtered as entry (entry.index + entry.value)}
-          <article class="entry" class:copied={copied === entry.value}>
+        {#each displayed as entry (entry.id)}
+          <article class="entry" class:copied={copied === entry.id}>
             <span class="entry-number">{String(entry.index + 1).padStart(2, "0")}</span>
             <div class="entry-content">
-              <p class="preview">{entry.preview || entry.value || "Empty entry"}</p>
-              <div class="entry-meta"><span>{entry.value.length.toLocaleString()} characters</span>{#if entry.value.includes("\n")}<span>{entry.value.split("\n").length} lines</span>{/if}</div>
-              <details><summary>View full text</summary><pre>{entry.value || "(empty)"}</pre></details>
+              <p class="preview">{@render linked(entry.preview || entry.value || kindLabel(entry.kind))}</p>
+              <div class="entry-meta"><span class="badge neutral">{kindLabel(entry.kind)}</span>{#if entry.mime}<span>{entry.mime}</span>{/if}{#if entry.value}<span>{entry.value.length.toLocaleString()} characters</span>{/if}{#if entry.files?.length}<span>{entry.files.length} {entry.files.length === 1 ? "file" : "files"}</span>{/if}</div>
+              {#if imageURL(entry)}{@const src = imageURL(entry) ?? ""}<button type="button" class="image-button" aria-label="Zoom into this image" onclick={() => (zoomed = { src, alt: entry.preview || "Copied image" })}><img class="clip-image" {src} alt={entry.preview || "Copied image"} loading="lazy" /></button>{/if}
+              {#if entry.kind === "html" && entry.html}<iframe class="clip-html" sandbox="" srcdoc={entry.html} title="Formatted clipboard entry" referrerpolicy="no-referrer" loading="lazy"></iframe>{/if}
+              {#if entry.files?.length}<ul class="files">{#each entry.files as file (file)}<li>{file}</li>{/each}</ul>{/if}
+              {#if entry.value}<details><summary>View plain text</summary><pre>{@render linked(entry.value)}</pre></details>{/if}
             </div>
-            <button class="copy-button" disabled={copying !== null} onclick={() => copy(entry)} aria-label={copied === entry.value ? "Entry copied" : `Copy clipboard entry ${entry.index + 1}`}><Icon name={copied === entry.value ? "check" : "clipboard"} size={14} />{copying === entry.value ? "Copying…" : copied === entry.value ? "Copied" : "Copy"}</button>
+            <div class="entry-actions">
+              <button type="button" class="copy-button" disabled={copying !== null} onclick={() => copy(entry)} aria-label={copied === entry.id ? "Entry copied" : `Copy clipboard entry ${entry.index + 1}`}><Icon name={copied === entry.id ? "check" : "clipboard"} size={14} />{copying === entry.id ? "Copying…" : copied === entry.id ? "Copied" : "Copy"}</button>
+              <button type="button" class="delete-button" onclick={() => remove(entry)} aria-label={`Delete clipboard entry ${entry.index + 1}`}><Icon name="close" size={14} />Delete</button>
+            </div>
           </article>
         {/each}
       </div>
+      {#if displayed.length < filtered.length}<button type="button" class="show-more" onclick={() => displayLimit += 100}>Show 100 more entries ({filtered.length - displayed.length} remaining)</button>{/if}
     {:else}
-      <div class="empty"><span class="empty-icon"><Icon name="clipboard" size={25} /></span><strong>{entries.length ? "No matching entries" : "Your clipboard history is empty"}</strong><p>{entries.length ? "Try another word or clear the search." : "Copy some text in another app. If nothing appears, check that the clipboard plugin is running."}</p>{#if entries.length}<button onclick={() => query = ""}>Clear search</button>{:else}<a href="/plugins/clipboard">Check clipboard plugin <span>→</span></a>{/if}</div>
+      <div class="empty"><span class="empty-icon"><Icon name="clipboard" size={25} /></span><strong>{visible.length ? "No matching entries" : "Your clipboard history is empty"}</strong><p>{visible.length ? "Try another word or clear the search." : "Copy something in another app. If nothing appears, check that the clipboard plugin is running."}</p>{#if visible.length}<button type="button" onclick={() => query = ""}>Clear search</button>{:else}<a href="/plugins/clipboard">Check clipboard plugin <span>→</span></a>{/if}</div>
     {/if}
   </div>
 </div>
+
+{#if zoomed}
+  <button type="button" class="zoom" aria-label="Close the zoomed image" onclick={() => (zoomed = null)}><img src={zoomed.src} alt={zoomed.alt} /></button>
+{/if}
 
 <style>
   .privacy-note { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 11px; margin-bottom: 22px; }
   .privacy-note :global(svg) { flex-shrink: 0; margin-top: 1px; }
   .privacy-note a { margin-left: auto; white-space: nowrap; }
   .clipboard { overflow: hidden; }
+  .history-status { padding: 9px 18px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border-soft); }
+  .history-status.error { color: var(--danger); }
+  .history-status button { min-height: 28px; margin-left: 8px; padding: 3px 8px; font-size: 12px; }
+  .refresh-button { min-height: 32px; font-size: 12px; padding: 5px 10px; }
+  .show-more { display: block; margin: 14px auto; font-size: 12px; }
   .entry { display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; align-items: start; gap: 16px; padding: 21px 23px; border-bottom: 1px solid var(--border-soft); }
   .entry:last-child { border-bottom: 0; }
   .entry.copied { background: #f5f9ef; }
   .entry-number { color: #9aa59b; font: 11px var(--mono); padding-top: 4px; }
   .preview { font: 12px/1.7 var(--mono); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-  .entry-meta { display: flex; gap: 12px; font-size: 10px; color: var(--muted); margin-top: 8px; }
+  .entry-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 10px; color: var(--muted); margin-top: 8px; }
+  .preview a, pre a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  .image-button { display: block; padding: 0; margin: 0; min-height: 0; border: 0; background: none; cursor: zoom-in; }
+  .zoom { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 32px; margin: 0; border: 0; border-radius: 0; background: rgba(24, 28, 22, .82); cursor: zoom-out; }
+  .zoom img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: 0 18px 48px rgba(0, 0, 0, .35); background: #fff; }
+  .clip-image { display: block; max-width: 100%; max-height: 240px; margin-top: 12px; border: 1px solid var(--border-soft); border-radius: 7px; object-fit: contain; background: #fff; }
+  .clip-html { display: block; width: 100%; height: 180px; margin-top: 12px; border: 1px solid var(--border-soft); border-radius: 7px; background: #fff; }
+  .files { margin: 12px 0 0; padding-left: 18px; font: 11px/1.6 var(--mono); overflow-wrap: anywhere; }
   details { margin-top: 8px; }
   summary { cursor: pointer; width: fit-content; font-size: 11px; color: var(--accent); }
   pre { margin: 12px 0 0; padding: 14px; background: var(--bg); border: 1px solid var(--border-soft); border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 350px; }
-  .copy-button { display: flex; align-items: center; gap: 6px; min-height: 31px; font-size: 11px; padding: 5px 10px; color: var(--accent); }
+  .entry-actions { display: flex; flex-direction: column; gap: 6px; }
+  .copy-button, .delete-button { display: flex; align-items: center; gap: 6px; min-height: 31px; font-size: 11px; padding: 5px 10px; }
+  .copy-button { color: var(--accent); }
+  .delete-button { color: var(--danger); }
   .empty-icon { display: flex; justify-content: center; color: #92a18f; margin-bottom: 15px; }
   .empty p { max-width: 420px; margin: 0 auto; font-size: 13px; }
   .empty a, .empty button { display: inline-block; margin-top: 17px; font-size: 12px; }
   .sr-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  @media (max-width: 640px) { .entry { padding: 18px 14px; gap: 10px; grid-template-columns: 19px minmax(0, 1fr) auto; }.privacy-note { flex-wrap: wrap; }.privacy-note a { margin-left: 24px; } }
+  @media (max-width: 640px) { .entry { padding: 18px 14px; gap: 10px; grid-template-columns: 19px minmax(0, 1fr); }.entry-actions { grid-column: 1 / -1; flex-direction: row; }.privacy-note { flex-wrap: wrap; }.privacy-note a { margin-left: 24px; } }
   @media print {
-    .privacy-note a, .copy-button { display: none; }
+    .privacy-note a, .entry-actions { display: none; }
     .clipboard { overflow: visible; border: 0; }
     .entry { grid-template-columns: 27px minmax(0, 1fr); padding: 12px 0; break-inside: avoid; }
+    .clip-html { height: auto; min-height: 80px; }
   }
 </style>

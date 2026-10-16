@@ -22,12 +22,64 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
 
   private let lock = NSLock()
   private var cached: [String: String]
+  /// Resolves the login shell's environment; injectable for tests.
+  private let resolve: (_ shellPath: String?, _ timeout: TimeInterval) -> [String: String]?
+  /// Runs the login shells one at a time, so the environment stored last is
+  /// the one requested last.
+  private let refreshQueue = DispatchQueue(label: "flash.process-environment.refresh")
+  /// Refresh bookkeeping, under `lock`. A request that arrives while a run
+  /// is in progress never joins that run — it may have read the rc files
+  /// before the edit that prompted the request — so it waits in
+  /// `followUpCompletions` for the one follow-up run scheduled after it, and
+  /// every request made meanwhile completes with that run's result.
+  private var runCompletions: [([String: String]) -> Void] = []
+  private var followUpCompletions: [([String: String]) -> Void] = []
+  private var refreshInProgress = false
+  private var followUpQueued = false
+  /// Where the first login-shell resolution stands. `seeded` until a refresh
+  /// is first requested (the CLI and unit tests never ask); `resolving`
+  /// while that first run is out; `resolved` from the moment it lands,
+  /// successfully or not, for the life of the process.
+  public enum Phase: Equatable {
+    case seeded, resolving, resolved
+  }
+  private var phaseValue: Phase = .seeded
+  private var resolvedWaiters: [(queue: DispatchQueue, body: () -> Void)] = []
+
+  public var phase: Phase {
+    lock.lock()
+    defer { lock.unlock() }
+    return phaseValue
+  }
+
+  /// Run `body` on `queue` once the first resolution has landed: at once
+  /// while nothing was ever asked, or once resolved. A child inherits the
+  /// environment in effect when it spawns for its whole life, so every
+  /// long-lived child — plugins, status jobs, persistent popups — waits here
+  /// rather than start with launchd's bare `PATH`.
+  public func whenResolved(on queue: DispatchQueue, _ body: @escaping () -> Void) {
+    lock.lock()
+    if phaseValue == .resolving {
+      resolvedWaiters.append((queue, body))
+      lock.unlock()
+      return
+    }
+    lock.unlock()
+    queue.async(execute: body)
+  }
 
   /// Seeds with the current process environment (plus a `PATH` fallback) so a
-  /// command that runs before the first ``refresh()`` still has a usable
-  /// `PATH`. `refresh()` replaces this with the real login-shell environment.
-  public init(seed: [String: String] = ProcessInfo.processInfo.environment) {
+  /// command that runs before the first ``refresh(completion:)`` still has a
+  /// usable `PATH`. A refresh replaces this with the real login-shell
+  /// environment.
+  public init(
+    seed: [String: String] = ProcessInfo.processInfo.environment,
+    resolve: @escaping (_ shellPath: String?, _ timeout: TimeInterval) -> [String: String]? = {
+      FlashProcessEnvironment.resolveLoginShellEnvironment(shellPath: $0, timeout: $1)
+    }
+  ) {
     self.cached = Self.withFallbackPath(seed)
+    self.resolve = resolve
   }
 
   /// The cached environment to assign to `Process.environment`.
@@ -37,31 +89,64 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     return cached
   }
 
-  /// Re-resolve the login-shell environment. Call once at launch and again on
-  /// config reload. Spawns one `$SHELL -l` that prints it; on any
-  /// failure (missing shell, timeout, empty output) the previous cache is kept
-  /// untouched. Returns the environment now in effect.
-  ///
-  /// Blocking — run it off the main thread. The work is a single short-lived
-  /// child process (login shell rc evaluation, typically tens of ms).
-  @discardableResult
+  /// Re-resolve the login-shell environment: once at launch and again on
+  /// config reload. Spawns one `$SHELL -l` that prints it, on a serial queue
+  /// of its own, and calls `completion` with the environment then in effect,
+  /// on that queue. On any failure (missing shell, timeout, empty output)
+  /// the previous cache is kept untouched: a transient shell failure must not
+  /// replace a resolved `PATH` with launchd's. Runs never overlap, so the
+  /// environment stored last is the one requested last; a request that
+  /// arrives during a run waits for one follow-up run rather than joining
+  /// the run in progress.
   public func refresh(
     shellPath: String? = nil,
-    timeout: TimeInterval = 5
-  ) -> [String: String] {
+    timeout: TimeInterval = 5,
+    completion: (([String: String]) -> Void)? = nil
+  ) {
+    lock.lock()
+    if refreshInProgress {
+      if let completion { followUpCompletions.append(completion) }
+      followUpQueued = true
+      lock.unlock()
+      return
+    }
+    refreshInProgress = true
+    if phaseValue == .seeded { phaseValue = .resolving }
+    if let completion { runCompletions.append(completion) }
+    lock.unlock()
+    refreshQueue.async { self.runRefresh(shellPath: shellPath, timeout: timeout) }
+  }
+
+  /// One run, then the follow-up a request made meanwhile asked for.
+  private func runRefresh(shellPath: String?, timeout: TimeInterval) {
+    let environment = resolveOnce(shellPath: shellPath, timeout: timeout)
+    lock.lock()
+    let completions = runCompletions
+    let runAgain = followUpQueued
+    runCompletions = runAgain ? followUpCompletions : []
+    followUpCompletions.removeAll()
+    followUpQueued = false
+    if !runAgain { refreshInProgress = false }
+    phaseValue = .resolved
+    let waiters = resolvedWaiters
+    resolvedWaiters.removeAll()
+    lock.unlock()
+    for waiter in waiters { waiter.queue.async(execute: waiter.body) }
+    for completion in completions { completion(environment) }
+    if runAgain { runRefresh(shellPath: shellPath, timeout: timeout) }
+  }
+
+  /// Resolve and store once; the stored environment is returned.
+  private func resolveOnce(shellPath: String?, timeout: TimeInterval) -> [String: String] {
     let base = ProcessInfo.processInfo.environment
     let shell = shellPath ?? base["SHELL"]
-    let merged: [String: String]
-    if let resolved = Self.resolveLoginShellEnvironment(shellPath: shell, timeout: timeout) {
-      // The login shell is spawned from this process, so `resolved` already
-      // carries our env plus whatever the rc files added. Overlay it on the
-      // current env anyway so a shell that prints a subset never drops a var.
-      var env = base
-      for (key, value) in resolved { env[key] = value }
-      merged = Self.withFallbackPath(env)
-    } else {
-      merged = Self.withFallbackPath(base)
-    }
+    guard let resolved = resolve(shell, timeout) else { return environment }
+    // The login shell is spawned from this process, so `resolved` already
+    // carries our env plus whatever the rc files added. Overlay it on the
+    // current env anyway so a shell that prints a subset never drops a var.
+    var env = base
+    for (key, value) in resolved { env[key] = value }
+    let merged = Self.withFallbackPath(env)
     lock.lock()
     cached = merged
     lock.unlock()
@@ -130,27 +215,30 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     process.standardError = err
     process.standardInput = FileHandle.nullDevice
 
+    // Nothing here waits on the shared dispatch pool: exit arrives through
+    // the process's own termination handler and stdout drains on a dedicated
+    // thread, so a saturated pool (a busy launch) cannot starve the resolver
+    // into its timeout.
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
     do {
       try process.run()
     } catch {
       return nil
     }
 
-    // Drain stdout on a background queue so a chatty rc file (a few KB) can't
-    // deadlock by filling the pipe buffer while we wait on exit.
+    // Drain stdout so a chatty rc file (a few KB) can't deadlock by filling
+    // the pipe buffer while we wait on exit.
     let collected = DispatchSemaphore(value: 0)
-    var data = Data()
-    DispatchQueue.global(qos: .userInitiated).async {
-      data = out.fileHandleForReading.readDataToEndOfFile()
+    let drained = DrainedOutput()
+    let reader = Thread {
+      drained.data = out.fileHandleForReading.readDataToEndOfFile()
       collected.signal()
     }
+    reader.name = "flash.login_environment.drain"
+    reader.start()
 
     let deadline = DispatchTime.now() + timeout
-    let exited = DispatchSemaphore(value: 0)
-    DispatchQueue.global(qos: .userInitiated).async {
-      process.waitUntilExit()
-      exited.signal()
-    }
     if exited.wait(timeout: deadline) == .timedOut {
       process.terminate()
       _ = exited.wait(timeout: .now() + 0.5)
@@ -163,8 +251,13 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     _ = try? err.fileHandleForReading.readToEnd()
 
     guard process.terminationStatus == 0 else { return nil }
-    let parsed = parse(environmentOutput: data)
+    let parsed = parse(environmentOutput: drained.data)
     return parsed.isEmpty ? nil : parsed
+  }
+
+  /// The drain thread's result, read only after its semaphore signals.
+  private final class DrainedOutput: @unchecked Sendable {
+    var data = Data()
   }
 
   // MARK: - Parsing

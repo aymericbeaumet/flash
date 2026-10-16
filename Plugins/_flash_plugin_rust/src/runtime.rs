@@ -156,6 +156,18 @@ struct EventPayload {
     running_applications: Vec<RunningApplication>,
     #[serde(default)]
     segments: Option<Vec<String>>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    html: Option<String>,
+    #[serde(default)]
+    mime: Option<String>,
+    #[serde(default)]
+    files: Vec<String>,
+    #[serde(default)]
+    sha256: Option<String>,
 }
 
 /// The host's report of which of this plugin's status segments a surface
@@ -192,6 +204,12 @@ pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
                 text: wire.payload.text,
                 notification: wire.payload.notification,
                 segments: wire.payload.segments,
+                id: wire.payload.id,
+                kind: wire.payload.kind,
+                html: wire.payload.html,
+                mime: wire.payload.mime,
+                files: wire.payload.files,
+                sha256: wire.payload.sha256,
             },
             running_applications: wire.payload.running_applications,
         }),
@@ -288,9 +306,16 @@ where
         // Each payload is already one newline-terminated JSON line; flush
         // every frame to keep latency low.
         let mut out = BufWriter::with_capacity(64 * 1024, output);
-        while let Some(payload) = out_rx.recv().await {
+        'frames: while let Some(payload) = out_rx.recv().await {
             if out.write_all(&payload.payload).await.is_err() {
                 break;
+            }
+            // Frames already queued behind this one ride the same flush: a
+            // status, a log and a publish emitted together cost one write.
+            while let Ok(next) = out_rx.try_recv() {
+                if out.write_all(&next.payload).await.is_err() {
+                    break 'frames;
+                }
             }
             if out.flush().await.is_err() {
                 break;
@@ -344,7 +369,7 @@ where
                 }
             };
         }
-        let Ok(frame) = serde_json::from_slice::<Value>(&line) else {
+        let Ok(mut frame) = serde_json::from_slice::<Value>(&line) else {
             ctx.log("warn", "[plugin] dropped undecodable frame");
             continue;
         };
@@ -357,9 +382,14 @@ where
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let params = frame.get("params").cloned().unwrap_or_else(|| json!({}));
         let trace = crate::trace::from_envelope(&frame);
         let deadline = crate::deadline::from_envelope(&frame);
+        // Moved out of the envelope, not cloned: a `hints` request or an
+        // apps list is the bulk of the frame.
+        let params = frame
+            .as_object_mut()
+            .and_then(|object| object.remove("params"))
+            .unwrap_or_else(|| json!({}));
 
         // Frame triage: id+method = request, id alone = the host's response
         // to a plugin-initiated call, method alone = notification.
@@ -1361,6 +1391,41 @@ mod tests {
             observed.event.segments,
             Some(vec!["top_cpu".to_string(), "top_mem".to_string()])
         );
+    }
+
+    #[test]
+    fn clipboard_event_decodes_format_metadata_and_ignores_unknown_fields() {
+        let sha = "ab".repeat(32);
+        let event = decode_event(json!({
+            "name": "core:clipboard.changed",
+            "payload": {
+                "id": "0123456789abcdef0123456789abcdef",
+                "kind": "image",
+                "text": "",
+                "mime": "image/png",
+                "sha256": sha,
+                "files": ["/tmp/shot.png"],
+                "future": 1
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            event.event.id.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(event.event.kind.as_deref(), Some("image"));
+        assert_eq!(event.event.mime.as_deref(), Some("image/png"));
+        assert_eq!(event.event.sha256.as_deref(), Some(sha.as_str()));
+        assert_eq!(event.event.files, vec!["/tmp/shot.png".to_string()]);
+
+        let plain = decode_event(json!({
+            "name": "core:clipboard.changed",
+            "payload": { "text": "hello" }
+        }))
+        .unwrap();
+        assert_eq!(plain.event.text.as_deref(), Some("hello"));
+        assert!(plain.event.id.is_none());
+        assert!(plain.event.files.is_empty());
     }
 
     /// Each delivered event's name and segment set.

@@ -102,6 +102,7 @@ final class PluginManager {
     var wildcardShebangTargets: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
     var actionBindings = ActionBindingIndex()
+    var actionConfirmations = ActionConfirmationIndex()
     var helpTopics: [HelpTopic] = []
   }
 
@@ -112,6 +113,10 @@ final class PluginManager {
     label: "flash.plugins.materialize", qos: .utility)
   private let hotSnapshotLock = NSLock()
   private var hotSnapshot = HotSnapshot()
+  /// The plugins listening to each event name seen since the snapshot was
+  /// published, so a storm of one event (`core:ax.changed`) never re-walks
+  /// every plugin's listen globs. Guarded by `hotSnapshotLock`.
+  private var listenersByEventName: [String: [PluginProcess]] = [:]
   /// Monotonic config generation. A reload that finished materializing for a
   /// superseded config (or after `stop()`) must not clobber newer state.
   private let generationLock = NSLock()
@@ -170,6 +175,12 @@ final class PluginManager {
     set { hostRPC.onNotifyRequested = newValue }
   }
 
+  /// See `PluginHostRPC.onOutputVolumeChanged`. The resident shows the percent.
+  var onOutputVolumeChanged: ((Int) -> Void)? {
+    get { hostRPC.onOutputVolumeChanged }
+    set { hostRPC.onOutputVolumeChanged = newValue }
+  }
+
   /// See `PluginHostRPC.wifiInfoProvider`; forwarded so AppDelegate owns the
   /// system authorization provider while the manager owns RPC routing.
   var wifiInfoProvider: WiFiInfoProviding? {
@@ -214,6 +225,17 @@ final class PluginManager {
     return hotSnapshot
   }
 
+  /// The plugins whose manifests listen to `name`, resolved once per name
+  /// per published snapshot.
+  private func listeners(for name: String) -> [PluginProcess] {
+    hotSnapshotLock.lock()
+    defer { hotSnapshotLock.unlock() }
+    if let cached = listenersByEventName[name] { return cached }
+    let listeners = hotSnapshot.plugins.filter { $0.listens(to: name) }
+    if listenersByEventName.count < 256 { listenersByEventName[name] = listeners }
+    return listeners
+  }
+
   /// Runs on `queue` after any mutation of the plugin set.
   private func publishHotSnapshot() {
     let plugins = pluginsByID.values.sorted { $0.identifier < $1.identifier }
@@ -227,6 +249,7 @@ final class PluginManager {
     var wildcardShebangs: [ShebangTarget] = []
     var verbIndex: [String: [VerbTarget]] = [:]
     var actionBindings = ActionBindingIndex()
+    var actionConfirmations = ActionConfirmationIndex()
     var terminalEmulators: Set<String> = []
     var onDemandHintApps: Set<String> = []
     var helpTopics: [HelpTopic] = []
@@ -301,6 +324,7 @@ final class PluginManager {
       onDemandHintApps.formUnion(manifest.onDemandHints)
 
       actionBindings.add(manifest)
+      actionConfirmations.add(manifest)
 
       for registration in manifest.mappings {
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(registration.key) else {
@@ -322,7 +346,8 @@ final class PluginManager {
             scope: registration.scope,
             mapping: ModeMapping(
               key: canonical, action: action,
-              repeatsOnFinalKey: registration.repeatsOnFinalKey)))
+              repeatsOnFinalKey: registration.repeatsOnFinalKey,
+              origin: ModeMapping.pluginOrigin(id: manifest.id, name: manifest.name))))
       }
 
       // Topic names collide on a first-wins basis with the host's topics
@@ -353,6 +378,7 @@ final class PluginManager {
       wildcardShebangTargets: wildcardShebangs,
       verbIndex: verbIndex,
       actionBindings: actionBindings,
+      actionConfirmations: actionConfirmations,
       helpTopics: helpTopics)
     // Declared before the snapshot is visible, so every selector resolved
     // against it already sees these apps as terminals.
@@ -360,6 +386,7 @@ final class PluginManager {
     OnDemandHintApps.declared.declare(onDemandHintApps)
     hotSnapshotLock.lock()
     hotSnapshot = snapshot
+    listenersByEventName.removeAll(keepingCapacity: true)
     hotSnapshotLock.unlock()
   }
 
@@ -390,25 +417,25 @@ final class PluginManager {
     catalogStore.onCatalogsChanged = nil
     let plugins = queue.sync { () -> [PluginProcess] in
       let snapshot = Array(pluginsByID.values)
-      for plugin in pluginsByID.values {
-        plugin.onStatusChanged = nil
-        plugin.onHostRequest = nil
-        plugin.runningApplicationsProvider = nil
-      }
       pluginsByID.removeAll()
       sourceAdaptersByID.removeAll()
       loadFailureStatuses.removeAll()
       publishHotSnapshot()
       return snapshot
     }
+    // The callbacks are read on each plugin's own queue and on main; they
+    // are cleared only once the child that could still invoke them is gone.
     for plugin in plugins {
       plugin.stopAndWait(reason: "manager_stop")
+      plugin.onStatusChanged = nil
+      plugin.onHostRequest = nil
+      plugin.runningApplicationsProvider = nil
     }
     catalogStore.removeAll()
   }
 
   func hasListener(for eventName: String) -> Bool {
-    readHotSnapshot().eventListenPatterns.contains { $0.matches(eventName) }
+    !listeners(for: eventName).isEmpty
   }
 
   private func runningApplicationsSnapshotValue() -> [[String: Any]] {
@@ -461,20 +488,22 @@ final class PluginManager {
     reconcile(config: config)
   }
 
-  private func configurationSnapshot() -> (Config, Int)? {
+  /// Restart `ids` under the configuration in effect, read with the request
+  /// under one lock: a reconcile taken between a caller's snapshot and its
+  /// request cannot drop the request, and a stopped manager drops it on
+  /// purpose, having no configuration.
+  private func requestRestarts(_ ids: Set<String>) {
     generationLock.lock()
-    defer { generationLock.unlock() }
-    return latestConfig.map { ($0, configGeneration) }
-  }
-
-  private func reconcile(
-    config: Config, restartIDs: Set<String> = [], expectedGeneration: Int? = nil
-  ) {
-    generationLock.lock()
-    if let expectedGeneration, expectedGeneration != configGeneration {
+    guard let config = latestConfig else {
       generationLock.unlock()
       return
     }
+    generationLock.unlock()
+    reconcile(config: config, restartIDs: ids)
+  }
+
+  private func reconcile(config: Config, restartIDs: Set<String> = []) {
+    generationLock.lock()
     latestConfig = config
     requestedRestarts.formUnion(restartIDs)
     configGeneration += 1
@@ -528,7 +557,10 @@ final class PluginManager {
   /// Re-derive which segments the running plugins' surfaces show, without
   /// reloading any plugin.
   private func applyObservedStatus() {
-    guard let (config, _) = configurationSnapshot() else { return }
+    generationLock.lock()
+    let current = latestConfig
+    generationLock.unlock()
+    guard let config = current else { return }
     let observed = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
     for (id, plugin) in pluginsByID {
       // The segments first, as on reload: a plugin that becomes observed
@@ -540,11 +572,8 @@ final class PluginManager {
 
   private func reloadDefinition(_ plugin: PluginProcess) {
     queue.async { [weak self, weak plugin] in
-      guard let self, let plugin, self.pluginsByID[plugin.identifier] === plugin,
-        let (config, generation) = self.configurationSnapshot()
-      else { return }
-      self.reconcile(
-        config: config, restartIDs: [plugin.identifier], expectedGeneration: generation)
+      guard let self, let plugin, self.pluginsByID[plugin.identifier] === plugin else { return }
+      self.requestRestarts([plugin.identifier])
     }
   }
 
@@ -559,10 +588,12 @@ final class PluginManager {
   /// sendEvent filters by listen pattern and hops to each plugin's own queue.
   /// The frame is identical for every listener, so it is encoded once here.
   private func emitOnEventQueue(_ event: PluginEvent) {
-    guard hasListener(for: event.name) else { return }
+    let listeners = listeners(for: event.name)
+    guard !listeners.isEmpty else { return }
     var event = event
     event.encodedFrame = PluginProcess.encodedEventFrame(event)
-    for plugin in readHotSnapshot().plugins {
+    event.coalescingKey = PluginProcess.coalescingKey(event)
+    for plugin in listeners {
       plugin.sendEvent(event)
     }
   }
@@ -646,13 +677,13 @@ final class PluginManager {
       switch outcome {
       case .performed(let pid, let navigationURL, let message):
         FlashLog.debug(
-          "[plugin_command] command=\(command) subcommand=\(subcommand) ok=true "
+          "[plugin] command=\(command) subcommand=\(subcommand) ok=true "
             + "target_pid=\(pid.map(String.init) ?? "nil") "
             + "navigation_scheme=\(navigationURL?.scheme ?? "nil")")
         onResult?(true, pid, message, navigationURL)
       case .unhandled:
         FlashLog.debug(
-          "[plugin_command] command=\(command) subcommand=\(subcommand) unhandled")
+          "[plugin] command=\(command) subcommand=\(subcommand) unhandled")
         onResult?(false, nil, nil, nil)
       case .failed(let error):
         FlashLog.plugin(
@@ -732,7 +763,7 @@ final class PluginManager {
   /// queries surface it live instead). Two sources combine here:
   ///   * **Manifest bangs** — declared statically in `manifest.json`,
   ///     gated against the focused app. Used by plugins with a small fixed
-  ///     set of bangs (aiproviders: chatgpt/claude/…).
+  ///     set of bangs.
   ///   * **Published dynamic bangs** — kind="bang" rows the plugin keeps in
   ///     its pushed catalog (reference: the DDG bang rows embedded from
   ///     `bangs.tsv`). Those are *not* returned here; they
@@ -773,6 +804,14 @@ final class PluginManager {
     _ action: SourceActionName, index: Int? = nil, in context: PluginSelectorContext
   ) -> ActionBinding? {
     readHotSnapshot().actionBindings.binding(action, index: index, in: context)
+  }
+
+  /// The question an applicable plugin asks before `action` in the focused
+  /// app (`action_confirmations`), or nil when none gates it.
+  func actionConfirmation(_ action: SourceActionName, in context: PluginSelectorContext)
+    -> String?
+  {
+    readHotSnapshot().actionConfirmations.prompt(for: action, in: context)
   }
 
   /// Every action a plugin binds in the focused app, with its winner.
@@ -869,6 +908,10 @@ final class PluginManager {
 
     loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
+    // Replacements are installed and published first, started and their
+    // predecessors stopped second: dispatch then reaches the replacement
+    // for the whole stop, which can take a child's full escalation.
+    var replacements: [Replacement] = []
     // Only configured widgets can be covered; a removed one forgets it.
     let enabledWidgets = Set(config.enabledWidgets.keys)
     hiddenWidgets.formIntersection(enabledWidgets)
@@ -876,6 +919,16 @@ final class PluginManager {
       pendingHides.removeValue(forKey: name)?.cancel()
     }
     let observedStatus = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
+    var claimManifests: [PluginManifest] = []
+    var claimIDs = Set<String>()
+    for item in desired {
+      guard let manifest = try? PluginManifest.load(from: item.root),
+        !config.plugins.disabled.contains(manifest.id),
+        claimIDs.insert(manifest.id).inserted
+      else { continue }
+      claimManifests.append(manifest)
+    }
+    let claimFailures = PluginManifest.commandClaimFailures(claimManifests)
     for item in desired {
       do {
         let manifest = try PluginManifest.load(from: item.root)
@@ -891,6 +944,9 @@ final class PluginManager {
             fields: ["id": manifest.id, "root": item.root.path])
           continue
         }
+        if let reason = claimFailures[manifest.id] {
+          throw PluginError.commandConflict(reason)
+        }
         nextIDs.insert(manifest.id)
         let settings = config.plugins.settings[manifest.id] ?? [:]
         let observedSegments = observedStatus[manifest.id]
@@ -905,10 +961,6 @@ final class PluginManager {
           existing?.setStatusObserved(statusObserved)
           if restartIDs.contains(manifest.id) { existing?.reload(reason: "definition_reload") }
           continue
-        }
-        existing?.stopAndWait(reason: "config_reload")
-        if let existing, existing.manifest != manifest || existing.root != item.root {
-          catalogStore.drop(pluginID: existing.identifier)
         }
         let plugin = PluginProcess(
           root: item.root,
@@ -949,9 +1001,18 @@ final class PluginManager {
         }
         pluginsByID[manifest.id] = plugin
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin, store: catalogStore)
-        plugin.start()
+        replacements.append(
+          Replacement(
+            previous: existing,
+            dropsCatalog: existing.map { $0.manifest != manifest || $0.root != item.root }
+              ?? false,
+            plugin: plugin))
       } catch {
-        if let existing = pluginsByID.values.first(where: { $0.root == item.root }),
+        // A command-name conflict must take the plugin down. A malformed edit
+        // of a plugin that was already valid keeps that process until fixed.
+        let claimConflict = (error as? PluginError)?.isCommandConflict == true
+        if !claimConflict,
+          let existing = pluginsByID.values.first(where: { $0.root == item.root }),
           !config.plugins.disabled.contains(existing.identifier)
         {
           // A malformed edit is not a new definition. Keep the validated
@@ -995,15 +1056,35 @@ final class PluginManager {
       }
     }
 
+    var removed: [PluginProcess] = []
     for id in Array(pluginsByID.keys) where !nextIDs.contains(id) {
-      pluginsByID[id]?.stopAndWait(reason: "config_removed")
-      pluginsByID.removeValue(forKey: id)
+      if let plugin = pluginsByID.removeValue(forKey: id) { removed.append(plugin) }
       sourceAdaptersByID.removeValue(forKey: id)
-      // Unload drops the published catalog — the rows' owner is gone.
-      catalogStore.drop(pluginID: id)
     }
+    // From here every request resolves to the replacement, which queues it
+    // until its child runs; the old child was never going to answer it.
     publishHotSnapshot()
+    for replacement in replacements {
+      replacement.previous?.stopAndWait(reason: "config_reload")
+      if replacement.dropsCatalog, let previous = replacement.previous {
+        catalogStore.drop(pluginID: previous.identifier)
+      }
+      replacement.plugin.start()
+    }
+    for plugin in removed {
+      plugin.stopAndWait(reason: "config_removed")
+      // Unload drops the published catalog — the rows' owner is gone.
+      catalogStore.drop(pluginID: plugin.identifier)
+    }
     notifyStateChanged()
+  }
+
+  /// A definition reconciled this pass: the process it replaces, if any,
+  /// whether that one's catalog goes with it, and the one to start.
+  private struct Replacement {
+    let previous: PluginProcess?
+    let dropsCatalog: Bool
+    let plugin: PluginProcess
   }
 
   /// Stop every loaded plugin and restart it. Triggered by
@@ -1014,9 +1095,7 @@ final class PluginManager {
   @discardableResult
   func reloadAll() -> [String] {
     let ids = readHotSnapshot().plugins.map(\.identifier)
-    if let (config, generation) = configurationSnapshot() {
-      reconcile(config: config, restartIDs: Set(ids), expectedGeneration: generation)
-    }
+    requestRestarts(Set(ids))
     return ids
   }
 

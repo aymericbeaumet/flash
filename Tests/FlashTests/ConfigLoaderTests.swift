@@ -125,12 +125,46 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(config.mode.scrollPageLines, 20)
   }
 
+  func testHyperDefaultsAreTheAppleFunctionRow() throws {
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let toml = try String(
+      contentsOf: root.appendingPathComponent("config.default.toml"), encoding: .utf8)
+    let config = ConfigLoader.parse(toml)
+    XCTAssertTrue(
+      config.diagnostics.isEmpty, config.diagnostics.map(\.message).joined(separator: "\n"))
+    let byKey = Dictionary(
+      uniqueKeysWithValues: config.mode.hyper.map {
+        ($0.key, $0.action.diagnosticDescription)
+      })
+    XCTAssertEqual(byKey["1"], "flash system_key --key=brightness_down")
+    XCTAssertEqual(byKey["2"], "flash system_key --key=brightness_up")
+    XCTAssertEqual(byKey["3"], "flash system_key --key=mission_control")
+    XCTAssertEqual(byKey["4"], "flash system_key --key=spotlight")
+    XCTAssertEqual(byKey["5"], "flash system_key --key=dictation")
+    XCTAssertEqual(byKey["6"], "flash system_key --key=focus")
+    XCTAssertEqual(byKey["7"], "flash system_key --key=media_previous")
+    XCTAssertEqual(byKey["8"], "flash system_key --key=media_play")
+    XCTAssertEqual(byKey["9"], "flash system_key --key=media_next")
+    XCTAssertEqual(byKey["0"], "flash system_key --key=mute")
+    XCTAssertEqual(byKey["-"], "flash system_key --key=volume_down")
+    XCTAssertEqual(byKey["="], "flash system_key --key=volume_up")
+    XCTAssertEqual(byKey["shift+1"], "flash function_key --key=f1")
+    XCTAssertEqual(byKey["shift+0"], "flash function_key --key=f10")
+    XCTAssertEqual(byKey["shift+-"], "flash function_key --key=f11")
+    XCTAssertEqual(byKey["shift+="], "flash function_key --key=f12")
+    XCTAssertNil(byKey["+"])
+  }
+
   func testModeTransitionsHaveNoDefaultMappings() {
     let closePopup = NormalModeInterpreter.canonicalizeMappingKey("cmd+w")
     for config in [Config.default, ConfigLoader.parse("")] {
       for (scope, mappings) in [
         ("all", config.mode.all), ("normal", config.mode.normal), ("insert", config.mode.insert),
         ("command", config.mode.command), ("terminal", config.mode.terminal),
+        ("hyper", config.mode.hyper),
       ] {
         for mapping in mappings {
           switch mapping.action.command {
@@ -236,29 +270,51 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#FFF785")
     XCTAssertEqual(c.overlay.hintBGBottom, "#FFC542")
     XCTAssertEqual(c.overlay.hintBorder, "#E3BE23")
-    for rawKey in ["d", "j", "k"] {
+    for rawKey in ["c", "d", "m", "j", "k"] {
       XCTAssertNil(c.mode.normal.first { $0.key == key(rawKey) })
     }
     XCTAssertEqual(c.mode.normal.first { $0.key == "u" }?.action.command, .undo)
     XCTAssertEqual(c.mode.normal.first { $0.key == key("ctrl+r") }?.action.command, .redo)
     XCTAssertEqual(c.mode.normalLeader, "\\")
+    XCTAssertEqual(c.mode.hyperKey, "<leader>")
+    XCTAssertEqual(c.mode.resolvedHyperKey, "\\")
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("\\<space>") }))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("sf") })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("cf") })?.action.command,
       .mouseTarget(.click(.rightClick, modifiers: [])))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+f") }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("sf") }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("df") })?.action.command,
       .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
       .mouseTarget(.move))
-    // `F` is the grid twin of `f`, and every click prefix works on both.
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "s" })?.action.command,
+      .mouseBigram(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("cs") })?.action.command,
+      .mouseBigram(.click(.rightClick, modifiers: [])))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+s") }))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("ds") })?.action.command,
+      .mouseBigram(.click(.doubleClick, modifiers: [])))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("ms") })?.action.command,
+      .mouseBigram(.move))
+    XCTAssertEqual(
+      c.mode.normal.first { $0.key == "s" }?.origin, ModeMapping.defaultOrigin)
+    XCTAssertNil(c.mode.normal.first { $0.key == "j" })
+    // `F` is the grid twin of `f`.
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("cF") })?.action.command,
+      .mouseGrid(.init(.click(.rightClick, modifiers: []))))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+shift+f") }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("sF") }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
       .mouseGrid(.init(.click(.leftClick, modifiers: []))))
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("sF") })?.action.command,
-      .mouseGrid(.init(.click(.rightClick, modifiers: []))))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("dF") })?.action.command,
       .mouseGrid(.init(.click(.doubleClick, modifiers: []))))
@@ -268,10 +324,8 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("tf") }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("tF") }))
     XCTAssertNotNil(c.mode.normal.first(where: { $0.key == key("t") }))
-    // The modified variants are gone: magic modifiers on the final hint key
-    // cover them, so there is nothing separate to bind.
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+f") }))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("ctrl+shift+f") }))
+    // Primary click has no modified chord of its own: magic modifiers on the
+    // final hint key cover that. Right-click is the `c` prefix: cf / cF / cs.
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
       .mouseGrid(.init(.move)))
@@ -946,29 +1000,6 @@ final class ConfigLoaderTests: XCTestCase {
       })
   }
 
-  /// `[open]` moved into `[flashlight]`: its keys are rejected with where
-  /// they live now, and read nothing.
-  func testOpenSectionIsRejectedForFlashlight() {
-    let c = ConfigLoader.parse(
-      """
-      [open]
-      ignored_apps = ["Flash"]
-      app_directories = ["/Applications"]
-      """)
-    XCTAssertEqual(
-      Set(c.loadingDiagnostics.map(\.message)),
-      [
-        "open.ignored_apps is not read; set ignored_apps in [flashlight]",
-        "open.app_directories is not read; set app_directories in [flashlight]",
-      ])
-    XCTAssertTrue(c.loadingDiagnostics.allSatisfy { $0.location != nil })
-    XCTAssertTrue(c.flashlight.ignoredApps.isEmpty)
-    XCTAssertEqual(c.flashlight.appDirectories, Config.Flashlight.defaultAppDirectories)
-    XCTAssertEqual(
-      ConfigLoader.parse("", environment: ["FLASH_OPEN_IGNORED_APPS": "[\"Flash\"]"])
-        .flashlight.ignoredApps, [], "the old environment name reads nothing")
-  }
-
   func testParsesEmptyMagicModifiersArray() {
     let c = ConfigLoader.parse(
       """
@@ -1048,6 +1079,52 @@ final class ConfigLoaderTests: XCTestCase {
       "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}")
   }
 
+  func testResolvedConfigJSONCommandsAreArgv() throws {
+    let c = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "alt+j" = ["flash", "window_move", "--position=bottomhalf"]
+      "alt+n" = ["flash", "window_move", "--screen=+1"]
+      "alt+z" = ["flash", "window_move", "--x=10.6925%", "--y=10.6925%", "--width=78.615%", "--height=78.615%"]
+      "o" = ["flash", "app_open", "--name=My App"]
+      "alt+h" = { command = ["flash", "window_move", "--position=lefthalf"], repeat = true }
+      """)
+    let json = c.resolvedConfigJSON
+    XCTAssertFalse(json.contains("\"flash window_move"))
+    XCTAssertFalse(json.contains("\"flash app_open"))
+    let root = try XCTUnwrap(Self.parseJSONObject(json))
+    let mode = try XCTUnwrap(root["mode"] as? [String: Any])
+    let all = try XCTUnwrap(mode["all"] as? [[String: Any]])
+    let byKey = Dictionary(
+      uniqueKeysWithValues: all.compactMap { row -> (String, [String: Any])? in
+        guard let key = row["key"] as? String else { return nil }
+        return (key, row)
+      })
+    XCTAssertEqual(
+      byKey["alt+j"]?["command"] as? [String],
+      ["flash", "window_move", "--position=bottomhalf", "--screen=0"])
+    XCTAssertEqual(
+      byKey["alt+n"]?["command"] as? [String],
+      ["flash", "window_move", "--screen=1"])
+    XCTAssertEqual(
+      byKey["alt+z"]?["command"] as? [String],
+      [
+        "flash", "window_move", "--x=10.6925%", "--y=10.6925%", "--width=78.615%",
+        "--height=78.615%", "--screen=0",
+      ])
+    // A space inside one flag stays one element. Joining and splitting would not.
+    XCTAssertEqual(
+      byKey["o"]?["command"] as? [String],
+      ["flash", "app_open", "--name=My App"])
+    XCTAssertEqual(
+      byKey["alt+h"]?["command"] as? [String],
+      ["flash", "window_move", "--position=lefthalf", "--screen=0"])
+    XCTAssertEqual(byKey["alt+h"]?["repeat"] as? Bool, true)
+    let normal = try XCTUnwrap(mode["normal"] as? [[String: Any]])
+    let mouse = normal.first { ($0["key"] as? String) == "f" }
+    XCTAssertEqual(mouse?["command"] as? [String], ["flash", "mouse_target"])
+  }
+
   func testResolvedConfigJSONNeverIncludesPluginSettingValues() throws {
     let config = ConfigLoader.parse(
       """
@@ -1075,7 +1152,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(root["default"] as? String, "<qwerty_homerow+qwerty_toprow>")
     XCTAssertEqual(root["raw"] as? String, "<colemak_homerow>")
     XCTAssertEqual(root["layout"] as? String, "colemak")
-    XCTAssertEqual(root["chars"] as? String, "arstnediho")
+    XCTAssertEqual(root["chars"] as? String, "tnsedhriao")
     XCTAssertEqual(root["left_hand"] as? String, "abcdfgpqrstvwxz")
   }
 
@@ -1100,7 +1177,7 @@ final class ConfigLoaderTests: XCTestCase {
       keys = "<dvorak_homerow_lefthand+dvorak_toprow_righthand>"
       """)
     XCTAssertEqual(c.resolvedAlphabet.layoutName, "dvorak")
-    XCTAssertEqual(String(c.resolvedAlphabet.chars), "aoeuifcrlg")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "ueioagcfrl")
     XCTAssertNil(c.resolvedAlphabet.warning)
   }
 
@@ -1128,7 +1205,7 @@ final class ConfigLoaderTests: XCTestCase {
       "direct mutation should not recompute hot-path derived data")
     c.prepareDerivedValues()
     XCTAssertEqual(c.resolvedAlphabet.layoutName, "colemak")
-    XCTAssertEqual(String(c.resolvedAlphabet.chars), "arstnediho")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "tnsedhriao")
   }
 
   func testLayoutKeyIsNotAVisibleConfigProperty() {
@@ -1342,6 +1419,57 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.compiledNormal.mapping(for: key(",x")))
     XCTAssertNil(c.mode.terminal.first(where: { $0.key == key("cmd+q") }))
     XCTAssertNotNil(c.mode.terminal.first(where: { $0.key == key("cmd+w") }))
+  }
+
+  /// `s` is the built-in jump. Removing it drops the jump. Right-click is
+  /// `cf`, so a `<leader>s` removal does not touch `s`.
+  func testRemovingTheBuiltinBigramDropsIt() {
+    let removed = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "s" = false
+      """)
+    XCTAssertTrue(
+      removed.loadingDiagnostics.isEmpty, "\(removed.loadingDiagnostics.map(\.message))")
+    XCTAssertNil(removed.mode.normal.first { $0.key == "s" })
+    XCTAssertNil(removed.mode.compiledNormal.mapping(for: "s"))
+    XCTAssertNotNil(removed.mode.compiledNormal.mapping(for: key("cf")))
+
+    let leaderOnly = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = ","
+      [mode.normal.mappings]
+      "<leader>s" = false
+      """)
+    XCTAssertEqual(
+      leaderOnly.mode.compiledNormal.mapping(for: "s")?.action.command,
+      .mouseBigram(.click(.leftClick, modifiers: [])))
+  }
+
+  func testMappingOriginNamesTheUserFileAndKeepsBundledDefaults() {
+    let bundled = ConfigLoader.Layer(
+      text: """
+        [mode.normal.mappings]
+        "s" = ["flash", "mouse_bigram"]
+        """,
+      sourceURL: URL(fileURLWithPath: "/tmp/Flash.app/Contents/Resources/config.default.toml"),
+      diagnosticLabel: "config.default.toml")
+    let user = ConfigLoader.Layer(
+      text: """
+        [mode.normal.mappings]
+        "q" = ["flash", "tab_close"]
+        [mode.apps."com.apple.Safari".normal.mappings]
+        "f" = ["flash", "mouse_target", "--search"]
+        """,
+      sourceURL: URL(fileURLWithPath: "/Users/example/.config/flash/flash.toml"))
+    let config = ConfigLoader.parseLayers([bundled, user])
+    XCTAssertEqual(config.mode.normal.first { $0.key == "s" }?.origin, ModeMapping.defaultOrigin)
+    XCTAssertEqual(config.mode.normal.first { $0.key == "q" }?.origin, "config:flash.toml")
+    XCTAssertEqual(
+      config.mode.appMappings["com.apple.Safari"]?.normal.first { $0.key == "f" }?.origin,
+      "config:flash.toml")
+    XCTAssertEqual(config.mode.normal.first { $0.key == "f" }?.origin, ModeMapping.defaultOrigin)
   }
 
   func testTrueAndCommandFalseAreRejectedWithTheRemovalSpelling() {
@@ -1597,6 +1725,87 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
   }
 
+  func testHyperMappingsParseVolumeKeysAndRejectLeader() {
+    let toml = """
+      [mode.normal]
+      leader = "<space>"
+      [mode.hyper.mappings]
+      "-" = ["flash", "media", "volumedown"]
+      "<plus>" = ["flash", "media", "volumeup"]
+      "<leader>s" = ["flash", "quit"]
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
+    // Entries extend the default function row and arrows; `-` replaces the
+    // default volume-down binding.
+    let keys = Set(c.mode.hyper.map(\.key))
+    XCTAssertTrue(keys.isSuperset(of: ["+", "-"]))
+    XCTAssertEqual(c.mode.hyper.filter { $0.key == "-" }.count, 1)
+    XCTAssertEqual(
+      c.mode.compiledHyper.mapping(for: "-")?.action.command,
+      .pluginCommand(command: "media", subcommand: "volumedown", args: []))
+    XCTAssertEqual(
+      c.mode.compiledHyper.mapping(for: "+")?.action.command,
+      .pluginCommand(command: "media", subcommand: "volumeup", args: []))
+    XCTAssertNil(c.mode.hyper.first { $0.key.contains("<leader>") || $0.key.contains("space") })
+    XCTAssertEqual(c.mode.resolvedHyperKey, "space")
+  }
+
+  func testHyperKeyFollowsTheLeaderAndCanBeRemapped() {
+    let remapped = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = "<space>"
+      hyper = "a"
+      """)
+    XCTAssertTrue(remapped.loadingDiagnostics.isEmpty, "\(remapped.loadingDiagnostics)")
+    XCTAssertEqual(remapped.mode.hyperKey, "a")
+    XCTAssertEqual(remapped.mode.resolvedHyperKey, "a")
+
+    let chord = ConfigLoader.parse(
+      """
+      [mode.normal]
+      hyper = "cmd+space"
+      """)
+    XCTAssertEqual(chord.mode.resolvedHyperKey, "cmd+space")
+    XCTAssertTrue(chord.loadingDiagnostics.isEmpty, "\(chord.loadingDiagnostics)")
+
+    let unset = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = false
+      """)
+    XCTAssertNil(unset.mode.normalLeader)
+    XCTAssertNil(unset.mode.resolvedHyperKey)
+    XCTAssertTrue(unset.loadingDiagnostics.isEmpty, "\(unset.loadingDiagnostics)")
+
+    let concrete = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = false
+      hyper = "<space>"
+      """)
+    XCTAssertNil(concrete.mode.normalLeader)
+    XCTAssertEqual(concrete.mode.resolvedHyperKey, "space")
+    XCTAssertTrue(concrete.loadingDiagnostics.isEmpty, "\(concrete.loadingDiagnostics)")
+
+    let sequence = ConfigLoader.parse(
+      """
+      [mode.normal]
+      hyper = "<leader>s"
+      """)
+    XCTAssertTrue(sequence.warnings.contains { $0.contains("mode.normal.hyper") })
+    XCTAssertEqual(sequence.mode.hyperKey, "<leader>")
+
+    let oldKey = ConfigLoader.parse(
+      """
+      [mode.hyper]
+      key = "a"
+      """)
+    XCTAssertTrue(oldKey.warnings.contains { $0.contains("unknown key 'key'") })
+    XCTAssertEqual(oldKey.mode.hyperKey, "<leader>")
+  }
+
   func testOldModeMappingTablesAreRejected() {
     let toml = """
       [mode.normal]
@@ -1781,6 +1990,7 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
 
     XCTAssertEqual(c.app, d.app)
+    XCTAssertEqual(c.keyboard, d.keyboard)
     XCTAssertEqual(c.hints, d.hints)
     XCTAssertEqual(c.overlay, d.overlay)
     XCTAssertEqual(c.plugins, d.plugins)
@@ -1794,6 +2004,12 @@ final class ConfigLoaderTests: XCTestCase {
     var builtinMode = d.mode
     loadedMode.normal.sort { $0.key < $1.key }
     builtinMode.normal.sort { $0.key < $1.key }
+    loadedMode.hyper.sort { $0.key < $1.key }
+    builtinMode.hyper.sort { $0.key < $1.key }
+    loadedMode.visual.sort { $0.key < $1.key }
+    builtinMode.visual.sort { $0.key < $1.key }
+    loadedMode.drag.sort { $0.key < $1.key }
+    builtinMode.drag.sort { $0.key < $1.key }
     loadedMode.recompileMappings()
     builtinMode.recompileMappings()
     XCTAssertEqual(loadedMode, builtinMode)
@@ -2070,28 +2286,6 @@ final class ConfigLoaderTests: XCTestCase {
       "expected a resolved <leader>x mapping, got keys: \(c.mode.normal.map(\.key))")
   }
 
-  func testLayeredParseTemplateSourceFollowsDefiningLayer() {
-    // Diagnostics retain the file that defined the template even when later
-    // layers change unrelated settings.
-    let definer = ConfigLoader.Layer(
-      text: """
-        [statusbar]
-        template = "#{flash.mode}"
-        """,
-      sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"),
-      diagnosticLabel: "config.default.toml")
-    let silent = ConfigLoader.Layer(
-      text: """
-        [hints]
-        min_length = 2
-        """,
-      sourceURL: URL(fileURLWithPath: "/tmp/user/flash.toml"))
-    let c = ConfigLoader.parseLayers([definer, silent])
-    XCTAssertEqual(
-      c.statusBar.templateSourceURL,
-      URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
-  }
-
   func testLayeredPopupSourcesResolveCommandsAgainstTheirDefiningFiles() {
     let base = ConfigLoader.Layer(
       text: """
@@ -2124,5 +2318,79 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.statusBar.sources["user"]?.workingDirectory, "/tmp/user/work")
     XCTAssertEqual(c.popupSourceURLs["base"], base.sourceURL)
     XCTAssertEqual(c.popupSourceURLs["user"], user.sourceURL)
+  }
+
+  func testResolvedConfigSourcesNameTheLayerThatOverrodeTheDefault() throws {
+    let bundled = ConfigLoader.Layer(
+      text: """
+        [debug]
+        log_level = "info"
+        show_hints_bounds = true
+        [hints]
+        min_length = 1
+        [mode.normal.mappings]
+        "j" = ["flash", "mouse_target"]
+        """,
+      sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"),
+      diagnosticLabel: "config.default.toml")
+    let user = ConfigLoader.Layer(
+      text: """
+        [debug]
+        log_level = "debug"
+        [hints]
+        min_length = 1
+        [popup.bonsai]
+        command = ["bonsai", "hq"]
+        size = "78.615%x78.615%"
+        persistent = true
+        [statusbar.sources.clock]
+        command = ["date"]
+        [mode.normal.mappings]
+        "b" = ["flash", "enter_terminal_mode", "--name=bonsai"]
+        """,
+      sourceURL: URL(fileURLWithPath: "/Users/ab/.config/flash/flash.toml"),
+      valueSource: ConfigValueSource(layer: "config", detail: "flash.toml"))
+    let cli = ConfigLoader.Layer(
+      text: """
+        [hints]
+        min_length = 3
+        """,
+      valueSource: ConfigValueSource(layer: "cli", detail: "--min-length"))
+    let config = ConfigLoader.parseLayers(
+      [bundled, user, cli], environment: ["FLASH_DEBUG_LOG_LEVEL": "warn"])
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics.map(\.message))")
+
+    let root = try XCTUnwrap(Self.parseJSONObject(config.resolvedConfigJSON))
+    let debug = try XCTUnwrap(root["debug"] as? [String: Any])
+    XCTAssertEqual(debug["log_level"] as? String, "warn")
+    let hints = try XCTUnwrap(root["hints"] as? [String: Any])
+    XCTAssertEqual(hints["min_length"] as? Int, 3)
+
+    let sources = config.resolvedConfigSources()
+    XCTAssertEqual(
+      Self.sourceMark(sources, ["debug", "log_level"]),
+      ["layer": "env", "where": "FLASH_DEBUG_LOG_LEVEL"])
+    XCTAssertNil(Self.sourceMark(sources, ["debug", "show_hints_bounds"]))
+    XCTAssertEqual(
+      Self.sourceMark(sources, ["hints", "min_length"]), ["layer": "cli", "where": "--min-length"])
+    XCTAssertEqual(
+      Self.sourceMark(sources, ["popup", "popups", "bonsai"]),
+      ["layer": "config", "where": "flash.toml"])
+    XCTAssertEqual(
+      Self.sourceMark(sources, ["statusbar", "sources", "clock"]),
+      ["layer": "config", "where": "flash.toml"])
+    XCTAssertEqual(
+      Self.sourceMark(sources, ["mode", "normal", "b"]),
+      ["layer": "config", "where": "flash.toml"])
+    XCTAssertNil(Self.sourceMark(sources, ["mode", "normal", "j"]))
+  }
+
+  private static func sourceMark(_ sources: [String: Any], _ path: [String]) -> [String: String]? {
+    var node = sources
+    for key in path {
+      guard let next = node[key] as? [String: Any] else { return nil }
+      node = next
+    }
+    return node["$"] as? [String: String]
   }
 }

@@ -57,9 +57,7 @@ extension OverlayPanel {
   }
 
   private func clearStatusBarHoverFeedback() {
-    statusBarHoverDwellWork?.cancel()
-    statusBarHoverDwellWork = nil
-    statusBarHoverDwellName = nil
+    _ = statusBarSpawnDwell.cancel()
     setStatusBarHoverHighlight(nil)
     // Only a preview is tied to the pointer; the reveal itself dismisses a
     // pinned popup (`statusBarNativeMenuDidReveal`).

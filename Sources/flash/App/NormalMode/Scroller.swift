@@ -299,7 +299,7 @@ extension NormalModeDispatcher {
 
   @discardableResult
   private static func postLineScroll(lines: Int32) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let event = CGEvent(
         scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
@@ -328,7 +328,7 @@ extension NormalModeDispatcher {
     else {
       return false
     }
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let event = CGEvent(
         scrollWheelEvent2Source: source,
@@ -340,7 +340,7 @@ extension NormalModeDispatcher {
     else {
       return false
     }
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let point = scrollWheelPoint(windowFrame: windowFrame, pageFrame: pageFrame)
     event.location = CGPoint(x: point.x, y: screenH - point.y)
     event.setIntegerValueField(
@@ -358,7 +358,7 @@ extension NormalModeDispatcher {
     // into). When the cursor is parked outside the window, fall back to
     // the page/window centre instead of the old right-edge anchor, so a
     // multi-pane terminal doesn't always scroll the rightmost pane.
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let cgCursor = CGEvent(source: nil)?.location ?? .zero
     let nsCursor = CGPoint(x: cgCursor.x, y: screenH - cgCursor.y)
     if windowFrame.insetBy(dx: 4, dy: 4).contains(nsCursor) {
@@ -395,9 +395,6 @@ extension NormalModeDispatcher {
   /// fitting Int32 with room to spare.
   private static let extremeWheelDelta: Int32 = 1_000_000
 
-  static func primaryScreenHeight() -> CGFloat {
-    ScreenSpace.primaryHeight
-  }
   private static func scrollBar(axis: Axis, pid: pid_t) -> AXUIElement? {
     let app = AXApp.make(pid: pid)
     if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
@@ -495,7 +492,7 @@ extension NormalModeDispatcher {
       return nil
     }
 
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     var best: PageScrollTarget?
     var bestArea: CGFloat = 0
     var queue = [window]

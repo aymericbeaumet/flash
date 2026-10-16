@@ -16,6 +16,45 @@ extension NormalModeDispatcher {
   static func fuzzyScore(normalizedQuery query: String, normalizedCandidate candidate: String)
     -> Int?
   {
+    fuzzyScore(prepared: PreparedFuzzyQuery(normalized: query), normalizedCandidate: candidate)
+  }
+
+  /// One normalized query's derived forms, built once per keystroke: the
+  /// scorer runs up to eight times per candidate over thousands of rows.
+  struct PreparedFuzzyQuery {
+    let normalized: String
+    /// Whitespace removed, as characters: the typo ladder's left side.
+    let compact: [Character]
+    let compactCount: Int
+    let maxEdits: Int
+
+    init(normalized: String) {
+      self.normalized = normalized
+      let compact = Array(normalized.filter { !$0.isWhitespace })
+      self.compact = compact
+      self.compactCount = compact.count
+      self.maxEdits = NormalModeDispatcher.allowedTypoCount(compact.count)
+    }
+  }
+
+  /// A scorer closure over one prepared query, for `scoreMatches`. The query
+  /// argument every call passes is the prepared one; any other falls back to
+  /// a fresh preparation so the contract holds for every caller.
+  static func fuzzyScorer(normalizedQuery: String) -> (String, String) -> Int? {
+    let prepared = PreparedFuzzyQuery(normalized: normalizedQuery)
+    return { query, candidate in
+      if query == prepared.normalized {
+        return fuzzyScore(prepared: prepared, normalizedCandidate: candidate)
+      }
+      return fuzzyScore(
+        prepared: PreparedFuzzyQuery(normalized: query), normalizedCandidate: candidate)
+    }
+  }
+
+  static func fuzzyScore(prepared: PreparedFuzzyQuery, normalizedCandidate candidate: String)
+    -> Int?
+  {
+    let query = prepared.normalized
     if query.isEmpty { return 0 }
     guard !candidate.isEmpty else { return nil }
 
@@ -23,14 +62,16 @@ extension NormalModeDispatcher {
     if let exact = exactContainmentScore(query: query, candidate: candidate) {
       best = max(best ?? exact, exact)
     }
-    if let ordered = orderedMatchScore(query: query, candidate: candidate) {
+    if let ordered = orderedMatchScore(query: prepared.compact, candidate: candidate) {
       best = max(best ?? ordered, ordered)
     }
 
-    let queryCompact = query.filter { !$0.isWhitespace }
-    let compactCandidate = candidate.filter { !$0.isWhitespace }
-    for segment in searchSegments(candidate: candidate) + [compactCandidate] {
-      guard let score = typoScore(query: queryCompact, segment: segment) else { continue }
+    for segment in searchSegments(candidate: candidate) {
+      guard let score = typoScore(query: prepared, segment: Array(segment)) else { continue }
+      best = max(best ?? score, score)
+    }
+    let compactCandidate = Array(candidate.filter { !$0.isWhitespace })
+    if let score = typoScore(query: prepared, segment: compactCandidate) {
       best = max(best ?? score, score)
     }
     return best
@@ -156,8 +197,7 @@ extension NormalModeDispatcher {
     return 220 - min(80, offset * 3) - max(0, candidate.count - query.count) / 6
   }
 
-  private static func orderedMatchScore(query: String, candidate: String) -> Int? {
-    let query = Array(query.filter { !$0.isWhitespace })
+  private static func orderedMatchScore(query: [Character], candidate: String) -> Int? {
     let candidate = Array(candidate)
     guard !query.isEmpty else { return 0 }
     var queryIndex = 0
@@ -193,46 +233,48 @@ extension NormalModeDispatcher {
     CharacterSet.alphanumerics.contains(scalar) || scalar.value == 35
   }
 
-  private static func searchSegments(candidate: String) -> [String] {
-    candidate
-      .split(whereSeparator: { $0.isWhitespace })
-      .map(String.init)
-      .filter { !$0.isEmpty }
+  private static func searchSegments(candidate: String) -> [Substring] {
+    candidate.split(whereSeparator: { $0.isWhitespace })
   }
 
-  private static func typoScore(query: String, segment: String) -> Int? {
-    guard !query.isEmpty, !segment.isEmpty else { return nil }
-    let maxEdits = allowedTypoCount(query.count)
-    guard query.count <= segment.count + maxEdits else { return nil }
-    let prefixLength = min(segment.count, query.count + maxEdits)
-    let prefix = String(segment.prefix(prefixLength))
-    guard let distance = boundedEditDistance(query, prefix, maxDistance: maxEdits) else {
-      return nil
-    }
-    return 105 - distance * 24 - abs(prefix.count - query.count) * 3
-      - max(0, segment.count - query.count) / 4
+  private static func typoScore(query: PreparedFuzzyQuery, segment: [Character]) -> Int? {
+    let queryCount = query.compactCount
+    guard queryCount > 0, !segment.isEmpty else { return nil }
+    let maxEdits = query.maxEdits
+    guard queryCount <= segment.count + maxEdits else { return nil }
+    let prefixLength = min(segment.count, queryCount + maxEdits)
+    guard
+      let distance = boundedEditDistance(
+        query.compact, segment, rhsCount: prefixLength, maxDistance: maxEdits)
+    else { return nil }
+    return 105 - distance * 24 - abs(prefixLength - queryCount) * 3
+      - max(0, segment.count - queryCount) / 4
   }
 
-  private static func allowedTypoCount(_ length: Int) -> Int {
+  static func allowedTypoCount(_ length: Int) -> Int {
     if length <= 2 { return 0 }
     if length <= 5 { return 1 }
     return 2
   }
 
+  /// Levenshtein distance between `a` and the first `rhsCount` characters of
+  /// `b`, nil once it must exceed `maxDistance`.
   private static func boundedEditDistance(
-    _ lhs: String,
-    _ rhs: String,
+    _ a: [Character],
+    _ b: [Character],
+    rhsCount: Int,
     maxDistance: Int
   ) -> Int? {
-    let a = Array(lhs)
-    let b = Array(rhs)
-    if abs(a.count - b.count) > maxDistance { return nil }
-    var previous = Array(0...b.count)
-    var current = Array(repeating: 0, count: b.count + 1)
+    let bCount = min(rhsCount, b.count)
+    if abs(a.count - bCount) > maxDistance { return nil }
+    if a.isEmpty { return bCount <= maxDistance ? bCount : nil }
+    if bCount == 0 { return a.count <= maxDistance ? a.count : nil }
+    var previous = Array(0...bCount)
+    var current = Array(repeating: 0, count: bCount + 1)
     for i in 1...a.count {
       current[0] = i
       var rowMin = current[0]
-      for j in 1...b.count {
+      for j in 1...bCount {
         let substitution = previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)
         let insertion = current[j - 1] + 1
         let deletion = previous[j] + 1
@@ -242,6 +284,6 @@ extension NormalModeDispatcher {
       if rowMin > maxDistance { return nil }
       swap(&previous, &current)
     }
-    return previous[b.count] <= maxDistance ? previous[b.count] : nil
+    return previous[bCount] <= maxDistance ? previous[bCount] : nil
   }
 }

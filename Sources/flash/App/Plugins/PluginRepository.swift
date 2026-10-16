@@ -1,6 +1,11 @@
 import FlashCore
 import Foundation
 
+struct PluginCommandPair: Hashable {
+  var command: String
+  var subcommand: String
+}
+
 /// Third-party plugin materialization (commit-pinned GitHub checkouts) and
 /// on-disk plugin-root discovery. Owns nothing but `baseDataDir`; every git
 /// child is argv-exec'd (no shell) with a kill-timer bound.
@@ -166,6 +171,49 @@ struct PluginRepository {
       }
     }
     return roots
+  }
+
+  /// `(command, subcommand)` pairs from bundled manifests. `subcommand` is
+  /// `*` for a wildcard. Config and the CLI accept `flash <command> <subcommand>`
+  /// for these, the same shape as `:command subcommand`.
+  static let declaredCommandPairs: Set<PluginCommandPair> = {
+    var pairs = Set<PluginCommandPair>()
+    let sourceTree = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Plugins")
+    for root in manifestRoots(in: officialPluginRoots() + [sourceTree]) {
+      let url = root.appendingPathComponent("manifest.json")
+      guard let data = try? Data(contentsOf: url),
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let commands = json["commands"] as? [[String: Any]]
+      else { continue }
+      for command in commands {
+        guard let name = command["command"] as? String else { continue }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { continue }
+        let sub =
+          (command["subcommand"] as? String)?
+          .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        pairs.insert(PluginCommandPair(command: trimmed, subcommand: sub))
+      }
+    }
+    return pairs
+  }()
+
+  /// True when some manifest registers `command`. With a subcommand, true
+  /// only for that pair or a `*` wildcard on the same command.
+  static func declaresCommand(_ command: String, subcommand: String? = nil) -> Bool {
+    let command = command.lowercased()
+    guard declaredCommandPairs.contains(where: { $0.command == command }) else { return false }
+    guard let subcommand else { return true }
+    let normalized = subcommand.lowercased()
+    return declaredCommandPairs.contains(
+      PluginCommandPair(command: command, subcommand: normalized))
+      || declaredCommandPairs.contains(PluginCommandPair(command: command, subcommand: "*"))
   }
 
   static func officialPluginRoots() -> [URL] {

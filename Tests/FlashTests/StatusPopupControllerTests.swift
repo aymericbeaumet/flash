@@ -88,6 +88,29 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(emoji.rows, 1)
   }
 
+  func testRefreshFollowsTheLabelOntoTheScreenThatNowHoldsIt() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    let oldScreen = CGRect(x: 0, y: 0, width: 800, height: 600)
+    var label = region(text: "Cld 6%")
+    label.rect = CGRect(x: 600, y: 574, width: 160, height: 26)
+    preview(controller, region: label, screen: oldScreen)
+    XCTAssertLessThanOrEqual(controller.frame.maxY, label.rect.minY)
+    XCTAssertLessThanOrEqual(controller.frame.maxY, oldScreen.maxY)
+
+    let newScreen = CGRect(x: 0, y: 0, width: 1728, height: 1085)
+    var moved = label
+    moved.rect = CGRect(x: 1400, y: 1059, width: 280, height: 26)
+    controller.refresh([moved]) { _ in newScreen }
+    XCTAssertGreaterThan(controller.frame.maxY, oldScreen.maxY)
+    XCTAssertLessThanOrEqual(controller.frame.maxY, moved.rect.minY)
+    XCTAssertGreaterThanOrEqual(controller.frame.minX, newScreen.minX)
+    XCTAssertLessThanOrEqual(controller.frame.maxX, newScreen.maxX)
+    XCTAssertGreaterThanOrEqual(controller.frame.minY, newScreen.minY)
+    controller.dismiss()
+  }
+
   func testTextPopupGrowsFromMinWidthToItsWidestLineAndWrapsPastMaxWidth() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }

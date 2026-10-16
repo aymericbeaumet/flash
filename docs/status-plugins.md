@@ -26,14 +26,18 @@ Flash owns the rotation, exactly as it does for `#{cycle:}` script sources.
 The local system-monitor suite is deliberately split by resource. Each plugin
 owns `summary` and `details`; every summary carries its preview through
 `StatusValue::with_preview`, while the standalone details segment supports custom
-templates. Each also publishes a popup-free `label` for a named popup: yellow section
-name plus a grey metric. CPU/MEM/DSK percentages use two digits plus `%`, capped at 99;
+templates. Each also publishes a popup-free `label`: the metric alone, with no section
+name, no colour, and no padding. The host trims a status value, so a leading
+space would not survive. The template supplies the name, the colour, and the
+width, for example `#[label]CPU#[default] #{p-3:flash.plugin.cpu.label}`.
+CPU/MEM/DSK percentages use two digits plus `%` (`p-3`), capped at 99;
 battery charge can reach 100%, and detailed reports retain the actual values.
-NET uses four cells for aggregate download + upload on the default-route
-interface (`1.2M`, ` 12K`), in decimal
+NET is the aggregate download + upload on the default-route
+interface (`1.2M`, `12K`); `p-4` reserves its four cells, in decimal
 bytes per second. Counting the default route avoids double-counting VPN traffic.
 The labels contain no links or inline popups, so surrounding template bindings
-own clicks and hover. [Raw numeric segments](#raw-numeric-segments) carry the
+own the name, the colour, clicks, and hover. `summary` remains the plugin's own
+one-token line (name, metric, and in `full` mode the chart). [Raw numeric segments](#raw-numeric-segments) carry the
 same figures without markup. The maintained configuration shows `details` in PTY pagers;
 no third-party monitoring application is required. All five accept `[plugin.<id>] summary_mode = "compact" | "full"`,
 default to compact, and warn before falling back from an invalid value.
@@ -58,11 +62,11 @@ a host deadline it awaits (`ctx.wait`), not a sleep — so the initial publish
 carries a real figure.
 
 The monitors are status-bound, so the host runs them only while a surface shows
-one of their segments — except once a command such as `:cpu` has started one,
+one of their segments — except once a command such as `:cpu show` has started one,
 when it keeps running unobserved. Their cadences therefore also follow
 `core:status.observed`: cancelled while none of the plugin's segments is shown,
-re-armed with an immediate sample as soon as one is. Unobserved, a bare `:cpu`,
-`:memory` or `:disks` samples before it answers.
+re-armed with an immediate sample as soon as one is. Unobserved, `:cpu show`,
+`:memory show` or `:disks show` samples before it answers.
 
 Details add context using the same snapshots and histories, without additional
 collection:
@@ -124,8 +128,6 @@ while a surface shows it.
 | `tmux` · socket retry | 5, 15, 60 s backoff | low | A retry nobody waits on |
 | `tmux` · observer reattach | 1, 5, 15, 60 s backoff | low | A retry nobody waits on |
 | `tmux` · remote hosts | 5 s, retried 15–60 s | low | A remote pull over SSH |
-| `aiproviders` · usage | 60 s while observed | low | A remote pull |
-| `aiproviders` · autosend | 2.5 s after opening a prompt | normal | The page needs a beat to load |
 | `answers` · ECB rates | 6 h, retried every 15 min | low | A remote pull |
 | `feed` · articles | `refresh_interval` (300 s default) | low | A remote pull |
 | `browsers`, `kitty`, `windows` · settles | 300 ms–1 s windows, AX bursts up to 10 s | normal | Catalogs nobody watches refresh |
@@ -254,67 +256,33 @@ which requires a broad system-socket grant. SSID reads go through the narrow
 `wifi_info` host capability: event-driven discovery reads passively, and only
 the explicit `:network refresh` action may request Location authorization.
 
-## Adjacent AI usage status
-
-`aiproviders` is adjacent to, not part of, the local system-monitor suite. It
-publishes `claude_label` and `codex_label`. Cld/Cdx labels show the remaining
-weekly quota with an unpadded percentage capped at 99, followed by `↻` and the
-time until the weekly window resets (for example `53%↻5d`). It reads only
-those weekly windows from the provider responses and leaves session and
-model-specific quotas out. Grok remains a launcher only; do not add quota polling that reads or mutates
-unsupported credential stores.
-
-For every quota window, and tokens and cost by day and model, show
-[tokscale](https://github.com/junhoyeo/tokscale)'s TUI in a popup under the
-labels, as the [example status strip](examples/statusbar/flash.toml) does;
-install it yourself, for example with `npm i -g tokscale`. Flash does not
-rebuild those views.
-
-The plugin republishes a sanitized last-good cache at startup. One timer runs
-each minute to rerender relative labels and check the independent fetch TTLs: ten minutes
-for Anthropic and two minutes for OpenAI. Only changed rendered segments publish.
-Quota labels show an unpadded dash once the cache is older than twice the provider
-TTL. Status layout is a pure read of that state and performs no authentication
-or API calls. The plugin is status-bound, so it is resident only while the bar
-or a popup shows one of its segments. A chat-launcher bang such as `!claude` still starts
-it on demand; the quota timer, including its credential reads, runs only while
-`core:status.observed` lists a quota segment, and resumes with an immediate
-refresh when one is shown again.
-
-Claude Code's credentials are read-only by default. The plugin reads the
-`Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json`, and
-uses the stored access token until it expires. Claude Code renews its
-eight-hour token only when it runs, so after a long idle stretch the Claude
-label ages out to a dash. An expired token makes no request, so the plugin
-rereads the store on every one-minute tick and the label recovers within a
-minute of Claude Code renewing it; every other failure retries after five
-minutes. A failed or absent Claude reading logs one content-free warning when
-it starts or changes class (`reason` is `no_credentials`, `token_expired`,
-`renewal_failed`, `unrecognized`, or `request` with its `http_status`), and one
-info line when a reading returns. `[plugin.aiproviders] refresh_claude_code_credentials = true` opts
-into renewing the token with Claude Code's OAuth client two minutes before
-expiry and writing the rotation back to Claude Code's store. Rotating another
-app's refresh token can sign that app out.
-
-An opted-in refresh preserves the complete credential document. Keychain writes
-use hex-encoded password data on `security -i` stdin, followed by read-back
-verification. Never pass credential JSON to a trailing `security ... -w` on stdin:
-that option prompts on the terminal and can save an empty password. Secrets must
-remain off subprocess argv and diagnostic output. An already empty credential
-requires signing in again through Claude Code.
-
 ## Feed headlines
 
-`feed` owns the `summary` and `label` segments, selected with
-`#{flash.plugin.feed.summary}` and `#{flash.plugin.feed.label}`. Set
-`[plugin.feed] url` to an RSS feed URL;
-without one, the plugin makes no network requests. `refresh_interval` defaults
-to 300 seconds and `cycle_interval` to 30 seconds. The plugin publishes every
-article in the window as one host-rotated carousel; Flash rotates it, keeps the
-visible headline until its scheduled rotation across refreshes, and slides the
-title, domain, and outbound arrow together through the full bar height while
-the label stays still as the carousel's prefix. The refresh cadence, driven by
-the host clock, is the plugin's only timer: an article that leaves the window
+`feed` publishes `summary` and `label`. Neither prints a section name. The
+template writes the name, its colour, the link on that name, and the hover:
+
+```toml
+[statusbar]
+template = "#[align=left]#[popup=feed]#[link=https://example.com]#[label]aggr#[default]#[nolink]#[nopopup] #[popup=feed-article]#{flash.plugin.feed.label}#[nopopup]"
+
+[popup.feed]
+command = ["newsboat", "-u", "status/newsboat/urls", "-C", "status/newsboat/config"]
+persistent = true
+cwd = "."
+
+[popup.feed-article]
+command = ["newsboat-article", "$FLASH_STATUS_LINK"]
+cwd = "."
+```
+
+Set `[plugin.feed] url` to an RSS feed URL; without one, the plugin makes no
+network requests. `refresh_interval` defaults to 300 seconds and `cycle_interval`
+to 30 seconds. The plugin publishes every article in the window as one
+host-rotated carousel; Flash rotates the headline, keeps the visible line until
+its scheduled rotation across refreshes, and slides the title and domain
+through the full bar height. A name written in the template stays still,
+because it is not part of the carousel. The refresh cadence, driven by the
+host clock, is the plugin's only timer: an article that leaves the window
 drops out at the next refresh.
 Other metrics update without this transition, including when pooled layers are reused.
 
@@ -329,38 +297,25 @@ and outbound arrow. The feed stays before the notch or, without one, before
 the actual centre component; its arrow and click target remain visible. RSS item links
 open the feed's article page; an Atom `link rel="via"` extension supplies the
 original article link when present. For AGGR, this means the title opens the
-archived snapshot and the arrow opens the publisher. Set `label = "AGGR"`
-for this feed; the default label is `FEED`. Each carousel line owns its
-preview, so the title, domain, and arrow share one popup region.
+archived snapshot and the arrow opens the publisher. Each `summary` line owns
+its preview, so the title, domain, and arrow share one popup region.
 
-`label` carries the same rotating headlines with the same still prefix and
-cadence, but no outbound arrow and no inline preview, and its title and domain
-form one link to the feed item rather than three separate targets. Binding
-`label` instead of `summary` hands hover to the surrounding template, so a
-configuration can wrap it in its own `#[popup=…]` and point that popup at any
-command it likes — a feed reader, a script, anything. The plugin does
-not decide what hovering a headline shows; the configuration does. The still
-prefix stays outside the item link, so a template link wrapping the segment
-addresses the feed itself: clicking the prefix opens the feed, clicking the
-headline or its domain opens that item.
+`label` is the same rotating headlines with no outbound arrow and no inline
+preview. Its title and domain form one link to the feed item rather than three
+separate targets. A `#[popup=…]` around that segment is the hover, so the
+configuration points it at any command it likes — a feed reader, a script,
+anything. The plugin does not decide what hovering a headline shows. When that
+command contains `$FLASH_STATUS_LINK`, Flash expands it to the item link as
+the process starts. A template
+link around the name addresses the feed itself: clicking the name opens the
+feed, clicking the headline or its domain opens that item.
 
-```toml
-# A popup the configuration owns end to end.
-[statusbar]
-template = "#[align=left]#[popup=feed]#[link=https://example.com]#{flash.plugin.feed.label}#[nolink]#[nopopup]"
-
-[popup.feed]
-command = ["newsboat", "-u", "status/newsboat/urls", "-C", "status/newsboat/config"]
-persistent = true
-cwd = "."
-```
-
-Hovering the article title, domain, or arrow opens a terminal-rendered preview of its opening
+Hovering a `summary` title, domain, or arrow opens a terminal-rendered preview of its opening
 lines from `content:encoded`, falling back to `description`. Paragraph breaks,
 headings, lists, quotations, emphasis, and code retain their structure. The
 excerpt is bounded to 12 logical lines and 900 visible characters; longer
-articles end with an ellipsis. Option-click any of its links to pin the
-preview; normal clicks preserve each link destination.
+articles end with an ellipsis. Right-click a linked span to pin the
+preview; left-click preserves each link destination.
 
 For AGGR, the feed's article body is also the content of its Markdown export.
 The plugin prepares the excerpt during the background feed refresh; hovering

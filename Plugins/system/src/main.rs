@@ -86,7 +86,7 @@ impl FlashPlugin for System {
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
-        if command.subcommand.is_empty() {
+        if command.subcommand == "help" {
             return PerformResponse::ok().message(system_usage());
         }
         run_system_action(&ctx, command.subcommand.as_str()).await

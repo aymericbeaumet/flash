@@ -79,20 +79,6 @@
       "description": "Run osascript with raw arguments"
     }
   ],
-  "verbs": [
-    {
-      "name": "media_input",
-      "command": "media",
-      "subcommand": "input",
-      "description": "List or select the default audio input device (--device=name-or-UID)"
-    },
-    {
-      "name": "media_output",
-      "command": "media",
-      "subcommand": "output",
-      "description": "List or select the default audio output device (--device=name-or-UID)"
-    }
-  ],
   "capabilities": [
     "media_keys",
     "audio_devices"

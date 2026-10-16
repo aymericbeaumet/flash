@@ -6,6 +6,36 @@ the resident. `flash status` and `flash doctor` travel the same event and read
 JSON from its reply; `flash config_check` never leaves the CLI. Configured mappings resolve through the same command definitions
 and dispatch in-process. Other mapping executables receive an argv array.
 
+## What starts at launch
+
+Configuration owns the surfaces: a hotkey registers only the chord it names
+(`ShortcutsCoordinator`), the status bar, widgets and their polling exist only
+with `[statusbar] enabled` or a `[widgets.<name>]` table, a popup's PTY starts
+on its first showing, the inspector listens only on demand or with
+`[debug] http_inspector_enabled`, and CoreAudio is touched per request. A
+plugin whose manifest declares only `status` runs while a visible surface
+reads one of its segments; a plugin with only commands starts on its first
+`perform`; a manifest without `exec` never spawns.
+
+The rest starts with the process, whatever the configuration says:
+
+| Component | Why it is eager | Cost |
+| --- | --- | --- |
+| `AppMonitor` AX observer and prepared model for the focused app | Hints must show without a walk on the key path (see the prepared-model guide) | One AXObserver per focused app, a complete walk per focus change, maintenance walks while the user is active |
+| `KeyboardCaptureTap` | The swallow decision must exist before the first mapped key; the no-tap fallback is slower | A session tap on main, plus the 2 s secure-input probe |
+| Resident plugins: every manifest with `sources`, `query`, `hints` or `listen` | Catalogs and hint providers are kept warm so the flashlight and terminal hints are complete on first open | One child process each (about eighteen by default), three queues and a root-directory watcher per plugin, `core:ax.changed` fan-out to the listeners |
+| Window navigation catalog (`WindowMover`) | Directional focus reads a prepared catalog rather than walking on the key path | `kAXWindows` per regular app at launch and on app launch/terminate |
+| Clipboard, network, volume and power monitors | A bundled manifest listens for them | A 500 ms pasteboard poll, one SCDynamicStore session, notification observers |
+| `ApplicationSource`, frecency and command history | Flashlight catalogs and ranking | An installed-apps scan with kqueue watchers, two files read on main |
+
+Making the resident plugins and the window catalog configuration-driven (spawn
+a catalog plugin on the first flashlight open from its persisted catalog, a
+scoped plugin when a matching app is focused, a listener only while its host
+monitor has a running consumer) is the planned next step; each item trades
+first-use latency for idle cost and is listed with its risk in the launch
+inventory of the resumption notes. Until then the README claims only what the
+table above supports.
+
 ## Boundaries
 
 | Owner | Responsibility |
@@ -19,7 +49,7 @@ and dispatch in-process. Other mapping executables receive an argv array.
 | `KeyboardLayoutMonitor` | `[app] keyboard_layout`'s reference table, rebuilt on input-source changes and config loads |
 | `CandidateFinderSession` | Catalog, query, source context and selection for one finder session |
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
-| `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture; the one held mouse button (`mouse_button`, pointer mode's `v`) and smooth-scroll steps |
+| `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture; the one held mouse button behind VISUAL and DRAG (`mouse_button`, pointer mode's `v`) and smooth-scroll steps |
 | `PluginManager` / `PluginProcess` | Manifest reconciliation, owned child generations, transport and RPC |
 | `FlashStatusBarController` | Evaluation of the bar and every desktop widget, each memoized on the inputs it read; reconciled source/job records for their union and the next necessary wakeup |
 | `WidgetController` / `WidgetWindow` | One click-through desktop-level window per enabled widget per display, placed in the Flash-usable frame; occlusion reported back so a covered widget stops refreshing |
@@ -53,9 +83,24 @@ receive window-tab hints when their expanded format exposes numeric
 bound to live window IDs before publication. Scrolling lists, other alignments,
 overflow and multi-row status layouts omit tab hints; pane and link hints remain
 available. Tab selection uses the same host mouse-click path as pane selection.
+Letter search in a terminal with no accessibility text reads this same client
+grid and the same window rectangle, including the status line and each
+pane-border title. `f` and `cf` label that grid's panes, links, window
+tabs and pane titles; they also label the same status-bar spans.
+
+A walk resolves the window it covers once: the frame step keeps the focused
+window element (`AppContext.walkedWindow`) and the walk starts there instead
+of asking the app for its focused window again. Per node, the batched
+attribute array is read in place by type id (`AXBatchValues`); strings are
+bridged only for a node the role gate admits, and the extension-document
+test is a scheme prefix check, not a `URL` parse. An activation reads the
+window list once for the frontmost app's top window and the dialog covering
+it. Label lists are memoized per layout and target count, and the overlay
+keeps one attributed string per label, prefix length and accent.
 
 Prepared models contain a complete finalized target set and assigned labels.
-Reads require matching PID, dirty token, configuration revision and freshness.
+Reads require matching PID, dirty token, configuration revision, freshness and
+the window's visible region.
 AX notifications, focus, Space, display and configuration changes invalidate them.
 Stale completed walks are discarded. Walks are never served as partial captures;
 an activation miss obtains a complete walk. Model refresh timers have independent
@@ -85,7 +130,7 @@ Overlay states that exclude one another are one value, never parallel flags.
 The overlay owns the border's drawn frame and derives its stroke from the badge
 style the status-bar pill is painted from, re-stroking when that style changes,
 so the border and the pill cannot show different modes. A hint session's phase
-(typing labels, searching, adjusting, steering the pointer) is one enum; the
+(typing a search letter, typing labels, searching, adjusting, steering the pointer) is one enum; the
 overlay's key route is its projection, pushed on every session change together
 with the border's visibility, which is hidden for the whole session. A toast is
 its own layer above everything else: it never recycles hint chips or closes the
@@ -106,7 +151,8 @@ rotations, each status surface's clock and pending output — each time one
 lands, for the bar and desktop widgets alike. `PollDeadline` wraps one
 re-armable deadline for a queue-confined owner: a trailing debounce re-arms it
 per event, a backoff per attempt, and a fire already on its way is dropped once
-it is re-armed or cancelled. Plugins register over the wire with `poll` —
+it is re-armed or cancelled. It releases only the registration it armed, so a
+successor under the same id keeps its wake-up. Plugins register over the wire with `poll` —
 cadences and deadlines, each at its own priority — and are ticked with a
 `core:poll:<name>` event.
 
@@ -115,15 +161,16 @@ readiness and maintenance wakes, the activation readiness ladder, the yank's
 pasteboard wait, AX observer registration retries, plugin and popup restart
 backoffs, the config, plugin-file, plugin-state, application-directory and
 ambient-location debounces, the network and volume change coalescers, the
-catalog notify throttle, the inspector's publish window and a covered widget's
-grace. A plain one-shot `asyncAfter` remains only where no clock is involved:
+catalog notify throttle, the inspector's publish window, a covered widget's
+grace and the latched hyper key. A plain one-shot `asyncAfter` remains only where no clock is involved:
 a timeout bounding one operation (request and perform deadlines, the kill
 escalation of a stopped child, the first-paint budget, a focus hand-off), the
 fixed timing of an interaction in progress (synthesized key, scroll and click
 spacing, sequence and hover-dwell timeouts, recapture and caret re-arm turns,
 toast and click-feedback expiry, a popup's first frame, terminal frame pacing)
 and a bounded fan-out of settle passes after one event (screen-change
-recovery, window-border reconciliation, the Accessibility-grant re-check).
+recovery, window-border reconciliation, the Accessibility-grant re-check,
+the held button's catch-up after a scroll in VISUAL and DRAG).
 `Scripts/check-guardrails.sh` rejects any other timer source, and blocking
 sleeps outside the three single operations it names.
 
@@ -159,19 +206,25 @@ among `high`, `normal` and `low`; `system` is core-only.
 | Prepared model · `core:prepared_model_refresh:<pid>`, `…_readiness:<pid>` | 80 ms debounce; readiness ladder | normal | Warms a model ahead of an activation nobody asked for yet |
 | Prepared model · `core:prepared_model_maintenance` | Before the 1.5–30 s freshness ceiling | normal | Slack stays inside the 250 ms lead |
 | Clipboard watcher · `core:clipboard` | 0.5 s while a plugin subscribes | normal | No pasteboard notification; a late copy reaches history late |
+| Secure input · `core:secure-input` | 2 s for the life of the resident | low | The tap receives no keys while the flag is on, so this poll is what sees a stuck hold |
+| Secure input release · `core:secure-input-fix` | 0.2–0.7 s steps of one release | normal | Spacing an activate, blur or restore already in progress |
 | AX observer retry · `core:ax_observer_retry:<pid>` | 60 ms–3 s ladder | normal | Events go unobserved until it lands |
 | Debounces · `core:config_reload`, `core:plugin_state_refresh`, `core:app_directories`, `core:ambient_location`, `core:plugin_reload:<id>:<n>` | 100–750 ms after the last event | normal | Someone is about to look, nobody is watching the instant |
 | Change coalescers · `core:network_changed`, `core:volumes_changed` | 500 ms window | normal | Plugins re-read what changed |
 | Catalog notify · `core:catalog_notify:<id>` | At most once a second | normal | An open flashlight re-reads the store on it |
 | Inspector publish · `core:inspector_publish:<id>` | 100 ms window while a stream is open | normal | A diagnostic page |
 | Plugin restart · `core:plugin_restart:<id>:<n>` | 1–30 s backoff | low | Catalogs survive a restart |
+| Plugin status grace · `core:plugin_status_grace:<id>:<n>` | 10 s after a planned reload | low | A stale label blanking late is not watched |
 | Liveness sweep · `core:plugin_liveness` | 30 s while a plugin runs | low | Background upkeep |
 | Covered widget · `core:widget_hidden:<name>` | 30 s grace | low | Nobody can see a covered widget |
 | Plugin cadences and deadlines · `plugin:<id>:<name>` | Plugin-chosen | Plugin-chosen: high, normal or low | See the [status plugins](status-plugins.md#scheduling) table |
 
 Registrations are also scoped to when they can observe anything at all: the
 pasteboard watcher runs only while a plugin subscribes to `clipboard.changed`,
-and the menu-bar reveal probe only while the pointer is in the band. Main-thread
+and the menu-bar reveal probe only while the pointer is in the band. Secure
+input is the exception that stays registered: the tap receives nothing while
+the flag is on, so `core:secure-input` is how a stuck hold is noticed at all.
+Main-thread
 stalls need no poll at all: the run loop reports each busy stretch itself, and
 the HTTP inspector pushes its state on the changes it shows.
 
@@ -179,7 +232,15 @@ Visible regions subtract every higher window from the active one, except fully
 transparent windows. The frontmost app's window can sit under another app's
 normal-level window only while the window list lags an activation, so when that
 leaves it fully covered the regions are recomputed without those windows
-(`[discover] frontmost_window_covered`); floating layers still cover it. A walk
+(`[discover] frontmost_window_covered`); floating layers still cover it. A
+system dialog that never becomes the frontmost app — Gatekeeper's card
+(`CoreServicesUIAgent`), an authentication panel — is still the surface `f`
+and EasyMotion walk: an elevated dialog-sized window, or a normal-level
+window of a non-regular process, in front of the focused app. Picture in
+Picture, Stage Manager, menu-bar status strips, and another regular app's
+ordinary window are not that surface. The walk hints a window's close button
+when it has one, and a dialog's default, cancel, and help buttons. A click on
+an agent that cannot become frontmost is posted immediately. A walk
 that leaves the window no visible region is never cached as a prepared model
 (see [prepared models](prepared-model.md#windows-that-are-covered)). An
 activation result that is empty, or collapsed below a tenth of the app's last
@@ -252,7 +313,12 @@ Activation progresses through `idle`, `discovering`, `pendingCommit`, and
 `committing`. Discovery and a not-yet-started commit may be replaced immediately.
 An active gesture retains ownership until release; the latest replacement waits
 behind it. Old completions neither clear a newer activation nor apply stale mode
-or navigation effects. Pointer-session reset consumes a held-button release once.
+or navigation effects. A commit whose target is not frontmost raises it and
+waits for that app's activation before posting; the commit carries that pid as
+its handoff, so the activation it waits for, Flash resigning key and the Space
+change the raise can cause are the handoff, not a cancellation, before and
+during the gesture alike. Activating any other app still cancels, and the
+handoff timeout still posts. Pointer-session reset consumes a held-button release once.
 Shutdown lets already-started finite mouse synthesis finish.
 
 Hints retain the target captured by discovery. Before a commit, AX targets
@@ -284,6 +350,21 @@ event: Flash cannot freeze another application's state atomically with its
 click, or distinguish objects that expose identical reused AX/plugin data.
 
 ## Coordinates and rendering
+
+Hint labels hide the pointer with `NSCursor.setHiddenUntilMouseMoves`, which
+AppKit ignores from a background app, and Flash stays in the background while
+the session tap reads keys. At launch `BackgroundCursor` sets the window
+server's private `SetsCursorInBackground` connection property, resolved at
+run time, so a macOS without it only leaves the pointer visible.
+
+`TrackpadGesture` emulates trackpad gestures the same way, through private
+interfaces resolved at run time. Zoom, rotate and smart zoom post gesture
+CGEvents with the undocumented gesture fields set (event type 29, the gesture
+subtype, magnification, rotation and phase). Mission Control (the gesture
+and `system_key --key=mission_control`), App Exposé, show desktop and, before
+macOS 26, Launchpad send Dock notifications through
+`CoreDockSendNotification`. A macOS
+that drops either only makes those gestures do nothing.
 
 Targets use global NSScreen coordinates: primary-screen bottom-left origin,
 positive Y upward. Accessibility and CGEvent use the primary-screen top-left
@@ -354,7 +435,9 @@ Waiting for a child process always ends on its kernel exit event
 (`ProcessExit`, a `kqueue` `NOTE_EXIT` or a process dispatch source), never a
 sleep loop: plugin stops, status-job shutdown and deferred terminal reaping
 return the moment the process is gone, and deadlines only bound one that is
-not. Status jobs retain their running process and value when effective definitions
+not. Plugins, status jobs and persistent popups start once the login
+environment resolves, since a child keeps the environment it spawned with; a
+resolution that fails keeps the seeded one. Status jobs retain their running process and value when effective definitions
 are unchanged. Replacements invalidate tokens before stopping children in one
 bounded batch. The scheduler arms only evaluated jobs, active cycles, the
 next boundary of the finest time unit a visible surface shows, and pending

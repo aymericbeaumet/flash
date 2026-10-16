@@ -232,11 +232,20 @@ final class PluginHostRPCArmTests: XCTestCase {
   func testAudioDevicesListsAndSelectsWithCapabilityAndDirectionValidation() {
     final class Stub: AudioDeviceProviding {
       var selected: [(String, AudioDeviceDirection)] = []
+      var volumeDeltas: [Int] = []
+      var muteToggles = 0
       func list(direction: AudioDeviceDirection) throws -> [AudioDeviceRecord] {
         [AudioDeviceRecord(uid: "device-1", name: "USB Audio", isDefault: true)]
       }
       func select(uid: String, direction: AudioDeviceDirection) throws {
         selected.append((uid, direction))
+      }
+      func adjustOutputVolume(deltaPercent: Int) throws -> Int {
+        volumeDeltas.append(deltaPercent)
+        return 50
+      }
+      func toggleOutputMute() throws {
+        muteToggles += 1
       }
     }
 
@@ -262,6 +271,47 @@ final class PluginHostRPCArmTests: XCTestCase {
       rpc, "host.audio_devices", ["direction": "effects"], capabilities: [.audioDevices])
     XCTAssertEqual(invalid["ok"] as? Bool, false)
     XCTAssertEqual(stub.selected.count, 1)
+
+    let louder = hostReply(
+      rpc, "host.audio_devices", ["volume_delta": 10], capabilities: [.audioDevices])
+    XCTAssertEqual(louder["ok"] as? Bool, true)
+    XCTAssertEqual(louder["volume_percent"] as? Int, 50)
+    XCTAssertEqual(stub.volumeDeltas, [10])
+    let quieter = hostReply(
+      rpc, "host.audio_devices", ["volume_delta": -10], capabilities: [.audioDevices])
+    XCTAssertEqual(quieter["ok"] as? Bool, true)
+    XCTAssertEqual(stub.volumeDeltas, [10, -10])
+    let muted = hostReply(
+      rpc, "host.audio_devices", ["mute": "toggle"], capabilities: [.audioDevices])
+    XCTAssertEqual(muted["ok"] as? Bool, true)
+    XCTAssertEqual(stub.muteToggles, 1)
+    let mixed = hostReply(
+      rpc, "host.audio_devices", ["direction": "output", "volume_delta": 10],
+      capabilities: [.audioDevices])
+    XCTAssertEqual(mixed["ok"] as? Bool, false)
+    XCTAssertEqual(stub.volumeDeltas, [10, -10])
+    let bezel = [0, 6, 13, 19, 25, 31, 38, 44, 50, 56, 63, 69, 75, 81, 88, 94, 100]
+    for (index, percent) in bezel.enumerated() {
+      XCTAssertEqual(
+        CoreAudioDevices.volumePercent(Float(index) / 16), percent,
+        "tick \(index)")
+    }
+    var up = Float(0)
+    for percent in bezel.dropFirst() {
+      up = CoreAudioDevices.nativeVolume(up, direction: 1)
+      XCTAssertEqual(CoreAudioDevices.volumePercent(up), percent)
+    }
+    XCTAssertEqual(CoreAudioDevices.nativeVolume(1, direction: 1), 1, accuracy: 0.0001)
+    var down = Float(1)
+    for percent in bezel.dropLast().reversed() {
+      down = CoreAudioDevices.nativeVolume(down, direction: -1)
+      XCTAssertEqual(CoreAudioDevices.volumePercent(down), percent)
+    }
+    XCTAssertEqual(CoreAudioDevices.nativeVolume(0, direction: -1), 0, accuracy: 0.0001)
+    XCTAssertEqual(
+      CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, direction: 1)), 44)
+    XCTAssertEqual(
+      CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, direction: -1)), 38)
   }
 
   func testMediaKeyPostsDownUpPairThroughTheSeamAndValidatesRange() {

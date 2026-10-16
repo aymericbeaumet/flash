@@ -173,49 +173,73 @@ final class MouseGridNavigationTests: XCTestCase {
       frontWindowFrame: window, allScreensFrame: .null)
   }
 
-  func testInitialRegionIsTheFrontWindowScreenBelowTheStatusBar() throws {
+  func testGridRootCoversTheStatusBarAndKeepsABottomDock() {
+    let layout = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+      usableFrame: CGRect(x: 0, y: 70, width: 1440, height: 808))
+    XCTAssertEqual(
+      MouseGrid.gridRoot(of: layout, includeStatusBar: true),
+      CGRect(x: 0, y: 70, width: 1440, height: 830))
+    XCTAssertEqual(
+      MouseGrid.gridRoot(of: layout, includeStatusBar: false),
+      layout.usableFrame)
+  }
+
+  func testInitialRegionCoversTheStatusBarAndKeepsTheDockInset() throws {
     let all = layouts(statusBarMonitor: .all)
     let onSecondary = try XCTUnwrap(
       MouseGrid.initialRegion(
         context: context(window: CGRect(x: 1600, y: 100, width: 800, height: 600)),
-        layouts: all, pointer: CGPoint(x: 10, y: 10)))
+        layouts: all, pointer: CGPoint(x: 10, y: 10), includeStatusBar: true))
     XCTAssertEqual(onSecondary.screenIndex, 1)
-    XCTAssertEqual(onSecondary.root, CGRect(x: 1440, y: 0, width: 1920, height: 1058))
+    XCTAssertEqual(onSecondary.root, secondaryFrame)
 
     let onPrimary = try XCTUnwrap(
       MouseGrid.initialRegion(
         context: context(window: CGRect(x: 100, y: 100, width: 800, height: 600)),
-        layouts: all, pointer: nil))
+        layouts: all, pointer: nil, includeStatusBar: true))
     XCTAssertEqual(onPrimary.screenIndex, 0)
-    XCTAssertEqual(onPrimary.root, CGRect(x: 0, y: 0, width: 1440, height: 878))
+    XCTAssertEqual(onPrimary.root, primaryFrame)
 
-    // A primary-only bar reserves the band on the main display alone.
+    // A hidden bar leaves the grid on the usable frame, below the menu bar.
+    let below = try XCTUnwrap(
+      MouseGrid.initialRegion(
+        context: context(window: CGRect(x: 100, y: 100, width: 800, height: 600)),
+        layouts: all, pointer: nil, includeStatusBar: false))
+    XCTAssertEqual(below.root, CGRect(x: 0, y: 0, width: 1440, height: 878))
+
+    // A primary-only bar is covered on the main display and absent elsewhere.
     let primaryOnly = layouts(statusBarMonitor: .primary)
     let secondary = try XCTUnwrap(
       MouseGrid.initialRegion(
         context: context(window: CGRect(x: 1600, y: 100, width: 800, height: 600)),
-        layouts: primaryOnly, pointer: nil))
+        layouts: primaryOnly, pointer: nil, includeStatusBar: true))
     XCTAssertEqual(secondary.root, secondaryFrame)
     let primary = try XCTUnwrap(
       MouseGrid.initialRegion(
         context: context(window: CGRect(x: 100, y: 100, width: 800, height: 600)),
-        layouts: primaryOnly, pointer: nil))
-    XCTAssertEqual(primary.root, CGRect(x: 0, y: 0, width: 1440, height: 878))
+        layouts: primaryOnly, pointer: nil, includeStatusBar: true))
+    XCTAssertEqual(primary.root, primaryFrame)
   }
 
   func testInitialRegionFallsBackToThePointerScreenThenThePrimary() throws {
     let all = layouts(statusBarMonitor: .all)
     let pointerScreen = try XCTUnwrap(
-      MouseGrid.initialRegion(context: nil, layouts: all, pointer: CGPoint(x: 2000, y: 500)))
+      MouseGrid.initialRegion(
+        context: nil, layouts: all, pointer: CGPoint(x: 2000, y: 500), includeStatusBar: true))
     XCTAssertEqual(pointerScreen.screenIndex, 1)
     let emptyWindow = try XCTUnwrap(
       MouseGrid.initialRegion(
-        context: context(window: .null), layouts: all, pointer: CGPoint(x: 2000, y: 500)))
+        context: context(window: .null), layouts: all, pointer: CGPoint(x: 2000, y: 500),
+        includeStatusBar: true))
     XCTAssertEqual(emptyWindow.screenIndex, 1)
     let primary = try XCTUnwrap(
-      MouseGrid.initialRegion(context: nil, layouts: all, pointer: CGPoint(x: -500, y: 0)))
+      MouseGrid.initialRegion(
+        context: nil, layouts: all, pointer: CGPoint(x: -500, y: 0), includeStatusBar: true))
     XCTAssertEqual(primary.screenIndex, 0)
-    XCTAssertNil(MouseGrid.initialRegion(context: nil, layouts: [], pointer: nil))
+    XCTAssertNil(
+      MouseGrid.initialRegion(context: nil, layouts: [], pointer: nil, includeStatusBar: true))
   }
 }
 
@@ -235,14 +259,27 @@ final class MouseGridCoordinatorTests: XCTestCase {
     delegate.hintSession.surface = .grid
     delegate.hintSession.gridShape = shape
     delegate.displayMouseGrid(MouseGrid.Navigation(root: root, screenIndex: 0))
-    XCTAssertEqual(delegate.hintSession.hints.map(\.label).joined(), "12345qwertasdfgzxcvb")
+    // The step's own cells carry the monograms; the preview underneath spells
+    // every next step as a bigram and never answers a key.
+    let primaries = delegate.hintSession.hints.filter {
+      $0.target.role != MouseGrid.previewCellRole
+    }
+    let previews = delegate.hintSession.hints.filter {
+      $0.target.role == MouseGrid.previewCellRole
+    }
+    XCTAssertEqual(primaries.map(\.label).joined(), "12345qwertasdfgzxcvb")
+    XCTAssertEqual(previews.count, 20 * 20)
+    XCTAssertTrue(previews.allSatisfy { $0.label.count == 2 })
+    XCTAssertEqual(delegate.hintSession.gridCellIndex.count, 20)
     XCTAssertEqual(delegate.overlay.hintKeyRoute, .grid(shape, cursorFollows: false))
 
     // `t` is the right end of the top letter row.
     delegate.overlayDidGrid(.cell("t", []))
     let t = CGRect(x: 1200, y: 500, width: 300, height: 250)
     XCTAssertEqual(delegate.hintSession.grid?.current, .init(region: t, depth: 1))
-    XCTAssertEqual(delegate.hintSession.hints.first?.target.frame.maxY, t.maxY)
+    XCTAssertEqual(
+      delegate.hintSession.hints.first { $0.target.role != MouseGrid.previewCellRole }?
+        .target.frame.maxY, t.maxY)
     delegate.overlayDidGrid(.move(.left))
     XCTAssertEqual(
       delegate.hintSession.grid?.current.region, t.offsetBy(dx: -300, dy: 0))

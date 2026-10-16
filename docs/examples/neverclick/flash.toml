@@ -1,0 +1,32 @@
+# Neverclick-shaped Flash configuration. Global hotkeys only; NORMAL stays off.
+
+[hints]
+# The nearest target to the centre of the window gets the easiest label, and
+# the centre keys of the keyboard are handed out first.
+label_order = "center"
+key_priority = "fjdkslaghrueiwotyqp"
+# 7 8 9 across the top of a target, 1 2 3 along the bottom, as in Neverclick.
+adjust_digits = "grid"
+
+[mode.all.mappings]
+# Left Click Tool. While the labels are up: Tab for the grid, Shift-Tab for
+# the whole screen, Backspace to come back.
+"ctrl+return" = ["flash", "mouse_target"]
+# Grid mode and the whole screen, directly.
+"ctrl+shift+return" = ["flash", "mouse_grid"]
+"ctrl+alt+return" = ["flash", "mouse_target", "--scope=screen"]
+# Path mode: two picks, every target between them is clicked.
+"ctrl+'" = ["flash", "mouse_target", "--path"]
+# Multi select: click as you pick, Escape ends.
+"ctrl+shift+'" = ["flash", "mouse_target", "--multi"]
+# Sticky hints: the same labels stay up after each click.
+"ctrl+;" = ["flash", "mouse_target", "--sticky"]
+# Words: a label on every visible word; with --select, highlight between two.
+"ctrl+alt+;" = ["flash", "mouse_target", "--words"]
+"ctrl+alt+shift+;" = ["flash", "mouse_target", "--words", "--select"]
+# Snap the click point inside a target before clicking.
+"ctrl+alt+'" = ["flash", "mouse_target", "--adjust"]
+# Windows: the one behind, and across the stacking order.
+"ctrl+shift+z" = ["flash", "window_focus", "--direction=behind"]
+"ctrl+shift+q" = ["flash", "window_focus", "--direction=previous"]
+"ctrl+shift+w" = ["flash", "window_focus", "--direction=next"]

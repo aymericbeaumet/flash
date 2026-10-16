@@ -205,6 +205,8 @@ enum FlashLog {
     fields: @autoclosure () -> [String: String] = [:],
     trace: String? = nil
   ) {
+    // The source string is built only for a line that will be written.
+    guard wouldEmit(level) else { return }
     emit(
       level, source: "plugin:\(pluginID)", fileID: #fileID, function: #function, fields: fields,
       trace: trace, message)

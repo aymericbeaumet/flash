@@ -24,6 +24,35 @@ final class NormalModeTests: XCTestCase {
         visible: true, hasTransientInput: true, activationInFlight: false))
   }
 
+  /// A half-typed sequence and the timeout armed for it belong to one mapping
+  /// table. When the effective mappings are rebuilt for another selector —
+  /// the focused app changed, or a plugin's mappings did — the sequence is
+  /// dropped and the timeout disowned, so it cannot fire a mapping from the
+  /// previous table. The same selector again leaves a sequence alone.
+  func testMappingTableChangeDropsThePendingSequenceAndItsTimeout() {
+    _ = NSApplication.shared
+    let delegate = AppDelegate()
+    delegate.registry = SourceRegistry(descriptors: [], runningApplications: [])
+    delegate.monitor = AppMonitor(registry: delegate.registry, config: delegate.config)
+    delegate.overlay = OverlayPanel()
+    delegate.overlay.normalModePending = "g"
+    delegate.overlay.normalModeRepeatAnchor = "t"
+    delegate.overlay.hyperPending = "x"
+    let token = delegate.normalModePendingCommandToken
+    delegate.invalidateEffectiveMappings()
+    delegate.refreshEffectiveMappings(for: nil)
+    XCTAssertEqual(delegate.overlay.normalModePending, "")
+    XCTAssertNil(delegate.overlay.normalModeRepeatAnchor)
+    XCTAssertEqual(delegate.overlay.hyperPending, "")
+    XCTAssertNotEqual(delegate.normalModePendingCommandToken, token, "the timeout is disowned")
+
+    delegate.overlay.normalModePending = "g"
+    let settled = delegate.normalModePendingCommandToken
+    delegate.refreshEffectiveMappings(for: nil)
+    XCTAssertEqual(delegate.overlay.normalModePending, "g", "the same selector keeps it")
+    XCTAssertEqual(delegate.normalModePendingCommandToken, settled)
+  }
+
   func testDirectionalScrollKeys() {
     XCTAssertEqual(command(chars: "h"), .scroll(.left))
     XCTAssertNil(command(chars: "j"))
@@ -58,19 +87,33 @@ final class NormalModeTests: XCTestCase {
   func testApplicationSpecificActionsHaveNoDefaultMappings() {
     let mappingKeys = Set(Config.Mode.defaultNormalMappings.map(\.key))
     let removedKeys = [
-      "d", "j", "k", "[h", "]h", "]b", "[B", "]B",
+      "c", "d", "m", "j", "k", "[h", "]h", "]b", "[B", "]B",
       "[e", "]e", "[s", "]s", "[w", "]w", "ctrl+tab", "ctrl+shift+tab",
+      "ctrl+f", "ctrl+s", "ctrl+shift+f",
       "gt", "gT", "J", "K", "e", "n", "N", "yy",
     ]
     for removedKey in removedKeys {
       XCTAssertFalse(
         mappingKeys.contains(key(removedKey)), "unexpected default mapping: \(removedKey)")
     }
+    let mouseFinishers: Set<Character> = ["f", "s"]
     for letter in "abcdefghijklmnopqrstuvwxyz" {
-      if letter != "f" {
-        XCTAssertFalse(mappingKeys.contains(key("m\(letter)")))
+      for prefix in ["c", "d", "m"] {
+        XCTAssertEqual(
+          mappingKeys.contains(key("\(prefix)\(letter)")),
+          mouseFinishers.contains(letter),
+          "\(prefix)\(letter)")
       }
       XCTAssertFalse(mappingKeys.contains(key("`\(letter)")))
+    }
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
+      for prefix in ["c", "d", "m"] {
+        XCTAssertEqual(
+          mappingKeys.contains(key("\(prefix)\(letter)")),
+          // `F` is the grid finisher.
+          letter == "F",
+          "\(prefix)\(letter)")
+      }
     }
   }
 
@@ -225,6 +268,14 @@ final class NormalModeTests: XCTestCase {
     let leadingZero = transition(chars: "0")
     XCTAssertNil(leadingZero.command)
     XCTAssertEqual(leadingZero.pending, "")
+
+    // A count before a mouse finisher reaches it as a finger count.
+    let threeFingers = transition(pending: "3", chars: "f")
+    XCTAssertEqual(threeFingers.command, .mouseTarget(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(threeFingers.repeatCount, 3)
+    let smartZoom = transition(pending: "2d", chars: "f")
+    XCTAssertEqual(smartZoom.command, .mouseTarget(.click(.doubleClick, modifiers: [])))
+    XCTAssertEqual(smartZoom.repeatCount, 2)
   }
 
   func testRepeatableMappingRepeatsOnItsFinalKey() {
@@ -296,6 +347,59 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(wrapped.target, 30)
   }
 
+  func testQuittingTheFocusedAppFocusesThePreviousOne() {
+    let available: Set<pid_t> = [10, 20, 30]
+    let focus = AppDelegate.appQuitFocus(
+      quitting: 30,
+      current: 30,
+      back: [10, 20],
+      forward: [],
+      isAvailable: available.contains)
+    XCTAssertEqual(focus?.target, 20)
+    XCTAssertEqual(focus?.back, [10])
+  }
+
+  func testQuittingReturnsToTheAppJustLeftAheadOfOlderHistory() {
+    let available: Set<pid_t> = [10, 30, 40]
+    // back once from 40 landed on 30, leaving 40 as the nearest forward entry.
+    let focus = AppDelegate.appQuitFocus(
+      quitting: 30,
+      current: 30,
+      back: [10],
+      forward: [40],
+      isAvailable: available.contains)
+    XCTAssertEqual(focus?.target, 40)
+    XCTAssertEqual(focus?.back, [10])
+  }
+
+  func testQuittingSkipsADeadAppAndKeepsAnUnrelatedCurrentApp() {
+    let alive: Set<pid_t> = [10]
+    let skipped = AppDelegate.appQuitFocus(
+      quitting: 30,
+      current: 30,
+      back: [10, 20],
+      forward: [],
+      isAvailable: alive.contains)
+    XCTAssertEqual(skipped?.target, 10)
+    XCTAssertEqual(skipped?.back, [])
+    XCTAssertNil(
+      AppDelegate.appQuitFocus(
+        quitting: 30,
+        current: 30,
+        back: [],
+        forward: [],
+        isAvailable: alive.contains))
+
+    let elsewhere = AppDelegate.appQuitFocus(
+      quitting: 30,
+      current: 10,
+      back: [20],
+      forward: [],
+      isAvailable: { $0 == 10 || $0 == 20 })
+    XCTAssertEqual(elsewhere?.target, 10)
+    XCTAssertEqual(elsewhere?.back, [20])
+  }
+
   func testBracketNavigationMappingsRepeatOnFinalKey() {
     let cases: [(prefix: String, letter: String, command: URLCommand)] = [
       ("[", "a", .appPrev),
@@ -364,6 +468,11 @@ final class NormalModeTests: XCTestCase {
     // Nothing to hand off to.
     XCTAssertFalse(
       AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: nil, frontmostPID: 501))
+    // Gatekeeper and the other agents that show a dialog never become
+    // frontmost. Waiting on that handoff only delays the click.
+    XCTAssertFalse(
+      AppDelegate.hintCommitNeedsFrontmostHandoff(
+        targetPID: 501, frontmostPID: 777, targetActivates: false))
     // Bounded, so an app that refuses activation still gets its click.
     XCTAssertGreaterThanOrEqual(AppDelegate.frontmostHandoffTimeoutMs, 200)
     XCTAssertLessThanOrEqual(AppDelegate.frontmostHandoffTimeoutMs, 1_000)
@@ -373,12 +482,12 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       command(chars: "f"),
       .mouseTarget(.click(.leftClick, modifiers: [])))
-    // `F` is the grid twin of `f`; the modified variants are gone because
-    // magic modifiers on the final hint key already provide them.
+    // `F` is the grid twin of `f`. Right-click is the `c` prefix, not Control.
     XCTAssertEqual(
       command(chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.init(.click(.leftClick, modifiers: []))))
-    XCTAssertNil(command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]))
+    XCTAssertNil(
+      command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]))
     XCTAssertNil(
       command(keyCode: kVK_ANSI_F, chars: "F", ignoring: "f", flags: [.control, .shift]))
     // Every click prefix reaches both surfaces, and they are all lowercase.
@@ -386,24 +495,22 @@ final class NormalModeTests: XCTestCase {
       command(pending: "m", chars: "f"),
       .mouseTarget(.move))
     XCTAssertEqual(
+      command(pending: "m", chars: "s"),
+      .mouseBigram(.move))
+    XCTAssertEqual(
       command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.init(.move)))
     // Triple click ships unbound so `t` can stay the new-tab mapping: a key
     // that is also the prefix of a longer one waits for the sequence timeout.
     XCTAssertNotNil(command(chars: "t"))
-    // `s` is now the secondary-click prefix (`sf`/`sF`), so it leaves a
-    // pending sequence rather than yielding `nil`.
-    XCTAssertEqual(transition(chars: "s").pending, "s")
+    // `s` starts no other mapping, so the jump fires at once.
+    let jump = transition(chars: "s")
+    XCTAssertEqual(jump.command, .mouseBigram(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(jump.pending, "")
+    XCTAssertNil(command(chars: "j"))
   }
 
-  func testSecondaryAndDoubleClickHintModeSequences() {
-    XCTAssertEqual(transition(chars: "s").pending, "s")
-    XCTAssertEqual(
-      command(pending: "s", chars: "f"),
-      .mouseTarget(.click(.rightClick, modifiers: [])))
-    XCTAssertEqual(
-      command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.init(.click(.rightClick, modifiers: []))))
+  func testDoubleClickHintModeSequences() {
     // `d` is the double-click prefix, so it parks rather than yielding `nil`.
     XCTAssertNil(command(chars: "d"))
     XCTAssertEqual(transition(chars: "d").pending, "d")
@@ -411,8 +518,25 @@ final class NormalModeTests: XCTestCase {
       command(pending: "d", chars: "f"),
       .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
+      command(pending: "d", chars: "s"),
+      .mouseBigram(.click(.doubleClick, modifiers: [])))
+    XCTAssertEqual(
       command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.init(.click(.doubleClick, modifiers: []))))
+  }
+
+  func testContextClickHintModeSequences() {
+    XCTAssertNil(command(chars: "c"))
+    XCTAssertEqual(transition(chars: "c").pending, "c")
+    XCTAssertEqual(
+      command(pending: "c", chars: "f"),
+      .mouseTarget(.click(.rightClick, modifiers: [])))
+    XCTAssertEqual(
+      command(pending: "c", chars: "s"),
+      .mouseBigram(.click(.rightClick, modifiers: [])))
+    XCTAssertEqual(
+      command(pending: "c", chars: "F", ignoring: "f", flags: [.shift]),
+      .mouseGrid(.init(.click(.rightClick, modifiers: []))))
   }
 
   func testHelpAndModifiedKeyConsumption() {
@@ -444,6 +568,13 @@ final class NormalModeTests: XCTestCase {
         modifierFlags: [],
         mappings: defaultMappings))
     XCTAssertEqual(command(chars: "/"), .find)
+    // `s` is the EasyMotion jump and fires on its own. It is not a prefix, so
+    // it does not wait out `sequence_timeout_ms`.
+    let jump = transition(chars: "s")
+    XCTAssertEqual(jump.command, .mouseBigram(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(jump.pending, "")
+    XCTAssertFalse(defaultMappings.hasStrictPrefix("s"))
+    XCTAssertNil(transition(chars: "\\").command)
     XCTAssertEqual(transition(chars: "\\").pending, "")
     XCTAssertNil(transition(pending: "\\", keyCode: kVK_Space, chars: " ").command)
     let modified = transition(chars: "r", flags: [.command])
@@ -769,7 +900,7 @@ final class NormalModeTests: XCTestCase {
     }
     let model = PreparedModel(
       pid: 44, targets: [], hints: [], computedAt: .now(), dirtyToken: 0, configRevision: 0,
-      fingerprint: 0, freshnessMs: AppMonitor.modelFreshnessMs, occluded: false)
+      fingerprint: 0, freshnessMs: AppMonitor.modelFreshnessMs, occluded: false, occlusion: nil)
     monitor.scheduleMaintenanceRefresh(for: model)
     XCTAssertEqual(registered(), [AppMonitor.maintenanceClientID])
     monitor.cancelRefreshWork(for: 44)
@@ -1872,7 +2003,7 @@ final class NormalModeTests: XCTestCase {
 
   func testMouseGridBisectDrawsQuadrantsAndKeepsHalves() {
     let area = CGRect(x: 0, y: 0, width: 1000, height: 800)
-    let hints = gridHints(area, depth: 0, shape: .bisect)
+    let hints = gridHints(area, depth: 0, shape: .qwertyBisect)
     XCTAssertEqual(hints.map(\.label), ["y", "u", "b", "n"])
     XCTAssertEqual(hints[0].target.frame, CGRect(x: 0, y: 400, width: 500, height: 400))
     XCTAssertEqual(hints[3].target.frame, CGRect(x: 500, y: 0, width: 500, height: 400))
@@ -1887,12 +2018,13 @@ final class NormalModeTests: XCTestCase {
     // Bisect ignores the step count and commits once a kept region is at the
     // size floor on both sides.
     XCTAssertFalse(
-      MouseGrid.selectionCommits(region: area, depth: 9, steps: 2, shape: .bisect))
+      MouseGrid.selectionCommits(region: area, depth: 9, steps: 2, shape: .qwertyBisect))
     XCTAssertFalse(MouseGrid.keepCommits(CGRect(x: 0, y: 0, width: 10, height: 40)))
     XCTAssertTrue(MouseGrid.keepCommits(CGRect(x: 0, y: 0, width: 18, height: 12)))
     XCTAssertTrue(
       MouseGrid.selectionCommits(
-        region: CGRect(x: 0, y: 0, width: 36, height: 30), depth: 0, steps: 3, shape: .bisect))
+        region: CGRect(x: 0, y: 0, width: 36, height: 30), depth: 0, steps: 3, shape: .qwertyBisect)
+    )
   }
 
   func testPluginCommandLineInvocationParser() throws {
@@ -2433,10 +2565,15 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in [
       "h", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "f", "F", "sf", "df", "mf", "sF",
-      "dF", "mF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
+      "gg", "G", "f", "F", "df", "mf", "cf",
+      "dF", "mF", "cF", "u", "ctrl-r", "x", "y", "p", "/", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "[a", "]a", "[t", "]t", "N{mapping}",
       "flash mouse_target",
+      "flash mouse_bigram",
+      "flash mouse_bigram --secondary",
+      "flash mouse_bigram --double",
+      "flash mouse_bigram --move",
+      "cs", "ds", "ms",
       "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_target --move",
       "flash mouse_grid", "flash mouse_grid --double",
@@ -2784,6 +2921,9 @@ final class NormalModeTests: XCTestCase {
         .sendKeys(
           keys: "g,i", keyCodes: [CGKeyCode(kVK_ANSI_G), CGKeyCode(kVK_ANSI_I)],
           flagsRawValues: [0, 0])))
+    XCTAssertFalse(
+      AppDelegate.normalModeCommandMayChangeKeyboardFocus(.arrow(direction: .down, shift: false)))
+    XCTAssertFalse(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.functionKey(1)))
     XCTAssertFalse(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.scroll(.down)))
     XCTAssertFalse(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.reload(force: false)))
     XCTAssertFalse(
@@ -2791,6 +2931,32 @@ final class NormalModeTests: XCTestCase {
         .sendKey(
           keys: "cmd+f", keyCode: CGKeyCode(kVK_ANSI_F),
           flagsRawValue: CGEventFlags.maskCommand.rawValue)))
+  }
+
+  /// Hyper arrows used to go out through `postToPid`. That event has no
+  /// window, and a terminal drops it while the hyper key is still down.
+  /// Volume kept working because it is not a key event. The stroke now
+  /// targets the key window, past the session tap, with the synthetic tag
+  /// and the shift flag intact.
+  func testFocusedKeyReachesTheKeyWindowPastTheSessionTap() throws {
+    let restore = NormalModeDispatcher.focusedKeyPoster
+    defer { NormalModeDispatcher.focusedKeyPoster = restore }
+    var posted: [CGEvent] = []
+    NormalModeDispatcher.focusedKeyPoster = { posted.append($0) }
+    XCTAssertTrue(
+      NormalModeDispatcher.sendFocusedKey(
+        virtualKey: CGKeyCode(kVK_DownArrow), flags: .maskShift))
+    XCTAssertEqual(posted.map(\.type), [.keyDown, .keyUp])
+    for event in posted {
+      XCTAssertEqual(event.getIntegerValueField(.keyboardEventKeycode), Int64(kVK_DownArrow))
+      XCTAssertEqual(event.flags, .maskShift)
+      XCTAssertEqual(
+        event.getIntegerValueField(.eventSourceUserData),
+        NormalModeDispatcher.syntheticKeyEventTag)
+    }
+    let delivered = try XCTUnwrap(NSEvent(cgEvent: posted[0]))
+    XCTAssertEqual(delivered.keyCode, UInt16(kVK_DownArrow))
+    XCTAssertEqual(delivered.characters, String(UnicodeScalar(NSDownArrowFunctionKey)!))
   }
 
   func testUnmodifiedNormalModeKeyDispatchRequiresTargetActivation() {
@@ -2894,6 +3060,41 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(first.pending, "\\")
     let second = transition(pending: "\\", chars: "c", mappings: mappings)
     XCTAssertEqual(second.action, action)
+  }
+
+  func testShiftHyperNumberRowSendsFunctionKeys() {
+    let mappings = Config.Mode.defaultHyperMappings
+    let f1 = transition(
+      keyCode: 0x12, chars: "!", ignoring: "1", flags: [.shift], mappings: mappings)
+    XCTAssertEqual(f1.command, .functionKey(1))
+    let f10 = transition(
+      keyCode: 0x1D, chars: ")", ignoring: "0", flags: [.shift], mappings: mappings)
+    XCTAssertEqual(f10.command, .functionKey(10))
+    let f12 = transition(
+      keyCode: 0x18, chars: "+", ignoring: "=", flags: [.shift], mappings: mappings)
+    XCTAssertEqual(f12.command, .functionKey(12))
+    let volume = transition(keyCode: 0x18, chars: "=", mappings: mappings)
+    XCTAssertEqual(volume.command, .systemKey(.volumeUp))
+  }
+
+  func testAMappedDigitRunsInsteadOfStartingACount() {
+    let mute = MappingCommand.flashCommand(.systemKey(.mute))
+    let brightness = MappingCommand.flashCommand(.systemKey(.brightnessDown))
+    let mappings = [
+      ModeMapping(key: "0", action: mute),
+      ModeMapping(key: "1", action: brightness),
+    ]
+    let zero = transition(chars: "0", mappings: mappings)
+    XCTAssertEqual(zero.action, mute)
+    XCTAssertEqual(zero.pending, "")
+    let one = transition(chars: "1", mappings: mappings)
+    XCTAssertEqual(one.action, brightness)
+    let count = transition(chars: "1")
+    XCTAssertNil(count.command)
+    XCTAssertEqual(count.pending, "1")
+    let bareZero = transition(chars: "0")
+    XCTAssertNil(bareZero.command)
+    XCTAssertEqual(bareZero.pending, "")
   }
 
   func testEscapeConsumesWithoutLeavingNormalMode() {

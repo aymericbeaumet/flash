@@ -57,38 +57,32 @@ public enum TargetFinalizer {
     let visible = candidates.filter { isVisible($0.target, in: visibleRegions) }
 
     var dedup = SpatialDedup()
-    var kept: [TargetCandidate] = []
+    var kept: [JumpTarget] = []
     kept.reserveCapacity(visible.count)
-    let byDedupPreference = visible.sorted { lhs, rhs in
+    // Decorate once: the comparator runs O(n log n) times and must not
+    // re-derive role tests, areas and logarithms per comparison.
+    var decorated = visible.map { DedupKey($0) }
+    decorated.sort { lhs, rhs in
       // A semantic control always beats a generic pressable container over
       // the same area; the container survives only where it adds a target.
-      let lhsGeneric = lhs.target.isGenericContainer
-      if lhsGeneric != rhs.target.isGenericContainer { return !lhsGeneric }
-      let lhsArea = area(lhs.target.frame)
-      let rhsArea = area(rhs.target.frame)
-      if lhsArea != rhsArea { return lhsArea < rhsArea }
+      if lhs.generic != rhs.generic { return !lhs.generic }
+      if lhs.area != rhs.area { return lhs.area < rhs.area }
       // Over the same area a typing surface beats the control laid over it:
       // WhatsApp covers its search field with a same-size button.
-      if lhs.target.entersInsertMode != rhs.target.entersInsertMode {
-        return lhs.target.entersInsertMode
-      }
-      if !lhsArea.isFinite {
-        let lhsLog = logArea(lhs.target.frame)
-        let rhsLog = logArea(rhs.target.frame)
-        if lhsLog != rhsLog { return lhsLog < rhsLog }
-      }
+      if lhs.entersInsertMode != rhs.entersInsertMode { return lhs.entersInsertMode }
+      if !lhs.area.isFinite, lhs.logArea != rhs.logArea { return lhs.logArea < rhs.logArea }
       if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
       if lhs.providerOrder != rhs.providerOrder { return lhs.providerOrder < rhs.providerOrder }
       if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
       return verticalOrder(lhs.target, rhs.target)
     }
-    for candidate in byDedupPreference {
-      guard !dedup.contains(candidate.target.frame) else { continue }
-      dedup.insert(candidate.target.frame)
-      kept.append(candidate)
+    for key in decorated {
+      guard !dedup.contains(key.target.frame) else { continue }
+      dedup.insert(key.target.frame)
+      kept.append(key.target)
     }
 
-    let targets = visualRows(kept.map(\.target))
+    let targets = visualRows(kept)
     return TargetFinalizerResult(
       targets: targets,
       rawCount: candidates.count,
@@ -96,11 +90,34 @@ public enum TargetFinalizer {
       dedupedCount: targets.count)
   }
 
+  /// A candidate with its dedup ordering keys computed once.
+  private struct DedupKey {
+    let target: JumpTarget
+    let generic: Bool
+    let area: CGFloat
+    let logArea: CGFloat
+    let entersInsertMode: Bool
+    let priority: Int
+    let providerOrder: Int
+    let ordinal: Int
+
+    init(_ candidate: TargetCandidate) {
+      target = candidate.target
+      generic = candidate.target.isGenericContainer
+      area = TargetFinalizer.area(candidate.target.frame)
+      logArea = area.isFinite ? 0 : TargetFinalizer.logArea(candidate.target.frame)
+      entersInsertMode = candidate.target.entersInsertMode
+      priority = candidate.priority
+      providerOrder = candidate.providerOrder
+      ordinal = candidate.ordinal
+    }
+  }
+
   public static func isVisible(_ target: JumpTarget, in regions: [CGRect]) -> Bool {
     guard !regions.isEmpty else { return false }
     let frame = target.frame
     guard frame.width > 0, frame.height > 0,
-      [frame.minX, frame.minY, frame.maxX, frame.maxY].allSatisfy(\.isFinite)
+      frame.minX.isFinite, frame.minY.isFinite, frame.maxX.isFinite, frame.maxY.isFinite
     else { return false }
     let center = CGPoint(x: frame.midX, y: frame.midY)
     return regions.contains { $0.containsInclusive(center) }

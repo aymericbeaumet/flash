@@ -17,7 +17,6 @@ final class AlphabetTests: XCTestCase {
   private struct TestLayout {
     let rows: [TestRow: [Character]]
     let leftHand: Set<Character>
-    let scores: [Character: Int]
   }
 
   private let layouts: [String: TestLayout] = [
@@ -27,15 +26,7 @@ final class AlphabetTests: XCTestCase {
         .homerow: Array("arstdhneio"),
         .bottomrow: Array("zxcvbkm"),
       ],
-      leftHand: Set("qwfpgarstdzxcvb"),
-      scores: scoreGroups([
-        ("arstneio", 100),
-        ("dh", 94),
-        ("wfpluy", 74),
-        ("qgj", 62),
-        ("zxcvbm", 54),
-        ("k", 42),
-      ])
+      leftHand: Set("qwfpgarstdzxcvb")
     ),
     "qwerty": TestLayout(
       rows: [
@@ -43,16 +34,7 @@ final class AlphabetTests: XCTestCase {
         .homerow: Array("asdfghjkl"),
         .bottomrow: Array("zxcvbnm"),
       ],
-      leftHand: Set("qwertasdfgzxcvb"),
-      scores: scoreGroups([
-        ("sdfjkl", 100),
-        ("agh", 92),
-        ("erui", 76),
-        ("wtyo", 66),
-        ("cvbnm", 56),
-        ("qzp", 38),
-        ("x", 32),
-      ])
+      leftHand: Set("qwertasdfgzxcvb")
     ),
     "dvorak": TestLayout(
       rows: [
@@ -60,15 +42,15 @@ final class AlphabetTests: XCTestCase {
         .homerow: Array("aoeuidhtns"),
         .bottomrow: Array("qjkxbmwvz"),
       ],
-      leftHand: Set("pyaoeuiqjkx"),
-      scores: scoreGroups([
-        ("aoeutns", 100),
-        ("idh", 94),
-        ("pyfcrl", 74),
-        ("g", 62),
-        ("qjkxbmwv", 54),
-        ("z", 38),
-      ])
+      leftHand: Set("pyaoeuiqjkx")
+    ),
+    "bepo": TestLayout(
+      rows: [
+        .toprow: Array("bépoèvdlj"),
+        .homerow: Array("auiectsrn"),
+        .bottomrow: Array("àyxkqghf"),
+      ],
+      leftHand: Set("bépoèauieàyxk")
     ),
   ]
 
@@ -182,6 +164,7 @@ final class AlphabetTests: XCTestCase {
     XCTAssertEqual(r.keyScores["s"], 3)
     XCTAssertEqual(r.keyScores["a"], 2)
     XCTAssertEqual(r.keyScores["q"], 1)
+    XCTAssertTrue(r.keyRows.isEmpty)
     XCTAssertNil(r.warning)
   }
 
@@ -203,8 +186,8 @@ final class AlphabetTests: XCTestCase {
   }
 
   /// The letter rows and hands hint selectors use are derived from each
-  /// layout's physical 4×10 matrix; they must stay byte-identical to the
-  /// literal rows and hands they replaced, so every hint alphabet is unchanged.
+  /// layout's physical 4×10 matrix. Key ease is the same row-and-column
+  /// formula on every layout.
   func testPhysicalLayoutsDeriveTheLetterRowsAndHands() throws {
     let rowMap: [TestRow: Alphabet.Row] = [
       .toprow: .toprow, .homerow: .homerow, .bottomrow: .bottomrow,
@@ -218,7 +201,47 @@ final class AlphabetTests: XCTestCase {
         XCTAssertEqual(layout.rows[row], expected.rows[testRow], "\(name) \(row)")
       }
       XCTAssertEqual(layout.leftHand, expected.leftHand, name)
-      XCTAssertEqual(layout.keyScores, expected.scores, name)
+      var formula: [Character: Int] = [:]
+      for (row, keys) in layout.physical.enumerated() {
+        for (column, key) in keys.enumerated() {
+          formula[key] = Self.formulaScore(row: row, column: column)
+        }
+      }
+      XCTAssertEqual(layout.keyScores, formula, name)
+      var rows: [Character: Int] = [:]
+      for (row, keys) in layout.physical.enumerated() {
+        for key in keys { rows[key] = row }
+      }
+      XCTAssertEqual(layout.keyRows, rows, name)
+      XCTAssertEqual(Alphabet.resolve("<\(name)>").keyRows, rows, name)
+    }
+    XCTAssertTrue(Alphabet.resolve("asdf").keyRows.isEmpty)
+  }
+
+  func testPhysicalKeyScoreRanksHomeThenBottomThenTop() {
+    XCTAssertEqual(Alphabet.physicalKeyScore(row: 2, column: 3), 331)
+    XCTAssertEqual(Alphabet.physicalKeyScore(row: 2, column: 6), 330)
+    XCTAssertEqual(Alphabet.physicalKeyScore(row: 2, column: 4), 316)
+    XCTAssertEqual(Alphabet.physicalKeyScore(row: 3, column: 3), 231)
+    XCTAssertEqual(Alphabet.physicalKeyScore(row: 1, column: 3), 131)
+    XCTAssertEqual(Alphabet.physicalKeyScore(row: 0, column: 3), 31)
+    let worstHome = Alphabet.physicalKeyScore(row: 2, column: 9)
+    let bestBottom = Alphabet.physicalKeyScore(row: 3, column: 3)
+    let worstBottom = Alphabet.physicalKeyScore(row: 3, column: 9)
+    let bestTop = Alphabet.physicalKeyScore(row: 1, column: 3)
+    XCTAssertGreaterThan(worstHome, bestBottom)
+    XCTAssertGreaterThan(worstBottom, bestTop)
+    for (name, layout) in layouts {
+      let home = Set(layout.rows[.homerow]!)
+      let bottom = Set(layout.rows[.bottomrow]!)
+      let top = Set(layout.rows[.toprow]!)
+      let scores = Alphabet.layouts[name]!.keyScores
+      let homeMin = home.map { scores[$0]! }.min()!
+      let bottomMax = bottom.map { scores[$0]! }.max()!
+      let bottomMin = bottom.map { scores[$0]! }.min()!
+      let topMax = top.map { scores[$0]! }.max()!
+      XCTAssertGreaterThan(homeMin, bottomMax, name)
+      XCTAssertGreaterThan(bottomMin, topMax, name)
     }
   }
 
@@ -232,6 +255,9 @@ final class AlphabetTests: XCTestCase {
     XCTAssertEqual(
       Alphabet.gridKeys(layoutName: "dvorak").map { String($0) },
       ["12345", "',.py", "aoeui", ";qjkx"])
+    XCTAssertEqual(
+      Alphabet.gridKeys(layoutName: "bepo").map { String($0) },
+      ["$\"«»(", "bépoè", "auie,", "àyx.k"])
   }
 
   func testLiteralKeysHaveNoLayoutSoTheGridIsQwerty() {
@@ -342,16 +368,37 @@ final class AlphabetTests: XCTestCase {
         }
       }
     }
+    let scores = formulaScores(layoutName)
     return String(
       chars
         .sorted {
-          let lhs = layout.scores[$0.0] ?? 0
-          let rhs = layout.scores[$1.0] ?? 0
+          let lhs = scores[$0.0] ?? 0
+          let rhs = scores[$1.0] ?? 0
           if lhs != rhs { return lhs > rhs }
           return $0.1 < $1.1
         }
         .map(\.0)
     )
+  }
+
+  /// Independent copy of `Alphabet.physicalKeyScore`, so a drift in the
+  /// layout tables fails here instead of following the production function.
+  private static func formulaScore(row: Int, column: Int) -> Int {
+    let rowBase = [0, 100, 300, 200][row]
+    let finger = [0, 1, 2, 3, 3, 3, 3, 2, 1, 0][column]
+    let reach = column == 4 || column == 5 ? 1 : 0
+    return rowBase + finger * 10 - reach * 15 + (column < 5 ? 1 : 0)
+  }
+
+  private func formulaScores(_ layoutName: String) -> [Character: Int] {
+    let physical = Alphabet.layouts[layoutName]!.physical
+    var scores: [Character: Int] = [:]
+    for (row, keys) in physical.enumerated() {
+      for (column, key) in keys.enumerated() {
+        scores[key] = Self.formulaScore(row: row, column: column)
+      }
+    }
+    return scores
   }
 
   private func includes(_ ch: Character, hand: TestHand?, layout: TestLayout) -> Bool {
@@ -365,13 +412,4 @@ final class AlphabetTests: XCTestCase {
     }
   }
 
-  private static func scoreGroups(_ groups: [(String, Int)]) -> [Character: Int] {
-    var scores: [Character: Int] = [:]
-    for (chars, base) in groups {
-      for (offset, ch) in chars.enumerated() {
-        scores[ch] = base - offset
-      }
-    }
-    return scores
-  }
 }

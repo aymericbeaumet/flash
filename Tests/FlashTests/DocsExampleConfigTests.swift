@@ -36,21 +36,31 @@ final class DocsExampleConfigTests: XCTestCase {
     }
   }
 
-  /// The README's snippets are the first configuration most people paste.
+  /// The README's snippets are the first configuration most people paste,
+  /// the getting-started guide's the next, and the alternatives pages'
+  /// migration snippets the first for someone coming from another tool.
   func testEveryReadmeTOMLSnippetLoadsOverTheDefaultsWithoutDiagnostics() throws {
     let defaults = ConfigLoader.Layer(
       text: try String(
         contentsOf: Self.root.appendingPathComponent("config.default.toml"), encoding: .utf8))
-    let readme = try String(
-      contentsOf: Self.root.appendingPathComponent("README.md"), encoding: .utf8)
-    let snippets = readme.components(separatedBy: "```toml\n").dropFirst().compactMap {
-      $0.components(separatedBy: "\n```").first
+    var pages = ["README.md", "docs/getting-started.md"]
+    let alternatives = Self.root.appendingPathComponent("docs/alternatives")
+    pages += try FileManager.default.contentsOfDirectory(atPath: alternatives.path)
+      .filter { $0.hasSuffix(".md") }.sorted().map { "docs/alternatives/\($0)" }
+    var total = 0
+    for page in pages {
+      let text = try String(contentsOf: Self.root.appendingPathComponent(page), encoding: .utf8)
+      let snippets = text.components(separatedBy: "```toml\n").dropFirst().compactMap {
+        $0.components(separatedBy: "\n```").first
+      }
+      total += snippets.count
+      for (index, snippet) in snippets.enumerated() {
+        let config = ConfigLoader.parseLayers([defaults, .init(text: snippet)])
+        XCTAssertEqual(
+          config.loadingDiagnostics.map(\.message), [], "\(page) snippet \(index + 1)")
+      }
     }
-    XCTAssertGreaterThanOrEqual(snippets.count, 5)
-    for (index, snippet) in snippets.enumerated() {
-      let config = ConfigLoader.parseLayers([defaults, .init(text: snippet)])
-      XCTAssertEqual(config.loadingDiagnostics.map(\.message), [], "README snippet \(index + 1)")
-    }
+    XCTAssertGreaterThanOrEqual(total, 20)
   }
 
   func testEveryExampleWidgetEvaluatesWithoutAnEmptyLine() throws {

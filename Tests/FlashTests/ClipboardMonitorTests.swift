@@ -4,6 +4,11 @@ import XCTest
 @testable import flash
 
 final class ClipboardMonitorTests: XCTestCase {
+  private let png = Data(
+    base64Encoded:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+  )!
+
   func testNSPasteboardOrgMarkersKeepPayloadsOutOfHistory() {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("flash-test-\(UUID().uuidString)"))
     defer { pasteboard.releaseGlobally() }
@@ -23,6 +28,150 @@ final class ClipboardMonitorTests: XCTestCase {
       pasteboard.setString("secret", forType: .string)
       pasteboard.setData(Data(), forType: markerType)
       XCTAssertFalse(ClipboardMonitor.isRecordable(pasteboard.types ?? []), marker)
+      XCTAssertNil(ClipboardCapture.read(pasteboard), marker)
     }
+  }
+
+  func testCaptureKeepsTextImagesHTMLAndDropsOversizedText() {
+    let text = ClipboardCapture.capture(
+      types: ["public.utf8-plain-text"], plain: "hello", html: nil, image: nil, filePaths: [],
+      imageFile: nil)
+    XCTAssertEqual(text?.kind, .text)
+    XCTAssertEqual(text?.text, "hello")
+
+    let image = ClipboardCapture.capture(
+      types: ["public.png"], plain: nil, html: nil, image: ("image/png", png), filePaths: [],
+      imageFile: nil)
+    XCTAssertEqual(image?.kind, .image)
+    XCTAssertEqual(image?.mime, "image/png")
+    XCTAssertEqual(image?.image, png)
+    XCTAssertEqual(image?.sha256?.count, 64)
+
+    let html = ClipboardCapture.capture(
+      types: ["public.html", "public.utf8-plain-text"], plain: "hello", html: "<b>hello</b>",
+      image: nil, filePaths: [], imageFile: nil)
+    XCTAssertEqual(html?.kind, .html)
+    XCTAssertEqual(html?.html, "<b>hello</b>")
+    XCTAssertEqual(html?.text, "hello")
+
+    let huge = String(repeating: "a", count: ClipboardCapture.maxTextBytes + 1)
+    XCTAssertNil(
+      ClipboardCapture.capture(
+        types: ["public.utf8-plain-text"], plain: huge, html: nil, image: nil, filePaths: [],
+        imageFile: nil))
+    XCTAssertNil(
+      ClipboardCapture.capture(
+        types: ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"], plain: "secret",
+        html: nil, image: nil, filePaths: [], imageFile: nil))
+  }
+
+  func testFilesWinOverAPasteboardImageAndASingleImageFileIsPreviewed() throws {
+    let rep = try XCTUnwrap(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8, samplesPerPixel: 4,
+        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+      ))
+    let tiff = try XCTUnwrap(rep.tiffRepresentation)
+    let converted = try XCTUnwrap(ClipboardCapture.pngData(fromTIFF: tiff))
+    XCTAssertEqual(
+      converted.prefix(8), Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+
+    let icon = ClipboardCapture.capture(
+      types: ["public.tiff", "public.file-url"], plain: nil, html: nil,
+      image: ("image/png", converted), filePaths: ["/tmp/notes.txt"], imageFile: nil)
+    XCTAssertEqual(icon?.kind, .files)
+    XCTAssertNil(icon?.mime)
+    XCTAssertEqual(icon?.files, ["/tmp/notes.txt"])
+    XCTAssertNil(icon?.image)
+
+    let preview = ClipboardCapture.capture(
+      types: ["public.file-url"], plain: nil, html: nil, image: ("image/png", converted),
+      filePaths: ["/tmp/shot.png"], imageFile: ("image/png", png))
+    XCTAssertEqual(preview?.kind, .files)
+    XCTAssertEqual(preview?.mime, "image/png")
+    XCTAssertEqual(preview?.image, png)
+    XCTAssertEqual(preview?.files, ["/tmp/shot.png"])
+
+    let many = (0..<25).map { "/tmp/\($0).txt" }
+    XCTAssertEqual(
+      ClipboardCapture.capture(
+        types: ["NSFilenamesPboardType"], plain: nil, html: nil, image: nil, filePaths: many,
+        imageFile: nil)?.files.count,
+      ClipboardCapture.maxFiles)
+
+    let tooBig = Data(count: ClipboardCapture.maxImageBytes + 1)
+    XCTAssertNil(
+      ClipboardCapture.capture(
+        types: ["public.png"], plain: nil, html: nil, image: ("image/png", tooBig), filePaths: [],
+        imageFile: nil))
+    XCTAssertEqual(
+      ClipboardCapture.capture(
+        types: ["public.png", "public.utf8-plain-text"], plain: "caption", html: nil,
+        image: ("image/png", tooBig), filePaths: [], imageFile: nil)?.kind,
+      .text)
+  }
+
+  func testPrivatePasteboardReadsPNGTextAndACopiedImageFile() throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("flash-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+
+    pasteboard.clearContents()
+    pasteboard.setData(png, forType: NSPasteboard.PasteboardType("public.png"))
+    let image = try XCTUnwrap(ClipboardCapture.read(pasteboard))
+    XCTAssertEqual(image.kind, .image)
+    XCTAssertEqual(image.mime, "image/png")
+    XCTAssertEqual(image.image, png)
+    XCTAssertEqual(image.text, "")
+
+    pasteboard.clearContents()
+    pasteboard.setString("hello clipboard", forType: .string)
+    XCTAssertEqual(ClipboardCapture.read(pasteboard)?.kind, .text)
+    XCTAssertEqual(ClipboardCapture.read(pasteboard)?.text, "hello clipboard")
+
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("shot.png")
+    try png.write(to: file)
+    pasteboard.clearContents()
+    XCTAssertTrue(pasteboard.writeObjects([file as NSURL]))
+    let copied = try XCTUnwrap(ClipboardCapture.read(pasteboard))
+    XCTAssertEqual(copied.kind, .files)
+    XCTAssertEqual(copied.mime, "image/png")
+    XCTAssertEqual(copied.image, png)
+    XCTAssertEqual(copied.files, [file.path])
+  }
+
+  func testImageStoreIsOwnerOnlyAndRejectsABadID() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "flash-clip-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let id = "0123456789abcdef0123456789abcdef"
+    let item = ClipboardCapture.Item(
+      kind: .image, text: "", html: nil, image: png, mime: "image/png", files: [], sha256: nil)
+    let payload = try XCTUnwrap(
+      ClipboardImageStore.changedPayload(for: item, dataDir: root, id: id))
+    XCTAssertEqual(payload["id"] as? String, id)
+    XCTAssertEqual(payload["kind"] as? String, "image")
+    XCTAssertEqual(payload["mime"] as? String, "image/png")
+    XCTAssertEqual((payload["sha256"] as? String)?.count, 64)
+    XCTAssertNil(payload["image"])
+    let url = try XCTUnwrap(ClipboardImageStore.fileURL(dataDir: root, id: id, mime: "image/png"))
+    let fileMode = try XCTUnwrap(
+      FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)
+    XCTAssertEqual(fileMode.intValue & 0o777, 0o600)
+    let dirMode = try XCTUnwrap(
+      FileManager.default.attributesOfItem(atPath: url.deletingLastPathComponent().path)[
+        .posixPermissions] as? NSNumber)
+    XCTAssertEqual(dirMode.intValue & 0o777, 0o700)
+    XCTAssertNil(ClipboardImageStore.changedPayload(for: item, dataDir: root, id: "../etc/passwd"))
+    XCTAssertNil(ClipboardImageStore.fileURL(dataDir: root, id: "../etc/passwd", mime: "image/png"))
+
+    let text = ClipboardCapture.Item(
+      kind: .text, text: "hi", html: nil, image: nil, mime: nil, files: [], sha256: nil)
+    let textPayload = try XCTUnwrap(
+      ClipboardImageStore.changedPayload(for: text, dataDir: root, id: id))
+    XCTAssertEqual(textPayload["text"] as? String, "hi")
+    XCTAssertNil(textPayload["mime"])
   }
 }

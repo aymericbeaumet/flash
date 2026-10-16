@@ -34,8 +34,44 @@ enum Mode: Equatable {
 
   /// A popup's local terminal view owns keyboard input; global mappings are
   /// suspended. Entered by `enter_terminal_mode` or by focusing a popup, and
-  /// left by `leave_mode`, which closes the popup.
-  case terminal(restoreTo: ReturnMode)
+  /// left by `leave_mode`, which closes the popup. `returnPID` is the app the
+  /// popup covers, captured as the mode is entered: an explicit close
+  /// activates it, and it is forgotten with the mode, so no later popup or
+  /// INSERT exit can activate an app a popup once covered.
+  case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
+
+  /// Visual selection (`v`): text is selected from where VISUAL began to
+  /// where the cursor is, and motions extend it as in Vim. Flash draws the
+  /// selection with a held primary button at the pointer; leaving VISUAL ends
+  /// the selection and leaves it selected. `[mode.visual.mappings]` is read
+  /// before NORMAL's.
+  case visual
+
+  /// Dragging with a mouse button held (`enter_drag_mode`, unmapped by
+  /// default): pointer moves drag what was grabbed, Return drops it where
+  /// the pointer is and Escape puts it back. `[mode.drag.mappings]` is read
+  /// before NORMAL's.
+  case drag
+
+  /// Momentary layer while `mode.normal.hyper` is physically held. The default
+  /// key is `<leader>`. Mappings come from `[mode.hyper.mappings]`. Releasing
+  /// the key returns to `restoreTo` (NORMAL). A clean tap of the leader still
+  /// arms a `<leader>` sequence.
+  case hyper(restoreTo: ReturnMode)
+}
+
+/// What a held mouse button means, which is the mode it enters: a visual
+/// selection, or a drag. The button is the mechanism for both.
+enum ButtonHold: String, CaseIterable, Equatable {
+  case visual
+  case drag
+
+  var mode: Mode {
+    switch self {
+    case .visual: return .visual
+    case .drag: return .drag
+    }
+  }
 }
 
 /// Where a transient surface (command / modal) returns to when it closes.
@@ -61,10 +97,19 @@ extension Mode {
     switch self {
     case .disabled: return .disabled
     case .insert: return .insert
-    case .normal: return .normal
+    case .normal, .visual, .drag: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
-    case .command(let restoreTo), .terminal(let restoreTo): return restoreTo
+    case .command(let restoreTo), .hyper(let restoreTo):
+      return restoreTo
+    case .terminal(let restoreTo, _):
+      return restoreTo
     }
+  }
+
+  /// The app the focused popup covers; nil outside TERMINAL.
+  var terminalReturnPID: pid_t? {
+    if case .terminal(_, let returnPID) = self { return returnPID }
+    return nil
   }
 
   var isInsert: Bool {
@@ -73,6 +118,24 @@ extension Mode {
   }
 
   var isNormal: Bool { self == .normal }
+
+  var isHyper: Bool {
+    if case .hyper = self { return true }
+    return false
+  }
+
+  var isVisual: Bool { self == .visual }
+
+  var isDrag: Bool { self == .drag }
+
+  /// The held button's purpose in VISUAL and DRAG; nil in every other mode.
+  var buttonHold: ButtonHold? {
+    switch self {
+    case .visual: return .visual
+    case .drag: return .drag
+    default: return nil
+    }
+  }
 
   var isTerminal: Bool {
     if case .terminal = self { return true }

@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-version=3.7c
-checksum=7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf
+version=3.8
+checksum=e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e
 unicode_version=2.12.0
 unicode_checksum=f564011d38b2888d583d510b08e69ffa15aa117155db1b9b49ef1dfe1fa25111
 cache="$PWD/build/tmux-oracle"

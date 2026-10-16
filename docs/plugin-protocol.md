@@ -41,11 +41,13 @@ builds a scrubbed environment containing only basic locale/path/process keys
 plus those values; ambient tokens, agent sockets, SDK search paths, and
 login-shell secrets are not inherited — put credentials in the plugin's
 config table. Install CLI tools under `FLASH_PLUGIN_DATA_DIR`, never into
-global shell paths.
+global shell paths. A child is spawned only once the host's login environment
+has resolved, so its `PATH` is the user's; a resolution that fails keeps the
+seeded one.
 
 **Activation.** A plugin is *resident* — spawned at startup and kept running —
 iff its manifest declares `sources`, `query`, `hints`, `status`, or `listen`.
-A plugin declaring only on-demand surfaces (`commands`, `bangs`, `verbs`,
+A plugin declaring only on-demand surfaces (`commands`, `bangs`,
 `navigation`) is *on-demand*: it stays unspawned until its first `perform`,
 which launches it (the `perform` deadline comfortably absorbs the startup
 budget) and then it stays running normally. Manifest-only plugins (no `exec`)
@@ -75,19 +77,24 @@ stop → stopped (all attempt work invalidated)
 other requests and no events until `running`. Restarts back off linearly
 (1..30 s); after five retries within 300 s, another failure parks the plugin in `failed` (recover with
 `:plugins reload` or a plugin-file change). Successful initialize does not
-reset the rolling failure budget; even an initialize-then-crash loop parks.
+reset the rolling failure budget; even an initialize-then-crash loop parks,
+and a status-bound plugin that stops being observed keeps its budget too.
 Lifecycle transitions belong to attempt generations. Stop/reload invalidates
 pending retries, installation completions, and transport work. Rejected
 initialize replies park immediately. The published catalog survives
-crashes and restarts (see `publish`) and is dropped on `failed` or unload;
-status segments clear on any teardown; in-flight `perform`s settle as errors.
+crashes and restarts (see `publish`) and is dropped on `failed` or unload.
+A planned reload keeps the previous status values for up to ten seconds,
+until each is republished, measured from the newest replacement; any other
+teardown clears them. In-flight `perform`s settle as errors.
 Asynchronous host RPC replies stay attached to the child that requested them:
 a replacement child can reuse an ID without receiving the old child's reply.
 
 Explicit reload and file changes reconcile the manifest through PluginManager.
 Unchanged definitions restart only the affected binaries and retain catalogs.
 A changed valid definition rebuilds its registrations, authorization, adapter,
-and process together and drops its previous catalog. An invalid replacement
+and process together and drops its previous catalog. Its requests route to
+the replacement from the moment it is reconciled: they wait while the old
+process stops, and the replacement starts only once it has. An invalid replacement
 keeps the last validated definition running and reports its load error; fixing
 the file allows reconciliation to recover without a resident-app restart.
 A plugin should also exit when `FLASH_PLUGIN_PARENT_PID` dies.
@@ -205,6 +212,20 @@ Notifications have no deadlines.
   of polling for it. The host observes the network (System Configuration's
   dynamic store) and volume mounts (workspace notifications) only while at
   least one plugin's `listen` matches the event.
+  `core:clipboard.changed` requires the `clipboard` capability. Its payload
+  is `{id, kind, text, html?, mime?, files?, sha256?}`. `id` is 32 lowercase
+  hex characters. `kind` is `text`, `image`, `html`, or `files`. `text` is
+  the plain fallback and may be empty for an image. `html` is a formatted
+  copy, capped at 64 KiB. `files` lists up to 20 copied paths. Image bytes
+  are not in the payload: before the event the host writes
+  `share/images/<id>.<ext>` under the clipboard plugin's data directory,
+  where `ext` is `png`, `jpg`, `gif`, or `webp` for `mime`. `sha256` is the
+  lowercase hex digest of that file. A TIFF pasteboard image is stored as
+  PNG. Concealed, transient, and auto-generated pasteboard types are never
+  emitted. `:clipboard show` returns `{id, kind, preview, value, html?,
+  mime?, files?}` for each entry, without the image bytes or the digest.
+  `:clipboard delete` takes `id=<id>` (or the bare id) and removes that
+  entry and its image file.
 - `evaluate` — `{query, scope, surface}` → `{"ok": true, "answers": [...]}`.
   The per-input evaluator: synchronous, CPU-only over state prepared earlier
   — no I/O. Unclaimed input answers `{"ok": true, "answers": []}` —
@@ -513,13 +534,13 @@ or stale host", never ambiguity.
   "hints": { "fallback_on_empty": true },
   "navigation": ["example"],
   "status": ["state"],
-  "verbs": [{ "name": "example_sync", "description": "Sync now" }],
   "action_bindings": {
     "tab_next": { "": "cmd+shift+]" },
     "clipboard_copy": { "": ["cmd+a", "cmd+c"] },
     "window_new": { "": { "menu": ["File", "New Window"] } },
     "app_print": { "": false }
   },
+  "action_confirmations": { "resource_archive": "Archive it?" },
   "mappings": [
     {
       "key": "ge",
@@ -549,15 +570,24 @@ Section semantics:
   the plugin resident.
 - **`sources`** — source descriptors for `@<source>` completion and ranking.
   `kind` is `"default"` (default) or `"locations"`; `priority` is the
-  semantic salience enum `low | normal | high | important | urgent`;
+  semantic salience enum `low | normal | high | important | urgent` and sets
+  the source's precedence weight in the flashlight (see
+  [flashlight ranking](flashlight.md#ranking)): it orders rows against other
+  sources inside one match tier and never lifts a partial hit above an exact
+  one. Bundled: `tmux.windows` is `important`, apps and browser tabs `high`.
   `live: true` marks a live (pull) source served by `search`.
 - **`query`** — registers the per-input evaluator. `prefixes` are exact
   literal markers (never regexes) that route matching input only to this
   evaluator; without one, evaluators are additive. Evaluator ordering is the
   manifest root `priority`, ties broken by plugin id.
-- **`commands`** — `:command subcommand` registrations; subcommand `"*"`
-  consumes the remainder as args; per-entry `timeout_ms` overrides the
-  `perform` deadline for interactive commands.
+- **`commands`** — `flash <command> <subcommand>` registrations, the same
+  words as `:command subcommand`. Both words are required. An empty
+  subcommand is rejected, and so is a `verbs` entry (that was a one-word
+  `flash <name>`). Subcommand `"*"` consumes the remainder as args;
+  per-entry `timeout_ms` overrides the `perform` deadline for interactive
+  commands. A command name that matches a Flash verb, a reserved query, or
+  another plugin's command fails the load of every plugin that claims it.
+  Declaring the same pair twice does too.
 - **`bangs`** — flashlight bangs; `token: "*"` is the catch-all; an entry's
   `source` scopes live-source completion to that bang.
 - **`actions`** — source-owned normal-mode action names, dispatched as
@@ -568,9 +598,6 @@ Section semantics:
 - **`navigation`** — durable route schemes restorable from movement history,
   dispatched as `perform {kind: "navigate"}`.
 - **`status`** — status-bar segment names fed by the `status` notification.
-- **`verbs`** — CLI/mapping verbs a plugin process serves through
-  `perform {kind: "command"}`. A verb may not reuse one of Flash's own verb
-  names: what an app does for those belongs in `action_bindings`.
 - **`action_bindings`** — what each app does for Flash's actions: action
   name → bundle id → binding. The bundle id `""` covers every app the root
   selector matches. A binding is one of:
@@ -619,20 +646,34 @@ Section semantics:
   conventions as `""` bindings; disabling it leaves those actions unbound.
   Manifest-only plugins may declare `action_bindings`. App knowledge lives
   here, never in the host.
+- **`action_confirmations`** — the question the host asks before an action
+  this plugin performs destructively: action name → prompt, for names in
+  `actions` only (an empty prompt or an action the plugin does not perform
+  rejects the manifest). In the apps the root selector matches, the host
+  shows the prompt as its confirmation alert (`[y]es / [n]o`, keys in the
+  hint colour) and dispatches the action only on `y`; the plugin then
+  performs it without a prompt of its own, which NORMAL mode's capture
+  would swallow the answer to. Across
+  plugins, a matching selector beats an unscoped one, then the higher
+  `priority`, then the plugin id. The bundled tmux plugin gates `tab_close`
+  and `pane_close` this way. A mapping gates any command the same way with
+  `["flash", "confirm", "--prompt=…", "--command=<verb [--arg=value]>"]`.
 - **`terminal_emulators`** — bundle ids of apps this plugin declares as
   terminal emulators. No protocol identifies one, so the host learns them as
   data: across plugins the union gets the terminal rules (an unbound Command
   chord is refused rather than typed, pixel wheels are refused, and a primary
   hint or grid click anywhere in one enters INSERT) and matches
-  `only_terminals`. The bundled manifest-only `terminals` plugin declares the
-  common emulators.
+  `only_terminals`. A terminal link hint stays in NORMAL. The bundled
+  manifest-only `terminals` plugin declares the common emulators.
 - **`on_demand_hints`** — bundle ids of apps whose accessibility tree costs
   too much to warm in the background. Across plugins, the union is walked
   only when hints are requested and observed with the reduced notification
   set that drives mode, border and focus. The bundled `defaults` plugin
   declares Notes.
-- **`mappings`** — key bindings scoped `all | normal | insert | terminal` (default
-  `normal`); `command` is an argv array with config-mapping syntax; entries
+- **`mappings`** — key bindings in any mode a config can map: `all | normal |
+  insert | terminal | command | hyper | visual | drag` (default `normal`), under the
+  config's key rules (a `command` key is one modified chord); `command` is an
+  argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence
   when its final key is pressed again, as in config. Map keys to high-level
   actions; an app's own chord for one belongs in `action_bindings`, and no

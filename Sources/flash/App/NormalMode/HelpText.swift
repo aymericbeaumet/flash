@@ -11,6 +11,8 @@ extension NormalModeDispatcher {
     var scope: String
     var key: String
     var action: String
+    var origin: String
+    var explanation: String
   }
 
   static func helpTopic(config: Config, showModes: Bool) -> HelpTopic {
@@ -48,7 +50,8 @@ extension NormalModeDispatcher {
         - `/` opens Find and enters INSERT; `x` closes the current tab and `X`
           reopens the last closed one.
         - `[a` / `]a` cycles previous/next app in MRU order; keep pressing `a`
-          to repeat (`[aaaa` / `]aaaa`).
+          to repeat (`[aaaa` / `]aaaa`). Quitting the focused app focuses
+          that previous app.
         - `[t` / `]t` switch to the previous/next tab; keep pressing `t` to
           repeat while staying in NORMAL.
         - `t` opens a tab and enters INSERT; `g1`–`g9` select one and NORMAL
@@ -58,14 +61,30 @@ extension NormalModeDispatcher {
         - `ctrl-o` / `ctrl-i` traverse Flash's movement history.
         - `H` / `L` go back/forward in the app (Cmd-[ / Cmd-], or the app's
           own chord; nothing in terminals and apps without history).
-        - Bare `d`, `j`, and `k` are unbound. Other tab, pane, archive,
-          find-match, URL-copy and mark shortcuts are opt-in.
+        - Bare `c`, `d`, `m`, `j`, and `k` are unbound. `c`, `d` and `m`
+          wait for a mouse finisher. Other tab, pane, archive, find-match,
+          URL-copy and mark shortcuts are opt-in.
 
         ## Mouse Targets
 
+        A mouse action is a prefix and a finisher. Prefixes: none, `m` move,
+        `d` double, `c` context (right-click). Finishers: `f` a target, `F`
+        the grid, `s` a visible letter. `c` is free in Vim and Vimium; `r`
+        reloads and `s` is the search finisher.
+
         - `f` clicks a discovered target (plain click; terminal links add Shift).
         - `F` starts the mouse grid and clicks a precise screen position.
-        - `sf` / `sF` right-click a target or a grid position.
+        - `s`, then one letter, then the two-character hint clicks that letter
+          in the focused window (`mouse_bigram`). The pointer lands one point
+          left of the letter's centre. `cs` right-clicks it,
+          `ds` double-clicks it, and `ms` moves the pointer onto it. `s`
+          starts no other mapping, so the jump fires at once. `v` and `V`
+          match the same glyphs, and so do a key and its shifted symbol
+          (`3` and `#`), in the
+          focused window and on the status bar. A textless terminal also matches
+          the tmux status line and pane titles. Backspace edits, Escape cancels,
+          and no match stays silent.
+        - `cf` / `cF` right-click a target or a grid position.
         - `df` / `dF` double-click a target or a grid position.
         - `mf` / `mF` move the cursor to a target or a grid position.
         - A click leaves the pointer on its target; `hints.restore_pointer`
@@ -73,9 +92,14 @@ extension NormalModeDispatcher {
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
           items) and `mouse_notifications` hint surfaces outside the window;
           bind them to use them.
-        - `mouse_button --state=down|up|toggle` holds a button at the pointer,
-          so moves (`mf`, `mF`, `mouse_pointer`) drag; Escape, `leave_mode`
-          or `--state=up` releases it.
+        - `v` starts a visual selection (VISUAL): `j` `k` `h` `l`, `w` `b`
+          `e`, `0` `$`, `f`, `F`, `s` and the scrolls extend it as in Vim; `y`
+          copies it, `d` cuts it, `c` changes it, `p` pastes over it; `v` again
+          or Escape ends it, leaving the text selected.
+        - `enter_drag_mode` (unmapped by default; `--secondary` for the right
+          button) grabs what is under the pointer (DRAG): `h` `j` `k` `l`
+          nudge it, `f`, `F`, `s` pick where it goes, Return drops it and
+          Escape puts it back.
 
         ## Mouse Grid
 
@@ -90,8 +114,10 @@ extension NormalModeDispatcher {
         - Arrows slide the region by its own size.
         - `tab` / `shift-tab` move to the next / previous display.
         - `` ` `` toggles cursor-follow; `escape` cancels.
-        - `mouse_grid --bisect` keeps a half with `h`/`j`/`k`/`l` or a
-          quadrant with `y`/`u`/`b`/`n`.
+        - `mouse_grid --bisect` keeps a half with the keys at the QWERTY
+          `h`/`j`/`k`/`l` positions of `[keyboard] layout`, or a quadrant
+          with the keys at `y`/`u` and `b`/`n`. Bépo's top-left quadrant is
+          the dead key `^`.
         - Modifiers held on the final hint key ride the click, so `f` then
           Command-Shift-`<hint>` is a Command-Shift click with no binding of its own.
         - Triple click ships unbound: `tf` would stall the bare `t`. Bind it yourself.
@@ -181,15 +207,19 @@ extension NormalModeDispatcher {
     let rows =
       mappingRows(scope: "all", mappings: config.mode.all)
       + mappingRows(scope: "normal", mappings: config.mode.normal)
+      + mappingRows(scope: "hyper", mappings: config.mode.hyper)
       + mappingRows(scope: "insert", mappings: config.mode.insert)
       + mappingRows(scope: "terminal", mappings: config.mode.effectiveTerminalMappings)
       + mappingRows(scope: "command", mappings: config.mode.command)
     let scopeWidth = max("SCOPE".count, rows.map(\.scope.count).max() ?? 0)
     let keyWidth = max("KEY".count, rows.map(\.key.count).max() ?? 0)
+    let originWidth = max("FROM".count, rows.map(\.origin.count).max() ?? 0)
     var lines = [
       "# Mappings",
       "",
       "Normal leader: `\(config.mode.normalLeader ?? "<unset>")`",
+      "",
+      "FROM is `default` for a built-in, `config` or `config:<file>` for your configuration, or `plugin:<name>`.",
       "",
     ]
     guard !rows.isEmpty else {
@@ -200,11 +230,13 @@ extension NormalModeDispatcher {
     lines.append(
       padded("SCOPE", width: scopeWidth)
         + "  " + padded("KEY", width: keyWidth)
+        + "  " + padded("FROM", width: originWidth)
         + "  ACTION")
     for row in rows {
       lines.append(
         padded(row.scope, width: scopeWidth)
           + "  " + padded(row.key, width: keyWidth)
+          + "  " + padded(row.origin, width: originWidth)
           + "  " + row.action)
     }
     lines.append("```")
@@ -216,10 +248,18 @@ extension NormalModeDispatcher {
   static func mappingsJSON(mode: Config.Mode) -> [[String: String]] {
     (mappingRows(scope: "all", mappings: Config.Mode.resolveMappings(mode.all))
       + mappingRows(scope: "normal", mappings: Config.Mode.resolveMappings(mode.normal))
+      + mappingRows(scope: "visual", mappings: Config.Mode.resolveMappings(mode.visual))
+      + mappingRows(scope: "drag", mappings: Config.Mode.resolveMappings(mode.drag))
+      + mappingRows(scope: "hyper", mappings: Config.Mode.resolveMappings(mode.hyper))
       + mappingRows(scope: "insert", mappings: Config.Mode.resolveMappings(mode.insert))
       + mappingRows(scope: "terminal", mappings: mode.effectiveTerminalMappings)
       + mappingRows(scope: "command", mappings: Config.Mode.resolveMappings(mode.command)))
-      .map { ["scope": $0.scope, "key": $0.key, "action": $0.action] }
+      .map {
+        [
+          "scope": $0.scope, "key": $0.key, "action": $0.action, "origin": $0.origin,
+          "explanation": $0.explanation,
+        ]
+      }
   }
 
   private static func mappingRows(scope: String, mappings: [ModeMapping]) -> [MappingRow] {
@@ -227,7 +267,9 @@ extension NormalModeDispatcher {
       MappingRow(
         scope: scope,
         key: displayMappingKey(mapping.key),
-        action: mapping.action.diagnosticDescription
+        action: mapping.action.diagnosticDescription,
+        origin: mapping.origin,
+        explanation: mapping.action.explanation
       )
     }
   }

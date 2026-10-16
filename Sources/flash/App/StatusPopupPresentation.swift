@@ -26,8 +26,9 @@ enum StatusPopupPresentation: Equatable {
   }
 
   /// The popup the pointer summoned and nothing else holds: a click
-  /// elsewhere or a focus change closes it. A focused popup closes when it
-  /// loses key instead, and a standalone popup stays until dismissed.
+  /// elsewhere or a focus change closes it. A focused or standalone popup
+  /// leaves the screen when it loses focus as well (`relinquishShownStatusPopup`):
+  /// hiding keeps a persistent process and stops a fresh one.
   var ephemeralName: String? {
     if case .preview(let name) = self { return name }
     return nil

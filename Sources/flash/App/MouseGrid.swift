@@ -10,15 +10,16 @@ enum MouseGrid {
     /// Rows of keys, top row first. Every step of the grid tiles its region
     /// with this matrix, so a cell's position always matches its key's.
     case keyboard([[Character]])
-    /// `--bisect`: y/u/b/n keep a quadrant; h/j/k/l keep a half.
-    case bisect
+    /// `--bisect`: the layout's y/u and b/n keys keep a quadrant; its hjkl
+    /// cluster keeps a half. QWERTY's cluster is the static value tests use.
+    case bisect(Alphabet.Navigation)
 
-    static let bisectKeys: [[Character]] = [["y", "u"], ["b", "n"]]
+    static var qwertyBisect: Self { .bisect(.qwerty) }
 
     var keys: [[Character]] {
       switch self {
       case .keyboard(let keys): return keys
-      case .bisect: return Self.bisectKeys
+      case .bisect(let navigation): return navigation.quadrants
       }
     }
 
@@ -43,6 +44,33 @@ enum MouseGrid {
   /// chips form a glued cluster centred on (and covering) the region, and
   /// each click lands on its chip's centre. The renderer keys off this role.
   static let finalChipRole = "FlashMouseGridFinalChip"
+  /// A cell of the step that follows one of the current cells, drawn faint
+  /// under the current step's own labels and labelled with the two keys that
+  /// reach it (`qw`: `q`, then `w`), so the next key can be read before the
+  /// first is pressed. Never a key target of its own.
+  static let previewCellRole = "FlashMouseGridPreviewCell"
+
+  /// How strongly each kind of grid cell draws, as factors the renderer
+  /// applies. The step's own cells hold the eye. The preview is a faint hint
+  /// under them. The clicking step's label is see-through, so the point it
+  /// clicks (the cell or chip centre, under the label) stays visible.
+  struct Appearance: Equatable {
+    /// Scales `hints.mouse_grid_opacity` for the tile's tint.
+    var tint: CGFloat
+    /// Added to the tint's alpha for the tile's border.
+    var border: CGFloat
+    /// Opacity of the label chip, letter included.
+    var label: CGFloat
+
+    static func of(role: String?) -> Appearance {
+      switch role {
+      case previewCellRole: return Appearance(tint: 0.15, border: 0.04, label: 0.3)
+      case finalCellRole: return Appearance(tint: 1, border: 0.3, label: 0.6)
+      case finalChipRole: return Appearance(tint: 1, border: 0.3, label: 0.6)
+      default: return Appearance(tint: 1, border: 0.3, label: 1)
+      }
+    }
+  }
 
   static func cellSize(of region: CGRect, shape: Shape) -> CGSize {
     guard shape.rows > 0, shape.columns > 0 else { return .zero }
@@ -98,7 +126,8 @@ enum MouseGrid {
       height: size.height)
   }
 
-  /// Bisect's h/j/k/l: the half of `region` on the `direction` side.
+  /// The half of `region` on the `direction` side. Bisect's home-row cluster
+  /// selects one of these.
   static func half(of region: CGRect, _ direction: Direction) -> CGRect {
     switch direction {
     case .left:
@@ -122,7 +151,7 @@ enum MouseGrid {
     switch shape {
     case .keyboard:
       return depth + 1 >= steps || min(cell.width, cell.height) <= minimumTerminalSize
-    case .bisect:
+    case .bisect(_):
       return keepCommits(CGRect(origin: .zero, size: cell))
     }
   }
@@ -137,12 +166,19 @@ enum MouseGrid {
   /// the shape's keys. When the selection clicks and cells are smaller than a
   /// chip, the chips form a glued cluster instead, each slot at least one chip
   /// and one cell in size, so it covers the region without overlapping.
+  ///
+  /// With `previewChipSize` — the size of a two-letter chip — a step whose
+  /// selection drills further also returns the cells of the step that
+  /// follows each of its cells, first in the array so the step's own cells
+  /// render over them, labelled with the two keys that reach each one. A
+  /// step whose next cells could not hold such a chip previews nothing.
   static func hints(
     region: CGRect,
     depth: Int,
     shape: Shape,
     steps: Int,
-    chipSize: CGSize
+    chipSize: CGSize,
+    previewChipSize: CGSize? = nil
   ) -> [AssignedHint] {
     let keys = shape.keys
     guard shape.rows > 0, shape.columns > 0, keys.allSatisfy({ $0.count == shape.columns })
@@ -162,8 +198,8 @@ enum MouseGrid {
       slotRegion = region
     }
     let role = cluster ? finalChipRole : commits ? finalCellRole : cellRole
-    var out: [AssignedHint] = []
-    out.reserveCapacity(shape.rows * shape.columns)
+    var cells: [AssignedHint] = []
+    cells.reserveCapacity(shape.rows * shape.columns)
     for (row, rowKeys) in keys.enumerated() {
       for (column, key) in rowKeys.enumerated() {
         let target = JumpTarget(
@@ -171,18 +207,50 @@ enum MouseGrid {
           frame: cellFrame(in: slotRegion, row: row, column: column, shape: shape),
           role: role,
           providerID: "mouse_grid")
-        out.append(AssignedHint(target: target, label: String(key)))
+        cells.append(AssignedHint(target: target, label: String(key)))
       }
     }
-    return out
+    guard let previewChipSize, !commits else { return cells }
+    let next = cellSize(of: cells[0].target.frame, shape: shape)
+    guard next.width >= previewChipSize.width, next.height >= previewChipSize.height else {
+      return cells
+    }
+    var previews: [AssignedHint] = []
+    previews.reserveCapacity(cells.count * cells.count)
+    for (index, parent) in cells.enumerated() {
+      for (row, rowKeys) in keys.enumerated() {
+        for (column, key) in rowKeys.enumerated() {
+          let target = JumpTarget(
+            id: "mouse_grid_preview:\(depth):\(index):\(row * shape.columns + column)",
+            frame: cellFrame(in: parent.target.frame, row: row, column: column, shape: shape),
+            role: previewCellRole,
+            providerID: "mouse_grid")
+          previews.append(AssignedHint(target: target, label: parent.label + String(key)))
+        }
+      }
+    }
+    return previews + cells
   }
 
-  /// The grid's starting area: the usable frame (below Flash's status bar) of
-  /// the front window's screen, else the pointer's, else the primary's.
+  /// The grid's root on one display. The usable frame stops at the Dock and,
+  /// when the bar is showing, at the bottom of Flash's status bar. The grid
+  /// covers that bar; it still stops at the Dock, and at the menu bar when
+  /// the Flash bar is hidden.
+  static func gridRoot(of layout: WindowScreenLayout, includeStatusBar: Bool) -> CGRect {
+    let usable = layout.usableFrame
+    guard includeStatusBar, usable.maxY < layout.frame.maxY else { return usable }
+    return CGRect(
+      x: usable.minX, y: usable.minY, width: usable.width,
+      height: layout.frame.maxY - usable.minY)
+  }
+
+  /// The grid's starting area: `gridRoot` of the front window's screen, else
+  /// the pointer's, else the primary's.
   static func initialRegion(
     context: AppContext?,
     layouts: [WindowScreenLayout],
-    pointer: CGPoint?
+    pointer: CGPoint?,
+    includeStatusBar: Bool
   ) -> (root: CGRect, screenIndex: Int)? {
     guard !layouts.isEmpty else { return nil }
     let index: Int
@@ -197,7 +265,19 @@ enum MouseGrid {
     } else {
       index = layouts.firstIndex { $0.frame.origin == .zero } ?? 0
     }
-    return (layouts[index].usableFrame, index)
+    return (gridRoot(of: layouts[index], includeStatusBar: includeStatusBar), index)
+  }
+
+  /// Shift-arrows: the middle of that edge of `region`, two points inside it.
+  static func edgePoint(of region: CGRect, _ direction: Direction) -> CGPoint {
+    let dx = min(2, region.width / 2)
+    let dy = min(2, region.height / 2)
+    switch direction {
+    case .left: return CGPoint(x: region.minX + dx, y: region.midY)
+    case .right: return CGPoint(x: region.maxX - dx, y: region.midY)
+    case .up: return CGPoint(x: region.midX, y: region.maxY - dy)
+    case .down: return CGPoint(x: region.midX, y: region.minY + dy)
+    }
   }
 
   /// Where a grid session is, and every earlier position so Backspace can undo
@@ -280,7 +360,7 @@ enum MouseGrid {
     }
 
     /// Tab / Shift-Tab: the whole of the next / previous display. `roots` are
-    /// the displays' usable frames in `NSScreen.screens` order. False with a
+    /// the displays' grid roots in `NSScreen.screens` order. False with a
     /// single display.
     @discardableResult
     mutating func switchScreen(_ delta: Int, roots: [CGRect]) -> Bool {

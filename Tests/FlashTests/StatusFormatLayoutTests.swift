@@ -20,15 +20,25 @@ final class StatusFormatLayoutTests: XCTestCase {
     XCTAssertEqual(row("123456789012", 10), "1234567890")
   }
 
-  func testAbsoluteCentreOverlaysOtherAlignmentSections() {
+  func testNotchOverlaysOtherAlignmentSections() {
     XCTAssertEqual(
-      row("LLLL#[align=centre]CC#[align=right]RRRR#[align=absolute-centre]AB", 10),
+      row("LLLL#[align=centre]CC#[align=right]RRRR#[align=notch]AB", 10),
       "LLLLABRRRR")
   }
 
+  func testNotchAndTmuxAbsoluteCentreAreTheSameLane() {
+    for marker in ["notch", "absolute-centre"] {
+      let text = StatusFormatDocument.parse("#[align=\(marker)]N").runs.filter {
+        !$0.isStyleBoundary
+      }
+      XCTAssertEqual(text.map(\.alignment), [.notch], marker)
+      XCTAssertEqual(text.map(\.text), ["N"], marker)
+    }
+  }
+
   func testWideGlyphPaddingSurvivesAnOverlayAtItsTrailingCell() {
-    XCTAssertEqual(row("界界界界#[align=absolute-centre]X", 8), "界界界界")
-    XCTAssertEqual(row("界界界界#[align=absolute-centre]XX", 8), "界界X 界")
+    XCTAssertEqual(row("界界界界#[align=notch]X", 8), "界界界界")
+    XCTAssertEqual(row("界界界界#[align=notch]XX", 8), "界界X 界")
   }
 
   func testNegativeOneCentreOffsetKeepsThePreviousNativeCursor() {
@@ -218,6 +228,7 @@ final class StatusFormatLayoutTests: XCTestCase {
     switch value {
     case .defaultForeground, .defaultBackground: return fallback
     case .rgb(let rgb): return rgb
+    case .label: return 0xEBCB8B
     case .palette: return nil
     }
   }
@@ -229,10 +240,10 @@ final class StatusFormatLayoutTests: XCTestCase {
     let pinned = root.appendingPathComponent("build/tmux-oracle/bin/tmux").path
     let executable = environment["TMUX_ORACLE"] ?? pinned
     guard FileManager.default.isExecutableFile(atPath: executable)
-    else { throw oracleUnavailable("tmux 3.7c is required for the native status drawing oracle") }
+    else { throw oracleUnavailable("tmux 3.8 is required for the native status drawing oracle") }
     let version = try DrawingOracle.run(executable, ["-V"])
-    guard version.trimmingCharacters(in: .whitespacesAndNewlines) == "tmux 3.7c" else {
-      throw oracleUnavailable("native status drawing oracle requires tmux 3.7c, found \(version)")
+    guard version.trimmingCharacters(in: .whitespacesAndNewlines) == "tmux 3.8" else {
+      throw oracleUnavailable("native status drawing oracle requires tmux 3.8, found \(version)")
     }
     let stampURL = URL(fileURLWithPath: executable).deletingLastPathComponent()
       .deletingLastPathComponent().appendingPathComponent(".flash-build")
@@ -243,7 +254,7 @@ final class StatusFormatLayoutTests: XCTestCase {
     #endif
     guard
       (try? String(contentsOf: stampURL, encoding: .utf8))?
-        .trimmingCharacters(in: .whitespacesAndNewlines) == "3.7c-2.12.0-\(architecture)"
+        .trimmingCharacters(in: .whitespacesAndNewlines) == "3.8-2.12.0-\(architecture)"
     else { throw oracleUnavailable("Run Scripts/build-tmux-oracle.sh to pin tmux and utf8proc") }
     return executable
   }

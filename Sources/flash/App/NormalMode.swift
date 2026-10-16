@@ -158,12 +158,19 @@ enum NormalModeInterpreter {
     }
 
     if state.prefix.isEmpty, let digit = digitValue(ignoredChar) {
-      if state.count == nil, digit == 0 {
-        return .consume
+      // A digit bound to a command is that command. Otherwise it is a repeat
+      // count, and a bare `0` is swallowed.
+      let digitIsCommand = keys.contains { key in
+        mappings.mapping(for: key) != nil || mappings.hasStrictPrefix(key)
       }
-      let next = min(((state.count ?? 0) * 10) + digit, maxRepeatCount)
-      return .pending(
-        PendingState(count: next, prefix: "", register: state.register).encoded)
+      if !digitIsCommand {
+        if state.count == nil, digit == 0 {
+          return .consume
+        }
+        let next = min(((state.count ?? 0) * 10) + digit, maxRepeatCount)
+        return .pending(
+          PendingState(count: next, prefix: "", register: state.register).encoded)
+      }
     }
 
     // `"` starts a register prefix (Vim's `"<reg>`), but only when it's at the
@@ -252,7 +259,9 @@ enum NormalModeInterpreter {
     modifierFlags: CGEventFlags,
     mappings: CompiledMappings
   ) -> Bool {
-    let keys = mappings.physicalKeyAtoms(virtualKey: virtualKey, cgFlags: modifierFlags)
+    // Keypad Enter is Return to every mapping (`namedKeyAtom`).
+    let keys = mappings.physicalKeyAtoms(
+      virtualKey: HotkeySyntax.unifiedVirtualKey(virtualKey), cgFlags: modifierFlags)
     guard !keys.isEmpty else { return false }
     let state = pendingState(pending)
     if state.awaitingRegister {
@@ -350,6 +359,114 @@ enum NormalModeInterpreter {
     return value
   }
 
+  /// The atoms a key event can match, in the interpreter's try-order.
+  static func eventKeyAtoms(
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> [String] {
+    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    return mappingKeys(
+      keyCode: keyCode,
+      modifierFlags: independent,
+      hasControl: independent.contains(.control),
+      hasShift: independent.contains(.shift),
+      ignoredChar: firstCharacter(charactersIgnoringModifiers)?.lowercased().first,
+      actualChar: firstCharacter(characters))
+  }
+
+  /// True when this physical key is the hyper hold key. A chord atom matches
+  /// with its modifiers. An unmodified named key still matches on key-up,
+  /// when the event may carry no characters. Shift-Space is still Space.
+  ///
+  /// Every NORMAL key and every swallowed release asks this. The matcher's
+  /// prepared chord and characters settle the common miss without building
+  /// the event's atoms; only a key that can match runs the full test.
+  static func isHyperKey(
+    matcher: HyperKeyMatcher,
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> Bool {
+    let physicalMatch = matcher.chord.map { $0.key == CGKeyCode(keyCode) } ?? false
+    if !physicalMatch, matcher.chord != nil {
+      guard !matcher.characters.isEmpty else { return false }
+      let typed = firstCharacter(charactersIgnoringModifiers) ?? firstCharacter(characters)
+      guard let typed, matcher.characters.contains(typed) else { return false }
+    }
+    return isHyperKey(
+      atom: matcher.atom,
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers)
+  }
+
+  /// The full, layout-aware test behind `isHyperKey(matcher:)`.
+  static func isHyperKey(
+    atom: String,
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> Bool {
+    if eventKeyAtoms(
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers
+    ).contains(atom) {
+      return true
+    }
+    return isLeaderKey(
+      atom: atom,
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers)
+  }
+
+  /// True when this physical key is the configured leader and is not part of
+  /// a Command/Control/Option chord. Shift is allowed: Shift-Space is still
+  /// Space. Key-up events sometimes carry no characters; named keys still
+  /// match by virtual key code.
+  static func isLeaderKey(
+    atom: String,
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String?,
+    charactersIgnoringModifiers: String?
+  ) -> Bool {
+    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if independent.contains(.command) || independent.contains(.control)
+      || independent.contains(.option)
+    {
+      return false
+    }
+    if eventKeyAtoms(
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers
+    ).contains(atom) {
+      return true
+    }
+    return namedKeyAtom(keyCode: keyCode) == atom
+  }
+
+  /// The atom a named (non-typeable) key is mapped by: Return (and keypad
+  /// Enter), Tab, Space, Delete, Forward Delete, Escape, the arrows, Home,
+  /// End, Page Up / Down and the function keys, spelled as
+  /// `HotkeySyntax.canonicalKeyName` spells them and as `<name>` in a
+  /// mapping canonicalizes (`KeySyntax.translateNamedKey`). Nil for every
+  /// typeable key: those match by the character the layout produces, never
+  /// by a US-ANSI position.
+  static func namedKeyAtom(keyCode: UInt16) -> String? {
+    HotkeySyntax.namedKeyAtom(virtualKey: UInt32(keyCode))
+  }
+
   private static func mappingKeys(
     keyCode: UInt16,
     modifierFlags: NSEvent.ModifierFlags,
@@ -395,19 +512,10 @@ enum NormalModeInterpreter {
     if keys.isEmpty, let ignoredChar {
       keys.append(String(ignoredChar))
     }
-    switch Int(keyCode) {
-    case kVK_Escape:
-      if !keys.contains("escape") { keys.append("escape") }
-    case kVK_Space:
-      if !keys.contains("space") { keys.append("space") }
-    case kVK_Tab:
-      if !keys.contains("tab") { keys.append("tab") }
-    case kVK_ForwardDelete:
-      for alias in ["delete_forward", "forward_delete"] where !keys.contains(alias) {
-        keys.append(alias)
-      }
-    default:
-      break
+    // A named key matches by its one atom, so `<return>` drops a drag and
+    // `<esc>` cancels it whatever character the event carries.
+    if let named = namedKeyAtom(keyCode: keyCode), !keys.contains(named) {
+      keys.append(named)
     }
     if let modified, !keys.contains(modified) {
       keys.append(modified)
@@ -444,6 +552,15 @@ enum NormalModeInterpreter {
           modifiers: modifiers,
           key: String(letter))
       }
+    }
+    // A shifted letter is the letter that key types. Layout arrows name the
+    // physical QWERTY position by that letter, and both an input source and
+    // a key-code remapper report it. The key code's ANSI name is a different
+    // key once the layout has moved the letter.
+    if modifiers == ["shift"], let ignoredChar, ignoredChar.isLetter {
+      return NormalModeInterpreter.canonicalModifiedKeyAtom(
+        modifiers: modifiers,
+        key: String(ignoredChar))
     }
     guard let key = HotkeySyntax.canonicalKeyName(virtualKey: UInt32(keyCode)) else {
       return nil
@@ -502,11 +619,7 @@ enum NormalModeDispatcher {
       size.width > 0,
       size.height > 0
     else { return nil }
-    return CGRect(
-      x: origin.x,
-      y: screenH - origin.y - size.height,
-      width: size.width,
-      height: size.height)
+    return ScreenSpace.flip(CGRect(origin: origin, size: size), height: screenH)
   }
 
   static func pointAttribute(_ element: AXUIElement, _ name: String) -> CGPoint? {

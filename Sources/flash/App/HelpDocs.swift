@@ -8,6 +8,12 @@ struct HelpTopic: Equatable {
   /// Extra strings that resolve to this topic in `:help <topic>`.
   /// Use for singular/plural pairs (`mark` ↔ `marks`) or short forms.
   var aliases: [String] = []
+  /// The section the browser help files the topic under, in reading order.
+  /// `HelpDocs.allTopics` assigns built-in groups; plugin topics share one.
+  var group: String = HelpDocs.pluginGroup
+  /// The manual page (`docs/<page>.md`) holding the long-form reference, or
+  /// nil when the guide is the whole story.
+  var manual: String? = nil
 }
 
 enum HelpDocs {
@@ -22,6 +28,15 @@ enum HelpDocs {
 
   static let repositoryRoot = repositoryRoot(
     revision: Bundle.main.object(forInfoDictionaryKey: "FlashGitCommit") as? String)
+
+  /// The published manual, built from `docs/` by the Docs workflow. Guides
+  /// link their long-form references there; source files that are not pages
+  /// keep `repositoryRoot` links.
+  static let manualRoot = "https://aymericbeaumet.github.io/flash"
+
+  static func manual(_ page: String) -> String {
+    page.isEmpty ? "\(manualRoot)/" : "\(manualRoot)/\(page)/"
+  }
 
   static func render(
     topic rawTopic: String?,
@@ -48,14 +63,49 @@ enum HelpDocs {
     return render(topic)
   }
 
+  static let pluginGroup = "Plugin guides"
+
+  /// Reading order of the built-in guides: the browser's sidebar, index,
+  /// previous/next links and `:help` listing all follow it. A topic absent
+  /// from this table is a bug caught by the help tests.
+  static let groups: [(title: String, names: [String])] = [
+    ("Start here", ["overview", "getting-started", "hints", "normal-mode", "mappings"]),
+    ("Move and discover", ["mouse-grid", "flashlight", "verbs"]),
+    ("Make it yours", ["config", "statusbar", "status-format", "widgets", "popups"]),
+    ("Extend and understand", ["plugins", "privacy", "troubleshooting", "development", "manual"]),
+  ]
+
+  /// Manual pages behind the built-in guides (`HelpDocs.manual`).
+  static let manualPages: [String: String] = [
+    "overview": "",
+    "getting-started": "getting-started",
+    "hints": "commands",
+    "normal-mode": "normal-mode",
+    "mappings": "configuration",
+    "mouse-grid": "commands",
+    "flashlight": "flashlight",
+    "verbs": "commands",
+    "config": "configuration",
+    "statusbar": "status-format",
+    "status-format": "status-format",
+    "widgets": "widgets",
+    "popups": "popups",
+    "plugins": "plugin-cookbook",
+    "privacy": "privacy",
+    "troubleshooting": "troubleshooting",
+    "development": "development",
+    "manual": "",
+  ]
+
   static func allTopics(
     config: Config,
     showModes: Bool,
     pluginTopics: [HelpTopic] = []
   ) -> [HelpTopic] {
-    let builtIn: [HelpTopic] = [
+    let declared: [HelpTopic] = [
       overviewTopic,
       gettingStartedTopic,
+      manualTopic,
       hintsTopic,
       mouseGridTopic,
       mappingsTopic,
@@ -72,6 +122,19 @@ enum HelpDocs {
       troubleshootingTopic,
       developmentTopic,
     ]
+    let byName = Dictionary(declared.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+    var builtIn: [HelpTopic] = []
+    for (title, names) in groups {
+      for name in names {
+        guard var topic = byName[name] else { continue }
+        topic.group = title
+        topic.manual = manualPages[name]
+        builtIn.append(topic)
+      }
+    }
+    // A declared topic missing from `groups` still renders, at the end.
+    let placed = Set(builtIn.map(\.name))
+    builtIn += declared.filter { !placed.contains($0.name) }
     // Names and aliases share one route namespace. Host topics win, then
     // the first accepted plugin topic owns its names.
     var claimedNames = Set(
@@ -83,7 +146,7 @@ enum HelpDocs {
       claimedNames.formUnion(names)
       return true
     }
-    return (builtIn + extras).sorted { $0.name < $1.name }
+    return builtIn + extras.sorted { $0.name < $1.name }
   }
 
   static let mappingsTopic = HelpTopic(
@@ -94,8 +157,19 @@ enum HelpDocs {
       # Mapping Syntax
 
       The [live mappings page](/mappings) shows the effective bindings from
-      defaults, plugins and your configuration. Press `?` in NORMAL or run
-      `:mappings` to open it. This guide explains how to write your own.
+      defaults, plugins and your configuration. Bindings are grouped by mode.
+      With the search empty they stay alphabetical by the command; a search
+      ranks what the binding does, and a close spelling still matches. Each
+      row's ? explains that binding. The Source column uses the same badge as
+      the command list. The page focuses its search when it opens. Press `?`
+      in NORMAL or run `:mappings` to open it. Above the list, your layout is
+      drawn with what each key does in the mode picked under it: NORMAL,
+      VISUAL, DRAG, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
+      dashed. Modifier buttons show the chord layers, a prefix key opens what
+      can follow it, and picking a key keeps its bindings in the list, each
+      with the TOML that rebinds or removes it. The keyboard can show the hint
+      alphabet, the grid keys and the zones instead. This guide explains how
+      to write your own.
 
       ## Add, replace or remove a binding
 
@@ -274,26 +348,51 @@ enum HelpDocs {
       # Hints & mouse actions
 
       `flash mouse_target` labels clickable controls in the focused app.
-      Type a label to click it, or Escape to cancel. In NORMAL the default
+      Type a label to click it, or Escape to cancel. The pointer hides while
+      the labels are up and returns when it moves. In NORMAL the default
       is `f`. Labels come from Accessibility; terminal content can be supplied
       by the tmux plugin. Flash never reads screen pixels to find targets.
 
       ## Choose an action
 
-      | Goal | NORMAL default | CLI |
-      | --- | --- | --- |
-      | Primary click | `f` | `flash mouse_target` |
-      | Secondary click | `sf` | `flash mouse_target --secondary` |
-      | Double click | `df` | `flash mouse_target --double` |
-      | Move the pointer | `mf` | `flash mouse_target --move` |
-      | Find by visible text | See live mappings | `flash mouse_target --search` |
-      | Keep choosing targets | Explicit mapping | `flash mouse_target --multi` |
-      | Drag between targets | Explicit mapping | `flash mouse_target --drag` |
-      | Select between points | Explicit mapping | `flash mouse_target --select` |
+      A mouse action is one prefix and one finisher. `c` is the right-click
+      (the context menu). It is the operator Vim and Vimium leave free.
+      `r` reloads and `s` is the search finisher, so neither is that prefix.
+
+      | | Click `f` | Grid `F` | Search `s` |
+      | --- | --- | --- | --- |
+      | Primary | `f` | `F` | `s` |
+      | Move `m` | `mf` | `mF` | `ms` |
+      | Double `d` | `df` | `dF` | `ds` |
+      | Right-click `c` | `cf` | `cF` | `cs` |
+
+      | Goal | CLI |
+      | --- | --- |
+      | Primary click | `flash mouse_target` |
+      | Secondary click | `flash mouse_target --secondary` |
+      | Double click | `flash mouse_target --double` |
+      | Move the pointer | `flash mouse_target --move` |
+      | Jump to a letter | `flash mouse_bigram` |
+      | Find by visible text | `flash mouse_target --search` |
+      | Keep choosing targets | `flash mouse_target --multi` |
+      | Keep the same labels up | `flash mouse_target --sticky` |
+      | Click everything between two targets | `flash mouse_target --path` |
+      | Label every visible word | `flash mouse_target --words` |
+      | Drag between targets | `flash mouse_target --drag` |
+      | Select between points | `flash mouse_target --select` |
+      | Label each display | `flash mouse_screens` |
+      | Jump to a window edge | `flash mouse_warp --edge=top` |
+      | Step one text line or character | `flash mouse_step --direction=down` |
+      | Save and recall pointer positions | `flash mouse_position --action=save` |
+
+      While labels are up, Tab restarts the same click on the grid, Shift-Tab
+      widens it to every app on the screen, and Backspace with nothing typed
+      returns to the surface before. The [key mappings](/mappings) keyboard
+      shows the hint alphabet and the grid keys.
 
       Hold a configured magic modifier on the final hint key to include it in
       the click; Shift is always available. Terminal link hints add Shift so
-      your terminal opens the link. The [command inventory](/commands) lists
+      your terminal opens the link, and that click stays in NORMAL. The [command inventory](/commands) lists
       all flags, scopes and installed mouse verbs.
 
       ## Beyond the focused window
@@ -307,7 +406,13 @@ enum HelpDocs {
       ## Tune labels and pointer behavior
 
       `[hints] keys` selects a layout or alphabet; `min_length` controls
-      label length. `[overlay]` controls font, colors and `hint_placement`.
+      label length. `label_order` gives the easiest label to the first target
+      in reading order, to the one nearest the centre, or makes the first key
+      name the zone of the window (`zones`); `key_priority` lists the keys
+      handed out first. Two-key labels alternate hands, then prefer the same
+      keyboard row, then a shorter jump between rows. A key ranks by where
+      it sits: home row, then bottom row, then top row. `[overlay]`
+      controls font, colors and `hint_placement`.
       `[overlay.dark]` supplies dark-mode color overrides. `click_feedback`
       draws a short ring where a click lands.
 
@@ -330,8 +435,10 @@ enum HelpDocs {
       # Mouse grid & pointer
 
       `flash mouse_grid` (NORMAL `F`) divides the display into a keyboard-shaped
-      grid. Press the key nearest your destination to zoom into its cell.
-      Repeat until the last step clicks. Every step uses the same layout.
+      grid, including Flash's status bar. Press the key nearest your destination
+      to zoom into its cell. Repeat until the last step clicks. Every step uses
+      the same layout. The grid stops at the Dock, and at the menu bar when the
+      Flash bar is hidden.
 
       ```text
       1 2 3 4 5
@@ -358,21 +465,26 @@ enum HelpDocs {
 
       ## Change the action or geometry
 
-      `sF`, `dF` and `mF` request secondary click, double click and movement.
+      `cF`, `dF` and `mF` request a right-click, a double click and movement.
       The grid accepts the same click modifiers and action flags as hints.
       `--drag` and `--select` collect two positions; `--multi` starts again
       after each click. `--zoom-to-depth=N` begins around the pointer.
 
-      `flash mouse_grid --bisect` uses `h/j/k/l` for the left/bottom/top/right
-      half and `y/u/b/n` for quadrants. Return commits immediately; otherwise
-      it commits when the region is small enough.
+      `flash mouse_grid --bisect` keeps a half with the keys at the QWERTY
+      h/j/k/l positions of `[keyboard] layout` (h/j/k/l on QWERTY, h/n/e/i on
+      Colemak, d/h/t/n on Dvorak, c/t/s/r on Bépo) and a quadrant with the
+      keys at y/u and b/n. Bépo's top-left quadrant is the dead key `^`.
+      Return commits immediately; otherwise it commits when the region is
+      small enough.
 
-      ## Hold a button or steer the pointer
+      ## Select, drag or steer the pointer
 
-      `mouse_pointer` opens keyboard pointer control. `mouse_button --state=toggle`
-      holds or releases a mouse button where the pointer is. While held, Flash
-      pointer moves drag it, including `mf` and `mF`. Toggle again to drop.
-      Escape, leaving the mode and quitting release the held button.
+      `v` starts a visual selection (VISUAL): motions such as `j`, `k`, `f`
+      and `s` extend it, and `v` or Escape ends it with the text selected.
+      `enter_drag_mode` (unmapped by default; `--secondary` for the right
+      button) grabs what is under the pointer (DRAG): `h` `j` `k` `l` nudge
+      it, `f` picks where it goes, Return drops it and Escape puts it back.
+      `mouse_pointer` opens keyboard pointer control.
 
       See [commands](/commands) for exact flags and [mappings](/mappings)
       for the shortcuts effective in this running instance.
@@ -393,7 +505,7 @@ enum HelpDocs {
 
       ## Entry points
 
-      - `flash flashlight` from the CLI.
+      - `flash enter_command_mode --input=':flashlight '` from the CLI.
       - A user-defined mapping to `enter_command_mode --input=:flashlight`.
       - `:flashlight <query>` in command-line mode.
 
@@ -492,16 +604,56 @@ enum HelpDocs {
       and app state, and [logs](/logs) follows diagnostics as they happen.
       These describe this resident, including your changes.
 
-      `?` in NORMAL opens mappings. `:help` opens the [homepage](/).
+      `?` in NORMAL opens mappings. `:help` opens the [homepage](/), which
+      checks what this Mac has already set up and what is still missing.
       `:help <topic>` opens a guide, for example `:help widgets`.
       Plugin guides appear alongside built-in topics when their manifests load.
 
       Start with [troubleshooting](/docs/troubleshooting) when behavior differs
       from what you expect. [Privacy](/docs/privacy) explains permissions and
       stored data; [development](/docs/development) links the architecture and
-      contributor references.
+      contributor references. The [manual](/docs/manual) is the complete
+      reference, including comparisons with other tools.
       """,
     aliases: ["help"])
+
+  private static let manualTopic = HelpTopic(
+    name: "manual",
+    title: "Manual",
+    summary: "The complete reference, published from the repository's docs.",
+    body: """
+      # Manual
+
+      These guides are the short version. The full manual is published at
+      [\(manualRoot)](\(manual(""))) from the repository's `docs/` directory,
+      so it describes the current `main`; your installation may be older.
+
+      ## Using Flash
+
+      - [Getting started](\(manual("getting-started"))), [configuration](\(manual("configuration"))) and the [commands](\(manual("commands"))) reference.
+      - [Normal mode](\(manual("normal-mode"))), [flashlight](\(manual("flashlight"))), [windows](\(manual("windows"))) and [audio devices](\(manual("audio"))).
+      - [Privacy](\(manual("privacy"))) and [troubleshooting](\(manual("troubleshooting"))).
+
+      ## Status bar, widgets and popups
+
+      - [Status format](\(manual("status-format"))), [status plugins](\(manual("status-plugins"))), [widgets](\(manual("widgets"))), [popups](\(manual("popups"))) and [calendar](\(manual("calendar"))).
+      - Examples: [a status bar](\(manual("examples/statusbar"))) and [desktop widgets](\(manual("examples/widgets"))).
+
+      ## Coming from another tool
+
+      [Alternatives](\(manual("alternatives"))) compares Flash with Neru,
+      Homerow, Shortcat, Scoot, Vimium, Hammerspoon, Raycast, SketchyBar,
+      Übersicht, AeroSpace, yabai, Rectangle and others, one page each, with
+      what they do better and how to move a setup over. Migration guides:
+      [Hammerspoon](\(manual("hammerspoon"))), [Neverclick](\(manual("neverclick"))),
+      [mousemaster](\(manual("mousemaster"))).
+
+      ## Plugins and contributing
+
+      - [Plugin cookbook](\(manual("plugin-cookbook"))), [protocol](\(manual("plugin-protocol"))), [Rust SDK](\(manual("plugin-rust-sdk"))) and [plugin performance](\(manual("plugin-performance"))).
+      - [Development](\(manual("development"))), [releases](\(manual("release"))), [architecture](\(manual("architecture"))), [prepared model](\(manual("prepared-model"))), [observability](\(manual("observability"))) and [performance](\(manual("performance"))).
+      """,
+    aliases: ["docs", "reference", "alternatives"])
 
   private static let statusbarTopic = HelpTopic(
     name: "statusbar",
@@ -544,8 +696,8 @@ enum HelpDocs {
       Inspect [plugins](/plugins) to see which are available and healthy.
 
       Next: [format language](/docs/status-format), [desktop widgets](/docs/widgets),
-      [status plugin values](\(HelpDocs.repositoryRoot)/docs/status-plugins.md),
-      and a [complete example](\(HelpDocs.repositoryRoot)/docs/examples/statusbar/README.md).
+      [status plugin values](\(HelpDocs.manual("status-plugins"))),
+      and a [complete example](\(HelpDocs.manual("examples/statusbar"))).
       """,
     aliases: ["status-bar"])
 
@@ -567,6 +719,7 @@ enum HelpDocs {
       | `#{flash.plugin.cpu.percent}` | A plugin's declared status value |
       | `%H:%M` | Local time |
       | `#[fg=green,bold]OK#[default]` | Style a span |
+      | `#[label]Cld#[default]` | Colour a name, then the ordinary foreground |
       | `#[align=right]text` | Place a section |
       | `#{?flash.secure_input,SECURE,}` | Conditional content |
       | `#[meter=12]42#[nometer]` | Numeric bar |
@@ -601,7 +754,7 @@ enum HelpDocs {
 
       See [runtime](/state) for effective settings, [plugins](/plugins) for
       status publishers, and the
-      [full format reference](\(HelpDocs.repositoryRoot)/docs/status-format.md)
+      [full format reference](\(HelpDocs.manual("status-format")))
       for operators, escaping, layouts and source lifecycles.
       """,
     aliases: ["formats"])
@@ -645,8 +798,8 @@ enum HelpDocs {
       this passive surface. Open [plugins](/plugins) if a metric is empty,
       or [runtime](/state) to inspect your loaded configuration.
 
-      Browse [ready-made panels](\#(HelpDocs.repositoryRoot)/docs/examples/widgets/README.md)
-      or the [widget reference](\#(HelpDocs.repositoryRoot)/docs/widgets.md)
+      Browse [ready-made panels](\#(HelpDocs.manual("examples/widgets")))
+      or the [widget reference](\#(HelpDocs.manual("widgets")))
       for all settings and a conky migration table.
       """#,
     aliases: ["widget"])
@@ -697,7 +850,7 @@ enum HelpDocs {
       If a command is missing, install it in your login PATH, then press
       Command-R. `flash doctor` reports missing popup commands. See
       [troubleshooting](/docs/troubleshooting), [live logs](/logs) and the
-      [popup reference](\(HelpDocs.repositoryRoot)/docs/popups.md)
+      [popup reference](\(HelpDocs.manual("popups")))
       for input, focus and lifecycle details.
       """,
     aliases: ["popup", "terminal"])
@@ -724,7 +877,7 @@ enum HelpDocs {
 
       Some plugins access the network: exchange rates, configured feeds,
       GitHub, AI-provider quotas or explicitly configured remote tmux hosts.
-      Read their guides and the [privacy inventory](\(HelpDocs.repositoryRoot)/docs/privacy.md)
+      Read their guides and the [privacy inventory](\(HelpDocs.manual("privacy")))
       for destinations, triggers and defaults. Disable an unwanted plugin
       with `[plugins] disabled = ["<id>"]`.
 
@@ -732,13 +885,16 @@ enum HelpDocs {
 
       Logs live in `~/Library/Logs/Flash/`. Command history, ranking data,
       plugin caches and clipboard history live in
-      `~/Library/Application Support/Flash/`. Clipboard history ignores
-      items marked concealed or transient by password managers. Flash's own
+      `~/Library/Application Support/Flash/`. Clipboard history keeps text,
+      images, formatted copies, and file paths, and ignores items marked
+      concealed, transient, or auto-generated. Flash's own
       submitted commands can appear in command history and diagnostic logs.
 
       This help server listens on loopback and starts when a browser command
       needs it (or at launch if configured). It exposes live state, logs and
-      clipboard entries to local clients until Flash quits. Other programs
+      clipboard entries to local clients until Flash quits. The homepage
+      remembers opened guides in that browser only; Flash does not receive
+      the list. Other programs
       on your Mac can access it; it is not a remote monitoring service.
       Do not share a log or runtime export without reviewing its contents.
 
@@ -787,11 +943,20 @@ enum HelpDocs {
       A mapping that prefixes a longer sequence waits for its timeout.
       macOS or another app may own a global shortcut. Secure input can hide
       keys from the event tap; `doctor` reports the holder when available.
-      `[app] keyboard_layout` controls the reference layout used for mappings.
+      `[app] keyboard_layout` reads keypresses. `[keyboard] layout` is the
+      logical layout for hints, the grid, bisect, and the ESDF positions
+      HYPER uses as arrows. The right key is the home-row index-finger mark.
 
       ## A saved config change is missing
 
       Check the active config path and diagnostics on [Runtime](/state).
+      That page shows the resolved configuration as JSON and edits the file.
+      Save writes it after the text parses as TOML. Purge defaults removes
+      assignments that equal the bundled file and leaves the result in the
+      editor until you save. Values from the default configuration keep the
+      base colour. A value your file or an environment variable overrode is
+      marked with that layer (`config` and the filename, or `env` and the
+      `FLASH_` variable).
       `FLASH_CONFIG` or `XDG_CONFIG_HOME` may select a different file.
       Invalid values are diagnosed and preserve the previous valid value
       according to the field's validation rule. Avoid duplicate TOML tables.
@@ -808,9 +973,9 @@ enum HelpDocs {
 
       For slowness, filter [Logs](/logs) by source or trace and inspect hint
       timings in `flash status --json`. The
-      [observability guide](\(HelpDocs.repositoryRoot)/docs/observability.md)
+      [observability guide](\(HelpDocs.manual("observability")))
       explains traces and the
-      [performance guide](\(HelpDocs.repositoryRoot)/docs/performance.md)
+      [performance guide](\(HelpDocs.manual("performance")))
       describes repeatable measurements. Review [privacy](/docs/privacy)
       before sharing diagnostics.
       """,
@@ -843,13 +1008,13 @@ enum HelpDocs {
 
       ## Follow the maintained contracts
 
-      - [Development](\(HelpDocs.repositoryRoot)/docs/development.md): prerequisites and verification suites.
-      - [Architecture](\(HelpDocs.repositoryRoot)/docs/architecture.md): ownership, coordinates and deterministic hints.
-      - [Prepared model](\(HelpDocs.repositoryRoot)/docs/prepared-model.md): cache validity and refresh scheduling.
-      - [Normal-mode internals](\(HelpDocs.repositoryRoot)/docs/normal-mode.md): input routing, latency and mode transitions.
-      - [Plugin cookbook](\(HelpDocs.repositoryRoot)/docs/plugin-cookbook.md): build a small plugin.
-      - [Protocol](\(HelpDocs.repositoryRoot)/docs/plugin-protocol.md) and [Rust SDK](\(HelpDocs.repositoryRoot)/docs/plugin-rust-sdk.md): wire contract and SDK examples.
-      - [Plugin performance](\(HelpDocs.repositoryRoot)/docs/plugin-performance.md): subprocess, scheduling and resource guidance.
+      - [Development](\(HelpDocs.manual("development"))): prerequisites and verification suites.
+      - [Architecture](\(HelpDocs.manual("architecture"))): ownership, coordinates and deterministic hints.
+      - [Prepared model](\(HelpDocs.manual("prepared-model"))): cache validity and refresh scheduling.
+      - [Normal-mode internals](\(HelpDocs.manual("normal-mode"))): input routing, latency and mode transitions.
+      - [Plugin cookbook](\(HelpDocs.manual("plugin-cookbook"))): build a small plugin.
+      - [Protocol](\(HelpDocs.manual("plugin-protocol"))) and [Rust SDK](\(HelpDocs.manual("plugin-rust-sdk"))): wire contract and SDK examples.
+      - [Plugin performance](\(HelpDocs.manual("plugin-performance"))): subprocess, scheduling and resource guidance.
       - [Contributor guide](\(HelpDocs.repositoryRoot)/AGENTS.md): repository constraints and required checks.
 
       ## Inspect the resident

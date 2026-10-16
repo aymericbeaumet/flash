@@ -122,6 +122,14 @@ final class FrecencyStore {
     scheduleFlush()
   }
 
+  /// The whole boost table, copied under the lock once: the live ranker
+  /// reads it for every scored row of a keystroke.
+  func boosts() -> [String: Int] {
+    lock.lock()
+    defer { lock.unlock() }
+    return boostSnapshot
+  }
+
   /// O(1) lookup. Returns 0 when the key isn't tracked. Called from
   /// the live ranker — never blocks on the queue.
   func boost(forKey key: String) -> Int {

@@ -186,6 +186,9 @@ final class PollScheduler {
     var state: ClientState
     var queue: DispatchQueue
     var handler: () -> Void
+    /// The `PollDeadline` that armed a one-shot, so its release cannot drop a
+    /// successor's registration under the same id.
+    var owner: UInt64? = nil
   }
 
   private let queue = DispatchQueue(label: "flash.poll", qos: .utility)
@@ -256,7 +259,7 @@ final class PollScheduler {
   /// an existing id always replaces the pending deadline.
   func scheduleOnce(
     _ id: String, afterMs: Int, priority: Priority, on handlerQueue: DispatchQueue,
-    handler: @escaping () -> Void
+    owner: UInt64? = nil, handler: @escaping () -> Void
   ) {
     queue.async { [weak self] in
       guard let self else { return }
@@ -265,14 +268,18 @@ final class PollScheduler {
         state: ClientState(
           id: id, intervalMs: max(1, afterMs), nextAtMs: now + max(0, afterMs), busy: false,
           priority: priority, repeats: false),
-        queue: handlerQueue, handler: handler)
+        queue: handlerQueue, handler: handler, owner: owner)
       self.rearm(now: now)
     }
   }
 
-  func unregister(_ id: String) {
+  /// Drop `id`. With `owner`, only the registration that owner armed: a
+  /// successor armed under the same id since is left alone.
+  func unregister(_ id: String, owner: UInt64? = nil) {
     queue.async { [weak self] in
-      guard let self, self.clients.removeValue(forKey: id) != nil else { return }
+      guard let self, let client = self.clients[id] else { return }
+      if let owner, client.owner != owner { return }
+      self.clients.removeValue(forKey: id)
       self.rearm(now: self.clock())
     }
   }
@@ -296,14 +303,20 @@ final class PollScheduler {
     }
     guard armedForMs != wakeup.atMs || timer == nil else { return }
     armedForMs = wakeup.atMs
-    timer?.cancel()
-    let timer = DispatchSource.makeTimerSource(queue: queue)
+    // One timer source for the process, rescheduled in place: a new deadline
+    // every second (a clock in the bar) must not create a kernel timer each.
+    let timer: DispatchSourceTimer
+    if let existing = self.timer {
+      timer = existing
+    } else {
+      timer = DispatchSource.makeTimerSource(queue: queue)
+      timer.setEventHandler { [weak self] in self?.fire() }
+      self.timer = timer
+      timer.resume()
+    }
     timer.schedule(
       deadline: .now() + .milliseconds(max(0, wakeup.atMs - now)),
       leeway: .milliseconds(wakeup.leewayMs))
-    timer.setEventHandler { [weak self] in self?.fire() }
-    self.timer = timer
-    timer.resume()
   }
 
   private func fire() {
@@ -347,6 +360,12 @@ final class PollDeadline {
   private let scheduler: PollScheduler
   private var generation: UInt64 = 0
   private(set) var isArmed = false
+  /// Tells this deadline's registrations from a successor's under the same
+  /// id, so `cancel` and `deinit` release only their own. A process-wide
+  /// serial, never an address, which a successor can reuse.
+  private let owner: UInt64
+  private static let ownerLock = NSLock()
+  private static var ownerSerial: UInt64 = 0
 
   init(
     _ id: String, priority: PollScheduler.Priority, on queue: DispatchQueue,
@@ -356,6 +375,10 @@ final class PollDeadline {
     self.priority = priority
     self.queue = queue
     self.scheduler = scheduler
+    Self.ownerLock.lock()
+    Self.ownerSerial &+= 1
+    owner = Self.ownerSerial
+    Self.ownerLock.unlock()
   }
 
   /// `priority` overrides the deadline's own for this arming, for a backoff
@@ -366,8 +389,9 @@ final class PollDeadline {
     generation &+= 1
     let armed = generation
     isArmed = true
-    scheduler.scheduleOnce(id, afterMs: afterMs, priority: priority ?? self.priority, on: queue) {
-      [weak self] in
+    scheduler.scheduleOnce(
+      id, afterMs: afterMs, priority: priority ?? self.priority, on: queue, owner: owner
+    ) { [weak self] in
       guard let self, self.generation == armed else { return }
       self.isArmed = false
       body()
@@ -385,10 +409,10 @@ final class PollDeadline {
     generation &+= 1
     guard isArmed else { return }
     isArmed = false
-    scheduler.unregister(id)
+    scheduler.unregister(id, owner: owner)
   }
 
   deinit {
-    if isArmed { scheduler.unregister(id) }
+    if isArmed { scheduler.unregister(id, owner: owner) }
   }
 }

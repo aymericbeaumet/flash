@@ -9,17 +9,16 @@ use std::time::Duration;
 /// carousel: Flash owns the cadence and the visible line, the plugin only
 /// republishes when the set changes.
 pub(crate) struct State {
-    label: String,
     cycle: Duration,
     articles: Vec<Article>,
     published: Published<Segments>,
 }
 
-/// The two segments the plugin owns. `summary` keeps the links and the inline
-/// article preview; `label` is popup-free and link-free so a template binding
-/// owns hover and clicks, exactly as the system monitors do. Publishing both
-/// lets a configuration choose its own popup — a terminal running any reader —
-/// without the plugin deciding what hovering a headline should show.
+/// The two segments the plugin owns. Both are the rotating headlines and
+/// nothing else: the template writes the name (`#[label]aggr`) and chooses
+/// the hover. `summary` keeps the archive and source links plus the inline
+/// article preview. `label` is one link to the feed item and has no preview,
+/// so a `#[popup=…]` around it is the whole hover.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Segments {
     pub(crate) summary: StatusSegment,
@@ -27,9 +26,8 @@ pub(crate) struct Segments {
 }
 
 impl State {
-    pub(crate) fn new(label: String, cycle: Duration) -> Self {
+    pub(crate) fn new(cycle: Duration) -> Self {
         Self {
-            label,
             cycle,
             articles: Vec::new(),
             published: Published::new(),
@@ -60,28 +58,18 @@ impl State {
             }
         } else {
             Segments {
-                summary: StatusSegment::Carousel(
-                    StatusCarousel::new(self.articles.iter().map(render), self.cycle)
-                        .with_prefix(prefix(&self.label)),
-                ),
-                label: StatusSegment::Carousel(
-                    StatusCarousel::new(self.articles.iter().map(render_label), self.cycle)
-                        .with_prefix(prefix(&self.label)),
-                ),
+                summary: StatusSegment::Carousel(StatusCarousel::new(
+                    self.articles.iter().map(render),
+                    self.cycle,
+                )),
+                label: StatusSegment::Carousel(StatusCarousel::new(
+                    self.articles.iter().map(render_label),
+                    self.cycle,
+                )),
             }
         };
         self.published.update(segments).cloned()
     }
-}
-
-/// The still label drawn before every line.
-pub(crate) fn prefix(label: &str) -> Markup {
-    Markup::raw(format!(
-        "#[fg={title_color}]{label}#[fg={muted}] ",
-        title_color = Color::TITLE,
-        muted = Color::MUTED,
-        label = Markup::text(label),
-    ))
 }
 
 /// One carousel line: the elastic linked title, the origin domain, and the
@@ -118,21 +106,16 @@ pub(crate) fn render(article: &Article) -> StatusValue {
 
 /// One popup-free carousel line: the elastic title and its origin domain form
 /// a single link to the feed item, with no outbound arrow and no inline
-/// preview. Only the click destination is data the plugin owns; hover belongs
-/// to the surrounding template, so a configuration can point the segment at any
-/// popup it likes. The still prefix stays outside the link, so a template link
-/// wrapping the segment addresses the feed rather than any one item.
+/// preview. The plugin owns the item URL. The template owns the section name,
+/// its colour, and the hover, and a link around the whole segment addresses
+/// the feed rather than any one item.
 pub(crate) fn render_label(article: &Article) -> StatusValue {
     let original = Url::parse(&article.original_url).expect("validated article URL");
     let domain = original.host_str().unwrap_or_default();
     let domain = Markup::text(domain.strip_prefix("www.").unwrap_or(domain));
     let title = Markup::text(feed::truncate(&article.title, 160));
     let row = Markup::raw(format!("#[shrink]{title}#[noshrink] ({domain})"));
-    StatusValue::text(Markup::raw(format!(
-        "{item}#[fg={muted}]",
-        muted = Color::MUTED,
-        item = Markup::link(row, &article.url),
-    )))
+    StatusValue::text(Markup::link(row, &article.url))
 }
 
 #[cfg(test)]
@@ -176,14 +159,14 @@ mod tests {
             .into_iter()
             .map(|name| article(name, 100))
             .collect();
-        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
+        let mut state = State::new(Duration::from_secs(30));
         let published = carousel(state.refresh(Ok(articles.clone()), 101));
         assert_eq!(
             published.lines,
             articles.iter().map(render).collect::<Vec<_>>()
         );
         assert_eq!(published.cycle, Duration::from_secs(30));
-        assert_eq!(published.prefix, prefix("AGGR"));
+        assert_eq!(published.prefix.as_str(), "");
         assert_eq!(state.refresh(Ok(articles.clone()), 103), None);
         assert_eq!(state.refresh(Err(()), 104), None);
         let reordered: Vec<_> = articles.iter().rev().cloned().collect();
@@ -197,7 +180,7 @@ mod tests {
     fn a_failed_refresh_tick_still_expires_old_articles_and_clears_when_none_remain() {
         let a = article("A", 100);
         let b = article("B", 200);
-        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
+        let mut state = State::new(Duration::from_secs(30));
         state.refresh(Ok(vec![a, b.clone()]), 201);
         assert_eq!(state.refresh(Err(()), 99 + feed::WINDOW_SECONDS), None);
         assert_eq!(
@@ -213,7 +196,7 @@ mod tests {
 
     #[test]
     fn valid_empty_refresh_clears_status() {
-        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
+        let mut state = State::new(Duration::from_secs(30));
         state.refresh(Ok(vec![article("A", 100)]), 101);
         assert_eq!(state.refresh(Ok(vec![]), 102), cleared());
     }
@@ -221,7 +204,7 @@ mod tests {
     #[test]
     fn label_mirrors_the_summary_carousel_with_one_item_link_and_no_preview() {
         let articles: Vec<_> = ["A", "B"].into_iter().map(|n| article(n, 100)).collect();
-        let mut state = State::new("AGGR".into(), Duration::from_secs(30));
+        let mut state = State::new(Duration::from_secs(30));
         let published = state.refresh(Ok(articles.clone()), 101);
         let summary = carousel(published.clone());
         let label = label_carousel(published);
@@ -247,12 +230,6 @@ mod tests {
     }
 
     #[test]
-    fn configured_label_is_escaped_in_the_still_prefix() {
-        let label = prefix("#[bold]NEWS");
-        assert_eq!(label.as_str(), "#[fg=#EBCB8B]##[bold]NEWS#[fg=colour245] ");
-    }
-
-    #[test]
     fn line_preserves_archive_source_links_popup_and_escaped_text() {
         let mut item = article("#[fg=red]Title", 100);
         item.url = "https://aggr.example/a,b]#[bold]".into();
@@ -266,10 +243,6 @@ mod tests {
         assert!(line.contains("#[link=https://www.source.example/original]"));
         assert!(line.contains("↗"));
         assert!(line.contains("%23%23%5Bbold%5Dinjection"));
-        assert!(
-            !line.contains("AGGR"),
-            "the label is the still prefix, not part of a line"
-        );
     }
 
     #[test]

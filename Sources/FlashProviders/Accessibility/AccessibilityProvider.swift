@@ -353,36 +353,86 @@ public final class AccessibilityProvider: FlashSource {
   // always succeeds. Compare CFTypeIDs explicitly.
   private static let axValueTypeID: CFTypeID = AXValueGetTypeID()
 
-  private static func axValue(_ v: Any) -> AXValue? {
-    let cf = v as CFTypeRef
-    guard CFGetTypeID(cf) == axValueTypeID else { return nil }
-    return (cf as! AXValue)
-  }
+  /// The batched attribute values of one element, read in place. Each
+  /// accessor is a `CFTypeID` comparison and bridges only the matched value,
+  /// so the per-node cost stays a few lookups rather than a boxed `[Any]`.
+  struct AXBatchValues {
+    private let array: CFArray
 
-  private static func stringValue(_ v: Any) -> String? {
-    guard let value = v as? String else { return nil }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
-  }
-
-  private static func urlValue(_ v: Any) -> String? {
-    if let url = v as? URL {
-      return url.absoluteString
+    init?(_ array: CFArray?) {
+      guard let array, CFArrayGetCount(array) == 12 else { return nil }
+      self.array = array
     }
-    let cf = v as CFTypeRef
-    if CFGetTypeID(cf) == CFURLGetTypeID() {
-      return (cf as! URL).absoluteString
+
+    @inline(__always)
+    private func ref(_ index: Int) -> CFTypeRef? {
+      guard let pointer = CFArrayGetValueAtIndex(array, index) else { return nil }
+      return Unmanaged<CFTypeRef>.fromOpaque(pointer).takeUnretainedValue()
     }
-    return stringValue(v)
+
+    func string(_ index: Int) -> String? {
+      guard let value = ref(index), CFGetTypeID(value) == CFStringGetTypeID() else {
+        return nil
+      }
+      return (value as! CFString) as String
+    }
+
+    /// `string` trimmed of surrounding whitespace, `nil` when nothing remains.
+    func trimmedString(_ index: Int) -> String? {
+      guard let value = string(index) else { return nil }
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func numberString(_ index: Int) -> String? {
+      guard let value = ref(index), CFGetTypeID(value) == CFNumberGetTypeID() else {
+        return nil
+      }
+      return (value as! NSNumber).stringValue
+    }
+
+    func bool(_ index: Int) -> Bool? {
+      guard let value = ref(index) else { return nil }
+      let typeID = CFGetTypeID(value)
+      if typeID == CFBooleanGetTypeID() {
+        return CFBooleanGetValue((value as! CFBoolean))
+      }
+      if typeID == CFNumberGetTypeID() {
+        return (value as! NSNumber).boolValue
+      }
+      return nil
+    }
+
+    func axValue(_ index: Int) -> AXValue? {
+      guard let value = ref(index), CFGetTypeID(value) == axValueTypeID else { return nil }
+      return (value as! AXValue)
+    }
+
+    func elements(_ index: Int) -> [AXUIElement]? {
+      guard let value = ref(index), CFGetTypeID(value) == CFArrayGetTypeID() else {
+        return nil
+      }
+      return (value as! CFArray) as? [AXUIElement]
+    }
+
+    /// A URL attribute as its absolute string, or the trimmed string the
+    /// attribute holds instead.
+    func url(_ index: Int) -> String? {
+      guard let value = ref(index) else { return nil }
+      if CFGetTypeID(value) == CFURLGetTypeID() {
+        return ((value as! CFURL) as URL).absoluteString
+      }
+      return trimmedString(index)
+    }
   }
 
-  private static func hintSnapshot(_ values: [Any], frame: CGRect) -> AXHintTargetSnapshot {
-    let value = stringValue(values[7]) ?? (values[7] as? NSNumber)?.stringValue
-    return AXHintTargetSnapshot(
-      role: values[0] as? String ?? "AXUnknown", subrole: values[10] as? String,
-      title: stringValue(values[5]), description: stringValue(values[6]), value: value,
-      url: urlValue(values[8]) ?? urlValue(values[11]),
-      enabled: values[3] as? Bool ?? true, hidden: values[9] as? Bool ?? false,
+  private static func hintSnapshot(_ values: AXBatchValues, frame: CGRect) -> AXHintTargetSnapshot {
+    AXHintTargetSnapshot(
+      role: values.string(0) ?? "AXUnknown", subrole: values.string(10),
+      title: values.trimmedString(5), description: values.trimmedString(6),
+      value: values.trimmedString(7) ?? values.numberString(7),
+      url: values.url(8) ?? values.url(11),
+      enabled: values.bool(3) ?? true, hidden: values.bool(9) ?? false,
       frame: frame)
   }
 
@@ -480,8 +530,7 @@ public final class AccessibilityProvider: FlashSource {
       // Scrolling targets their container, including its interactive children.
       // Click hints must not redirect to a different interactive child.
       if !allowsInteractiveDescendants, let role = AXAttribute.role(current),
-        ["AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuItem"]
-          .contains(role) || JumpTarget.textInputRoles.contains(role)
+        Self.foreignHitRoles.contains(role) || JumpTarget.textInputRoles.contains(role)
       {
         return .foreign
       }
@@ -490,6 +539,11 @@ public final class AccessibilityProvider: FlashSource {
     return .unavailable
   }
 
+  /// Roles that make a hit-tested ancestor a different control than the hint's.
+  private static let foreignHitRoles: Set<String> = [
+    "AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuItem",
+  ]
+
   private static func readHintSnapshot(_ element: AXUIElement, screenH: CGFloat)
     -> AXHintTargetSnapshot?
   {
@@ -497,10 +551,10 @@ public final class AccessibilityProvider: FlashSource {
     guard
       AXUIElementCopyMultipleAttributeValues(
         element, batchAttrs, AXCopyMultipleAttributeOptions(rawValue: 0), &raw) == .success,
-      let values = raw as? [Any], values.count == 12
+      let values = AXBatchValues(raw)
     else { return nil }
     let frame: CGRect
-    if let position = axValue(values[1]), let size = axValue(values[2]),
+    if let position = values.axValue(1), let size = values.axValue(2),
       let standardFrame = frameFromAX(pos: position, size: size, screenH: screenH)
     {
       frame = standardFrame
@@ -654,7 +708,7 @@ public final class AccessibilityProvider: FlashSource {
       _ = AXUIElementSetAttributeValue(
         app, "AXManualAccessibility" as CFString, trueRef)
     }
-    let screenH = primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
 
     // The clip rect is supplied by AppMonitor from its single
     // WindowServer visibility snapshot. This is stricter than the screen
@@ -685,13 +739,19 @@ public final class AccessibilityProvider: FlashSource {
     // A surface that is not the focused window (a Picture in Picture player,
     // the Stage Manager strip) is found by its frame instead, and never falls
     // back to the focused window, whose targets would leak into its frame.
+    //
+    // A walk whose frame step already resolved that window (`walkedWindow`)
+    // walks the very element it measured, and asks the app for nothing.
     let roots: [AXUIElement]
     switch context.walkRoot {
     case .focusedWindow:
-      guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
+      guard let focusedWindow = context.walkedWindow ?? Self.focusedOrFirstWindow(in: app)
+      else { return [] }
       roots = [focusedWindow]
     case .elementsInFrame:
       roots = Self.topLevelElements(in: app, meeting: clip, screenH: screenH)
+    case .openMenus:
+      roots = context.menus
     }
 
     var state = WalkState()
@@ -735,26 +795,37 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   /// A terminal emulator's window is one typing surface: a primary click on
-  /// any of its targets hands the keyboard to the terminal, so they all enter
-  /// INSERT. Which apps are terminals is plugin data (manifest
-  /// `terminal_emulators`); every other app keeps the per-role judgement the
-  /// walk made.
+  /// its targets hands the keyboard to the terminal, so they enter INSERT.
+  /// A link is navigation and stays in NORMAL. Which apps are terminals is
+  /// plugin data (manifest `terminal_emulators`); every other app keeps the
+  /// per-role judgement the walk made.
   static func settlingInsertIntent(
     _ targets: [JumpTarget], bundleIdentifier: String,
     isTerminalEmulator: (String) -> Bool = TerminalEmulators.contains
   ) -> [JumpTarget] {
     guard isTerminalEmulator(bundleIdentifier) else { return targets }
-    return targets.map { $0.entersInsertMode ? $0 : $0.enteringInsertMode(true) }
+    return targets.map { target in
+      if target.role == JumpTarget.terminalLinkRole || target.role == "AXLink" {
+        return target.entersInsertMode ? target.enteringInsertMode(false) : target
+      }
+      return target.entersInsertMode ? target : target.enteringInsertMode(true)
+    }
   }
 
-  /// The frame (NSScreen coords) of the window a walk of `pid` covers — its
-  /// focused, main or first top-level surface — so the visible-area step can
+  /// The window a walk of `pid` covers — its focused, main or first top-level
+  /// surface — with its frame (NSScreen coords), so the visible-area step can
   /// scope hints to that same window rather than to whichever of the app's
   /// windows is frontmost: a tooltip or hover card above it has no targets,
-  /// and clipping the walk to it left none at all.
-  public static func walkedWindowFrame(
+  /// and clipping the walk to it left none at all. The walk then starts at
+  /// this element (`AppContext.walkedWindow`) instead of resolving it again.
+  public struct WalkedWindow {
+    public let element: AXUIElement
+    public let frame: CGRect
+  }
+
+  public static func walkedWindow(
     pid: pid_t, bundleIdentifier: String?, screenH: CGFloat
-  ) -> CGRect? {
+  ) -> WalkedWindow? {
     GeckoAccessibility.withTree(pid: pid, bundleIdentifier: bundleIdentifier) { app in
       guard let window = focusedOrFirstWindow(in: app) else { return nil }
       var pos: CFTypeRef?
@@ -763,9 +834,32 @@ public final class AccessibilityProvider: FlashSource {
         AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &pos) == .success,
         AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
         let pos, let size, CFGetTypeID(pos) == AXValueGetTypeID(),
-        CFGetTypeID(size) == AXValueGetTypeID()
+        CFGetTypeID(size) == AXValueGetTypeID(),
+        let frame = frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
       else { return nil }
-      return frameFromAX(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
+      return WalkedWindow(element: window, frame: frame)
+    }
+  }
+
+  /// The open menus to walk, with their frames: `recorded` (the menus the
+  /// app reported opening; Firefox's context menu is reachable no other way)
+  /// and any `AXMenu` child of the application element (Cocoa's), each once.
+  /// A menu with no on-screen frame has closed and is dropped.
+  public static func openMenus(
+    in app: AXUIElement, recorded: [AXUIElement], screenH: CGFloat
+  ) -> [(element: AXUIElement, frame: CGRect)] {
+    let children = AXAttribute.children(app).filter {
+      AXAttribute.role($0) == (kAXMenuRole as String)
+    }
+    var seen: [AXUIElement] = []
+    for menu in recorded + children where !seen.contains(menu) { seen.append(menu) }
+    return seen.compactMap { menu in
+      guard let origin = AXAttribute.point(menu, kAXPositionAttribute as String),
+        let size = AXAttribute.size(menu, kAXSizeAttribute as String),
+        size.width > 0, size.height > 0
+      else { return nil }
+      // Accessibility is top-left; Flash's frames are NSScreen bottom-left.
+      return (menu, ScreenSpace.flip(CGRect(origin: origin, size: size), height: screenH))
     }
   }
 
@@ -849,6 +943,45 @@ public final class AccessibilityProvider: FlashSource {
     "AXSystemDialog",
   ]
 
+  /// Window controls that are also attributes, so a tree that omits them as
+  /// children still gets a hint. Help is a child (`AXHelpButton`), not an
+  /// attribute. Minimize and zoom stay out: only the close button, and a
+  /// dialog's default and cancel buttons, are hint targets of this kind.
+  static let windowChromeSubroles: Set<String> = [
+    "AXCloseButton", "AXHelpButton", "AXDefaultButton", "AXCancelButton",
+  ]
+
+  private static let windowChromeAttributes: [String] = [
+    kAXCloseButtonAttribute as String,
+    kAXDefaultButtonAttribute as String,
+    kAXCancelButtonAttribute as String,
+  ]
+
+  /// Title-bar and dialog buttons sit on the window's edge. A clip that is
+  /// the content rect leaves their centre a few points outside; a real
+  /// control is still within a title bar of the clip.
+  static func acceptsHintCenter(_ center: CGPoint, visible: CGRect, subrole: String?) -> Bool {
+    if visible.containsInclusive(center) { return true }
+    guard let subrole, windowChromeSubroles.contains(subrole) else { return false }
+    return visible.insetBy(dx: -28, dy: -28).containsInclusive(center)
+  }
+
+  /// Close, default, and cancel buttons the window exposes only as attributes.
+  /// A button that is already a child is left to the ordinary walk.
+  private static func windowChromeButtons(
+    missingFrom children: [AXUIElement], of window: AXUIElement
+  ) -> [AXUIElement] {
+    var extra: [AXUIElement] = []
+    for name in windowChromeAttributes {
+      guard let button = elementAttribute(window, name) else { continue }
+      let alreadyListed =
+        children.contains { CFEqual($0, button) } || extra.contains { CFEqual($0, button) }
+      if alreadyListed { continue }
+      extra.append(button)
+    }
+    return extra
+  }
+
   private func walk(
     _ element: AXUIElement,
     depth: Int,
@@ -905,18 +1038,28 @@ public final class AccessibilityProvider: FlashSource {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 12 else { return }
+    guard err == .success, let vals = AXBatchValues(valuesRef) else { return }
 
-    let role = vals[0] as? String
-    let posValue = Self.axValue(vals[1])
-    let sizeValue = Self.axValue(vals[2])
-    let enabled = (vals[3] as? Bool) ?? true
-    let allChildren = vals[4] as? [AXUIElement]
-    let label =
-      Self.stringValue(vals[5]) ?? Self.stringValue(vals[6]) ?? Self.stringValue(vals[7])
-    let url = Self.urlValue(vals[8]) ?? Self.urlValue(vals[11])
-    let hidden = (vals[9] as? Bool) ?? false
-    let subrole = vals[10] as? String
+    // Every per-node read below is a type-ID check on the batched CFArray;
+    // nothing is bridged into Swift until the role gate admits the node.
+    let role = vals.string(0)
+    let posValue = vals.axValue(1)
+    let sizeValue = vals.axValue(2)
+    let enabled = vals.bool(3) ?? true
+    let allChildren = vals.elements(4)
+    let hidden = vals.bool(9) ?? false
+    let subrole = vals.string(10)
+    // Decoded once; every gate below and the offscreen prune read this.
+    let frame: CGRect? =
+      if let posValue, let sizeValue {
+        Self.frameFromAX(pos: posValue, size: sizeValue, screenH: screenH)
+      } else {
+        nil
+      }
+    // The URL is read for every node: an extension document's scheme marks
+    // the subtree, and the AXWebArea that carries it is visited before
+    // `insideWebArea` is set. It is one CFURL type check plus a prefix test.
+    let url = vals.url(8) ?? vals.url(11)
     let currentOrAncestorInsideExtensionDocument =
       insideExtensionDocument || Self.isExtensionDocumentURL(url)
 
@@ -947,9 +1090,7 @@ public final class AccessibilityProvider: FlashSource {
     // dedup so a wrapper never displaces the link it wraps.
     var isAppWebPressContainer = false
     if insideWebArea, !environment.webAreasArePages,
-      let role, Self.webAppPressContainerRoles.contains(role),
-      let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+      let role, Self.webAppPressContainerRoles.contains(role), let frame
     {
       isAppWebPressContainer = Self.pressContainerFits(frame, in: visible)
     }
@@ -958,9 +1099,7 @@ public final class AccessibilityProvider: FlashSource {
     // it is the click target, ranked below semantic controls in dedup.
     var isIOSContentCell = false
     if insideIOSContent, !insideWebArea, role == IOSContent.cellRole,
-      allChildren?.isEmpty ?? true,
-      let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+      allChildren?.isEmpty ?? true, let frame
     {
       isIOSContentCell = Self.pressContainerFits(frame, in: visible)
     }
@@ -986,9 +1125,7 @@ public final class AccessibilityProvider: FlashSource {
     // invisible or non-pointer; we can't see CSS but the size is a
     // reliable proxy (real icon links are 16x16+, real text links
     // are taller than 13px).
-    if roleAllowed, insideWebArea, role == "AXLink",
-      let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+    if roleAllowed, insideWebArea, role == "AXLink", let frame,
       frame.width < 13, frame.height < 13
     {
       roleAllowed = false
@@ -996,12 +1133,17 @@ public final class AccessibilityProvider: FlashSource {
     // `enabled` is checked per-branch below rather than in this gate: a
     // disabled row/cell can still be the real click target (see the
     // row/cell branch), whereas every other disabled element stays inert.
-    if let posV = posValue, let sizeV = sizeValue,
-      let frame = Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH),
-      visible.containsInclusive(CGPoint(x: frame.midX, y: frame.midY)),
+    if let frame,
+      Self.acceptsHintCenter(
+        CGPoint(x: frame.midX, y: frame.midY), visible: visible, subrole: subrole),
       roleAllowed, !hidden
     {
       state.idCounter += 1
+      // Only an admitted target bridges its strings out of the batch.
+      let title = vals.trimmedString(5)
+      let description = vals.trimmedString(6)
+      let valueText = vals.trimmedString(7)
+      let label = title ?? description ?? valueText
       let captured = element
       let capturedRole = role ?? "AXUnknown"
       // Browser tab strips report their entries either as native `AXTab` or as
@@ -1013,7 +1155,11 @@ public final class AccessibilityProvider: FlashSource {
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
-      let snapshot = Self.hintSnapshot(vals, frame: frame)
+      let snapshot = AXHintTargetSnapshot(
+        role: capturedRole, subrole: subrole,
+        title: title, description: description,
+        value: valueText ?? vals.numberString(7),
+        url: url, enabled: enabled, hidden: hidden, frame: frame)
       let resolveClickPoint: (CGPoint) -> CGPoint? = { preferred in
         GeckoAccessibility.withTree(
           pid: pid,
@@ -1066,11 +1212,8 @@ public final class AccessibilityProvider: FlashSource {
 
     // Descent pruning (`skipsOffscreenSubtree`): a native container wholly
     // outside the visible clip is not walked; a web container always is.
-    let elementFrame = posValue.flatMap { posV in
-      sizeValue.flatMap { sizeV in Self.frameFromAX(pos: posV, size: sizeV, screenH: screenH) }
-    }
     if Self.skipsOffscreenSubtree(
-      frame: elementFrame, visible: visible, depth: depth, insideWebArea: insideWebArea)
+      frame: frame, visible: visible, depth: depth, insideWebArea: insideWebArea)
     {
       return
     }
@@ -1100,6 +1243,11 @@ public final class AccessibilityProvider: FlashSource {
       role: role,
       insideWebArea: insideWebArea,
       children: children)
+    // Only the window root carries the standard button attributes. Deeper
+    // nodes are controls and groups; asking them is a wasted IPC per element.
+    if depth == 0 {
+      children = Self.windowChromeButtons(missingFrom: children, of: element) + children
+    }
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"
@@ -1260,22 +1408,35 @@ public final class AccessibilityProvider: FlashSource {
     case keepWithoutInsert
   }
 
-  private func primaryScreenHeight() -> CGFloat {
-    ScreenSpace.primaryHeight
-  }
-
+  /// Whether `value` is an extension document URL. A scheme prefix test on
+  /// the raw string: this runs for every walked node, and parsing a `URL`
+  /// per node cost more than the rest of the node's CPU work.
   public static func isExtensionDocumentURL(_ value: String?) -> Bool {
-    guard let value,
-      let scheme = URL(string: value)?.scheme?.lowercased()
-    else { return false }
-    return extensionDocumentSchemes.contains(scheme)
+    guard let value else { return false }
+    let head = value.utf8.prefix(extensionDocumentSchemeMaxLength)
+    for scheme in extensionDocumentSchemePrefixes {
+      if head.count >= scheme.count,
+        zip(head, scheme).allSatisfy({ Self.asciiLowercase($0) == $1 })
+      {
+        return true
+      }
+    }
+    return false
   }
 
-  private static let extensionDocumentSchemes: Set<String> = [
-    "chrome-extension",
-    "moz-extension",
-    "safari-web-extension",
+  /// Scheme prefixes, lowercase, each ending in the `:` that closes a scheme.
+  private static let extensionDocumentSchemePrefixes: [[UInt8]] = [
+    Array("chrome-extension:".utf8),
+    Array("moz-extension:".utf8),
+    Array("safari-web-extension:".utf8),
   ]
+  private static let extensionDocumentSchemeMaxLength =
+    extensionDocumentSchemePrefixes.map(\.count).max() ?? 0
+
+  @inline(__always)
+  private static func asciiLowercase(_ byte: UInt8) -> UInt8 {
+    (byte >= 65 && byte <= 90) ? byte + 32 : byte
+  }
 
   /// The children a table or outline is walked through. A native table's
   /// scrolled-off rows (`kAXRowsAttribute` minus `kAXVisibleRowsAttribute`) are
@@ -1328,7 +1489,7 @@ public final class AccessibilityProvider: FlashSource {
     return raw as? [AXUIElement]
   }
 
-  private static func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
+  static func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
     guard AXValueGetType(pos) == .cgPoint, AXValueGetType(size) == .cgSize else { return nil }
     var origin = CGPoint.zero
     var sz = CGSize.zero
@@ -1339,7 +1500,6 @@ public final class AccessibilityProvider: FlashSource {
     // 3x3 is the conservative threshold that drops them without
     // touching real icon-only buttons (16x16+).
     if sz.width < 3 || sz.height < 3 { return nil }
-    let flippedY = screenH - origin.y - sz.height
-    return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
+    return ScreenSpace.flip(CGRect(origin: origin, size: sz), height: screenH)
   }
 }

@@ -59,8 +59,11 @@ extension AppDelegate {
       FlashLog.trace("[config] reload_skipped reason=unchanged")
       return
     }
+    let launching = lastAppliedConfigFileContents == nil
     lastAppliedConfigFileContents = contents
-    reloadConfig()
+    // Launch already started the one environment refresh it needs; a reload
+    // the user caused re-reads the rc files they may just have edited.
+    reloadConfig(refreshesEnvironment: !launching)
   }
 
   private func teardownConfigWatchers() {
@@ -113,15 +116,16 @@ extension AppDelegate {
   /// Re-read the config from disk, layer env + CLI overrides on top,
   /// then publish to overlay + monitor under their internal locks. Every
   /// future activation snapshots the new config at the start of its walk.
-  private func reloadConfig() {
+  private func reloadConfig(refreshesEnvironment: Bool) {
     MainThreadActivity.note("config_reload")
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
     // Popups whose command could not start retry once it lands.
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      FlashProcessEnvironment.shared.refresh()
-      DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
+    if refreshesEnvironment {
+      FlashProcessEnvironment.shared.refresh { [weak self] _ in
+        DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
+      }
     }
     let cfg = ConfigLoader.load()
     if hintSession.isActive || activationInFlight { cancelOverlay() }
@@ -170,6 +174,7 @@ extension AppDelegate {
     overlay.popupStyle = cfg.popupStyle
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
+    overlay.keyboardNavigation = Alphabet.navigation(layoutName: cfg.positionLayoutName)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
     // Rebuilt on every load: the setting may have changed, and so may the
     // installed layouts an explicit input-source ID names.
@@ -263,7 +268,7 @@ extension AppDelegate {
       return
     }
     guard message != shownConfigError?.message else { return }
-    overlay.displayAlert(message, duration: 8, style: .error)
+    overlay.displayAlert(.message(message, style: .error))
     shownConfigError = ShownConfigError(message: message, toastToken: overlay.toastToken)
   }
 }

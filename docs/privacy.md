@@ -14,6 +14,7 @@ running plugins with `:plugins`.
 | --- | --- | --- |
 | Accessibility | Flash | First launch. Required. |
 | Automation: Safari, Chrome, and other Chromium browsers | `browsers` | The first time it lists tabs while that browser runs. |
+| Automation: the app holding a stuck secure-input flag, and System Events | Flash | The first time a stuck hold is released by blurring a browser or sending its address-bar shortcut. A real password field does not ask. |
 | Automation: Notes, Reminders, Contacts | `apple` | The first time it indexes that app. |
 | Screen Recording | `screenshot` | The first `:screenshot`; macOS `screencapture` takes the picture. |
 | Location | `network` | Only on an explicit `:network refresh`, to read the Wi-Fi name. |
@@ -42,7 +43,6 @@ the others make their own requests or run the CLI tools named here.
 | `answers` | `www.ecb.europa.eu` (daily exchange rates) | At start, then every 6 hours | On |
 | `github` | GitHub, through your `gh` CLI | At launch, then when the flashlight opens at most every 10 minutes, only if `gh` is installed and signed in | On |
 | `feed` | The URL you configure | Every `refresh_interval` | Off until `url` is set |
-| `aiproviders` | Anthropic's usage API with Claude Code's token; OpenAI through `codex app-server` | Every 60 seconds while the plugin runs | Starts only when your status bar shows an AI quota segment or you use a chat bang such as `!claude` |
 | `tmux` | Noninteractive SSH to hosts running tmux | Every few seconds | Off: only hosts listed in `[plugin.tmux] ssh_hosts` |
 | `spotify` | Spotify, through the `spotify_player` CLI | When you use it | On use |
 | third-party plugins | GitHub (`git clone` of the pinned commit) | When listed in `[plugins] third_party` | Off |
@@ -54,7 +54,7 @@ the others make their own requests or run the CLI tools named here.
 | `~/.config/flash/flash.toml` | Your configuration. |
 | `~/Library/Logs/Flash/` | Logs. They never contain keys typed in other apps. Commands Flash's command line cannot run are logged with their text; the `trace` level also logs every submitted command line and AX tree dumps. |
 | `~/Library/Application Support/Flash/command-history.json` | The last 200 entries you submitted in Flash's command line, including flashlight queries. |
-| `~/Library/Application Support/Flash/Plugins/clipboard/` | Clipboard history: the last 50 text items, up to 128 KiB each, readable only by you. Items that password managers mark as concealed, transient, or auto-generated are never recorded. |
+| `~/Library/Application Support/Flash/Plugins/clipboard/` | Clipboard history: up to 1000 entries by default (`[plugin.clipboard] history_size`, 1–10000), readable only by you. This is a retention ceiling; Flash cannot recover copies made before it recorded them. The help page loads the retained entries in bounded pages. Plain text is kept up to 128 KiB. Formatted HTML is kept up to 64 KiB. One image (PNG, JPEG, GIF, WebP, or a TIFF stored as PNG) is kept up to 4 MiB, including a preview when you copy a single image file of that size. A file copy records up to 20 paths. Items that password managers mark as concealed, transient, or auto-generated are never recorded. |
 | `~/Library/Application Support/Flash/Plugins/history/` | Copies of Chrome's `History` and Firefox's `places.sqlite`, refreshed when the flashlight opens or you leave the browser, at most once a minute and only when the originals changed. They only feed explicit searches such as `@firefox.history`, never default results. |
 | `~/Library/Application Support/Flash/` (other files) | Ranking data for search results and plugin caches, such as exchange rates. |
 
@@ -107,13 +107,8 @@ the others make their own requests or run the CLI tools named here.
   latest output, and a source's numeric `history`, in memory to draw the bar,
   popups and widgets, and sends none of it anywhere; a popup showing it goes
   through the private pager snapshot described in [popups](popups.md).
-- **AI provider quotas:** Claude Code's OAuth token from its Keychain item or
-  `~/.claude/.credentials.json`, and the Codex CLI's session (`aiproviders`).
-  Flash only reads the Claude token; when it expires, the quota shows as stale
-  until Claude Code renews it. Set
-  `[plugin.aiproviders] refresh_claude_code_credentials = true` to let Flash
-  renew it, which rewrites Claude Code's stored token and can sign Claude Code
-  out.
+  Flash does not fetch AI provider quotas. A quota command in your own
+  configuration does, and its output is kept like any other source.
 
 ## Keyboard
 
@@ -128,6 +123,19 @@ from the tap. Flash respects it: a hint session started then takes Flash's own
 key window instead, so the labels you type go to Flash and never to the
 password field. `[app] keyboard_layout` reads which input source is selected
 and its key layout, to match keys to hint labels; it records neither.
+
+Secure input sometimes stays on after that field is gone, usually because a
+browser or a password manager enabled it in the background. Flash polls the
+flag (it cannot see keys while the flag is on) and, when the focused element
+is not a password field, asks the holding app to release it. A Chromium
+browser is told, through AppleScript, to blur the focused element in its open
+windows; the script does not read the field. If the flag remains, or the
+holder is Firefox or Safari, Flash brings that browser forward and sends the
+address-bar shortcut (the letter l with Command) via System Events, then
+returns to the app you were in. Any other holding app is activated and then
+left, which is what makes a background password manager drop the hold. The
+first of these can ask for Automation. Flash does not lock the screen, show a
+dialog, or read what you type. The log line names the app's bundle id.
 
 ## Screen capture
 
@@ -158,10 +166,10 @@ deny-by-default macOS sandbox profile built from their manifest: they may read
 files broadly (that is how `history` copies browser history databases), but
 never `~/.ssh`, `~/.aws`, `~/.config/gh`, your Keychains, or another plugin's
 data; they write only to their own data directory, run only the executables
-they declare, and reach the network only when they declare it. Seven plugins
-run unsandboxed. Six execute helpers the sandbox forbids: `aiproviders`,
-`caffeinate`, `github`, `screenshot`, `shortcuts`, and `tmux`. The seventh,
-`browsers`, lists tabs over Apple Events, which Chrome and the other Chromium
+they declare, and reach the network only when they declare it. Six plugins
+run unsandboxed. Five execute helpers the sandbox forbids: `caffeinate`,
+`github`, `screenshot`, `shortcuts`, and `tmux`. The sixth, `browsers`,
+lists tabs over Apple Events, which Chrome and the other Chromium
 browsers refuse from any sandboxed sender, even with Automation granted.
 
 Third-party plugins load only when listed in `[plugins] third_party`, and GitHub
@@ -176,6 +184,13 @@ command until Flash quits, or from launch when
 `[debug] http_inspector_enabled = true`. It shows bundled documentation,
 app version and uptime, Accessibility/capture state, the configuration path and
 diagnostics, effective mappings for the focused app, logs, plugin state, and recent
-clipboard entries. Plugin setting values remain redacted. It rejects requests addressed to other host names and sends
+clipboard entries (text, images, formatted HTML, and file paths). The homepage
+remembers which of its guides this browser has opened, in that browser's
+`localStorage` only; Flash does not receive the list. A loopback client can read
+the full retained clipboard history in pages, delete one entry, or fetch one stored image.
+It can also read the configuration file Flash loaded and, on Save, replace
+that file. Purge defaults returns text and does not write. The server writes
+only that file, and only after the text parses as TOML. Plugin setting values
+remain redacted. It rejects requests addressed to other host names and sends
 no CORS headers, so web pages cannot read it, but other programs on your Mac
 can while it runs.

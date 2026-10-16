@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import { paths } from "./routes";
+  import SourceBadge from "./SourceBadge.svelte";
+  import { sourceFromCommand } from "./source";
   import type { CommandInfo } from "./types";
 
   let { commands, filter = "" }: { commands: CommandInfo[]; filter?: string } = $props();
@@ -15,10 +16,9 @@
     return commands.filter((command) =>
       (source === "all" || command.source_kind === source) &&
       (!q || [command.name, command.syntax, command.source, command.description, ...(command.aliases ?? [])].join(" ").toLowerCase().includes(q)),
-    ).sort((a, b) => {
-      if (a.source_kind !== b.source_kind) return a.source_kind === "core" ? -1 : 1;
-      return a.source.localeCompare(b.source) || a.name.localeCompare(b.name);
-    });
+    ).sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true })
+      || a.source.localeCompare(b.source, undefined, { sensitivity: "base" }));
   });
 </script>
 
@@ -52,7 +52,7 @@
               <tr>
                 <td class="command-cell"><code class="command-name">{command.name}</code>{#if command.syntax && command.syntax !== command.name}<code class="syntax">{command.syntax}</code>{/if}{#if command.aliases?.length}<span class="aliases">Also {command.aliases.join(", ")}</span>{/if}</td>
                 <td class="description">{command.description || "No description provided."}</td>
-                <td>{#if command.source_kind === "plugin"}<a class="badge neutral" href={paths.plugins(command.source)}>{command.source} <Icon name="chevron" size={11} /></a>{:else}<span class="badge">Built-in</span>{/if}</td>
+                <td><SourceBadge {...sourceFromCommand(command.source_kind, command.source)} /></td>
               </tr>
             {/each}
           </tbody>

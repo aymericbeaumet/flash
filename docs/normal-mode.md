@@ -19,14 +19,20 @@ mappings.
 - `/` opens Find (`app_find`, Cmd-F) and enters INSERT, so typing goes to the
   find field.
 - `x` closes the current tab (`tab_close`); `X` reopens the last closed one
-  (`tab_reopen`). Inside tmux `x` closes the tmux window after tmux's own
-  confirmation. `X` acts in browsers and editors; tmux, terminals and Finder
-  keep no closed tabs, so there it does nothing.
+  (`tab_reopen`). Inside tmux `x` first asks `Close this tmux window?` in the
+  alert, with `[y]es / [n]o` and the keys in the hint colour: the tmux
+  plugin declares the kill destructive (`action_confirmations`), so `y`
+  closes the window and any other key — `n`, Escape, a click — closes only
+  the question. Wrap any command the same way with
+  `confirm --prompt=… --command=…`. `X` acts in browsers and editors; tmux,
+  terminals and Finder keep no closed tabs, so there it does nothing.
 - `r` reloads (`app_reload`); `R` hard-reloads (`app_reload --force`).
   Browsers use their own chords (Safari's hard reload is Cmd-Option-R) and
   tmux refreshes its client. Other apps, terminals included, do nothing:
   Cmd-R replies in Mail and runs in Xcode.
-- `[a` / `]a` cycle previous/next app in MRU order.
+- `[a` / `]a` cycle previous/next app in MRU order. Quitting the focused
+  app (`:qa`, `:wq`, `app_quit`, or the app's own quit) focuses that
+  previous app, from command mode and from every other mode.
 - `[t` / `]t` switch to the previous/next tab (`tab_previous` / `tab_next`);
   repeat the final `t` to keep switching. Inside tmux they switch tmux windows;
   elsewhere the app's own chord (Control-(Shift-)Tab in Messages), else
@@ -55,19 +61,69 @@ mappings.
   outdents use their own chord (Control-Minus in VS Code, Cursor, Zed and
   Sublime Text; Control-Command-Arrow in Xcode). Terminals and apps without
   history (Notes, TextEdit, Pages, Mail) do nothing.
-- Lowercase `f` targets discovered clickable elements; uppercase `F` targets a
-  screen position through the grid. A lowercase prefix picks the click on
-  either surface: none for primary, `s` secondary, `d` double, `m` move.
-  So `df` double-clicks an element and `dF` double-clicks a grid position.
+- A mouse action is a prefix and a finisher. Prefixes are none, `m` (move),
+  `d` (double) and `c` (context, the right-click). Finishers are `f` (a
+  discovered target), `F` (a screen position through the grid) and `s` (one
+  visible letter). `c` is the operator Vim and Vimium leave free; `r` reloads
+  and `s` is the search finisher. The pointer hides while labels are up, even
+  with another app in front, and returns when it moves; the labels going away
+  leave it to that move. Pointer mode and a cursor-following grid keep it
+  visible. So `df` double-clicks an
+  element, `dF` double-clicks a grid position, and `ds` double-clicks a letter.
+  `cf`, `cF` and `cs` are the right-click of each.
+  A system dialog in front of the focused app, such as the Gatekeeper prompt,
+  is the surface `f` and `s` walk even when its process does not become
+  frontmost. A window's close button is a hint when the window has one, and
+  so are a dialog's default, cancel, and help buttons.
+- `s`, then one letter, then a two-character hint jumps to that
+  letter in the focused window's visible text (EasyMotion). The same prefixes
+  apply: `cs` right-clicks, `ds` double-clicks, `ms` moves the pointer. `s`
+  starts no other mapping, so the jump fires at once.
+  Nothing is drawn for the search letter itself: the hints are the only
+  surface, sitting on each match.
+  The search character matches either case, so `v` and `V` find the same
+  glyphs, and the other character of that US key, so `3` and `#` do too,
+  everywhere in the focused window and on the status bar of that window's
+  screen (the surfaces `f` reaches). A letter on a status-bar link or popup
+  does what `f` does there; a letter on plain bar text moves the pointer onto
+  it. The click and the move land one point left of the glyph's centre, still
+  on the letter, so a later selection can start on that glyph's leading side;
+  in VISUAL they land one point right of it, so the selection a held button
+  draws ends on that letter.
+  Hint labels are uppercase and accept either case. Backspace
+  edits the letter, Escape cancels, and no match stays silent. Holding the
+  hyper key, or any other key that enters a mode, ends the jump and enters
+  that mode instead of typing into it. `mouse_bigram --move`
+  moves the pointer without clicking. The text comes from Accessibility.
+  Each visible line is measured once, so a common letter costs the same as a
+  rare one. Each match then asks Accessibility where its glyph is drawn, so a
+  label sits on its letter even when the text is narrower than its element;
+  an app that does not answer keeps an even spread of the characters across
+  the line. Characters truncated behind an ellipsis get no label. The click
+  re-reads the glyph's bounds.
+  A terminal whose tree has no text uses the tmux grid of the client attached
+  to that window: pane text, the tmux status line, and each pane-border title,
+  measured on the same window `f` and `cf` use. Those two label the same
+  targets, including pane titles and the status bar. On the status bar,
+  `cf` right-clicks, which pins the popup. `s` labels the letters
+  on that grid. Flash never reads screen pixels.
 - A prefix letter must not also be a mapping of its own, or that mapping waits
   for `sequence_timeout_ms` before it fires. Triple click therefore ships
   unbound, because `tf` would stall the bare `t` (new tab). To bind `tf` /
   `tF`, remove the default `t` with `"t" = false` in the same table; `tf`
-  then fires on its second key with no timeout.
+  then fires on its second key with no timeout. A pending sequence is dropped
+  when the focused app or the effective mappings change, and its timeout
+  never fires a mapping from the previous table.
+- A count before `f`, `F` or `s` is a finger count, as on a trackpad. `2f`
+  secondary-clicks the pick, `2df` smart-zooms there and `3f` looks up the
+  word there (`mouse_target --gesture=look_up|smart_zoom`). The gestures move
+  the pointer like `mf` and keep NORMAL. `flash gesture` performs the other
+  trackpad gestures; see [commands](commands.md).
 - Primary clicks enter INSERT only on input targets; secondary clicks preserve
   NORMAL. Everything in a terminal emulator (an app a plugin declares in
-  `terminal_emulators`) is an input target, so a primary click on any hint
-  there — tmux pane, window and link hints included — enters INSERT. A hint click moves the pointer to the target and leaves it there;
+  `terminal_emulators`) is an input target, so a primary click on a hint
+  there — tmux pane and window hints included — enters INSERT. A terminal
+  link hint is navigation and stays in NORMAL. A hint click moves the pointer to the target and leaves it there;
   `m` (move) moves it without clicking. With `[hints] restore_pointer = true`,
   every committed click, drag or selection — hint or grid, and `mouse_repeat`
   — puts the pointer back where it was; `m` and `mouse_pointer` still move it.
@@ -80,11 +136,34 @@ mappings.
   and Shift always): `f` then Shift-`<hint>` is a Shift-click, on targets and on
   the grid alike. Link text repeated in a terminal pane resolves to the copy
   under the hint.
-- `sF` / `dF` use the [mouse grid](#mouse-grid) for secondary/double clicks.
-- `mF` moves the cursor with the mouse grid.
+- While labels are up, `Tab` restarts the same click on the mouse grid and
+  `Shift-Tab` widens it to every app on the screen, or narrows it back.
+  `Backspace` with nothing typed returns to the surface the session came from.
+  A chord on Tab cancels, like any other unknown chord.
+- `mouse_target --path` picks two labels and clicks every target between them
+  in reading order, from the first pick to the second; the first pick is
+  marked until the second lands. `--sticky` keeps the same labels up after each
+  click, with no new walk, until Escape or Return; `--multi` walks again.
+  `--words` labels the visible words of the window's text instead of its
+  controls, landing on each word's leading edge; with `--select` it highlights
+  the text between two words, with `--drag` it drags one. Nothing of this
+  reads the screen: the words come from the text Accessibility exposes, the
+  same walk `s` uses.
+- `[hints] label_order` decides which target gets the easiest label: the first
+  in reading order, the one nearest the centre of the window, or, with
+  `zones`, the first key of every label names the keyboard-shaped zone of the
+  window the target sits in. `[hints] key_priority` lists the keys handed out
+  first. See [configuration](configuration.md#hint-labels).
+- `mouse_screens` labels every display, `mouse_warp` jumps the pointer to an
+  edge or the centre of the focused window or its screen, and `mouse_position`
+  saves, labels, cycles and forgets pointer positions. None of them ships
+  bound; see [commands](commands.md).
+- `cF`, `dF` and `mF` use the [mouse grid](#mouse-grid) for a right-click, a
+  double click and a move.
 - `?` and `:mappings` open the browser mapping reference for the focused app,
   with both effective plugin-merged and configured mappings, including expanded leader
-  bindings and argv mappings.
+  bindings and argv mappings. Each row names where the binding comes from:
+  a built-in default, a config file, or a plugin.
 - `:help` opens the browser help homepage; `:help <topic>` opens a feature guide.
 
 ## Mouse grid
@@ -105,6 +184,14 @@ rows × 5 columns, each cell labelled with the key at the same position in the
 +---+---+---+---+---+
 ```
 
+Each cell also shows, faintly, the grid of the step that follows it, every
+sub-cell labelled with the two keys that reach it (`qw` is `q`, then `w`), so
+the next key can be read before the first is pressed; the step's own labels are
+drawn on top and stay the first thing to find. The clicking step and cells too
+small for a two-letter label show no preview. `hints.mouse_grid_preview =
+false` turns it off. The clicking step's labels are see-through, so the exact
+point each one clicks shows under it.
+
 Colemak uses `12345` / `qwfpg` / `arstd` / `zxcvb` and Dvorak `12345` /
 `',.py` / `aoeui` / `;qjkx`; a literal `hints.keys` gets the QWERTY block, and
 `hints.mouse_grid_keys` sets any other matrix. Press the key where you want to
@@ -114,17 +201,19 @@ step uses the same muscle memory. The last of `hints.mouse_grid_steps` (default
 step's cells are smaller than a label, they are drawn as one glued cluster
 centred on (and covering) the chosen cell; each click lands on its label.
 
-The grid starts on the display of the focused window, below Flash's status
-bar, or on the pointer's display when no window is focused.
+The grid starts on the display of the focused window and covers Flash's
+status bar, or on the pointer's display when no window is focused. It still
+stops at the Dock, and at the menu bar when the Flash bar is hidden.
 
 | Key | Action |
 | --- | --- |
 | a grid key | Zoom into that cell; on the last step, click its centre |
 | `space` | Zoom into the centre; on the last step, click the centre |
 | `return` | Click the centre of the current region now |
-| `backspace` | Undo the last grid key (zoom, move, display switch) |
+| `backspace` | Undo the last grid key (zoom, move, display switch); with nothing left, back to the labels the grid was opened from |
 | `cmd-backspace` / `alt-backspace` | Start over on the whole display |
 | arrows | Slide the region by its own size, stopping at the display edge |
+| `shift`-arrows | Put the pointer on that edge of the region, so a drag or a held button can start on a grid line |
 | `tab` / `shift-tab` | Move to the next / previous display |
 | `` ` `` | Toggle cursor-follow (`hints.mouse_grid_cursor_follow`) |
 | `escape` | Cancel; a pointer moved by cursor-follow goes back |
@@ -146,22 +235,71 @@ on both sides, or on `return`; the other grid keys work as above.
 pointer, on the pointer's display, stopping while one selection remains;
 Backspace walks back out.
 
-## Holding a mouse button
+## Visual selection: VISUAL
 
-`mouse_button --state=down|up|toggle [--secondary|--middle]` presses or
-releases a button where the pointer is; it ships unbound. While a button is
-held, every pointer move Flash makes drags it — `mf`, `mF`, `mouse_pointer`
-movement, grid cursor-follow — so a keyboard drag works in any app:
+VISUAL selects text the way Vim's visual mode does. `v` starts a selection
+where the pointer is; from then on the text from that point to the cursor is
+selected, and every motion extends it:
+
+- `j` / `k` move one text line down / up, keeping the column, and `h` / `l`
+  one character left / right, measured from the glyph under the pointer.
+- `w` / `b` move to the next word's start or back to a word's start, `e` to
+  a word's end, and `0` / `$` to the start / end of the line.
+- `f`, `F` and `s` pick a target, a grid cell or a letter and extend the
+  selection to it instead of clicking. `s` lands just past its letter, so the
+  selection takes it.
+- `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` scroll the page, and the
+  selection follows the text that scrolled under the cursor. This differs
+  from Vim, where `ctrl+e` scrolls without moving the cursor: in Flash the
+  cursor stays put on screen. `gg` / `G` extend to the first / last line.
+
+Operators act on the selection and end it, as in Vim: `y` copies it, `d`
+and `x` cut it, `c` cuts it and enters INSERT to type its replacement, and
+`p` pastes over it (`selection --action=copy|cut|change|paste`). `v` again or
+Escape ends VISUAL and leaves the text selected. The badge is orange and shows `mode.labels.visual` (default
+`VISUAL`). `[mode.visual.mappings]` holds these keys; any key it leaves alone
+keeps its NORMAL meaning, and a key it binds hides the NORMAL sequences it
+starts, so it fires at once.
+
+## Dragging: DRAG
+
+DRAG drags something with a mouse button held down. `enter_drag_mode` grabs
+what is under the pointer with the left button (`--secondary` or `--middle`
+for another); it ships unmapped, so bind it where you like. Then:
+
+- `h` `j` `k` `l` nudge it 16 points, `H` `J` `K` `L` 96 points.
+- `f`, `F` and `s` pick where it goes: a target, a grid cell or a letter.
+- Return, or the key that entered DRAG, drops it where the pointer is;
+  Escape puts it back where it was grabbed and lets go.
+
+The badge is yellow and shows `mode.labels.drag` (default `DRAG`). The keys
+live in `[mode.drag.mappings]`, read before NORMAL's like VISUAL's. An
+all-mode chord enters DRAG from INSERT as well, and the drop returns to
+NORMAL.
 
 ```toml
 [mode.normal.mappings]
-"<leader>v" = ["flash", "mouse_button", "--state=toggle"]
+"v" = ["flash", "mouse_button", "--state=toggle", "--mode=visual"]
+
+[mode.all.mappings]
+"cmd+ctrl+d" = ["flash", "enter_drag_mode"]
 ```
 
-Press `<leader>v` over what to grab, `mf` (or `mF`) to the drop point, then
-`<leader>v` again to drop. `mouse_pointer`'s `v` toggles the same held
-button. Cancelling a Flash overlay (Escape), `leave_mode` and quitting Flash
-release it, as does a committed click, drag or selection.
+### How Flash does it
+
+Both modes are a mouse button Flash holds down (`mouse_button`;
+`enter_drag_mode` is its DRAG toggle): VISUAL holds the primary button where
+the selection starts, and every pointer move Flash makes while a button is
+held is a drag of it. The mode follows the hold exactly: whichever path
+presses the button from NORMAL or INSERT enters the mode named by `--mode`,
+whichever releases it leaves, and leaving the mode any other way
+(`enter_normal_mode`, INSERT, the command line, `leave_mode`, quitting
+Flash, a committed click) releases the button. `mouse_pointer`'s `v` holds a
+drag the same way. A half-typed NORMAL sequence is dropped when the button
+goes down or up, since the tables differ. After a scroll Flash re-posts the
+held button's drag where the pointer is, once after the scroll and once after
+the app's own smooth scroll settles, so the app sees the pointer over what
+scrolled under it.
 
 ## Movement history
 
@@ -243,7 +381,9 @@ only explicit mappings act. Map a key to the high-level action it stands for;
 for a chord no action covers, `send_key` is the explicit escape hatch, or the
 user enters INSERT first. The release of a swallowed key is swallowed with it,
 because a terminal running the Kitty keyboard protocol encodes key releases to
-its pty.
+its pty. A held key's repeats follow its press: a key whose press entered
+INSERT repeats nothing into the app, and a key the app received keeps
+repeating there.
 
 A synthesized chord reaches an iOS app (Mac Catalyst or iPad) with its
 modifiers pressed and released around the key, as a keyboard sends it: UIKit
@@ -312,6 +452,19 @@ Advanced-mode eligibility follows the base mode through command, finder, and
 terminal surfaces. Opening a surface while disabled cannot enable NORMAL.
 Changing the enabling binding while a surface is open updates its return mode:
 enabling returns to NORMAL, and disabling returns to the disabled base mode.
+A context menu Flash saw open keeps the keyboard until it closes: a recapture
+a system event asks for — an app launching, a Space change, the panel resigning
+key — never ends it, while its close notification, an explicit mode entry or
+another app coming forward does. A surface that posts no menu notifications
+keeps the bounded window that stood in for a close signal.
+While a context menu is open its app's NORMAL mappings still fire, so `f`
+labels the menu's items rather than the window behind it: the walk starts at
+the menus the app reported opening (submenus included; a browser's context
+menu is reachable no other way) and keeps targets inside their frames. A
+submenu closing leaves the menu it hangs from in charge of the keyboard. The hint session takes the keyboard back from the menu while it runs,
+so labels and Escape reach Flash, and gives it back when it ends. This needs
+the session tap: Flash's key-window fallback would close the menu by becoming
+key, so under secure input `f` walks the window as before.
 A label or configuration refresh preserves native-menu capture suspension; only an explicit
 mode entry resets that interaction context. Reentrant events wait until the
 current mode effect batch finishes, preserving transition order.
@@ -345,15 +498,27 @@ Each hint or grid session fixes its capture path when it starts
 field) macOS hides keys from every tap, so that session takes the key window
 instead and typed labels reach Flash, never the password field. A commit hands
 focus back by raising its target; a cancel yields activation to the covered
-app. `#{flash.secure_input}` and `flash status` show the state, which the tap
-refreshes when it reads it for a key; there is no banner and no poll.
+app. `#{flash.secure_input}` and `flash status` show the state. The tap
+refreshes it when a key still reaches Flash. While the flag is on the tap
+receives nothing, so `core:secure-input` polls it (low priority, every 2 s)
+for the life of the resident; there is no banner. A focused secure field, and
+a text field in the app that holds the flag, are left alone. Anything else is
+a stuck hold, and Flash asks that app to release it once: a Chromium browser
+blurs its focused element and, if the flag stays on, is sent to its address
+bar; Firefox and Safari are sent to the address bar; any other holding app is
+activated and the app you were in is restored. The first browser blur can ask
+for Automation. Flash does not lock the screen and does not show a dialog.
+One attempt per time the flag turns on. A password field that is focused when
+the attempt would start is left alone; one that appears after the attempt has
+started does not abort a release already in progress.
 
 Interpreters read keys through `[app] keyboard_layout`'s reference table
 (`KeyCharacters.read`, one lookup per key): labels, the grid, pointer and
 adjustment keys and NORMAL mappings match by key position under a non-Latin
-input source, while `--search` keeps the typed text. The table is rebuilt on
-input-source changes and config loads, never per key, and the swallow decision
-never reads it.
+input source, while `--search` keeps the typed text. Which characters those
+positions spell comes from `[keyboard] layout`, not from this input-source
+table. The table is rebuilt on input-source changes and config loads, never
+per key, and the swallow decision never reads it.
 
 Handing activation back needs the cooperative API: `NSApp.yieldActivation(to:)`
 then `app.activate(from: .current)`. `NSApp.deactivate()` and a bare
@@ -363,6 +528,9 @@ AppKit draws no caret. Closing the command line without running anything hands
 activation back this way; a submit that opens an app hands it over through that
 app's own activation. The command line's caret is AppKit's insertion point, and
 it is live only while the panel is key with the field editor as first responder.
+An earlier INSERT handoff may finish after a rapid command open and take key
+status back; the panel's key-resign event schedules a guarded recapture while
+the command field is still visible and no other Flash window owns focus.
 
 The tap source, Carbon callbacks, AX observer sources, and mode coordinator all
 share the main run loop. Treat that loop as the input latency budget:
@@ -374,6 +542,17 @@ share the main run loop. Treat that loop as the input latency budget:
   reconcile
   does no work when the event's target pid already matches the observed
   frontmost app (`reconcileFrontmostApplication(forKeyTargetingPID:)`).
+- The hyper key is prepared once per config load (`HyperKeyMatcher`: the
+  atom's physical chord and the characters that can spell it). A key that
+  cannot be it is settled from its key code or typed character before any
+  key atom is built, and the tap drops every other swallowed release without
+  an `NSEvent` or a main-thread hop. The HYPER hold watch reads that prepared
+  chord; the leader atom is resolved once with it. Entering or leaving HYPER
+  paints the border's cached frame instead of reading the window list.
+- Arrow and function-key mapping commands carry prepared key codes, and every
+  synthesized key, click, pointer move and wheel step uses the process's
+  shared `CGEventSource`s (`SyntheticEventSources`); creating one per event
+  was a WindowServer round trip.
 - A recapture-only event calls `recaptureNormalModeKeyboardInput()`. With a live
   tap this restores `.normal` routing and stops; only the no-tap fallback needs
   key-window retries. Recapture must not rebuild the status bar or active-window
@@ -476,10 +655,65 @@ again at publication. Changing or leaving that query clears its rows and rejects
 both stale replies and timeout results. Initial snapshot publication never
 overwrites the current live-query result.
 
+## Hyper
+
+Holding `mode.normal.hyper` enters HYPER until that key is released. The
+default is `<leader>`, which follows `mode.normal.leader`. When the key is
+`<leader>` and the leader is not set (`leader = false`), HYPER stays off.
+Any other single key works in its place (`a`, `<space>`, `cmd+space`). The
+status pill is purple and shows `mode.labels.hyper` (default `HYPER`). Keys
+pressed while it is held are read from `[mode.hyper.mappings]`, not from
+NORMAL. The defaults are the Apple function row on `1`–`9`, `0`, `-`, and
+`=`: brightness, Mission Control, Spotlight, Dictation, Focus, media, mute,
+and volume. Shift plus the same key sends F1–F12. Arrows sit on the
+physical keys where QWERTY has `e` `s` `d` `f` (up, left, down, right),
+spelled as the letters those keys type in `[keyboard] layout`: QWERTY
+`e` `s` `d` `f`, Colemak `f` `r` `s` `t`, Dvorak `.` `o` `e` `u`, Bépo
+`p` `u` `i` `e`. F is the home-row index-finger mark, and it is right.
+Shift posts a shifted arrow on that same letter, so Colemak down is
+`shift+s`. A punctuation key uses the character Shift types there, so
+Dvorak up is `>`. A mapping or `false` on one of those keys wins.
+The arrow is posted into the focused app's key window, downstream of the
+session tap. `postToPid` carries no window, so a terminal drops it while
+the hyper key is still down. Volume is a system event and does not take
+this path. F-keys use the same window posting.
+Pointer movement and bisect stay on the hjkl columns.
+
+While the hyper key is the leader, a key with no hyper mapping can still
+complete a NORMAL `<leader>` sequence when that key continues one. Unmapped
+keys are swallowed.
+
+A hold enters HYPER right after a repeatable mapping too: `]t` arms a repeat
+of `t`, which any other key drops, the hyper key included. Only a mapping
+whose final key is the hyper key keeps that press as its repeat. Entering
+HYPER drops whatever NORMAL had pending, with its timeout.
+
+Releasing the key returns to NORMAL. The session tap can drop that key-up
+after it swallowed the press and a synthetic event (a volume key, a posted
+chord) lands in between; HYPER would otherwise stay up until the key is
+pressed again. While HYPER is latched, `core:hyper-hold` reads the key from
+the HID state table (`CGEventSource.keyState(.hidSystemState)`, and every
+modifier in a chord such as `cmd+space`) and leaves once the key has been up
+for two ticks. Combined session state is the wrong table: a swallowed press
+can look up there. The next key sees the same reading, leaves first, and is
+routed as a NORMAL key. A delivered key-up still leaves immediately. The
+watch is registered only while the mode is HYPER. Leaving HYPER any other
+way — `leave_mode`, opening the command line, a focus change — ends the hold
+and drops its pending keys the same way: the mode transition is the one
+reset point, so no exit can leave a latched hold behind.
+
+If nothing else was pressed and the hyper key is the leader, that tap arms
+the `<leader>` prefix: press it,
+release it, then the next key, and the sequence runs as before. Holding it
+again enters HYPER while that prefix is armed. A mapped `<leader><leader>`
+sequence still takes the second press. Any other pending sequence stays in
+NORMAL. INSERT, the command line, a popup, and an open hint session keep
+their own keys. See [configuration](configuration.md).
+
 ## Popup input
 
-Every popup is a terminal. TERMINAL is the fourth mode, beside NORMAL, INSERT
-and COMMAND: `enter_terminal_mode [--name=<popup>]` enters it by showing the
+Every popup is a terminal. TERMINAL sits beside NORMAL, INSERT, COMMAND, and
+the momentary HYPER layer: `enter_terminal_mode [--name=<popup>]` enters it by showing the
 popup standalone (the built-in `terminal` popup without a name), and clicking a
 popup's body or pinning it from the status bar enters it too. Either way the
 popup's local terminal view gets focus. `leave_mode` leaves it, closing the
@@ -511,7 +745,9 @@ Local mappings run before native copy/paste and terminal key encoding. Text
 popups use the same focus mode for selection, copying, and scrolling. Leaving via
 `enter_normal_mode` dismisses the popup and activates the captured external app
 before NORMAL recapture. Losing popup focus restores the prior base mode without
-activating a different app. A popup's lifecycle, not its focus or visibility,
+activating a different app. The app captured on entry is part of the TERMINAL
+mode value and is forgotten with it: the next popup captures its own, and no
+other exit can activate an app a popup once covered. A popup's lifecycle, not its focus or visibility,
 decides how long its process lives; see [popups](popups.md#lifecycles).
 
 `leave_mode` provides one configured exit across surfaces. It dismisses a popup,
@@ -545,7 +781,8 @@ INSERT is entered by:
 - a configured `enter_insert_mode` mapping;
 - a physical primary click while NORMAL is capturing;
 - a primary hint or mouse-grid click on an input target (the same rule for
-  `f` and `F`): a text input, or anything in a declared terminal emulator;
+  `f` and `F`): a text input, or anything in a declared terminal emulator.
+  A terminal link hint is navigation, so `f` on one stays in NORMAL;
 - `app_find` (`/`) or `tab_new` (`t`) once it reached the app.
 
 Other normal commands, focus changes and app activation preserve NORMAL.
@@ -565,3 +802,9 @@ Use `leave_mode` / `enter_normal_mode` to return from INSERT to NORMAL.
 ```
 
 Closing a popup or command surface may restore its saved INSERT mode.
+
+INSERT's keys belong to the focused app, so Flash never stays the active app
+in INSERT. Whenever Flash shows INSERT or becomes active while in it, it hands
+activation back to the app it tracks as focused. Otherwise every key the tap
+passes, Command chords included, would reach Flash instead. About, a hint
+session and a physical click that is still activating its own app keep it.

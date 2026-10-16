@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 import FlashTerminal
 
 struct StatusTerminalInputOrigin: Equatable {
@@ -44,20 +45,23 @@ extension AppDelegate {
     popup.willFocus = { [weak self] in
       guard let self else { return }
       self.terminalInputMappings?.flush()
-      self.terminalReturnApplicationPID =
-        self.terminalReturnApplicationPID
+      // The app the popup covers, captured as the mode is entered and
+      // forgotten with it; a popup focused from TERMINAL keeps the current.
+      let returnPID =
+        self.modeStore.mode.terminalReturnPID
         ?? self.currentNonFlashRunningApplication()?.processIdentifier
         ?? self.normalModeTargetPID
-      self.dispatchMode(.openTerminal)
+      self.dispatchMode(.openTerminal(returnPID: returnPID))
+    }
+    popup.onFocusLost = { [weak self] in
+      self?.overlay.relinquishShownStatusPopup(reason: "focus_lost")
     }
     popup.willDismissFocus = { [weak self] in self?.terminalInputMappings?.flush() }
     popup.didDismissFocus = { [weak self] reason in
       guard let self else { return }
       if case .terminal = self.modeStore.mode {
-        let targetPID = reason == "terminal_removed" ? self.terminalReturnApplicationPID : nil
-        self.dispatchMode(.closeTerminal(targetPID: targetPID))
+        self.dispatchMode(.closeTerminal(restoresApp: reason == "terminal_removed"))
       }
-      self.terminalReturnApplicationPID = nil
     }
     overlay.statusBarPopupDismissHandler = { [weak self] restoreApplication in
       self?.dismissPopup(restoreApplication: restoreApplication)
@@ -67,10 +71,10 @@ extension AppDelegate {
       return self.config.terminalPopupNames.contains(name)
         && self.overlay.statusTerminals.session(named: name) == nil
     }
-    overlay.statusBarTerminalPrepareHandler = { [weak self] name in
+    overlay.statusBarTerminalPrepareHandler = { [weak self] name, link in
       guard let self else { return false }
       guard self.config.terminalPopupNames.contains(name) else { return true }
-      return self.overlay.statusTerminals.open(name) != nil
+      return self.overlay.statusTerminals.open(name, link: link) != nil
     }
     overlay.statusTerminals.gridResolver = { [weak self] size in
       guard let self else { return size.unplacedGrid }
@@ -106,8 +110,8 @@ extension AppDelegate {
       (lastAppliedMappingMode ?? config.mode).compiledTerminal,
       timeoutMs: config.mode.sequenceTimeoutMs)
     // Sessions start with the login environment, so their commands see the
-    // user's PATH and tooling.
-    guard statusTerminalEnvironmentReady else { return }
+    // user's PATH and tooling; the launch refresh applies them once it lands.
+    guard FlashProcessEnvironment.shared.phase != .resolving else { return }
     overlay.statusTerminals.apply(
       style: config.popupStyle, terminals: config.terminalPopups,
       invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)
@@ -166,13 +170,11 @@ extension AppDelegate {
 
   func dismissPopup(restoreApplication: Bool = true) {
     suppressDismissedPopupHover()
-    let returnPID = terminalReturnApplicationPID
     if case .terminal = modeStore.mode {
-      dispatchMode(.closeTerminal(targetPID: restoreApplication ? returnPID : nil))
+      dispatchMode(.closeTerminal(restoresApp: restoreApplication))
     } else {
       overlay.hideStatusBarPopup(reason: "dismiss_popup")
     }
-    if !restoreApplication { terminalReturnApplicationPID = returnPID }
   }
 
   func restartPopup(named name: String?) {

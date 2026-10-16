@@ -221,6 +221,29 @@ final class PollSchedulerTests: XCTestCase {
     queue.sync { XCTAssertFalse(deadline.isArmed) }
   }
 
+  /// Two deadlines can carry one id across replacements of their owner — a
+  /// watcher recreated under the same name. The old one's release, on cancel
+  /// or deinit, must not drop the registration its successor armed.
+  func testADeadlineReleasesOnlyItsOwnRegistration() {
+    let scheduler = PollScheduler()
+    let queue = DispatchQueue(label: "poll.owner.tests")
+    let fired = expectation(description: "the successor's arming runs")
+    var old: PollDeadline? = PollDeadline(
+      "core:shared", priority: .normal, on: queue, scheduler: scheduler)
+    let new = PollDeadline("core:shared", priority: .normal, on: queue, scheduler: scheduler)
+    queue.sync {
+      old?.arm(afterMs: 5_000) { XCTFail("the replaced deadline must not run") }
+      new.arm(afterMs: 40) { fired.fulfill() }
+    }
+    XCTAssertEqual(registeredIDs(scheduler), ["core:shared"])
+    queue.sync { old?.cancel() }
+    XCTAssertEqual(registeredIDs(scheduler), ["core:shared"], "the successor keeps its wake-up")
+    old = nil
+    XCTAssertEqual(registeredIDs(scheduler), ["core:shared"], "and survives the old deinit")
+    wait(for: [fired], timeout: 5)
+    XCTAssertEqual(registeredIDs(scheduler), [])
+  }
+
   /// Cancelling releases the registration, so a cancelled debounce costs no
   /// wake-up; a fire already on its way to the queue is dropped as stale.
   func testCancellingAPollDeadlineReleasesItsWakeup() {

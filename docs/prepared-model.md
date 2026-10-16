@@ -44,7 +44,11 @@ configuration revision are unchanged.
 
 AX observer sources are hosted on a dedicated `AXObserverThread`; callbacks
 enqueue and the main thread drains each burst in one hop, bumping every dirty
-token in arrival order. AX storms and automatic walks taking at least 50 ms
+token in arrival order. Observer registration, its retry ladder, focused-window
+re-observation and teardown run on a serial queue of their own, so a walk, a
+readiness probe or a commit on the AX queue never waits behind an app slow to
+answer a registration; a multi-app screen-scope walk steps one app per turn
+and asks main between apps whether its activation still stands. AX storms and automatic walks taking at least 50 ms
 suppress AX, queued, and maintenance warming. Focus and configuration requests can reassess those apps;
 explicit activation remains available and complete. A degenerate walk (see
 below) is fast because there was nothing to read, so it never lifts the
@@ -66,7 +70,13 @@ and arms no maintenance; nor does it count toward the slow-walk backoff, the
 empty-walk gate or a readiness rewalk. An activation that finds no model
 recomputes the visible region and walks on demand, so the same window list
 always gives the same hints, and a window still fully covered at activation
-stays silent.
+stays silent. A partly covered window is the same window-list state: every
+stored model carries the visible region its walk saw — the window's frame and
+the fragments left of it — and a lookup recomputes the region from the
+activation's own window-list read, through the builder the walk used, and
+treats a difference as a miss. A notification banner, a floating player or a
+panel moving over or off the window therefore costs one walk, never a stale
+set of hints drawn over the cover or missing from what it uncovered.
 
 ## Trees that are not built yet
 

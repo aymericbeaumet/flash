@@ -545,6 +545,41 @@ final class StatusTerminalRegistryTests: XCTestCase {
     waitUntil { self.running(registry.session(named: "tool")) != nil }
   }
 
+  /// Two restart requests while the command is still missing read the
+  /// environment twice, and only the first reply restarts the process. The
+  /// second lands on a session a restart already replaced — the same
+  /// `TerminalSession` object, so identity cannot tell — and must leave the
+  /// fresh process and whatever was typed into it alone.
+  func testASecondRestartRequestDoesNotRestartTheProcessTwice() throws {
+    var completions: [() -> Void] = []
+    let bin = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-bin-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+    let registry = StatusTerminalRegistry(
+      environment: FlashProcessEnvironment(seed: ["PATH": "\(bin.path):/usr/bin:/bin"]),
+      refreshEnvironment: { completions.append($0) })
+    defer {
+      registry.shutdown()
+      try? FileManager.default.removeItem(at: bin)
+    }
+    apply(registry, ["tool": terminal(["flash-missing-tool"], persistent: true)])
+    waitUntil {
+      registry.session(named: "tool")?.state == .failed(.commandNotFound("flash-missing-tool"))
+    }
+    registry.restart(name: "tool")
+    registry.restart(name: "tool")
+    XCTAssertEqual(completions.count, 2)
+    try install("flash-missing-tool", in: bin)
+    completions[0]()
+    waitUntil { self.running(registry.session(named: "tool")) != nil }
+    let pid = running(registry.session(named: "tool"))
+    let generation = registry.inputGenerations["tool"]
+    completions[1]()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    XCTAssertEqual(registry.inputGenerations["tool"], generation, "the late reply restarts nothing")
+    XCTAssertEqual(running(registry.session(named: "tool")), pid)
+  }
+
   /// A reload rereads the login environment and then starts every persistent
   /// popup whose command could not start.
   func testReloadRetriesPopupsWhoseCommandCouldNotStart() throws {
@@ -757,5 +792,18 @@ final class StatusTerminalRegistryTests: XCTestCase {
     waitUntil { self.running(session).map { $0 != originalPID } ?? false }
     XCTAssertEqual(session.frame?.foreground.red, 0xab)
     XCTAssertEqual(session.frame?.background.red, 0x65)
+  }
+
+  func testHoveredLinkExpandsIntoThePopupCommand() {
+    let definition = Config.Terminal(command: ["newsboat-article", "$FLASH_STATUS_LINK"])
+    let launch = StatusTerminalRegistry.configuration(
+      for: definition, environment: ["PATH": "/usr/bin"],
+      link: "https://aggr.example/items/one")
+    XCTAssertEqual(launch.command, ["newsboat-article", "https://aggr.example/items/one"])
+    XCTAssertEqual(launch.environment["FLASH_STATUS_LINK"], "https://aggr.example/items/one")
+    let untouched = StatusTerminalRegistry.configuration(
+      for: definition, environment: ["PATH": "/usr/bin"])
+    XCTAssertEqual(untouched.command, ["newsboat-article", "$FLASH_STATUS_LINK"])
+    XCTAssertNil(untouched.environment["FLASH_STATUS_LINK"])
   }
 }

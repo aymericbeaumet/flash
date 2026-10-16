@@ -11,9 +11,9 @@ extension AppDelegate {
     repeatCount: Int = 1
   ) {
     if let lines = NormalModeDispatcher.scrollLineDelta(for: kind, repeatCount: repeatCount) {
-      if NormalModeDispatcher.synthesizeLineScroll(lines: lines),
-        let pid = observedFocusedAppPID ?? normalModeTargetPID
-      {
+      guard NormalModeDispatcher.synthesizeLineScroll(lines: lines) else { return }
+      extendHeldSelection(after: kind)
+      if let pid = observedFocusedAppPID ?? normalModeTargetPID {
         monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
       }
       return
@@ -26,6 +26,7 @@ extension AppDelegate {
     // the focused-window scroller.
     if kind == .top || kind == .bottom {
       performSourceAction(kind == .top ? .scrollTop : .scrollBottom)
+      extendHeldSelection(after: kind)
       return
     }
     guard let context = normalModeDispatchContext() else {
@@ -49,7 +50,7 @@ extension AppDelegate {
     let pid = context.processID
     let bundleID = context.bundleIdentifier
     let fallbackFrame = context.frontWindowFrame
-    let primaryH = monitor.primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     let monitor: AppMonitor = self.monitor
     monitor.axQueue.async {
       let windowFrame = AppMonitor.topWindowFrame(for: pid, primaryH: primaryH) ?? fallbackFrame
@@ -61,9 +62,30 @@ extension AppDelegate {
         }
       }
       guard didScroll else { return }
-      DispatchQueue.main.async {
+      DispatchQueue.main.async { [weak self] in
+        self?.extendHeldSelection(after: kind)
         monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
       }
     }
+  }
+
+  /// VISUAL: the scroll extends the selection, as a Vim motion extends it
+  /// from the cursor. `gg` / `G` drag the pointer to the window's top /
+  /// bottom edge, so the selection reaches the first / last line. In VISUAL
+  /// and DRAG every scroll then re-posts the held button's drag where the
+  /// pointer is, so the app sees the pointer over what scrolled under it.
+  /// Without a held button, nothing.
+  func extendHeldSelection(after kind: NormalModeDispatcher.ScrollKind) {
+    guard ActionDispatcher.heldButton != nil else { return }
+    // Only a selection extends to the first / last line; a drag stays put.
+    if kind == .top || kind == .bottom, modeStore.mode.isVisual,
+      let window = normalModeContext()?.frontWindowFrame, !window.isNull, !window.isEmpty
+    {
+      ActionDispatcher.moveCursor(
+        to: VisualSelection.edgePoint(
+          top: kind == .top, pointer: NSEvent.mouseLocation, window: window))
+    }
+    ActionDispatcher.catchUpHeldSelection(afterScrollMs: FlashTunables.scrollSmoothMs)
+    FlashLog.trace("[visual] selection_follows scroll=\(kind)")
   }
 }

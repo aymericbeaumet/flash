@@ -7,6 +7,15 @@ overrides. `FLASH_CONFIG` selects a file; otherwise Flash uses
 The resident watches these configuration files for changes. CLI arguments invoke
 verbs; they do not configure the resident's startup.
 
+The inspector runtime page shows the resolved configuration as JSON and edits
+the selected file. Values that still come from the bundled default use the
+base text colour. A value a later layer wrote uses the override style and
+names that layer: `config` with the filename, or `env` with the `FLASH_`
+variable. Save writes the editor after the text parses as TOML. Purge
+defaults removes assignments that equal the bundled file and leaves the
+result in the editor; it does not write until Save. The request body is
+limited to 256KB.
+
 Every layer uses the same TOML schema, diagnostics and validators. Invalid values
 are reported with their source and preserve the previous valid value according
 to that field's validation contract. Derivation runs after all layers are applied.
@@ -52,6 +61,76 @@ config load, never on a keypress; the keyboard tap's swallow decision does not
 read it. `--search` still matches the text you actually type, since it filters
 by visible text. `flash status` shows the selected source and the reference
 layout.
+
+## Logical layout
+
+`[keyboard] layout` names where keys sit for hint labels, the mouse grid,
+bisect, pointer movement and HYPER arrows. It defaults to `qwerty` and also
+accepts `colemak`, `dvorak` and `bepo`. This is not the input source:
+`[app] keyboard_layout` only decides how a keypress is read.
+
+When `hints.keys` is still the bundled default and the layout is not QWERTY,
+hint labels use that layout's letters — home row, top row and bottom row —
+the same alphabet as `keys = "<colemak>"`. QWERTY keeps the bundled home-row
+and top-row alphabet. A `hints.keys` token in your file wins, including an
+explicit QWERTY token or a narrower selector such as
+`<colemak_homerow+colemak_toprow>`. The mouse grid uses the left-hand block
+of the resolved hint layout.
+
+Two-key labels alternate hands while the alphabet can spell them that way.
+One-key labels stay in front only while the keys held back as prefixes can
+cover the rest with those alternations. Among those labels, a hand change
+ranks first, then less travel between keyboard rows (a same-row pair, then
+a one-row jump, then a two-row jump), then key ease. Key ease is the
+physical row and column, one formula for every layout: home row above
+bottom row above top row, and on a row the index finger, then middle, the
+inward index reach, ring, and pinky. The left key of a mirrored pair ranks
+one point higher.
+
+Bisect halves use the home-row columns where QWERTY has `h` `j` `k` `l`
+(left, down, up, right): Colemak `h` `n` `e` `i`, Dvorak `d` `h` `t` `n`,
+Bépo `c` `t` `s` `r`. Quadrants use the keys at QWERTY `y` `u` and `b` `n`.
+Bépo's top-left quadrant is the dead key `^`, so one press may not type it.
+
+HYPER posts arrows from the physical QWERTY ESDF positions (up, left,
+down, right): QWERTY `e` `s` `d` `f`, Colemak `f` `r` `s` `t`, Dvorak
+`.` `o` `e` `u`, Bépo `p` `u` `i` `e`. F is the home-row index-finger
+mark, and it is right. Shift posts a shifted arrow on that same letter:
+Colemak's D position types `s`, and its shifted arrow is `shift+s`. A
+punctuation key uses the character Shift types there, so Dvorak up is
+`>`. A mapping or `false` on one of the keys wins. Pointer movement and bisect stay on
+the hjkl columns. The bindings are derived, so `config.default.toml`
+does not list them.
+
+
+## Hint labels
+
+`[hints] label_order` says which target gets the easiest label. `reading`
+(the default) hands the one-key labels out in reading order, top to bottom
+and left to right. `center` gives them to the targets nearest the centre of
+the window, or of the screen for `--scope=screen`, so the thing you are most
+likely looking at takes one key. `zones` makes the first key of every label
+predictable before the labels show: the window splits into bands and columns
+laid out like the alphabet's keys on the keyboard (two bands of ten columns
+with the default alphabet, `q` top-left, `p` top-right, `a` to `l` below),
+each target's first key is its zone, and the rest of the label is handed out
+inside the zone as usual. Every label is then at least two keys long.
+
+`[hints] key_priority` is a string of hint keys, best first. The listed keys
+outrank the layout's ease, in the order written, and every other key keeps
+its place behind them, so `"fjdk"` puts the index and middle fingers first
+whatever the layout says. A key that is not in `hints.keys` is reported in
+`flash config_check` and ignored.
+
+`[hints] adjust_digits` picks what `1`–`9` do in `mouse_target --adjust`:
+tenths of the target's width (`width`, the default), or a numeric keypad over
+the target (`grid`, `7` `8` `9` along the top).
+
+`mouse_position` keeps `position_history_size` saved pointer positions, one
+list for every app, or one per app with `position_history_scope = "app"`.
+`pointer_follows_focus = true` centres the pointer on a newly focused app's
+window when it was outside it. `pointer_step`, `pointer_acceleration` and
+`pointer_max_step` set `mouse_pointer`'s movement in points.
 
 ## Environment overrides
 
@@ -177,16 +256,30 @@ leader = "\\"
 "[a" = { command = ["flash", "app_previous"], repeat = true }
 "f" = ["flash", "mouse_target"]
 "F" = ["flash", "mouse_grid"]
+"s" = ["flash", "mouse_bigram"]
+"cf" = ["flash", "mouse_target", "--secondary"]
+"cF" = ["flash", "mouse_grid", "--secondary"]
+"cs" = ["flash", "mouse_bigram", "--secondary"]
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]
 ```
 
+Mapping keys are characters, chords (`ctrl+e`, `cmd+shift+<lbracket>`) or
+sequences of them. A key that types nothing is written `<name>`: `<escape>` or
+`<esc>`, `<return>` or `<enter>` (the keypad's Enter too), `<tab>`, `<space>`,
+`<delete>` or `<backspace>`, `<delete_forward>`, `<left>` / `<right>` / `<up>`
+/ `<down>`, `<home>`, `<end>`, `<pageup>`, `<pagedown>`; each pair of aliases
+is the same key, so a mapping never misses its key by spelling.
 Mapping values are argv arrays, or inline tables with a `command` argv array and
-optional `repeat` metadata. `repeat = true` repeats a completed normal-mode
+optional `repeat` metadata. Resolved configuration JSON reports that same argv,
+in canonical form. `repeat = true` repeats a completed normal-mode
 sequence whenever its final key is pressed again. Arrays beginning with `"flash"`
 dispatch in-process; any other executable launches directly. Arguments receive
-home/environment expansion, with no implicit shell. The CLI queries
-`status`, `doctor` and `config_check` are not verbs and cannot be mapped.
+home/environment expansion, with no implicit shell. A plugin command is two
+words (`["flash", "caffeinate", "toggle"]`). A one-word plugin name is
+rejected. The CLI queries `status`, `doctor` and `config_check` are not verbs
+and cannot be mapped. A built-in verb with invalid arguments, or a name no
+manifest declares, is rejected.
 
 Entries extend the defaults layer by layer: reusing a key replaces its mapping,
 and `false` removes it.
@@ -206,6 +299,42 @@ spelled another way (`cmd+shift+]` and `cmd+shift+}`). `true` and
 `{ command = false }` are rejected.
 
 NORMAL persists across commands and focus changes. Its unmapped keys are swallowed.
+Holding `mode.normal.hyper` enters HYPER until the key is released. It
+defaults to `<leader>`, which follows `mode.normal.leader`. `leader = false`
+clears the leader; HYPER then stays off until `hyper` is a real key. Any other
+single key remaps the hold (`"a"`, `"<space>"`, `"cmd+space"`). The status
+pill turns purple and shows `mode.labels.hyper` (default `HYPER`). Keys
+pressed during the hold come from `[mode.hyper.mappings]`. While the hyper
+key is the leader, a key with no hyper mapping can still complete a NORMAL
+`<leader>` sequence. A tap that presses nothing else arms that prefix on
+release, so `<leader>` sequences keep working. `+` is written `<plus>`.
+
+VISUAL (`v`, a visual selection) and DRAG (`enter_drag_mode`, unmapped by
+default, a drag with a mouse button held) read `[mode.visual.mappings]` and `[mode.drag.mappings]` before
+NORMAL's; their labels are `mode.labels.visual` and `mode.labels.drag`. The
+[mode guide](normal-mode.md#visual-selection-visual) describes their keys and
+[dragging](normal-mode.md#dragging-drag).
+
+```toml
+[mode.normal]
+hyper = "<leader>"
+
+[mode.hyper.mappings]
+"1" = ["flash", "system_key", "--key=brightness_down"]
+"-" = ["flash", "system_key", "--key=volume_down"]
+"=" = ["flash", "system_key", "--key=volume_up"]
+```
+
+The built-in row is brightness, Mission Control, Spotlight, Dictation, Focus,
+media, mute, and volume on `1`–`9`, `0`, `-`, and `=`. Shift plus the same
+key sends F1–F12. A later mapping replaces one key.
+
+A plugin command is the same words as the command bar, and both are required:
+`flash caffeinate toggle`, `flash media volumedown`, `flash media output USB Audio`.
+Words after the subcommand are the command's arguments. A one-word plugin name,
+or a command with no subcommand, is rejected at plugin load. A name that matches
+a Flash verb, a reserved query (`status`, `doctor`, `config_check`), or another
+plugin's command is an error: every plugin that claims it fails to load.
 Map keys to high-level actions such as `tab_new`, `app_undo` or `app_reload`:
 each resolves in the focused app's context, through a source or the binding a
 plugin declares for that app (`action_bindings`; the bundled `defaults` plugin
@@ -233,7 +362,8 @@ while that app is focused:
 App-specific entries take precedence over plugin and global mappings in the
 same scope. `false` suppresses an inherited mapping for that app; other apps
 keep their existing bindings. Bundle IDs match exactly and are case-sensitive.
-The available scopes are `all`, `normal`, `insert`, `command`, and `terminal`;
+The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, `hyper`,
+`visual`, and `drag`;
 COMMAND mappings still require a single modified key. Flash updates the active
 mapping table when focus changes, so no config reload is needed.
 

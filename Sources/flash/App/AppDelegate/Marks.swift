@@ -112,6 +112,27 @@ extension AppDelegate {
     )
   }
 
+  /// The app to focus after `quitting` goes away, and the back stack that
+  /// leaves that app current. Recency is the app focused now, then the one
+  /// just left (`forward`'s tail), then older apps. The quitting pid is
+  /// never a candidate. `isAvailable` drops terminated apps and Flash itself.
+  static func appQuitFocus(
+    quitting: pid_t,
+    current: pid_t?,
+    back: [pid_t],
+    forward: [pid_t],
+    isAvailable: (pid_t) -> Bool
+  ) -> (target: pid_t, back: [pid_t])? {
+    var seen = Set<pid_t>()
+    var recentFirst: [pid_t] = []
+    let recency = (current.map { [$0] } ?? []) + forward.reversed() + back.reversed()
+    for pid in recency where pid != quitting && isAvailable(pid) && seen.insert(pid).inserted {
+      recentFirst.append(pid)
+    }
+    guard let target = recentFirst.first else { return nil }
+    return (target: target, back: Array(recentFirst.dropFirst().reversed()))
+  }
+
   func recordMovement(_ entry: MovementEntry, source: String, isAmbient: Bool = false) {
     guard let identity = movementIdentity(entry) else { return }
     if isAmbient, let target = movementNavigationTargetKey, target != identity.key {
@@ -578,6 +599,18 @@ extension AppDelegate {
   func currentNonFlashContext() -> AppContext? {
     let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
     return monitor.frontmostContext(excludingBundleIdentifier: flashBundleIdentifier)
+  }
+
+  /// `currentNonFlashContext()` with the covering dialog resolved from the
+  /// same window-list read, for hint activations.
+  func currentNonFlashActivationContext() -> AppContext? {
+    currentNonFlashActivationTarget()?.context
+  }
+
+  /// The activation's app with the window list that chose it.
+  func currentNonFlashActivationTarget() -> AppMonitor.ActivationTarget? {
+    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
+    return monitor.activationTarget(excludingBundleIdentifier: flashBundleIdentifier)
   }
 
   func focusedAboutContext() -> AppContext? {

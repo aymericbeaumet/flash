@@ -10,12 +10,20 @@ import Foundation
 /// diagnosis; the phase it failed in is evident from the call site and log.
 enum PluginError: Error, CustomStringConvertible {
   case failure(String)
+  /// A `flash` subcommand token this plugin cannot own. The manager unloads
+  /// the plugin; a malformed edit of some other kind keeps a running process.
+  case commandConflict(String)
 
   var description: String {
     switch self {
-    case .failure(let message):
+    case .failure(let message), .commandConflict(let message):
       return message
     }
+  }
+
+  var isCommandConflict: Bool {
+    if case .commandConflict = self { return true }
+    return false
   }
 }
 
@@ -76,6 +84,9 @@ struct PluginEvent {
   /// The wire frame for this event, encoded once by `PluginManager.emit` and
   /// shared by every listener instead of re-serializing the payload per plugin.
   var encodedFrame: Data?
+  /// The replacement slot this event supersedes in a plugin's queue, derived
+  /// once beside `encodedFrame` rather than per listener.
+  var coalescingKey: String?
 
   /// `core:ax.changed`: the one AX `notification` an observed app posted
   /// (`protocol.json` `host_events.ax_notifications`), so a plugin skips the

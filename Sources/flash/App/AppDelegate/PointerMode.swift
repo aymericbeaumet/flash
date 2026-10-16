@@ -2,7 +2,8 @@ import AppKit
 import FlashCore
 
 /// Pointer mode (`mouse_pointer`): freestyle keyboard cursor control.
-/// h/j/k/l or arrows move with autorepeat acceleration (shift = 2px fine),
+/// The layout's hjkl cluster or the arrow keys move with autorepeat
+/// acceleration (shift = 2px fine),
 /// `m` / `,` / `.` click left/middle/right in place, `v` toggles a drag,
 /// Return or space clicks and returns to NORMAL; Escape (or `q`) exits.
 /// `mouse_button` presses and releases outside it; both share
@@ -10,6 +11,13 @@ import FlashCore
 /// Runs as a hint-session variant:
 /// `inputMode` stays `.hints` so the capture policy is untouched, and the
 /// session's pointer phase routes keys to `PointerModeInterpreter`.
+extension AppDelegate {
+  /// `focus_input` walks run here one after another; see
+  /// `focusTextInputInNormalMode`.
+  static let focusTextInputQueue = DispatchQueue(
+    label: "flash.focus_input", qos: .userInitiated)
+}
+
 extension AppDelegate {
   func enterPointerMode() {
     guard prepareHintActivation(.pointer) else { return }
@@ -41,7 +49,9 @@ extension AppDelegate {
       pointer.moveStreak = streak
       pointer.lastMoveAt = now
       hintSession.phase = .pointer(pointer)
-      let step = PointerModeInterpreter.step(streak: streak, fine: fine)
+      let step = PointerModeInterpreter.step(
+        streak: streak, fine: fine, base: config.hints.pointerStep,
+        acceleration: config.hints.pointerAcceleration, maximum: config.hints.pointerMaxStep)
       let target = Self.clampToScreens(
         CGPoint(x: location.x + CGFloat(dx) * step, y: location.y + CGFloat(dy) * step))
       _ = ActionDispatcher.moveCursor(to: target)
@@ -68,7 +78,8 @@ extension AppDelegate {
     case .toggleDrag:
       // The same hold as `mouse_button --state=toggle`: a button another
       // press left down is released first.
-      ActionDispatcher.setMouseButton(.toggle, .primary, at: location)
+      ActionDispatcher.setMouseButton(.toggle, .primary, for: .drag, at: location)
+      overlay.movePointerMarker(to: location)
       FlashLog.trace("[pointer_mode] drag held=\(ActionDispatcher.heldButton != nil)")
     case .commitClick:
       commitPointerModeClick(at: location)
@@ -133,10 +144,19 @@ extension AppDelegate {
     let pid = context.processID
     let normalized = max(1, index)
     let generation = activationGen
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+    // Requests run one at a time, in order, and a request made since wins
+    // outright: two quick presses no longer race on the AX focus write, and
+    // the superseded one never writes at all.
+    focusTextInputRequest &+= 1
+    let request = focusTextInputRequest
+    Self.focusTextInputQueue.async { [weak self] in
+      let current = DispatchQueue.main.sync { self?.focusTextInputRequest == request }
+      guard current else { return }
       let focused = NormalModeDispatcher.focusTextInput(pid: pid, index: normalized)
       DispatchQueue.main.async {
-        guard let self, self.activationLifecycle.isCurrent(generation) else { return }
+        guard let self, self.activationLifecycle.isCurrent(generation),
+          self.focusTextInputRequest == request
+        else { return }
         if focused {
           FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
         } else {
@@ -154,9 +174,10 @@ extension AppDelegate {
   /// is released here, by Escape in a Flash overlay, `leave_mode` or quit.
   func performMouseButton(_ request: MouseButtonRequest) {
     let effects = ActionDispatcher.setMouseButton(
-      request.state, request.button, at: NSEvent.mouseLocation)
+      request.state, request.button, for: request.hold, at: NSEvent.mouseLocation)
     FlashLog.debug(
       "[mouse_button] state=\(request.state.rawValue) button=\(request.button.rawValue) "
+        + "mode=\(request.hold.rawValue) "
         + "effects=\(effects.count) held=\(ActionDispatcher.heldButton?.rawValue ?? "none")")
   }
 

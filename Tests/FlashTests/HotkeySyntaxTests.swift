@@ -281,6 +281,24 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(URLCommand.mouseMenuBar.diagnosticDescription, "flash mouse_menubar")
     XCTAssertEqual(
       URLCommand.mouseNotifications.diagnosticDescription, "flash mouse_notifications")
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_bigram"])?.command,
+      .mouseBigram(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_bigram", "--move"])?.command,
+      .mouseBigram(.move))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_bigram", "--secondary"])?.command,
+      .mouseBigram(.click(.rightClick, modifiers: [])))
+    XCTAssertEqual(
+      URLCommand.mouseBigram(.click(.doubleClick, modifiers: [])).diagnosticDescription,
+      "flash mouse_bigram --double")
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--drag"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--select"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--multi"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--adjust"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--search"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_bigram", "--move", "--secondary"]))
   }
 
   func testParseEnterCommandRestoreMode() {
@@ -396,6 +414,56 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(alert.style, .error)
   }
 
+  func testParseFlashConfirmWrapsAVerbLine() throws {
+    let action = parseMappingCommand(argv: [
+      "flash", "confirm", "--prompt=Close this window?", "--command=tab_close",
+    ])
+    guard case .flashCommand(.confirm(let request)) = action else {
+      return XCTFail("expected .confirm")
+    }
+    XCTAssertEqual(request.prompt, "Close this window?")
+    XCTAssertEqual(request.command, .tabClose)
+    XCTAssertEqual(
+      URLCommand.confirm(request).argv,
+      ["flash", "confirm", "--prompt=Close this window?", "--command=tab_close"],
+      "the verb line round-trips through argv")
+
+    // The wrapped line takes the same words a mapping would after `flash`:
+    // arguments, and a plugin command.
+    let withArgs = parseMappingCommand(argv: [
+      "flash", "confirm", "--prompt=Jump?", "--command=tab_select --index=2",
+    ])
+    guard case .flashCommand(.confirm(let selected)) = withArgs else {
+      return XCTFail("expected .confirm")
+    }
+    XCTAssertEqual(selected.command, .tabSelect(index: 2))
+    XCTAssertEqual(selected.commandText, "tab_select --index=2")
+    XCTAssertEqual(
+      URLCommand.confirm(selected).explanation,
+      "Asks \"Jump?\" first; y then " + URLCommand.tabSelect(index: 2).explanation.lowercasedFirst)
+  }
+
+  func testParseFlashConfirmRejectsAMissingQuestionOrCommand() {
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "confirm"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "confirm", "--prompt=Close?"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "confirm", "--command=tab_close"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "confirm", "--prompt= ", "--command=tab_close"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "confirm", "--prompt=Close?", "--command="]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "confirm", "--prompt=Close?", "--command=no_such_verb"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "confirm", "--prompt=Close?", "--command=tab_select --index=zero",
+      ]))
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "confirm", "--prompt=Twice?",
+        "--command=confirm --prompt=Again? --command=tab_close",
+      ]), "a confirmation cannot wrap another one")
+  }
+
   func testParseFlashDismissAlert() {
     let action = parseMappingCommand(argv: ["flash", "alert_dismiss"])
     guard case .flashCommand(.dismissAlert) = action else {
@@ -419,15 +487,58 @@ final class HotkeySyntaxTests: XCTestCase {
   func testParseFlashPlugins() {
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "plugins"])?.command, .showPlugins)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "about"])?.command, .showAbout)
-    let action = parseMappingCommand(argv: [
-      "flash", "plugin_command", "--command=spotify", "--subcommand=pause", "--args=quiet",
-    ])
+    XCTAssertNil(
+      parseMappingCommand(argv: [
+        "flash", "plugin_command", "--command=spotify", "--subcommand=pause", "--args=quiet",
+      ]))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "media", "volumedown"])?.diagnosticDescription,
+      "flash media volumedown")
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "media", "output", "USB", "Audio"])?
+        .diagnosticDescription,
+      "flash media output USB Audio")
+    XCTAssertEqual(
+      URLEventHandler.pluginSubcommand(
+        verb: "media", args: ["subcommand": "volumedown"]
+      )?.diagnosticDescription,
+      "flash media volumedown")
+    XCTAssertNil(
+      URLEventHandler.parse(
+        verb: "plugin_command", args: ["command": "media", "subcommand": "volumedown"]))
+  }
+
+  func testPluginCommandIsAFlashSubcommand() {
+    let action = parseMappingCommand(argv: ["flash", "media", "volumedown"])
     guard case .flashCommand(.pluginCommand(let command, let subcommand, let args)) = action else {
-      return XCTFail("expected .pluginCommand")
+      return XCTFail("expected media volumedown, got \(String(describing: action))")
     }
-    XCTAssertEqual(command, "spotify")
-    XCTAssertEqual(subcommand, "pause")
-    XCTAssertEqual(args, ["quiet"])
+    XCTAssertEqual(command, "media")
+    XCTAssertEqual(subcommand, "volumedown")
+    XCTAssertEqual(args, [])
+
+    // The tail is the command bar's words: `:media output USB Audio`.
+    let positioned = parseMappingCommand(argv: ["flash", "media", "output", "USB", "Audio"])
+    guard case .flashCommand(.pluginCommand(_, let output, let deviceArgs)) = positioned else {
+      return XCTFail("expected media output, got \(String(describing: positioned))")
+    }
+    XCTAssertEqual(output, "output")
+    XCTAssertEqual(deviceArgs, ["USB", "Audio"])
+
+    let clipboard = parseMappingCommand(argv: ["flash", "clipboard", "show"])
+    guard
+      case .flashCommand(
+        .pluginCommand(let clipboardCommand, let clipboardSub, let clipboardArgs)) = clipboard
+    else {
+      return XCTFail("expected clipboard show, got \(String(describing: clipboard))")
+    }
+    XCTAssertEqual(clipboardCommand, "clipboard")
+    XCTAssertEqual(clipboardSub, "show")
+    XCTAssertEqual(clipboardArgs, [])
+
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "clipboard"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "media"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "media", "not-a-subcommand"]))
   }
 
   func testNonFlashArgvIsTreatedAsShellCommand() {
@@ -559,6 +670,10 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testInvalidFlashURLRejected() {
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "caffeinate_toggle"]))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "caffeinate", "toggle"])?.command,
+      .pluginCommand(command: "caffeinate", subcommand: "toggle", args: []))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "unknown_command"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "app_open"]))  // no name
     XCTAssertNil(parseMappingCommand(argv: ["flash", "alert_show"]))  // no message
@@ -702,4 +817,11 @@ final class HotkeySyntaxTests: XCTestCase {
       ]))
   }
 
+}
+
+extension String {
+  fileprivate var lowercasedFirst: String {
+    guard let first = first else { return self }
+    return first.lowercased() + dropFirst()
+  }
 }

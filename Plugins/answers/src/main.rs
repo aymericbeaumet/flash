@@ -35,8 +35,8 @@ impl Answers {
         }
     }
 
-    /// Engines in the order the host ran the formerly standalone evaluators
-    /// (equal priority, ids ascending): calculator, colors, timezones.
+    /// Engines in evaluation order (equal priority, ids ascending):
+    /// calculator, colors, timezones.
     fn engines(&self) -> [&dyn Engine; 3] {
         [&self.calculator, &Colors, &self.timezones]
     }

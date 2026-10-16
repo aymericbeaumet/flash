@@ -219,6 +219,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(runs.count, 1)
     XCTAssertEqual(runs[0].name, "quota")
     XCTAssertEqual(runs[0].content, "#[fg=colour178,bold]Claude#[default]\n5-hour 75% remaining")
+    XCTAssertNil(runs[0].link)
     XCTAssertGreaterThan(runs[0].xOffset, 0)
     XCTAssertGreaterThan(runs[0].width, 0)
     XCTAssertGreaterThan(total, runs[0].xOffset + runs[0].width)
@@ -249,6 +250,18 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(total, popupRuns[0].xOffset + popupRuns[0].width)
     XCTAssertEqual(linkRuns.count, 1)
     XCTAssertEqual(linkRuns[0].url, "https://example.com")
+    XCTAssertEqual(popupRuns[0].link, "https://example.com")
+  }
+
+  func testSeparatePopupsKeepTheLinkOnTheirOwnSpan() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw =
+      "#[popup=feed]#[link=https://aggr.example]aggr#[nolink]#[nopopup] "
+      + "#[popup=feed-article]#[link=https://article.example/a]Headline#[nopopup]"
+    let (runs, _) = FlashStatusBarRenderer.popupRuns(
+      from: raw, font: font, popupTexts: ["feed": "", "feed-article": ""])
+    XCTAssertEqual(runs.map(\.name), ["feed", "feed-article"])
+    XCTAssertEqual(runs.map(\.link), ["https://aggr.example", "https://article.example/a"])
   }
 
   func testInlinePopupContentOverridesNamedTemplateOnlyForItsSpan() {
@@ -1136,7 +1149,7 @@ final class StatusBarTests: XCTestCase {
       .init(write: nil, owned: false))
   }
 
-  func testErrorAlertsSurviveTransientTeardownAndInfoToastsDoNot() {
+  func testErrorAlertsSurviveTransientTeardownAndInfoToastsDoNot() throws {
     _ = NSApplication.shared
     let panel = OverlayPanel()
     defer {
@@ -1148,7 +1161,7 @@ final class StatusBarTests: XCTestCase {
 
     // An error has to stay readable: a dismiss observer firing during the
     // restart churn used to wipe it within the same event loop.
-    panel.displayAlert("Something broke", duration: 30, style: .error)
+    panel.displayAlert(.message("Something broke", duration: .seconds(30), style: .error))
     let error = try? XCTUnwrap(panel.toast?.layer)
     panel.hide()
     XCTAssertTrue(panel.toast?.layer === error, "an error outlives a transient teardown")
@@ -1158,8 +1171,88 @@ final class StatusBarTests: XCTestCase {
     XCTAssertFalse(panel.contentLayer.sublayers?.contains { $0 === error } ?? false)
 
     // An informational toast keeps the get-out-of-the-way behaviour.
-    panel.displayAlert("Sleep ON", duration: 30, style: .standard)
+    panel.displayAlert(.message("Sleep ON", duration: .seconds(30)))
+    let message = try XCTUnwrap(panel.toast?.layer)
+    XCTAssertEqual(message.sublayers?.count, 1, "a message is one line")
+    panel.hide()
+    XCTAssertNil(panel.toast)
+    XCTAssertEqual(StatusAlert.volume(6).value, "6%")
+    XCTAssertEqual(StatusAlert.volume(50).value, "50%")
+    XCTAssertEqual(StatusAlert.volume(100).value, "100%")
+    XCTAssertEqual(StatusAlert.volume(6).title, "volume")
+    panel.displayAlert(StatusAlert.volume(6))
+    let volumeNarrow = try XCTUnwrap(panel.toast?.layer.frame.width)
+    XCTAssertEqual(panel.toast?.layer.sublayers?.count, 2, "a value is its own line")
+    panel.displayAlert(StatusAlert.volume(100))
+    let volumeWide = try XCTUnwrap(panel.toast?.layer.frame.width)
+    XCTAssertEqual(
+      StatusAlert.caffeinate(on: true),
+      StatusAlert(title: "caffeinate", value: "on", valueAnchor: "off"))
+    XCTAssertEqual(
+      StatusAlert.caffeinate(on: false),
+      StatusAlert(title: "caffeinate", value: "off", valueAnchor: "off"))
+    panel.displayAlert(StatusAlert.caffeinate(on: true))
+    let caffeinateOn = try XCTUnwrap(panel.toast?.layer.frame.width)
+    panel.displayAlert(StatusAlert.caffeinate(on: false))
+    let caffeinateOff = try XCTUnwrap(panel.toast?.layer.frame.width)
+    XCTAssertEqual(volumeNarrow, volumeWide)
+    XCTAssertEqual(caffeinateOn, caffeinateOff)
+    XCTAssertNotEqual(volumeWide, caffeinateOff)
     XCTAssertNotNil(panel.toast)
+    panel.hide()
+    XCTAssertNil(panel.toast)
+  }
+
+  /// `alert_show`, a plugin result and a confirmation all draw through the
+  /// one alert: the verb's dwell and style map onto it, and a question stays
+  /// up with no expiry until the session that asked it is torn down.
+  func testEveryAlertIsTheOneConfigurableAlert() throws {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.dismissAlert()
+      panel.orderOut(nil)
+    }
+    XCTAssertEqual(
+      AlertCommand(message: "Wi-Fi OFF", duration: nil, style: .standard).alert,
+      .message("Wi-Fi OFF"))
+    XCTAssertEqual(
+      AlertCommand(message: "Broke", duration: 0.75, style: .error).alert,
+      StatusAlert(title: "Broke", style: .error, duration: .seconds(0.75)))
+    XCTAssertEqual(
+      OverlayPanel.alertDurationMs(.standard, style: .standard),
+      Int((FlashTunables.alertDuration * 1000).rounded()))
+    XCTAssertEqual(OverlayPanel.alertDurationMs(.standard, style: .error), 10_000)
+    XCTAssertEqual(OverlayPanel.alertDurationMs(.seconds(0.75), style: .error), 750)
+    XCTAssertNil(OverlayPanel.alertDurationMs(.untilDismissed, style: .standard))
+
+    let question = StatusAlert.confirmation("Close this tmux window?")
+    XCTAssertEqual(question.title, "Close this tmux window?")
+    XCTAssertEqual(question.value, "[y]es / [n]o")
+    XCTAssertEqual(question.valueAccents, ["[y]", "[n]"])
+    // The keys are the only accented runs; the rest keeps the text colour.
+    let choices = try XCTUnwrap(
+      OverlayPanel.alertValueString(
+        "[y]es / [n]o", accents: ["[y]", "[n]"], font: .systemFont(ofSize: 10),
+        textColor: .white, accentColor: .systemYellow) as? NSAttributedString)
+    var accented: [String] = []
+    choices.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: choices.length)) {
+      color, range, _ in
+      if color as? NSColor == NSColor.systemYellow {
+        accented.append((choices.string as NSString).substring(with: range))
+      }
+    }
+    XCTAssertEqual(accented, ["[y]", "[n]"])
+    XCTAssertTrue(
+      OverlayPanel.alertValueString(
+        "6%", accents: [], font: .systemFont(ofSize: 10), textColor: .white,
+        accentColor: .systemYellow) is String, "a state value stays plain")
+    XCTAssertEqual(question.duration, .untilDismissed)
+    XCTAssertEqual(question.style, .standard)
+    panel.displayAlert(question)
+    let asked = try XCTUnwrap(panel.toast)
+    XCTAssertFalse(asked.outlivesTeardown, "the question goes with its session")
+    XCTAssertEqual(asked.layer.sublayers?.count, 2)
     panel.hide()
     XCTAssertNil(panel.toast)
   }
@@ -1230,7 +1323,7 @@ final class StatusBarTests: XCTestCase {
       panel.dismissToast()
       panel.orderOut(nil)
     }
-    panel.displayAlert("config error", duration: 30, style: .error)
+    panel.displayAlert(.message("config error", duration: .seconds(30), style: .error))
     let configError = panel.toastToken
     panel.displayBanner("Copied", durationMs: 0)
     let banner = panel.toast?.layer

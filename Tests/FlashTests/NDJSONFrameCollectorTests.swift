@@ -40,6 +40,29 @@ final class NDJSONFrameCollectorTests: XCTestCase {
       [.oversized(18), .frame(data("{\"a\":1}"))])
   }
 
+  /// A long frame arriving in many reads is scanned once: each read searches
+  /// only the bytes it added, and a newline split across reads still ends
+  /// the frame at the right byte.
+  func testLongFrameSplitAcrossManyReadsIsScannedIncrementally() {
+    var collector = NDJSONFrameCollector()
+    let body = String(repeating: "x", count: 64 * 1024)
+    let line = "{\"body\":\"\(body)\"}"
+    let bytes = Array(line.utf8)
+    var offset = 0
+    while offset < bytes.count {
+      let end = min(bytes.count, offset + 4096)
+      XCTAssertEqual(collector.append(Data(bytes[offset..<end])), [])
+      offset = end
+    }
+    XCTAssertEqual(
+      collector.append(data("\n{\"id\":1}\n")),
+      [.frame(data(line)), .frame(data("{\"id\":1}"))])
+    // The collector is clean afterwards: the next partial line scans from
+    // its own start.
+    XCTAssertEqual(collector.append(data("{\"id\"")), [])
+    XCTAssertEqual(collector.append(data(":2}\n")), [.frame(data("{\"id\":2}"))])
+  }
+
   func testScansLargeCoalescedBatchWithoutLosingOrder() {
     var collector = NDJSONFrameCollector()
     let expected = (0..<10_000).map { data("{\"id\":\($0)}") }

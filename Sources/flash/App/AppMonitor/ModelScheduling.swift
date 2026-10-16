@@ -41,7 +41,7 @@ extension AppMonitor {
     modelScheduler.reset(pid: pid)
     releaseMaintenanceWake(pid: pid)
     releaseRefreshWakes(pid: pid)
-    pendingModelCompletion.removeValue(forKey: pid)
+    pendingModelWaiters.take(pid: pid)?(nil)
     slowAutomaticModelRefreshPIDs.remove(pid)
     readinessRewalkBudget.removeValue(forKey: pid)
   }
@@ -50,7 +50,7 @@ extension AppMonitor {
     modelScheduler.reset()
     releaseMaintenanceWake(pid: nil)
     releaseRefreshWakes(pid: nil)
-    pendingModelCompletion.removeAll()
+    for waiter in pendingModelWaiters.takeAll() { waiter(nil) }
     slowAutomaticModelRefreshPIDs.removeAll()
     readinessRewalkBudget.removeAll()
   }
@@ -386,17 +386,17 @@ extension AppMonitor {
       return
     }
     guard preparedModels.beginRebuild(pid: pid) else {
-      // Last-writer-wins: only the latest activation waiter matters,
-      // earlier waiters are already-stale activations.
+      // Only the latest activation waiter matters; the one it displaces is
+      // a superseded activation, told so with nil rather than left hanging.
       if let completion {
-        pendingModelCompletion[pid] = completion
+        pendingModelWaiters.park(completion, pid: pid)?(nil)
       }
       return
     }
     if completion == nil {
       modelScheduler.noteRefreshStarted(pid: pid, now: DispatchTime.now().uptimeNanoseconds)
     }
-    let primaryH = primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
 
     axQueue.async { [weak self] in
       guard let self else { return }
@@ -414,7 +414,7 @@ extension AppMonitor {
           rebuildEndedAt.uptimeNanoseconds - rebuildStartedAt.uptimeNanoseconds) / 1_000_000
       DispatchQueue.main.async {
         let shouldRunQueued = self.preparedModels.finishRebuild(pid: pid)
-        let waiter = self.pendingModelCompletion.removeValue(forKey: pid)
+        let waiter = self.pendingModelWaiters.take(pid: pid)
         defer {
           if shouldRunQueued {
             self.scheduleModelRefresh(for: pid, reason: .queued)

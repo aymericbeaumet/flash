@@ -23,8 +23,25 @@ final class MappingsCoordinator {
   private var mappingDispatch: ((MappingCommand) -> Void)?
   private var activeMappings: [ParsedHotkey: ModeMapping] = [:]
   private var configuredMode: Config.Mode = .init()
+  /// The native tables of each scope under `configuredMode`, built on first
+  /// use after `apply(mode:)`: a NORMAL/INSERT/COMMAND transition then swaps
+  /// a prepared table instead of resolving the mapping lists again.
+  private struct ScopeTables {
+    var active: [ParsedHotkey: ModeMapping]
+    var scoped: [ModeMapping]
+  }
+  private var scopeTables: [MappingScope: ScopeTables] = [:]
+
+  private func tables(for scope: MappingScope) -> ScopeTables {
+    if let cached = scopeTables[scope] { return cached }
+    let built = ScopeTables(
+      active: Self.activeMappingTable(in: configuredMode, scope: scope),
+      scoped: Self.scopedNativeMappings(in: configuredMode, scope: scope))
+    scopeTables[scope] = built
+    return built
+  }
   private var lastAppliedScope: MappingScope = .insert
-  private var lastFireDiagnostic: String?
+  private var lastFiredAction: MappingCommand?
   private var lastFireAt: Date = .distantPast
   /// Chords Flash just synthesized into the focused app (e.g. the `⌘⇧]`
   /// Messages tab-traversal fallback). `postToPid` is *supposed* to bypass
@@ -51,7 +68,8 @@ final class MappingsCoordinator {
   /// from inside the synchronous tap callback, which must never wait on it.
   func apply(mode: Config.Mode) {
     configuredMode = mode
-    activeMappings = Self.activeMappingTable(in: mode, scope: lastAppliedScope)
+    scopeTables.removeAll(keepingCapacity: true)
+    activeMappings = tables(for: lastAppliedScope).active
     guard !registrationReconcileQueued else { return }
     registrationReconcileQueued = true
     DispatchQueue.main.async { [weak self] in
@@ -85,16 +103,27 @@ final class MappingsCoordinator {
 
   private func reconcileScopedMappings(for mappingScope: MappingScope) {
     lastAppliedScope = mappingScope
-    activeMappings = Self.activeMappingTable(in: configuredMode, scope: mappingScope)
-    reconcile(
-      Self.scopedNativeMappings(in: configuredMode, scope: mappingScope), with: scopedHotkeys,
-      label: "\(mappingScope)")
+    let tables = tables(for: mappingScope)
+    activeMappings = tables.active
+    reconcile(tables.scoped, with: scopedHotkeys, label: "\(mappingScope)")
   }
 
   /// Mapping keys macOS refused to register, per registration set. A refused
   /// chord stays desired, so every reconcile retries it and this is the
   /// current set; `flash doctor` reports it.
   private var refusedKeys: [ObjectIdentifier: [String]] = [:]
+
+  /// Mapping keys registered with macOS, per registration set: the chords
+  /// Flash takes from every app until the scope changes.
+  private var registeredKeys: [ObjectIdentifier: [String]] = [:]
+
+  /// The scope whose chords are registered and whose table the tap reads.
+  var appliedScope: MappingScope { lastAppliedScope }
+
+  /// Every mapping key Flash holds as a system-wide hotkey right now.
+  var registeredHotkeys: [String] {
+    Array(Set(registeredKeys.values.joined())).sorted()
+  }
 
   var refusedHotkeys: [String] {
     Array(Set(refusedKeys.values.joined())).sorted()
@@ -106,9 +135,12 @@ final class MappingsCoordinator {
       if let chord = mapping.nativeHotkey { keysByChord[chord] = mapping.key }
     }
     let result = hotkeys.reconcile(desired: Set(keysByChord.keys)) { [weak self] chord in
-      self?.handle(hotkey: chord)
+      self?.handle(hotkey: chord, origin: .carbon)
     }
     refusedKeys[ObjectIdentifier(hotkeys)] = result.refused.map { keysByChord[$0] ?? "?" }
+    registeredKeys[ObjectIdentifier(hotkeys)] = hotkeys.registeredChords.map {
+      keysByChord[$0] ?? "?"
+    }
     for chord in result.refused {
       FlashLog.warn(
         "[mappings] could not register \"\(keysByChord[chord] ?? "?")\" — "
@@ -126,6 +158,8 @@ final class MappingsCoordinator {
     case .terminal: return false
     case .command: return scope == .all || scope == .command
     case .normal: return scope == .all || scope == .normal
+    case .visual: return scope == .all || scope == .normal || scope == .visual
+    case .drag: return scope == .all || scope == .normal || scope == .drag
     case .insert: return scope == .all || scope == .insert
     }
   }
@@ -140,6 +174,13 @@ final class MappingsCoordinator {
   }
 
   static func nativeMappings(in mode: Config.Mode, scope: MappingScope) -> [ModeMapping] {
+    // A held-button mode reads the interpreter's own table: its entries over
+    // the NORMAL ones it leaves alone.
+    switch scope {
+    case .visual: return mode.heldMappings(.visual).filter { $0.nativeHotkey != nil }
+    case .drag: return mode.heldMappings(.drag).filter { $0.nativeHotkey != nil }
+    case .normal, .insert, .command, .terminal: break
+    }
     let scopes: [(ModeScope, [ModeMapping])] = [
       (.normal, mode.normal), (.insert, mode.insert), (.command, mode.command), (.all, mode.all),
     ]
@@ -159,11 +200,31 @@ final class MappingsCoordinator {
 
   // MARK: - Hot path
 
+  /// Where a chord came from. The session tap and the key window hand over
+  /// physical presses, already filtered of Flash's own tagged synthetic
+  /// keys; only a Carbon hotkey can be an echo of a chord Flash posted, and
+  /// only there do the echo window and the same-action debounce apply.
+  enum FireOrigin {
+    case carbon
+    case event
+  }
+
   func handle(event: NSEvent) -> Bool {
     handle(
       hotkey: ParsedHotkey(
         modifiers: Self.carbonModifiers(from: event.modifierFlags),
-        virtualKey: UInt32(event.keyCode)))
+        virtualKey: UInt32(event.keyCode)),
+      origin: .event)
+  }
+
+  /// The command a chord would fire, without firing it. EasyMotion uses this
+  /// to tell a mode change from a chord that should stay inside the jump.
+  func action(for event: NSEvent) -> MappingCommand? {
+    activeMappings[
+      ParsedHotkey(
+        modifiers: Self.carbonModifiers(from: event.modifierFlags),
+        virtualKey: UInt32(event.keyCode))
+    ]?.action
   }
 
   /// Whether a raw event matches the same resolved chord used by Carbon and
@@ -175,27 +236,34 @@ final class MappingsCoordinator {
   }
 
   @discardableResult
-  private func handle(hotkey: ParsedHotkey) -> Bool {
+  private func handle(hotkey: ParsedHotkey, origin: FireOrigin) -> Bool {
     guard let mapping = activeMappings[hotkey] else { return false }
-    fire(mapping, parsed: hotkey)
+    fire(mapping, parsed: hotkey, origin: origin)
     return true
   }
 
-  private func fire(_ mapping: ModeMapping, parsed: ParsedHotkey) {
-    let diagnostic = mapping.action.diagnosticDescription
+  private func fire(_ mapping: ModeMapping, parsed: ParsedHotkey, origin: FireOrigin) {
+    let action = mapping.action
     let now = Date()
-    if consumeSyntheticEcho(virtualKey: parsed.virtualKey, modifiers: parsed.modifiers, now: now) {
-      FlashLog.debug("[mappings] suppressed self-synthesized echo \(diagnostic)")
-      return
+    if origin == .carbon {
+      if consumeSyntheticEcho(virtualKey: parsed.virtualKey, modifiers: parsed.modifiers, now: now)
+      {
+        FlashLog.debug(
+          "[mappings] suppressed self-synthesized echo \(action.diagnosticDescription)")
+        return
+      }
+      // A physical press never reaches here twice: the tap swallows before
+      // Carbon dispatch. Two Carbon fires inside the window are a chord
+      // echoed back; a held key's repeats on the tap path are the user's.
+      if lastFiredAction == action, now.timeIntervalSince(lastFireAt) < 0.08 {
+        return
+      }
+      lastFiredAction = action
+      lastFireAt = now
     }
-    if lastFireDiagnostic == diagnostic, now.timeIntervalSince(lastFireAt) < 0.08 {
-      return
-    }
-    lastFireDiagnostic = diagnostic
-    lastFireAt = now
     Trace.ensure(.hotkey) {
-      FlashLog.debug("[mappings] fired \(diagnostic)")
-      mappingDispatch?(mapping.action)
+      FlashLog.debug("[mappings] fired \(action.diagnosticDescription)")
+      mappingDispatch?(action)
     }
   }
 

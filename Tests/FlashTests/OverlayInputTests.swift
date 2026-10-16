@@ -272,16 +272,16 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(cmd(kVK_Tab, "\t", [.shift]), .screen(-1))
     XCTAssertEqual(cmd(kVK_ANSI_Grave, "`"), .toggleFollow)
 
-    XCTAssertEqual(cmd(kVK_ANSI_H, "h", shape: .bisect), .half(.left, []))
-    XCTAssertEqual(cmd(kVK_ANSI_J, "j", shape: .bisect), .half(.down, []))
-    XCTAssertEqual(cmd(kVK_ANSI_K, "k", shape: .bisect), .half(.up, []))
-    XCTAssertEqual(cmd(kVK_ANSI_L, "l", [.shift], shape: .bisect), .half(.right, [.shift]))
+    XCTAssertEqual(cmd(kVK_ANSI_H, "h", shape: .qwertyBisect), .half(.left, []))
+    XCTAssertEqual(cmd(kVK_ANSI_J, "j", shape: .qwertyBisect), .half(.down, []))
+    XCTAssertEqual(cmd(kVK_ANSI_K, "k", shape: .qwertyBisect), .half(.up, []))
+    XCTAssertEqual(cmd(kVK_ANSI_L, "l", [.shift], shape: .qwertyBisect), .half(.right, [.shift]))
     for key in ["y", "u", "b", "n"] {
-      XCTAssertEqual(cmd(0, key, shape: .bisect), .cell(Character(key), []))
+      XCTAssertEqual(cmd(0, key, shape: .qwertyBisect), .cell(Character(key), []))
     }
-    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", shape: .bisect), .cancel)
-    XCTAssertEqual(cmd(kVK_Return, "\r", shape: .bisect), .commitHere([]))
-    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", shape: .bisect), .back)
+    XCTAssertEqual(cmd(kVK_ANSI_Q, "q", shape: .qwertyBisect), .cancel)
+    XCTAssertEqual(cmd(kVK_Return, "\r", shape: .qwertyBisect), .commitHere([]))
+    XCTAssertEqual(cmd(kVK_Delete, "\u{7f}", shape: .qwertyBisect), .back)
   }
 
   func testGridTypedCharacterIsUnshiftedOnlyWhileShiftIsHeld() {
@@ -321,6 +321,34 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.cancelCount, 0, "the grid owns its cancel")
   }
 
+  /// A question owns every key: only `y` (bare or shifted, on the reference
+  /// layout) accepts; `n`, Escape, Return and a mapped chord all answer no,
+  /// and none of them reaches a mapping or the cancel path.
+  func testConfirmationRouteAnswersWithTheFirstKeyAndOwnsEveryOther() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.keyboardLayout = .usANSI
+    panel.inputMode = .hints
+    panel.hintKeyRoute = .confirmation
+    defer { panel.inputMode = .passive }
+    XCTAssertTrue(HintKeyRoute.confirmation.showsCursor, "a question hides no labels")
+
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_Y, characters: "y"))
+    panel.keyDown(with: try keyEvent(keyCode: kVK_ANSI_Y, characters: "Y", modifierFlags: [.shift]))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_Y, characters: "н"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_N, characters: "n"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Escape, characters: ""))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Return, characters: "\r"))
+    coordinator.mappingEventsToHandle = 1
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_Y, characters: "y", modifierFlags: [.command]))
+
+    XCTAssertEqual(coordinator.confirmations, [true, true, true, false, false, false, false])
+    XCTAssertEqual(coordinator.mappingEventsToHandle, 1, "no mapping fires over a question")
+    XCTAssertEqual(coordinator.cancelCount, 0, "the question owns its own no")
+  }
+
   /// Under a Russian source the F key types "а"; with a reference layout
   /// every positional interpreter reads it as `f`, while `--search` keeps
   /// the typed text it matches against.
@@ -355,6 +383,15 @@ final class OverlayInputTests: XCTestCase {
     panel.hintKeyRoute = .search
     panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_F, characters: "а"))
     XCTAssertEqual(coordinator.searchCommands, [.append("а")])
+
+    panel.hintKeyRoute = .bigram
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_T, characters: "е"))
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_H, characters: "р", modifierFlags: [.shift]))
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_ANSI_T, characters: "t", modifierFlags: [.command]))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Escape, characters: ""))
+    XCTAssertEqual(coordinator.bigramCommands, [.append("t"), .append("H"), .cancel])
   }
 
   func testAReferenceLayoutFeedsNormalMode() throws {
@@ -878,6 +915,41 @@ final class OverlayInputTests: XCTestCase {
     panel.hintKeyRoute = .labels
   }
 
+  /// Labels hide the pointer until the mouse moves; ending them leaves it to
+  /// that move rather than flashing it back. Each session hides it again, and
+  /// only a route that steers the pointer shows it at once.
+  func testHintCursorHidesUntilTheMouseMovesAndIsNotReshownWhenHintsEnd() {
+    let panel = OverlayPanel()
+    var hiddenUntilMove: [Bool] = []
+    let previous = OverlayPanel.hintCursorVisibility
+    OverlayPanel.hintCursorVisibility = { hiddenUntilMove.append($0) }
+    defer {
+      OverlayPanel.hintCursorVisibility = previous
+      panel.inputMode = .passive
+    }
+    func settle() {
+      let turn = expectation(description: "cursor update")
+      DispatchQueue.main.async { turn.fulfill() }
+      wait(for: [turn], timeout: 1)
+    }
+    panel.hintKeyRoute = .labels
+    panel.inputMode = .hints
+    settle()
+    XCTAssertEqual(hiddenUntilMove, [true])
+
+    panel.inputMode = .passive
+    settle()
+    XCTAssertEqual(hiddenUntilMove, [true], "ending the labels does not reshow it")
+
+    panel.inputMode = .hints
+    settle()
+    XCTAssertEqual(hiddenUntilMove, [true, true], "the next labels hide it again")
+
+    panel.hintKeyRoute = .pointer
+    settle()
+    XCTAssertEqual(hiddenUntilMove, [true, true, false], "pointer mode needs the cursor")
+  }
+
   func testActiveWindowBorderIsStrokedInTheStyleOfTheBadgeShown() {
     let panel = OverlayPanel()
     defer {
@@ -995,6 +1067,8 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var adjustCommands: [HintAdjustmentCommand] = []
   var pointerCommands: [PointerModeCommand] = []
   var searchCommands: [HintSearchCommand] = []
+  var bigramCommands: [HintBigramCommand] = []
+  var confirmations: [Bool] = []
 
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
@@ -1008,13 +1082,17 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {
     searchCommands.append(command)
   }
+  func overlayDidBigram(_ command: HintBigramCommand) { bigramCommands.append(command) }
   func overlayDidGrid(_ command: MouseGridKeyCommand) { gridCommands.append(command) }
+  func overlayDidConfirm(accepted: Bool) { confirmations.append(accepted) }
   func overlayDidUpdatePrefix(_ prefix: String) {}
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
     if action != nil {
       normalModeActions.append((action, repeatCount))
     }
   }
+  func handleLeaderHoldKeyDown(_ event: NSEvent) -> Bool { false }
+  func handleLeaderKeyUp(_ event: NSEvent) -> Bool { false }
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
     guard mappingEventsToHandle > 0 else { return false }
     mappingEventsToHandle -= 1
@@ -1104,6 +1182,36 @@ final class CommandLineKeyRecoveryTests: XCTestCase {
     XCTAssertNil(
       OverlayPanel.activationSourcePID(
         workspaceFrontPID: nil, lastNonFlashPID: nil, currentPID: 5))
+  }
+}
+
+final class CommandLineKeyResignTests: XCTestCase {
+  func testLateHandoffRecapturesOnlyTheSameOpenCommandLine() {
+    func recovers(
+      generation: UInt64 = 7,
+      mode: OverlayInputMode = .commandLine,
+      laidOut: Bool = true,
+      visible: Bool = true,
+      focused: Bool = false,
+      otherFlashWindowIsKey: Bool = false
+    ) -> Bool {
+      OverlayPanel.shouldRecoverCommandLineFocus(
+        scheduledGeneration: generation,
+        currentGeneration: 7,
+        inputMode: mode,
+        fieldIsLaidOut: laidOut,
+        panelIsVisible: visible,
+        holdsKeyboardFocus: focused,
+        otherFlashWindowIsKey: otherFlashWindowIsKey)
+    }
+
+    XCTAssertTrue(recovers())
+    XCTAssertFalse(recovers(generation: 6))
+    XCTAssertFalse(recovers(mode: .passive))
+    XCTAssertFalse(recovers(laidOut: false))
+    XCTAssertFalse(recovers(visible: false))
+    XCTAssertFalse(recovers(focused: true))
+    XCTAssertFalse(recovers(otherFlashWindowIsKey: true))
   }
 }
 

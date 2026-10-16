@@ -76,7 +76,7 @@ impl FlashPlugin for Caffeinate {
             return PerformResponse::fail(error.diagnostic());
         }
         match command.subcommand.as_str() {
-            "" | "status" => performed(&state),
+            "status" => performed(&state),
             "on" => self.start_and_report(&ctx, &mut state, minutes).await,
             "off" => stop_and_report(&ctx, &mut state).await,
             "toggle" if state.pid().is_some() => stop_and_report(&ctx, &mut state).await,
@@ -196,7 +196,8 @@ async fn terminate_into(
 
 fn performed(state: &AssertionState) -> PerformResponse {
     match state.pid() {
-        Some(pid) => PerformResponse::ok().message(format!("caffeinate on (pid {pid})")),
+        // These phrases share Flash's alert box with `volume 100%`.
+        Some(_) => PerformResponse::ok().message("caffeinate on"),
         None => PerformResponse::ok().message("caffeinate off"),
     }
 }
@@ -248,7 +249,10 @@ const NO_WAIT: timespec = timespec {
 /// `reconcile`, so its pid cannot be reused meanwhile.
 async fn exited(pid: u32) -> io::Result<()> {
     // Readable only: a kqueue descriptor rejects a write filter.
-    let queue = AsyncFd::with_interest(Queue(Kqueue::new()?), Interest::READABLE)?;
+    // SAFETY: Queue owns the kqueue descriptor and never replaces it while
+    // AsyncFd is alive, so its AsRawFd value remains valid and stable.
+    let queue =
+        unsafe { AsyncFd::register_with_interest(Queue(Kqueue::new()?), Interest::READABLE)? };
     let exit = KEvent::new(
         pid as usize,
         EventFilter::EVFILT_PROC,

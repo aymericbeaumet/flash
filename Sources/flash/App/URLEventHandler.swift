@@ -18,11 +18,48 @@ import FlashCore
 // so the in-process path and the AppleEvent path share one source of
 // truth.
 
-enum URLCommand: Hashable {
+indirect enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
+  /// One letter of visible text in the focused window and on its status bar,
+  /// then a hint bigram, then a click (`s`). Only `.click` and `.move`.
+  case mouseBigram(MouseCommand)
+
+  /// Entering or leaving a mode. An EasyMotion jump releases the keyboard
+  /// for these and then runs them; other commands stay inside the jump.
+  var changesMode: Bool {
+    switch self {
+    case .insertMode, .normalMode, .commandMode, .enterCommand, .terminalMode, .leaveMode:
+      return true
+    default:
+      return false
+    }
+  }
   /// `mouse_target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen (click variants only).
   case mouseTargetScreen(MouseCommand)
+  /// `mouse_target --words`: a hint on every visible word of the focused
+  /// window's text, landing on the word's leading edge (click, move, drag
+  /// and select).
+  case mouseTargetWords(MouseCommand)
+  /// `mouse_screens`: one hint per display; the pointer lands on its centre.
+  case mouseScreens
+  /// `mouse_warp`: the pointer jumps to an edge or the centre of the focused
+  /// window or its screen.
+  case mouseWarp(MouseWarpRequest)
+  /// `mouse_step`: the pointer moves one text line or one character from the
+  /// text under it; in VISUAL that extends the selection.
+  case mouseStep(TextStep.Direction)
+  /// `mouse_step --to`: Vim's word and line jumps on the text under the
+  /// pointer (`w`, `b`, `e`, `0`, `$`).
+  case mouseJump(TextStep.Jump)
+  /// `selection`: act on the selected text, ending a visual selection first.
+  case selection(SelectionAction)
+  /// `mouse_nudge`: the pointer moves a fixed distance; in DRAG the held
+  /// button drags what it grabbed.
+  case mouseNudge(TextStep.Direction, distance: Int)
+  /// `mouse_position`: the saved pointer positions — save, hint, cycle,
+  /// forget.
+  case mousePosition(MousePositionRequest)
   case mouseGrid(MouseGridRequest)
   /// Re-click the last Flash-committed click point (sticky click). Repeats
   /// honour normal-mode counts (`3` + mapped key clicks three times).
@@ -32,6 +69,10 @@ enum URLCommand: Hashable {
   /// Press, release or toggle a button at the pointer; moves drag while it
   /// is held.
   case mouseButton(MouseButtonRequest)
+  /// `enter_drag_mode`: grab what is under the pointer with `button` held
+  /// (DRAG), or drop it there when that button is already held. Sugar for
+  /// `mouse_button --state=toggle --mode=drag`; ships unmapped.
+  case dragMode(MouseButtonKind)
   /// Focus the first (or count-th) editable text input in the focused window
   /// while preserving the current mode.
   case focusInput
@@ -129,8 +170,17 @@ enum URLCommand: Hashable {
   case clipboardCopy
   case clipboardCut
   case clipboardPaste
+  /// `gesture`: a trackpad gesture by finger count and motion, emulated at
+  /// the pointer (`TrackpadGesture`).
+  case trackpadGesture(fingers: Int, motion: TrackpadGesture.Motion)
+  /// `look_up`: the focused app's Look Up (definition, data detectors) on the
+  /// word under the pointer, a three-finger tap on a trackpad.
+  case lookUp
   case showAlert(AlertCommand)
   case dismissAlert
+  /// Ask before running a command the user cannot undo: the question is the
+  /// alert, `y` runs the wrapped command, any other key closes it.
+  case confirm(ConfirmCommand)
   case showUsage(topic: String?)
   case showMappings
   case showPlugins
@@ -140,8 +190,14 @@ enum URLCommand: Hashable {
   case openApp(name: String)
   case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
-  case focusWindow(WindowFocusDirection)
+  case focusWindow(WindowFocusRequest)
   case windowState(WindowStateAction)
+  /// One printed Apple function-row action (brightness, sound, …).
+  case systemKey(SystemKeyboard.RowKey)
+  /// A plain F1–F12 keystroke, with no modifiers.
+  case functionKey(Int)
+  /// One arrow key, optionally shifted. HYPER binds the layout's ESDF positions here.
+  case arrow(direction: WindowFocusDirection, shift: Bool)
   case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
   case sendKeys(keys: String, keyCodes: [CGKeyCode], flagsRawValues: [UInt64])
   /// A verb registered by a plugin via the manifest's `verbs.items` section.
@@ -200,6 +256,7 @@ extension URLCommand {
     case .clipboardCopy: return .clipboardCopy
     case .clipboardCut: return .clipboardCut
     case .clipboardPaste: return .clipboardPaste
+    case .lookUp: return .lookUp
     default: return nil
     }
   }
@@ -215,14 +272,15 @@ extension URLCommand {
 }
 
 struct AlertCommand: Hashable {
-  enum Style: String, Hashable {
-    case standard
-    case error
-  }
-
   let message: String
   let duration: TimeInterval?
-  let style: Style
+  let style: StatusAlert.Style
+
+  /// The alert the verb shows: one line, for the style's default dwell
+  /// unless the call passed `--duration`.
+  var alert: StatusAlert {
+    .message(message, duration: duration.map { .seconds($0) } ?? .standard, style: style)
+  }
 
   var argTokens: [String] {
     var tokens = ["--message=\(message)"]
@@ -233,6 +291,20 @@ struct AlertCommand: Hashable {
       tokens.append("--style=\(style.rawValue)")
     }
     return tokens
+  }
+}
+
+/// `confirm --prompt=<text> --command=<verb [--arg=value ...]>`: the question
+/// and the Flash command it gates. The wrapped command is any verb a mapping
+/// could name after `flash`, a plugin command included; a confirmation
+/// cannot wrap another confirmation.
+struct ConfirmCommand: Hashable {
+  let prompt: String
+  let command: URLCommand
+
+  /// The `--command` value: the wrapped verb and its arguments, space-joined.
+  var commandText: String {
+    command.argv.dropFirst().joined(separator: " ")
   }
 }
 
@@ -259,9 +331,119 @@ struct MouseGridRequest: Hashable {
   }
 }
 
+/// `selection --action`: what to do with the selected text. Copy and paste
+/// go through `yank_selection` and `paste`, cut through the focused app's
+/// own action; change cuts and enters INSERT to type the replacement.
+enum SelectionAction: String, CaseIterable, Hashable {
+  case copy, cut, change, paste
+}
+
+/// `mouse_warp`: where the pointer jumps. `area` is the focused window or
+/// the display it is on; `edge` the centre or one side, a few points inside
+/// it so the pointer still sits on the area.
+struct MouseWarpRequest: Hashable {
+  enum Area: String, Hashable, CaseIterable {
+    case window, screen
+  }
+  enum Edge: String, Hashable, CaseIterable {
+    case center, top, bottom, left, right
+  }
+  var area: Area = .window
+  var edge: Edge = .center
+
+  var argTokens: [String] {
+    ["--area=\(area.rawValue)", "--edge=\(edge.rawValue)"]
+  }
+
+  /// The point `edge` names inside `frame` (NSScreen coordinates), `inset`
+  /// points in from a side.
+  func point(in frame: CGRect, inset: CGFloat = 8) -> CGPoint {
+    let dx = min(inset, frame.width / 2)
+    let dy = min(inset, frame.height / 2)
+    switch edge {
+    case .center: return CGPoint(x: frame.midX, y: frame.midY)
+    case .top: return CGPoint(x: frame.midX, y: frame.maxY - dy)
+    case .bottom: return CGPoint(x: frame.midX, y: frame.minY + dy)
+    case .left: return CGPoint(x: frame.minX + dx, y: frame.midY)
+    case .right: return CGPoint(x: frame.maxX - dx, y: frame.midY)
+    }
+  }
+}
+
+/// `mouse_position`: one action on the saved pointer positions.
+enum MousePositionRequest: Hashable {
+  /// Remember where the pointer is.
+  case save
+  /// Forget the saved position the pointer is on.
+  case unsave
+  /// Forget every saved position (of this app, when the history is per app).
+  case clear
+  /// Hint every saved position and act on the one you pick.
+  case hints(MouseCommand)
+  /// Jump to the saved position after / before the one the pointer is on.
+  case next
+  case previous
+
+  var argTokens: [String] {
+    switch self {
+    case .save: return ["--action=save"]
+    case .unsave: return ["--action=unsave"]
+    case .clear: return ["--action=clear"]
+    case .hints(let command): return ["--action=hints"] + command.argTokens
+    case .next: return ["--action=next"]
+    case .previous: return ["--action=previous"]
+    }
+  }
+}
+
+/// `window_focus`: the nearest window in a direction, or the next one in
+/// the z-order.
+enum WindowFocusCycle: String, Hashable, CaseIterable {
+  /// The window just below the focused one in the z-order (wrapping).
+  case next
+  /// The window just above it in the z-order (wrapping).
+  case previous
+  /// The frontmost window below the focused one that it overlaps.
+  case behind
+}
+
+enum WindowFocusRequest: Hashable {
+  case direction(WindowFocusDirection)
+  case cycle(WindowFocusCycle)
+
+  init?(rawValue: String) {
+    if let direction = WindowFocusDirection(rawValue: rawValue) {
+      self = .direction(direction)
+    } else if let cycle = WindowFocusCycle(rawValue: rawValue) {
+      self = .cycle(cycle)
+    } else {
+      return nil
+    }
+  }
+
+  var rawValue: String {
+    switch self {
+    case .direction(let direction): return direction.rawValue
+    case .cycle(let cycle): return cycle.rawValue
+    }
+  }
+}
+
+/// `--gesture`: a trackpad gesture performed at the picked point instead of
+/// a click. The pointer lands on the point first, as with `--move`.
+enum TargetGesture: String, CaseIterable, Hashable {
+  /// Look Up (three-finger tap): the app's look-up action on the word under
+  /// the pointer.
+  case lookUp = "look_up"
+  /// Smart zoom (two-finger double tap) at the point.
+  case smartZoom = "smart_zoom"
+}
+
 enum MouseCommand: Hashable {
   case click(JumpAction, modifiers: ClickModifiers)
   case move
+  /// The pointer lands on the point, then the trackpad gesture runs there.
+  case gesture(TargetGesture)
   /// Two-phase drag: the first commit picks the grab point, the second picks
   /// the drop point, then the dispatcher synthesizes one continuous
   /// down→dragged…→up gesture. Modifiers are held for the whole gesture
@@ -282,6 +464,13 @@ enum MouseCommand: Hashable {
   /// Seek & click (`mouse_target` only): type visible label text to filter
   /// the targets, Tab cycles, Return commits the selection with `action`.
   case search(JumpAction, modifiers: ClickModifiers)
+  /// Path session (`mouse_target` only): the first commit picks one end,
+  /// the second the other, and every target between them in reading order
+  /// gets `action`, in that order.
+  case path(JumpAction, modifiers: ClickModifiers)
+  /// Sticky session (`mouse_target` only): each commit performs `action`
+  /// and the same labels stay up, with no new walk, until Escape ends it.
+  case sticky(JumpAction, modifiers: ClickModifiers)
 
   var action: JumpAction {
     switch self {
@@ -289,7 +478,9 @@ enum MouseCommand: Hashable {
     case .multi(let action, _): return action
     case .adjust(let action, _): return action
     case .search(let action, _): return action
-    case .move, .drag, .select: return .leftClick
+    case .path(let action, _): return action
+    case .sticky(let action, _): return action
+    case .move, .gesture, .drag, .select: return .leftClick
     }
   }
 
@@ -301,13 +492,47 @@ enum MouseCommand: Hashable {
     case .multi(_, let modifiers): return modifiers
     case .adjust(_, let modifiers): return modifiers
     case .search(_, let modifiers): return modifiers
-    case .move: return []
+    case .path(_, let modifiers): return modifiers
+    case .sticky(_, let modifiers): return modifiers
+    case .move, .gesture: return []
     }
   }
 
-  var isMove: Bool {
-    if case .move = self { return true }
+  var isSticky: Bool {
+    if case .sticky = self { return true }
     return false
+  }
+
+  /// A session that keeps its labels up after a commit (`--multi`,
+  /// `--sticky`).
+  var repeats: Bool { isMulti || isSticky }
+
+  /// This command as a plain click of its action and modifiers: what a
+  /// surface that has no session shapes of its own (the grid, a switched
+  /// surface) performs.
+  var asClick: MouseCommand {
+    switch self {
+    case .move, .gesture: return self
+    case .drag(let modifiers): return .drag(modifiers: modifiers)
+    case .select(let modifiers): return .select(modifiers: modifiers)
+    case .multi: return self
+    case .click, .adjust, .search, .path, .sticky:
+      return .click(action, modifiers: modifiers)
+    }
+  }
+
+  /// A count typed before a mouse finisher is a finger count, the way a
+  /// trackpad reads it: two fingers turn a click into a secondary click and a
+  /// double click into smart zoom; three fingers turn a click into Look Up.
+  /// Every other count, and every other command, is unchanged.
+  func withFingers(_ fingers: Int) -> MouseCommand {
+    switch (fingers, self) {
+    case (2, .click(.leftClick, let modifiers)): return .click(.rightClick, modifiers: modifiers)
+    case (2, .click(.doubleClick, let modifiers)) where modifiers.isEmpty:
+      return .gesture(.smartZoom)
+    case (3, .click(.leftClick, let modifiers)) where modifiers.isEmpty: return .gesture(.lookUp)
+    default: return self
+    }
   }
 
   var isDrag: Bool {
@@ -322,11 +547,6 @@ enum MouseCommand: Hashable {
 
   var isMulti: Bool {
     if case .multi = self { return true }
-    return false
-  }
-
-  var isAdjust: Bool {
-    if case .adjust = self { return true }
     return false
   }
 
@@ -423,10 +643,10 @@ final class URLEventHandler: NSObject {
       answer(query, argsJSON: argsJSON, reply: reply)
       return
     }
-    // CLI / AppleEvent path uses `parseOrPluginVerb` so a `flash <verb>`
-    // call can reach plugin-registered verbs. Config-load goes through
-    // strict `parse` instead, so a stale verb in `[mode.*.mappings]`
-    // still surfaces as a config error rather than a silent runtime miss.
+    // A declared plugin command arrives as the AppleEvent verb (`media`)
+    // with `subcommand` and optional `args`. Anything else is a built-in
+    // verb. Mapping config only accepts the same `flash <command> <subcommand>`
+    // words.
     guard let args = Self.decodeArgs(json: argsJSON) else {
       Self.reject(reply: reply, message: "Invalid command or arguments")
       return
@@ -437,6 +657,19 @@ final class URLEventHandler: NSObject {
         "--\($0)=\(args[$0] ?? "")"
       }).joined(separator: " ")
     let message = Self.rejectionMessage(invocation)
+    if PluginRepository.declaresCommand(verb), !Self.isBuiltInVerb(verb),
+      FlashQuery(rawValue: verb) == nil
+    {
+      guard let cmd = Self.pluginSubcommand(verb: verb, args: args) else {
+        rejected(invocation)
+        Self.reject(reply: reply, message: message)
+        return
+      }
+      if !Trace.triggered(at: arrivedAt, { handler(cmd) }) {
+        Self.reject(reply: reply, message: message)
+      }
+      return
+    }
     guard let cmd = Self.parseOrPluginVerb(verb: verb, args: args) else {
       rejected(invocation)
       Self.reject(reply: reply, message: message)
@@ -494,19 +727,30 @@ final class URLEventHandler: NSObject {
     reply.setParam(NSAppleEventDescriptor(string: message), forKeyword: AEKeyword(keyErrorString))
   }
 
-  /// Look up a verb in the dispatch table and turn its args dict into a
-  /// resolved ``URLCommand``. Returns nil for unknown verbs or for verbs
-  /// whose required parameters are missing/invalid. The AppleEvent handler
-  /// rejects the invocation with an error reply; config loading emits a
-  /// located diagnostic naming the rejected command.
+  /// Look up a verb in the built-in dispatch table and turn its args dict
+  /// into a resolved ``URLCommand``. Returns nil for unknown verbs or for
+  /// verbs whose required parameters are missing/invalid.
   ///
-  /// Strict by design: plugin-registered verbs are NOT resolved here so the
-  /// mapping/CLI parsers reject stale verbs at config-load time. Runtime
-  /// dispatch entry points use ``parseOrPluginVerb(verb:args:)`` to fall
-  /// back to a ``URLCommand/pluginVerb(name:args:)`` when the built-in table
-  /// misses but the name looks like a plugin verb.
+  /// Plugin commands are not in this table. They are
+  /// `flash <command> <subcommand>`, parsed by ``PluginGitInvocation``.
   static func parse(verb: String, args: [String: String]) -> URLCommand? {
     commands[verb]?.command(arguments: args)
+  }
+
+  /// `flash <command> <subcommand> [word ...]` as the resident receives it
+  /// from the CLI: the AppleEvent verb is the command, and `subcommand` plus
+  /// optional space-separated `args` are the rest. Nil when that pair is not
+  /// declared.
+  static func pluginSubcommand(verb: String, args: [String: String]) -> URLCommand? {
+    guard Set(args.keys).isSubset(of: ["subcommand", "args"]),
+      let subcommand = args["subcommand"], !subcommand.isEmpty,
+      PluginRepository.declaresCommand(verb, subcommand: subcommand)
+    else { return nil }
+    let words =
+      args["args"]?
+      .split(separator: " ", omittingEmptySubsequences: true)
+      .map(String.init) ?? []
+    return .pluginCommand(command: verb, subcommand: subcommand, args: words)
   }
 
   /// Whether `verb` names one of Flash's own verbs, which a plugin verb of
@@ -517,10 +761,9 @@ final class URLEventHandler: NSObject {
 
   /// Same as ``parse(verb:args:)`` but, on a built-in miss for an
   /// identifier-shape verb, returns a ``URLCommand/pluginVerb(name:args:)``
-  /// so the dispatch path can hand the call to ``PluginManager``. Used by
-  /// the AppleEvent handler — config validation stays on `parse(verb:args:)`
-  /// so stale verbs surface a clear failure instead of silently turning
-  /// into no-op plugin calls.
+  /// so the AppleEvent handler can hand the call to ``PluginManager``.
+  /// Mapping config does not use this: an undeclared name there is a typo,
+  /// not a plugin call.
   static func parseOrPluginVerb(verb: String, args: [String: String]) -> URLCommand? {
     if Self.commands[verb] != nil { return Self.parse(verb: verb, args: args) }
     if FlashQuery(rawValue: verb) == nil, Self.looksLikePluginVerb(verb) {
@@ -558,13 +801,32 @@ final class URLEventHandler: NSObject {
   private static let mouseParameters: [VerbParameter] = [
     .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
     .flag("move"), .flag("drag"), .flag("select"), .flag("multi"),
-    .flag("adjust"), .flag("search"), .text("modifiers", "cmd+ctrl+alt+shift"),
+    .flag("adjust"), .flag("search"), .flag("path"), .flag("sticky"),
+    .text("gesture", "look_up|smart_zoom"), .text("modifiers", "cmd+ctrl+alt+shift"),
   ]
+
+  /// The click flags alone: no session shape.
+  private static let clickParameters: [VerbParameter] = [
+    .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
+    .flag("move"), .text("modifiers", "cmd+ctrl+alt+shift"),
+  ]
+
+  /// The session shapes only `mouse_target` on the focused window offers.
+  private static let targetSessionFlags = ["adjust", "search", "path", "sticky"]
 
   private static let commands: [String: VerbDefinition] = [
     "mouse_target": .init(
-      mouseParameters + [.text("scope", "app|screen")],
+      mouseParameters + [.text("scope", "app|screen"), .flag("words")],
       parse: { a in
+        if a.bool("words") {
+          // Words are a text walk: the session shapes that walk the app's
+          // controls again (`--multi`) or filter by control text do not apply.
+          guard a.value("scope") == nil, let command = mouseCommand(a) else { return nil }
+          switch command {
+          case .click, .move, .gesture, .drag, .select: return .mouseTargetWords(command)
+          default: return nil
+          }
+        }
         switch a.value("scope") {
         case nil, "app":
           return mouseCommand(a).map(URLCommand.mouseTarget)
@@ -577,10 +839,88 @@ final class URLEventHandler: NSObject {
           return nil
         }
       }),
+    "mouse_screens": .init(parse: { a in a.args.isEmpty ? .mouseScreens : nil }),
+    "mouse_warp": .init(
+      [.text("area", "window|screen"), .text("edge", "center|top|bottom|left|right")],
+      parse: { a in
+        var request = MouseWarpRequest()
+        if let area = a.value("area") {
+          guard let parsed = MouseWarpRequest.Area(rawValue: area) else { return nil }
+          request.area = parsed
+        }
+        if let edge = a.value("edge") {
+          guard let parsed = MouseWarpRequest.Edge(rawValue: edge) else { return nil }
+          request.edge = parsed
+        }
+        return .mouseWarp(request)
+      }),
+    "mouse_step": .init(
+      [
+        .text("direction", "up|down|left|right"),
+        .text("to", "next_word|previous_word|word_end|line_start|line_end"),
+      ],
+      parse: { a in
+        // Exactly one of a one-step direction or a jump.
+        switch (a.value("direction"), a.value("to")) {
+        case (let direction?, nil):
+          return TextStep.Direction(rawValue: direction).map { .mouseStep($0) }
+        case (nil, let to?):
+          return TextStep.Jump(rawValue: to).map { .mouseJump($0) }
+        case (_?, _?), (nil, nil):
+          return nil
+        }
+      }),
+    "selection": .init(
+      [.text("action", "copy|cut|change|paste", required: true)],
+      parse: { a in
+        a.value("action").flatMap(SelectionAction.init(rawValue:)).map { .selection($0) }
+      }),
+    "mouse_nudge": .init(
+      [.text("direction", "up|down|left|right", required: true), .text("distance", "points")],
+      parse: { a in
+        guard let direction = a.value("direction").flatMap(TextStep.Direction.init(rawValue:))
+        else { return nil }
+        guard let raw = a.value("distance") else { return .mouseNudge(direction, distance: 16) }
+        guard let distance = Int(raw), (1...2000).contains(distance) else { return nil }
+        return .mouseNudge(direction, distance: distance)
+      }),
+    "mouse_position": .init(
+      [.text("action", "save|unsave|clear|hints|next|previous", required: true)]
+        + clickParameters,
+      parse: { a in
+        let clickArgs = a.args.filter { $0.key != "action" }
+        switch a.value("action") {
+        case "save": return clickArgs.isEmpty ? .mousePosition(.save) : nil
+        case "unsave": return clickArgs.isEmpty ? .mousePosition(.unsave) : nil
+        case "clear": return clickArgs.isEmpty ? .mousePosition(.clear) : nil
+        case "next": return clickArgs.isEmpty ? .mousePosition(.next) : nil
+        case "previous": return clickArgs.isEmpty ? .mousePosition(.previous) : nil
+        case "hints":
+          guard let command = mouseCommand(a, allowAdjust: false) else { return nil }
+          switch command {
+          case .click, .move: return .mousePosition(.hints(command))
+          default: return nil
+          }
+        default: return nil
+        }
+      }),
     // The grid IS the precision surface, so `--adjust` and `--search` are
     // config errors there.
+    "mouse_bigram": .init(
+      [
+        .flag("secondary"), .flag("double"), .flag("middle"), .flag("triple"),
+        .flag("move"), .text("gesture", "look_up|smart_zoom"),
+        .text("modifiers", "cmd+ctrl+alt+shift"),
+      ],
+      parse: { a in
+        guard let command = mouseCommand(a, allowAdjust: false) else { return nil }
+        switch command {
+        case .click, .move, .gesture: return .mouseBigram(command)
+        default: return nil
+        }
+      }),
     "mouse_grid": .init(
-      mouseParameters.filter { !["adjust", "search"].contains($0.name) }
+      mouseParameters.filter { !targetSessionFlags.contains($0.name) }
         + [.flag("bisect"), .integer("zoom_to_depth")],
       parse: { a in
         mouseCommand(a, allowAdjust: false).map {
@@ -593,18 +933,38 @@ final class URLEventHandler: NSObject {
 
     "mouse_pointer": .init(parse: { a in a.args.isEmpty ? .mousePointer : nil }),
 
+    "enter_drag_mode": .init(
+      [.flag("secondary"), .flag("middle")],
+      parse: { a in
+        switch (a.bool("secondary"), a.bool("middle")) {
+        case (false, false): return .dragMode(.primary)
+        case (true, false): return .dragMode(.secondary)
+        case (false, true): return .dragMode(.middle)
+        case (true, true): return nil
+        }
+      }),
+
     "mouse_button": .init(
       [
-        .text("state", "down|up|toggle", required: true), .flag("secondary"), .flag("middle"),
+        .text("state", "down|up|toggle|release|cancel", required: true), .flag("secondary"),
+        .flag("middle"), .text("mode", "visual|drag"),
       ],
       parse: { a in
         guard let state = a.value("state").flatMap(MouseButtonState.init(rawValue:)) else {
           return nil
         }
+        let hold: ButtonHold
+        if let mode = a.value("mode") {
+          guard let parsed = ButtonHold(rawValue: mode) else { return nil }
+          hold = parsed
+        } else {
+          hold = .drag
+        }
         switch (a.bool("secondary"), a.bool("middle")) {
-        case (false, false): return .mouseButton(.init(state: state, button: .primary))
-        case (true, false): return .mouseButton(.init(state: state, button: .secondary))
-        case (false, true): return .mouseButton(.init(state: state, button: .middle))
+        case (false, false): return .mouseButton(.init(state: state, button: .primary, hold: hold))
+        case (true, false):
+          return .mouseButton(.init(state: state, button: .secondary, hold: hold))
+        case (false, true): return .mouseButton(.init(state: state, button: .middle, hold: hold))
         case (true, true): return nil
         }
       }),
@@ -770,6 +1130,22 @@ final class URLEventHandler: NSObject {
     "clipboard_cut": .init(parse: { _ in .clipboardCut }),
 
     "clipboard_paste": .init(parse: { _ in .clipboardPaste }),
+    "look_up": .init(parse: { a in a.args.isEmpty ? .lookUp : nil }),
+    "gesture": .init(
+      [
+        .text("fingers", "2|3|4|5", required: true),
+        .text(
+          "motion",
+          "tap|double_tap|pinch|spread|rotate_left|rotate_right|swipe_left|swipe_right|swipe_up|swipe_down",
+          required: true),
+      ],
+      parse: { a in
+        guard let fingers = a.value("fingers").flatMap(Int.init),
+          let motion = a.value("motion").flatMap(TrackpadGesture.Motion.init(rawValue:)),
+          TrackpadGesture.action(fingers: fingers, motion: motion) != nil
+        else { return nil }
+        return .trackpadGesture(fingers: fingers, motion: motion)
+      }),
 
     "alert_show": .init(
       [
@@ -778,6 +1154,12 @@ final class URLEventHandler: NSObject {
       ], parse: { alertCommand($0) }),
 
     "alert_dismiss": .init(parse: { _ in .dismissAlert }),
+
+    "confirm": .init(
+      [
+        .text("prompt", "question", required: true),
+        .text("command", "verb [--arg=value ...]", required: true),
+      ], parse: { confirmCommand($0) }),
 
     "help_show": .init(
       [.text("topic", "topic")], parse: { a in .showUsage(topic: a.value("topic")) }),
@@ -799,22 +1181,6 @@ final class URLEventHandler: NSObject {
         return .openApp(name: name)
       }),
 
-    "plugin_command": .init(
-      [
-        .text("command", "command", required: true),
-        .text("subcommand", "subcommand", required: true), .text("args", "space-separated"),
-      ],
-      parse: { a in
-        guard let command = a.value("command"), !command.isEmpty,
-          let subcommand = a.value("subcommand"), !subcommand.isEmpty
-        else { return nil }
-        let args =
-          a.value("args")?
-          .split(separator: " ", omittingEmptySubsequences: true)
-          .map(String.init) ?? []
-        return .pluginCommand(command: command, subcommand: subcommand, args: args)
-      }),
-
     "window_move": .init(
       [
         .text("position", "slot"), .text("x", "percent"), .text("y", "percent"),
@@ -822,12 +1188,12 @@ final class URLEventHandler: NSObject {
       ], parse: windowMoveCommand),
 
     "window_focus": .init(
-      [.text("direction", "left|right|up|down", required: true)],
+      [.text("direction", "left|right|up|down|next|previous|behind", required: true)],
       parse: { a in
         guard let value = a.value("direction"),
-          let direction = WindowFocusDirection(rawValue: value)
+          let request = WindowFocusRequest(rawValue: value)
         else { return nil }
-        return .focusWindow(direction)
+        return .focusWindow(request)
       }),
 
     "window_minimize": .init(parse: { a in a.args.isEmpty ? .windowState(.minimize) : nil }),
@@ -840,6 +1206,33 @@ final class URLEventHandler: NSObject {
         guard let state = WindowStateAction.FullscreenState(rawValue: a.value("state") ?? "toggle")
         else { return nil }
         return .windowState(.fullscreen(state))
+      }),
+
+    "system_key": .init(
+      [.text("key", "brightness_down", required: true)],
+      parse: { a in
+        guard let name = a.value("key"), let key = SystemKeyboard.RowKey.named(name) else {
+          return nil
+        }
+        return .systemKey(key)
+      }),
+
+    "function_key": .init(
+      [.text("key", "f1", required: true)],
+      parse: { a in
+        guard let name = a.value("key")?.lowercased(),
+          name.hasPrefix("f"), let index = Int(name.dropFirst()), (1...12).contains(index)
+        else { return nil }
+        return .functionKey(index)
+      }),
+
+    "arrow": .init(
+      [.text("direction", "left|down|up|right", required: true), .flag("shift")],
+      parse: { a in
+        guard let value = a.value("direction"),
+          let direction = WindowFocusDirection(rawValue: value)
+        else { return nil }
+        return .arrow(direction: direction, shift: a.bool("shift"))
       }),
 
     "send_key": .init([.text("keys", "hotkey", required: true)], parse: sendKeyCommand),
@@ -877,18 +1270,36 @@ extension URLEventHandler {
       not verbs: they report (as text, or JSON with `--json`) and cannot be
       mapped. `:doctor` runs the doctor's checks from the command line.
 
-      `mouse_target` selects an app-discovered target. `mouse_grid` selects
+      `mouse_target` selects an app-discovered target. `mouse_bigram` types one
+      letter, then the two-character hint on each match in the focused window
+      and on the status bar of its screen. A textless terminal also matches
+      the tmux status line and pane titles. `v` and `V` match the same glyphs;
+      no match stays silent.
+      `--move` moves the pointer onto the
+      letter. `mouse_grid` selects
       a precise screen position: the screen splits like the left half of
       the keyboard (4 rows × 5 keys of the `hints.keys` layout, `12345` /
       `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its
-      cell. `--bisect` halves the region instead (h/j/k/l, or y/u/b/n for a
-      quadrant); `--zoom-to-depth=N` starts N steps deep under the pointer.
+      cell. `--bisect` keeps a half with the keys at the QWERTY h/j/k/l
+      positions of `[keyboard] layout` (h/j/k/l on QWERTY, h/n/e/i on Colemak,
+      d/h/t/n on Dvorak, c/t/s/r on Bépo) and a quadrant with the keys at y/u
+      and b/n. Bépo's top-left quadrant is the dead key `^`.
+      `--zoom-to-depth=N` starts N steps deep under the pointer.
       `--multi` keeps clicking, discovering the targets again after each
-      click. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
+      click; `--sticky` keeps the same labels up instead; `--path` clicks
+      every target between the two you pick, in reading order; `--words`
+      labels the visible words of the focused window's text instead of its
+      controls. While labels are up, Tab moves the same click to the grid and
+      Shift-Tab widens it to the screen; Backspace returns. `mouse_screens`
+      labels each display, `mouse_warp` jumps the pointer to an edge or the
+      centre of the focused window or its screen, `mouse_step` moves it one
+      text line or character from the text under it, and `mouse_position` saves,
+      hints, cycles and forgets pointer positions. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
       the status items) and `mouse_notifications` (Notification Center's
       banners, alerts and buttons) hint surfaces outside the focused window.
-      `mouse_button --state=down|up|toggle` holds a button where the pointer
-      is, so Flash's pointer moves drag until it is released.
+      `mouse_button --state=toggle --mode=visual|drag` starts a visual
+      selection (VISUAL) or a drag (DRAG); `release` drops or ends it and
+      `cancel` puts a drag back. `mouse_nudge` moves the pointer a few points.
 
       `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode` and
       `enter_terminal_mode` select a mode; `leave_mode` leaves the current
@@ -943,9 +1354,24 @@ private func alertCommand(_ a: VerbArgs) -> URLCommand? {
     duration = nil
   }
 
-  let styleRaw = a.value("style") ?? AlertCommand.Style.standard.rawValue
-  guard let style = AlertCommand.Style(rawValue: styleRaw) else { return nil }
+  let styleRaw = a.value("style") ?? StatusAlert.Style.standard.rawValue
+  guard let style = StatusAlert.Style(rawValue: styleRaw) else { return nil }
   return .showAlert(AlertCommand(message: message, duration: duration, style: style))
+}
+
+/// `--command` holds the wrapped verb line as the words after `flash` in a
+/// mapping: `tab_close`, `tab_select --index=2`, `caffeinate toggle`. The
+/// words are split on spaces, so an argument value cannot contain one.
+private func confirmCommand(_ a: VerbArgs) -> URLCommand? {
+  guard let prompt = a.value("prompt")?.trimmed, !prompt.isEmpty,
+    let line = a.value("command")
+  else { return nil }
+  let words = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+  guard !words.isEmpty,
+    case .flashCommand(let command)? = parseMappingCommand(argv: ["flash"] + words)
+  else { return nil }
+  if case .confirm = command { return nil }
+  return .confirm(ConfirmCommand(prompt: prompt, command: command))
 }
 
 /// Read the optional `--register=<name>` arg shared by `yank_selection` and
@@ -973,18 +1399,25 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   let multi = a.bool("multi")
   let adjust = a.bool("adjust")
   let search = a.bool("search")
-  if (adjust || search) && !allowAdjust { return nil }
-  if [drag, select, multi, adjust, search].filter({ $0 }).count > 1 { return nil }
+  let path = a.bool("path")
+  let sticky = a.bool("sticky")
+  if (adjust || search || path || sticky) && !allowAdjust { return nil }
+  if [drag, select, multi, adjust, search, path, sticky].filter({ $0 }).count > 1 { return nil }
   let variants: [JumpAction] = [
     a.bool("secondary") ? .rightClick : nil,
     a.bool("double") ? .doubleClick : nil,
     a.bool("middle") ? .middleClick : nil,
     a.bool("triple") ? .tripleClick : nil,
   ].compactMap { $0 }
+  let shaped = drag || select || multi || adjust || search || path || sticky
+  if let raw = a.value("gesture") {
+    guard let gesture = TargetGesture(rawValue: raw), !a.bool("move"), modifiers.isEmpty,
+      variants.isEmpty, !shaped
+    else { return nil }
+    return .gesture(gesture)
+  }
   if a.bool("move") {
-    return
-      (modifiers.isEmpty && variants.isEmpty && !drag && !select && !multi && !adjust && !search)
-      ? .move : nil
+    return (modifiers.isEmpty && variants.isEmpty && !shaped) ? .move : nil
   }
   if drag { return variants.isEmpty ? .drag(modifiers: modifiers) : nil }
   if select { return variants.isEmpty ? .select(modifiers: modifiers) : nil }
@@ -992,6 +1425,8 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   if multi { return .multi(variants.first ?? .leftClick, modifiers: modifiers) }
   if adjust { return .adjust(variants.first ?? .leftClick, modifiers: modifiers) }
   if search { return .search(variants.first ?? .leftClick, modifiers: modifiers) }
+  if path { return .path(variants.first ?? .leftClick, modifiers: modifiers) }
+  if sticky { return .sticky(variants.first ?? .leftClick, modifiers: modifiers) }
   return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }
 

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "description": "Flash Help — documentation and live runtime information served by Flash.",
-  "packageManager": "pnpm@12.6.0",
+  "packageManager": "pnpm@12.11.2",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -14,11 +14,11 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
-    "marked": "^18.0.14",
-    "svelte": "^5.57.1",
+    "marked": "^18.1.1",
+    "svelte": "^5.57.2",
     "svelte-check": "^4.7.6",
     "typescript": "^6.0.3",
-    "vite": "^8.3.1",
+    "vite": "^8.3.4",
     "vite-plugin-singlefile": "^2.3.3"
   }
 }

@@ -44,11 +44,18 @@ enum ConfigLoader {
     /// non-primary layer (e.g. the embedded default config) names its file.
     /// nil for the primary (user) config, whose diagnostics stay unprefixed.
     var diagnosticLabel: String?
+    /// Nil for the bundled default. A user file, environment variable, or
+    /// other later layer sets the writer the inspector shows on overrides.
+    var valueSource: ConfigValueSource?
 
-    init(text: String, sourceURL: URL? = nil, diagnosticLabel: String? = nil) {
+    init(
+      text: String, sourceURL: URL? = nil, diagnosticLabel: String? = nil,
+      valueSource: ConfigValueSource? = nil
+    ) {
       self.text = text
       self.sourceURL = sourceURL
       self.diagnosticLabel = diagnosticLabel
+      self.valueSource = valueSource
     }
   }
 
@@ -67,7 +74,12 @@ enum ConfigLoader {
     if let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     {
-      layers.append(Layer(text: text, sourceURL: url.resolvingSymlinksInPath()))
+      let file = url.resolvingSymlinksInPath()
+      let name = file.lastPathComponent
+      // A file that is itself the bundled default stays the base layer.
+      let source: ConfigValueSource? =
+        name == "config.default.toml" ? nil : ConfigValueSource(layer: "config", detail: name)
+      layers.append(Layer(text: text, sourceURL: file, valueSource: source))
     }
     return parseLayers(layers, environment: env)
   }
@@ -111,6 +123,7 @@ enum ConfigLoader {
     var pendingModeMappings: [PendingModeMapping] = []
 
     for layer in layers + environmentLayers(environment) {
+      config.activeValueSource = layer.valueSource
       let diagnosticsBefore = config.diagnostics.count
       let locations = ConfigSourceLocationIndex(text: layer.text)
       do {
@@ -138,7 +151,12 @@ enum ConfigLoader {
           file: diagnostic.file ?? layer.sourceURL?.path)
       }
     }
+    config.activeValueSource = nil
 
+    // Resolve built-in `<leader>` keys before the file's mappings land.
+    // Otherwise a placeholder `<leader>…` and the file's already-resolved
+    // key sit side by side, and the later refresh turns them into a duplicate.
+    config.mode.refreshLeaderDerivedDefaults()
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
     config.prepareDerivedValues()
@@ -409,6 +427,7 @@ enum ConfigLoader {
       sectionTable(root[name], name: name, locations: locations, into: &config)
     }
     applyApp(section("app"), locations: locations, into: &config)
+    applyKeyboard(section("keyboard"), locations: locations, into: &config)
     applyHints(section("hints"), locations: locations, into: &config)
     applyPlugins(section("plugins"), locations: locations, sourceURL: sourceURL, into: &config)
     applyPluginSettings(section("plugin"), locations: locations, into: &config)
@@ -462,9 +481,13 @@ enum ConfigLoader {
   ) {
     let sectionKeys: [String: Set<String>] = [
       "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
+      "keyboard": ["layout"],
       "hints": [
-        "keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity",
-        "mouse_grid_keys", "mouse_grid_cursor_follow", "restore_pointer",
+        "keys", "min_length", "magic_modifiers", "key_priority", "label_order", "adjust_digits",
+        "position_history_size", "position_history_scope", "pointer_follows_focus",
+        "pointer_step", "pointer_acceleration", "pointer_max_step",
+        "mouse_grid_steps", "mouse_grid_opacity", "mouse_grid_keys", "mouse_grid_cursor_follow",
+        "mouse_grid_preview", "restore_pointer",
       ],
       "plugins": [
         "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
@@ -479,7 +502,9 @@ enum ConfigLoader {
         "live_query_timeout_ms", "ignored_apps", "app_directories",
       ],
       "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "apps",
+        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "hyper",
+        "visual", "drag",
+        "apps",
         "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
         "click_hold_ms", "send_key_interval_ms",
       ],
@@ -514,80 +539,13 @@ enum ConfigLoader {
     locations: ConfigSourceLocationIndex,
     into config: inout Config
   ) {
-    for (key, value) in table where !known.contains(key) {
+    for key in table.keys where !known.contains(key) {
       let fullPath = path + [key]
-      if let moved = movedKeys(fullPath, value: value) {
-        for (message, location) in moved {
-          config.addDiagnostic(message, location: location(locations))
-        }
-        continue
-      }
       let dotted = fullPath.joined(separator: ".")
       let suggestion = closestKnownKey(to: key, in: known).map { " — did you mean '\($0)'?" } ?? ""
       config.addDiagnostic(
         "unknown config key '\(dotted)'\(suggestion)",
         location: locations.location(for: fullPath))
-    }
-  }
-
-  /// Retired keys, each rejected with where its setting lives now: the popup
-  /// keys `[popup]` replaced (`[terminal.<name>]`, `[statusbar.popup]` and
-  /// the `popup_*` style keys of `[statusbar]`), the `options` tables a
-  /// template now writes inline, and `[open]`, now part of `[flashlight]`.
-  private static func movedKeys(
-    _ path: [String], value: any TOMLValueConvertible
-  ) -> [(String, (ConfigSourceLocationIndex) -> ConfigLocation?)]? {
-    func named(_ table: TOMLTable, _ message: @escaping (String) -> String) -> [(
-      String, (ConfigSourceLocationIndex) -> ConfigLocation?
-    )] {
-      table.keys.sorted().map { name in
-        (message(name), { $0.location(for: path + [name]) })
-      }
-    }
-    switch path {
-    case ["terminal"]:
-      guard let table = value.table else { return nil }
-      return named(table) { name in
-        "[terminal.\(name)] is not read; declare it as [popup.\(name)] with command = [...] "
-          + "(cwd, env, size = \"COLUMNSxROWS\" and persistent are its other keys)"
-      }
-    case ["statusbar", "popup"]:
-      guard let table = value.table else { return nil }
-      return named(table) { name in
-        "statusbar.popup.\(name) is not read; declare it as [popup.\(name)] with text = \"…\""
-      }
-    case ["open"]:
-      guard let table = value.table else { return nil }
-      return named(table) { name in
-        ["ignored_apps", "app_directories"].contains(name)
-          ? "open.\(name) is not read; set \(name) in [flashlight]"
-          : "[open] is not read; its ignored_apps and app_directories are in [flashlight]"
-      }
-    case ["statusbar", "options"]:
-      return [
-        (
-          "[statusbar.options] is not read; write its formats inline in [statusbar] template",
-          { $0.location(for: path) }
-        )
-      ]
-    case _ where path.count == 3 && path[0] == "widgets" && path[2] == "options":
-      return [
-        (
-          "[widgets.\(path[1]).options] is not read; write its formats inline in "
-            + "[widgets.\(path[1])] template",
-          { $0.location(for: path) }
-        )
-      ]
-    default:
-      guard path.count == 2, path[0] == "statusbar", path[1].hasPrefix("popup_"),
-        popupStyleKeys.contains(String(path[1].dropFirst("popup_".count)))
-      else { return nil }
-      return [
-        (
-          "statusbar.\(path[1]) is not read; set \(path[1].dropFirst("popup_".count)) in [popup]",
-          { $0.location(for: path) }
-        )
-      ]
     }
   }
 
@@ -660,6 +618,77 @@ enum ConfigLoader {
       let unknownSet = Set(unknown)
       config.hints.magicModifiers = value.filter { !unknownSet.contains($0) }
     }
+    applyString(
+      table["key_priority"], path: ["hints", "key_priority"],
+      message: "hints.key_priority must be a string of hint keys, best first (no repeats)",
+      locations: locations, into: &config,
+      validate: { value in
+        let keys = Alphabet.priorityKeys(value)
+        return keys.count == value.filter { !$0.isWhitespace }.count
+          && keys.allSatisfy { $0.isASCII && ($0.isLetter || $0 == ";" || $0 == "'") }
+      },
+      assign: { value, config in
+        config.hints.keyPriority = value
+      })
+    applyString(
+      table["label_order"], path: ["hints", "label_order"],
+      message: "hints.label_order must be \"reading\", \"center\" or \"zones\"",
+      locations: locations, into: &config,
+      validate: { Config.LabelOrder(rawValue: $0) != nil },
+      assign: { value, config in
+        config.hints.labelOrder = Config.LabelOrder(rawValue: value) ?? .reading
+      })
+    applyString(
+      table["adjust_digits"], path: ["hints", "adjust_digits"],
+      message: "hints.adjust_digits must be \"width\" or \"grid\"",
+      locations: locations, into: &config,
+      validate: { Config.AdjustDigits(rawValue: $0) != nil },
+      assign: { value, config in
+        config.hints.adjustDigits = Config.AdjustDigits(rawValue: value) ?? .width
+      })
+    applyInt(
+      table["position_history_size"], path: ["hints", "position_history_size"],
+      message: "hints.position_history_size must be an integer between 1 and 100",
+      locations: locations, into: &config, validate: { (1...100).contains($0) },
+      assign: { value, config in
+        config.hints.positionHistorySize = value
+      })
+    applyString(
+      table["position_history_scope"], path: ["hints", "position_history_scope"],
+      message: "hints.position_history_scope must be \"global\" or \"app\"",
+      locations: locations, into: &config,
+      validate: { Config.PositionScope(rawValue: $0) != nil },
+      assign: { value, config in
+        config.hints.positionHistoryScope = Config.PositionScope(rawValue: value) ?? .global
+      })
+    applyBool(
+      table["pointer_follows_focus"], path: ["hints", "pointer_follows_focus"],
+      message: "hints.pointer_follows_focus must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.pointerFollowsFocus = value
+      })
+    applyInt(
+      table["pointer_step"], path: ["hints", "pointer_step"],
+      message: "hints.pointer_step must be an integer between 1 and 500",
+      locations: locations, into: &config, validate: { (1...500).contains($0) },
+      assign: { value, config in
+        config.hints.pointerStep = value
+      })
+    applyInt(
+      table["pointer_acceleration"], path: ["hints", "pointer_acceleration"],
+      message: "hints.pointer_acceleration must be an integer between 0 and 100",
+      locations: locations, into: &config, validate: { (0...100).contains($0) },
+      assign: { value, config in
+        config.hints.pointerAcceleration = value
+      })
+    applyInt(
+      table["pointer_max_step"], path: ["hints", "pointer_max_step"],
+      message: "hints.pointer_max_step must be an integer between 1 and 1000",
+      locations: locations, into: &config, validate: { (1...1000).contains($0) },
+      assign: { value, config in
+        config.hints.pointerMaxStep = value
+      })
     applyInt(
       table["mouse_grid_steps"], path: ["hints", "mouse_grid_steps"],
       message: "hints.mouse_grid_steps must be an integer between 2 and 6", locations: locations,
@@ -693,6 +722,13 @@ enum ConfigLoader {
       locations: locations, into: &config,
       assign: { value, config in
         config.hints.mouseGridCursorFollow = value
+      })
+    applyBool(
+      table["mouse_grid_preview"], path: ["hints", "mouse_grid_preview"],
+      message: "hints.mouse_grid_preview must be true or false",
+      locations: locations, into: &config,
+      assign: { value, config in
+        config.hints.mouseGridPreview = value
       })
     applyBool(
       table["restore_pointer"], path: ["hints", "restore_pointer"],
@@ -923,6 +959,21 @@ enum ConfigLoader {
       assign: { value, config in config.app.keyboardLayout = value })
   }
 
+  private static func applyKeyboard(
+    _ table: TOMLTable?,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    let names = Alphabet.layoutNames.joined(separator: ", ")
+    applyString(
+      table["layout"], path: ["keyboard", "layout"],
+      message: "keyboard.layout must be one of \(names)",
+      locations: locations, into: &config,
+      validate: { Alphabet.layouts[$0.lowercased()] != nil },
+      assign: { value, config in config.keyboard.layout = value.lowercased() })
+  }
+
   private static func applyStatusBarTail(
     _ table: TOMLTable,
     locations: ConfigSourceLocationIndex,
@@ -935,8 +986,6 @@ enum ConfigLoader {
       into: &config
     ) { value, config in
       config.statusBar.template.template = value
-      // Retain the defining layer rather than the last layer parsed.
-      config.statusBar.templateSourceURL = sourceURL
     }
     applyString(
       table["monitor"], path: ["statusbar", "monitor"],
@@ -1129,6 +1178,7 @@ enum ConfigLoader {
         environment: parsed.environment, intervalSeconds: Double(interval),
         cycleIntervalSeconds: cycle, timeoutSeconds: config.statusBar.commandTimeoutSeconds,
         historyLength: history > 0 ? history : nil)
+      config.recordLocation(path: path, location: location)
       if definition["interval"] == nil {
         config.statusBar.sourcesUsingDefaultInterval.insert(name)
       } else {
@@ -1145,11 +1195,6 @@ enum ConfigLoader {
   private static let textPopupKeys: Set<String> = ["text"]
   private static let terminalPopupKeys: Set<String> = [
     "command", "cwd", "env", "size", "persistent",
-  ]
-  /// Keys of the retired `[terminal.<name>]` tables, pointed at their
-  /// replacement.
-  private static let renamedTerminalPopupKeys = [
-    "working_directory": "cwd", "columns": "size", "rows": "size",
   ]
 
   /// `[popup]`: TOML types tell the keys apart. A table is a named popup
@@ -1238,9 +1283,9 @@ enum ConfigLoader {
     if let key = definition.keys.sorted().first(where: { !allowed.contains($0) }) {
       let suggestion =
         isText
-        ? terminalPopupKeys.contains(key) || renamedTerminalPopupKeys[key] != nil
+        ? terminalPopupKeys.contains(key)
           ? " (\(key) belongs to command popups; a text popup takes only text)" : ""
-        : (renamedTerminalPopupKeys[key] ?? closestKnownKey(to: key, in: allowed)).map {
+        : closestKnownKey(to: key, in: allowed).map {
           " — did you mean '\($0)'?"
         } ?? ""
       invalid(": unknown key '\(key)'\(suggestion)", at: key)
@@ -1263,7 +1308,8 @@ enum ConfigLoader {
       guard let raw = value.string, let parsed = Config.PopupSize(raw) else {
         invalid(
           ".size must be \"COLUMNSxROWS\", each side a cell count from 1 to 1000 or a "
-            + "percentage of the screen from 1% to 100%, like \"100x28\" or \"90%x85%\"",
+            + "percentage of the screen from 1% to 100% (a fraction is allowed), "
+            + "like \"100x28\", \"90%x85%\" or \"78.615%x78.615%\"",
           at: "size")
         return
       }
@@ -1553,22 +1599,30 @@ enum ConfigLoader {
         (1...32).contains(normal.count),
         (1...32).contains(insert.count),
         (1...32).contains(command.count),
-        (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count)
+        (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count),
+        (1...32).contains((parsed["hyper"] ?? config.mode.labels.hyper).count),
+        (1...32).contains((parsed["visual"] ?? config.mode.labels.visual).count),
+        (1...32).contains((parsed["drag"] ?? config.mode.labels.drag).count)
       {
-        for key in parsed.keys where !["normal", "insert", "command", "terminal"].contains(key) {
+        for key in parsed.keys
+        where !["normal", "insert", "command", "terminal", "hyper", "visual", "drag"].contains(key)
+        {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, visual, drag)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
           normal: normal,
           insert: insert,
           command: command,
-          terminal: parsed["terminal"] ?? config.mode.labels.terminal)
+          terminal: parsed["terminal"] ?? config.mode.labels.terminal,
+          hyper: parsed["hyper"] ?? config.mode.labels.hyper,
+          visual: parsed["visual"] ?? config.mode.labels.visual,
+          drag: parsed["drag"] ?? config.mode.labels.drag)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
-          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\", terminal = \"...\" } "
+          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\", terminal = \"...\", hyper = \"...\" } "
             + "with each label 1-32 characters",
           location: location)
       }
@@ -1630,18 +1684,36 @@ enum ConfigLoader {
     if let normal = sectionTable(
       table["normal"], name: "mode.normal", locations: locations, into: &config)
     {
+      if normal["leader"]?.bool == false {
+        config.mode.normalLeader = nil
+        config.recordLocation(
+          path: "mode.normal.leader",
+          location: locations.location(for: ["mode", "normal", "leader"]))
+      } else {
+        applyString(
+          normal["leader"], path: ["mode", "normal", "leader"],
+          message:
+            "mode.normal.leader must be a single key (e.g. \"\\\\\" or \",\"), or false to clear it",
+          locations: locations,
+          into: &config,
+          validate: {
+            // Reject multi-atom strings here — otherwise every <leader>
+            // mapping later fails with a misleading "leader is not set".
+            NormalModeInterpreter.translateLeader(canonicalNormalModeKeyToken($0)) != nil
+          },
+          assign: { value, config in
+            config.mode.normalLeader = canonicalNormalModeKeyToken(value)
+          })
+      }
       applyString(
-        normal["leader"], path: ["mode", "normal", "leader"],
-        message: "mode.normal.leader must be a single key (e.g. \"\\\\\" or \",\")",
+        normal["hyper"], path: ["mode", "normal", "hyper"],
+        message:
+          "mode.normal.hyper must be one key (\"<leader>\", \"a\", \"<space>\", \"cmd+space\")",
         locations: locations,
         into: &config,
-        validate: {
-          // Reject multi-atom strings here — otherwise every <leader>
-          // mapping later fails with a misleading "leader is not set".
-          NormalModeInterpreter.translateLeader(canonicalNormalModeKeyToken($0)) != nil
-        },
+        validate: { Config.Mode.resolveHyperKey($0, leader: "\\") != nil },
         assign: { value, config in
-          config.mode.normalLeader = canonicalNormalModeKeyToken(value)
+          config.mode.hyperKey = value
         })
       applyModeMappingTable(
         sectionTable(
@@ -1653,10 +1725,10 @@ enum ConfigLoader {
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in normal where key != "leader" && key != "mappings" {
+      for (key, _) in normal where key != "leader" && key != "hyper" && key != "mappings" {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
-            + "[mode.normal.mappings]; valid keys are leader, mappings",
+            + "[mode.normal.mappings]; valid keys are leader, hyper, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }
@@ -1679,7 +1751,7 @@ enum ConfigLoader {
       }
     }
 
-    for scope in [ModeScope.insert, .terminal] {
+    for scope in [ModeScope.insert, .terminal, .hyper, .visual, .drag] {
       let name = scope.rawValue
       guard
         let scoped = sectionTable(
@@ -1694,7 +1766,6 @@ enum ConfigLoader {
         sourceURL: sourceURL,
         pendingModeMappings: &pendingModeMappings,
         into: &config)
-
       for (key, _) in scoped where key != "mappings" {
         config.addDiagnostic(
           "mode.\(name): unknown key '\(key)' — mappings belong under [mode.\(name).mappings]",
@@ -1741,7 +1812,7 @@ enum ConfigLoader {
           let scopePath = appPath + [scopeName]
           guard let scope = ModeScope(rawValue: scopeName) else {
             config.addDiagnostic(
-              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal",
+              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, visual, drag",
               location: locations.location(for: scopePath))
             continue
           }
@@ -2305,12 +2376,14 @@ enum ConfigLoader {
     key: String,
     action: MappingCommand,
     repeatsOnFinalKey: Bool,
+    origin: String,
     into config: inout Config
   ) {
     let mapping = ModeMapping(
       key: key,
       action: action,
-      repeatsOnFinalKey: repeatsOnFinalKey)
+      repeatsOnFinalKey: repeatsOnFinalKey,
+      origin: origin)
     // Mapping a key a lower layer removed takes it back.
     if let removed = config.mode.unmapped[scope] {
       let remaining = removed.filter {
@@ -2336,6 +2409,15 @@ enum ConfigLoader {
     case .command:
       config.mode.command.removeAll { $0.key == key }
       config.mode.command.append(mapping)
+    case .hyper:
+      config.mode.hyper.removeAll { $0.key == key }
+      config.mode.hyper.append(mapping)
+    case .visual:
+      config.mode.visual.removeAll { $0.key == key }
+      config.mode.visual.append(mapping)
+    case .drag:
+      config.mode.drag.removeAll { $0.key == key }
+      config.mode.drag.append(mapping)
     }
   }
 
@@ -2353,6 +2435,9 @@ enum ConfigLoader {
     case .insert: config.mode.insert.removeAll(where: removed)
     case .terminal: config.mode.terminal.removeAll(where: removed)
     case .command: config.mode.command.removeAll(where: removed)
+    case .hyper: config.mode.hyper.removeAll(where: removed)
+    case .visual: config.mode.visual.removeAll(where: removed)
+    case .drag: config.mode.drag.removeAll(where: removed)
     }
   }
 
@@ -2383,9 +2468,10 @@ enum ConfigLoader {
       }
       switch mapping.value {
       case .mapping(let action, let repeatsOnFinalKey):
+        let origin = ModeMapping.configOrigin(file: mapping.file)
         if let bundleID = mapping.bundleID {
           let entry = ModeMapping(
-            key: key, action: action, repeatsOnFinalKey: repeatsOnFinalKey)
+            key: key, action: action, repeatsOnFinalKey: repeatsOnFinalKey, origin: origin)
           config.mode.appMappings[bundleID, default: .init()].set(entry, in: mapping.scope)
           continue
         }
@@ -2394,6 +2480,7 @@ enum ConfigLoader {
           key: key,
           action: action,
           repeatsOnFinalKey: repeatsOnFinalKey,
+          origin: origin,
           into: &config)
       case .removal:
         if let bundleID = mapping.bundleID {

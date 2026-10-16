@@ -165,6 +165,228 @@ fn is_visual_style(token: &str) -> bool {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PlacedSpan {
+    pub column: usize,
+    pub width: usize,
+    pub text: String,
+}
+
+/// Visible text of one expanded tmux format line, in the same cells the
+/// status-line layout uses. A centred pane title and a left-aligned status
+/// line both come back as the span covering the non-blank text, so `f` and
+/// a letter search sit on those cells.
+pub(crate) fn place_format_line(line: &str, columns: usize) -> Option<PlacedSpan> {
+    if columns == 0 {
+        return None;
+    }
+    let mut lanes = [
+        Lane::default(),
+        Lane::default(),
+        Lane::default(),
+        Lane::default(),
+    ];
+    let mut lane_index = 0usize;
+    let mut chars = line.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '#' {
+            lanes[lane_index].push(character);
+            continue;
+        }
+        let mut hashes: usize = 1;
+        while chars.peek() == Some(&'#') {
+            chars.next();
+            hashes += 1;
+        }
+        let style_follows = hashes % 2 == 1 && chars.peek() == Some(&'[');
+        let literal_hashes = if style_follows {
+            hashes / 2
+        } else {
+            hashes.div_ceil(2)
+        };
+        for _ in 0..literal_hashes {
+            lanes[lane_index].push('#');
+        }
+        if !style_follows {
+            continue;
+        }
+        chars.next();
+        let mut style = String::new();
+        loop {
+            match chars.next() {
+                Some(']') => break,
+                Some(character) => style.push(character),
+                None => return None,
+            }
+        }
+        lane_index = lane_for_style(&style, lane_index);
+    }
+
+    let mut widths = [
+        lanes[0].width,
+        lanes[1].width,
+        lanes[2].width,
+        lanes[3].width,
+    ];
+    let mut excess = widths[0]
+        .saturating_add(widths[1])
+        .saturating_add(widths[2])
+        .saturating_sub(columns);
+    for index in [1usize, 2, 0] {
+        let removed = widths[index].min(excess);
+        widths[index] -= removed;
+        excess -= removed;
+    }
+    let left = widths[0];
+    let centre = widths[1];
+    let right = widths[2];
+    let mut grid = vec![Cell::Empty; columns];
+    paint(&mut grid, &lanes[0], 0, 0, left);
+    paint(
+        &mut grid,
+        &lanes[2],
+        lanes[2].width.saturating_sub(right),
+        columns.saturating_sub(right),
+        right,
+    );
+    let centre_offset = left + (columns - right - left) / 2 - centre / 2;
+    let centre_start = lanes[1].width / 2 - centre / 2;
+    paint(&mut grid, &lanes[1], centre_start, centre_offset, centre);
+    let absolute = widths[3].min(columns);
+    let absolute_offset = (columns - absolute) / 2;
+    paint(&mut grid, &lanes[3], 0, absolute_offset, absolute);
+
+    let start = grid.iter().position(|cell| cell.is_ink())?;
+    let end = grid.iter().rposition(|cell| cell.is_ink())?;
+    let mut text = String::new();
+    let mut width = 0usize;
+    let mut column = start;
+    while column <= end && column < grid.len() {
+        match &grid[column] {
+            Cell::Glyph {
+                character,
+                columns: glyph,
+            } => {
+                text.push(*character);
+                width += *glyph;
+                column += *glyph;
+            }
+            Cell::Empty | Cell::Continuation => {
+                if column <= end {
+                    text.push(' ');
+                    width += 1;
+                }
+                column += 1;
+            }
+        }
+    }
+    if text.chars().all(char::is_whitespace) {
+        return None;
+    }
+    Some(PlacedSpan {
+        column: start,
+        width,
+        text,
+    })
+}
+
+/// Client row of a pane-border title. `pane_top` is the content origin, so a
+/// top border is the row above the content and a bottom border the row after.
+pub(crate) fn pane_title_row(
+    border: &str,
+    top_offset: i64,
+    pane_top: i64,
+    pane_height: i64,
+) -> Option<i64> {
+    match border {
+        "top" => {
+            let row = top_offset + pane_top - 1;
+            (row >= 0).then_some(row)
+        }
+        "bottom" => Some(top_offset + pane_top + pane_height),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Cell {
+    Empty,
+    Continuation,
+    Glyph { character: char, columns: usize },
+}
+
+impl Cell {
+    fn is_ink(self) -> bool {
+        matches!(self, Self::Glyph { character, .. } if !character.is_whitespace())
+    }
+}
+
+#[derive(Default)]
+struct Lane {
+    text: String,
+    width: usize,
+}
+
+impl Lane {
+    fn push(&mut self, character: char) {
+        if character.is_control() {
+            return;
+        }
+        let width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width == 0 {
+            return;
+        }
+        self.text.push(character);
+        self.width += width;
+    }
+}
+
+fn lane_for_style(style: &str, current: usize) -> usize {
+    let mut lane = current;
+    for token in style.split([',', ' ']).filter(|token| !token.is_empty()) {
+        lane = match token.to_ascii_lowercase().as_str() {
+            "align=left" | "noalign" => 0,
+            "align=centre" => 1,
+            "align=right" => 2,
+            "align=notch" | "align=absolute-centre" => 3,
+            _ => lane,
+        };
+    }
+    lane
+}
+
+fn paint(grid: &mut [Cell], lane: &Lane, source_start: usize, offset: usize, width: usize) {
+    if width == 0 || offset >= grid.len() {
+        return;
+    }
+    let mut seen = 0usize;
+    let mut column = offset;
+    for character in lane.text.chars() {
+        let glyph = UnicodeWidthChar::width(character).unwrap_or(0);
+        if glyph == 0 {
+            continue;
+        }
+        if seen + glyph <= source_start {
+            seen += glyph;
+            continue;
+        }
+        if column >= grid.len() || column - offset >= width {
+            break;
+        }
+        grid[column] = Cell::Glyph {
+            character,
+            columns: glyph,
+        };
+        for extra in 1..glyph {
+            if column + extra < grid.len() {
+                grid[column + extra] = Cell::Continuation;
+            }
+        }
+        column += glyph;
+        seen += glyph;
+    }
+}
+
 fn is_color(value: &str) -> bool {
     if let Some(hex) = value.strip_prefix('#') {
         return hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
@@ -265,6 +487,7 @@ mod tests {
         for prefix in [
             "#[align=right]",
             "#[align=centre]",
+            "#[align=notch]",
             "#[align=absolute-centre]",
             "#[list=on]",
             "#[list=focus]",
@@ -310,5 +533,24 @@ mod tests {
             Some(vec![])
         );
         assert_eq!(parse_status_hints("#[range=user|1]one", 0), None);
+    }
+
+    #[test]
+    fn centred_pane_title_uses_the_same_cells_as_a_letter_search() {
+        let placed = place_format_line("#[align=centre] a", 9).unwrap();
+        assert_eq!(placed.column, 4);
+        assert_eq!(placed.width, 1);
+        assert_eq!(placed.text, "a");
+        let coloured = place_format_line("#[fg=colour178 bold]za", 20).unwrap();
+        assert_eq!(coloured.column, 0);
+        assert_eq!(coloured.text, "za");
+        assert!(!coloured.text.contains('#'));
+        assert_eq!(
+            pane_title_row("top", 1, 1, 68),
+            Some(1),
+            "a top border sits above the pane content, under a top status line"
+        );
+        assert_eq!(pane_title_row("bottom", 0, 0, 3), Some(3));
+        assert_eq!(pane_title_row("off", 1, 0, 10), None);
     }
 }

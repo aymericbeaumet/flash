@@ -27,7 +27,8 @@ Every hint activation logs one line when its hints reach the screen:
   (any app that handles http and https), `electron` (other Chromium apps) and
   `other`.
 - `surface` names the activation: `targets` (`mouse_target`), `screen`,
-  `scroll`, `grid`, `mouse_dock`, `mouse_menubar`, `mouse_notifications`.
+  `scroll`, `grid`, `bigram` (`mouse_bigram`), `mouse_dock`, `mouse_menubar`,
+  `mouse_notifications`.
 - `bundle` is the app the hints are for (`-` when unknown).
 - `outcome` says how the app's own hints were obtained: `hit` (the prepared
   model), `miss` (a walk), `retried` (a degenerate first walk was walked
@@ -268,8 +269,8 @@ work whose source has no change notification, and all of it rides the one
 | Event debounces and coalescers | A config, plugin-file, application-directory, network or volume change | 100–500 ms after it | normal |
 
 Bundled plugins register cadences only for values no event reports, and only
-while something can see them: `cpu`, `memory`, `disks`, `processes` and
-`aiproviders` samples while a status surface shows their segments, `network`
+while something can see them: `cpu`, `memory`, `disks`, and `processes`
+sample while a status surface shows their segments, `network`
 traffic while a traffic segment is shown, the remote tmux hosts listed in
 `[plugin.tmux] ssh_hosts`, and the `feed` and `answers` refreshes. Network
 discovery follows `core:network.changed`, the disk mount set

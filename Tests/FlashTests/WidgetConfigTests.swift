@@ -182,32 +182,6 @@ final class WidgetConfigTests: XCTestCase {
     XCTAssertTrue(warnings[0].contains("link=, popup=, range="), warnings[0])
   }
 
-  /// A widget's format is written inline: `options` tables are rejected with
-  /// where their formats go now.
-  func testOptionsTablesAreRejectedWithTheInlineTemplate() {
-    let config = ConfigLoader.parse(
-      """
-      [statusbar.options]
-      "@a" = "shared"
-      [widgets.w]
-      template = "#{@a}"
-      [widgets.w.options]
-      "@a" = "local"
-      """)
-    XCTAssertEqual(
-      Set(messages(config)),
-      [
-        "[statusbar.options] is not read; write its formats inline in [statusbar] template",
-        "[widgets.w.options] is not read; write its formats inline in [widgets.w] template",
-      ])
-    XCTAssertTrue(config.loadingDiagnostics.allSatisfy { $0.location != nil })
-    let template = config.widgets["w"]!.template
-    let runs = FlashStatusBarTemplateEngine.evaluateDocument(
-      template, native: FlashStatusBarTemplateEngine.formatContext(.init())
-    ).runs
-    XCTAssertEqual(runs.map(\.text).joined(), "", "no option is set")
-  }
-
   func testObservedSegmentsUnionTheBarAndEnabledWidgets() {
     let toml = """
       [statusbar]

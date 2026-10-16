@@ -27,8 +27,8 @@ import os
 ///   - On completion, the prepared model is written ONLY if
 ///     `dirtyTokens[pid] == startToken` (no events during the walk) AND
 ///     the pid is still frontmost.
-///   - Model reads serve a hit ONLY if token, config revision, and
-///     freshness all match.
+///   - Model reads serve a hit ONLY if token, config revision, freshness
+///     and the window's visible region all match.
 ///
 /// The result is deterministic: two activations in the same UI state
 /// always serve the same hint set. No partial model, no stale model.
@@ -36,11 +36,24 @@ final class AppMonitor {
   let registry: SourceRegistry
 
   let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
+  /// AX observer registration, its retry ladder, focused-window
+  /// re-observation, teardown, and the launch-time Chromium wakes: each is an
+  /// IPC the target app answers at its own pace, up to the 1.5 s messaging
+  /// timeout, so they run here and a walk, a readiness probe or a commit on
+  /// `axQueue` never waits behind them. The focus-path wake stays on
+  /// `axQueue`, ahead of the probe that watches the tree it builds.
+  let observerQueue = DispatchQueue(label: "flash.ax_observers", qos: .userInitiated)
   /// AX geometry reads for the active-window border that must not wait behind
   /// an AX walk on `axQueue`. Window-list reads never run here; see
   /// `WindowSnapshot.windowList`.
   let geometryQueue = DispatchQueue(label: "flash.window_geometry", qos: .userInitiated)
-  var focusedElementDidChange: ((pid_t, String) -> Void)?
+  /// Every observed AX notification: the app's pid, its bundle id as known
+  /// at observer install, and the notification name.
+  var focusedElementDidChange: ((pid_t, String?, String) -> Void)?
+  /// A menu of app `pid` opened (`true`) or closed, with the element the
+  /// notification named: the one handle on a menu that is not a child of
+  /// its application element (Firefox's context menus).
+  var menuDidChange: ((pid_t, Bool, AXUIElement) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
   var activeWindowMayHaveChanged: ((pid_t, String, AXUIElement?) -> Void)?
   var focusedWindowDidResolve: ((pid_t, AXUIElement) -> Void)?
@@ -51,14 +64,11 @@ final class AppMonitor {
   // writes via `updateConfig` when the user edits flash.toml; axQueue
   // reads via `snapshotConfig` at the start of each walk.
 
-  private var config: Config
-  private var configLock = os_unfair_lock_s()
+  private let config: OSAllocatedUnfairLock<Config>
   var configRevision: UInt64 = 0
 
   func snapshotConfig() -> Config {
-    os_unfair_lock_lock(&configLock)
-    defer { os_unfair_lock_unlock(&configLock) }
-    return config
+    config.withLock { $0 }
   }
 
   /// Called by the AppDelegate config file-watcher whenever
@@ -66,9 +76,7 @@ final class AppMonitor {
   /// config, then invalidates the prepared model on main so labels and
   /// provider debug settings refresh together.
   func updateConfig(_ cfg: Config) {
-    os_unfair_lock_lock(&configLock)
-    config = cfg
-    os_unfair_lock_unlock(&configLock)
+    config.withLock { $0 = cfg }
 
     MainThreadHopper.runOrAsync { [weak self] in
       guard let self else { return }
@@ -137,7 +145,7 @@ final class AppMonitor {
 
   init(registry: SourceRegistry, config: Config, pollScheduler: PollScheduler = .shared) {
     self.registry = registry
-    self.config = config
+    self.config = OSAllocatedUnfairLock(initialState: config)
     self.pollScheduler = pollScheduler
   }
 
@@ -179,12 +187,9 @@ final class AppMonitor {
     minimumIntervalMs: backgroundModelMinIntervalMs,
     freshnessMs: modelFreshnessMs,
     maintenanceLeadMs: modelMaintenanceLeadMs)
-  /// Only the latest activation waiter matters — earlier waiters are
-  /// stale activations whose generation has already moved on. A scalar
-  /// per pid replaces the previous unbounded array; if a second
-  /// activation lands while a walk is in flight, it overwrites the
-  /// first instead of stacking.
-  var pendingModelCompletion: [pid_t: (PreparedModel?) -> Void] = [:]
+  /// The activation waiting on each app's in-flight walk; a displaced or
+  /// cancelled waiter is completed with nil, never dropped.
+  var pendingModelWaiters = PreparedModelWaiters()
   /// The last trusted target count per app: what a later walk of the same app
   /// is judged against (`discoveryLooksDegenerate`). Written by activations
   /// and by stored background walks that do not look degenerate; forgotten
@@ -214,7 +219,7 @@ final class AppMonitor {
     /// notifications are emitted by the window element, not the application
     /// element, so the focused window needs its own registrations.
     var focusedWindow: AXUIElement?
-    /// Accessed only on `axQueue`. Set by teardown so a pending registration
+    /// Accessed only on `observerQueue`. Set by teardown so a pending registration
     /// retry stops instead of registering on an observer that is gone.
     var isTornDown = false
 
@@ -236,12 +241,16 @@ final class AppMonitor {
   final class ObserverContext {
     weak var monitor: AppMonitor?
     let pid: pid_t
+    /// The observed app's bundle id, looked up once at install so a storm of
+    /// notifications never consults LaunchServices per event.
+    let bundleIdentifier: String?
     private let focusedWindowLock = NSLock()
     private var focusedWindow: AXUIElement?
 
-    init(monitor: AppMonitor, pid: pid_t) {
+    init(monitor: AppMonitor, pid: pid_t, bundleIdentifier: String?) {
       self.monitor = monitor
       self.pid = pid
+      self.bundleIdentifier = bundleIdentifier
     }
 
     func setFocusedWindow(_ window: AXUIElement?) {
@@ -265,19 +274,27 @@ final class AppMonitor {
     let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
     guard let monitor = ctx.monitor else { return }
     let isFocusedWindow = ctx.isFocusedWindow(element)
+    let name = notification as String
+    let isMenu =
+      name == kAXMenuOpenedNotification as String || name == kAXMenuClosedNotification as String
     monitor.enqueueAXEvent(
       PendingAXEvent(
         pid: ctx.pid,
-        notification: notification as String,
+        bundleIdentifier: ctx.bundleIdentifier,
+        notification: name,
         observedElementIsFocusedWindow: isFocusedWindow,
-        observedWindow: isFocusedWindow ? element : nil))
+        observedWindow: isFocusedWindow ? element : nil,
+        menu: isMenu ? element : nil))
   }
 
   struct PendingAXEvent {
-    let pid: pid_t
-    let notification: String
-    let observedElementIsFocusedWindow: Bool
-    let observedWindow: AXUIElement?
+    var pid: pid_t
+    var bundleIdentifier: String? = nil
+    var notification: String
+    var observedElementIsFocusedWindow: Bool
+    var observedWindow: AXUIElement?
+    /// The menu an `AXMenuOpened` / `AXMenuClosed` names.
+    var menu: AXUIElement? = nil
   }
 
   private let pendingAXEventsLock = NSLock()
@@ -305,9 +322,11 @@ final class AppMonitor {
     for event in batch {
       onAXEvent(
         pid: event.pid,
+        bundleIdentifier: event.bundleIdentifier,
         notification: event.notification,
         observedElementIsFocusedWindow: event.observedElementIsFocusedWindow,
-        observedWindow: event.observedWindow)
+        observedWindow: event.observedWindow,
+        menu: event.menu)
     }
   }
 
@@ -336,6 +355,10 @@ final class AppMonitor {
     kAXUIElementDestroyedNotification,
     kAXRowExpandedNotification,
     kAXRowCollapsedNotification,
+    // A context menu opening and closing: the evidence that decides how long
+    // a native surface keeps the keyboard (`NativeSurfaceOwnership`).
+    kAXMenuOpenedNotification,
+    kAXMenuClosedNotification,
   ]
 
   /// Reduced set for apps excluded from automatic model warming
@@ -436,11 +459,18 @@ final class AppMonitor {
   }
 
   private func wakeChromiumAccessibilityForAllRunningApps() {
-    AccessibilityWaker.wakeAllRunningApps(on: axQueue)
+    AccessibilityWaker.wakeAllRunningApps(on: observerQueue)
   }
 
+  /// The focus-path wake, on `axQueue`: the readiness probe queued behind it
+  /// watches the tree this starts building.
   func maybeWakeChromiumAccessibility(for app: NSRunningApplication) {
     AccessibilityWaker.maybeWake(app: app, on: axQueue)
+  }
+
+  /// A launch-time wake: nothing waits on it, so it stays off the walk queue.
+  func wakeChromiumAccessibilityInBackground(for app: NSRunningApplication) {
+    AccessibilityWaker.maybeWake(app: app, on: observerQueue)
   }
 
   func stop() {
@@ -461,12 +491,33 @@ final class AppMonitor {
     localObservers.removeAll()
   }
 
-  func lookupPreparedModel(for pid: pid_t) -> PreparedModel? {
-    preparedModels.lookup(
+  /// The model for `pid` if it is still current, the visible region of its
+  /// window included: another app's window moving over or off it is window
+  /// list state no AX event reports, so the lookup recomputes the region
+  /// from `windowEntries` — the activation's own read — or one read here,
+  /// on main, through the same builder the walk used.
+  func lookupPreparedModel(
+    for pid: pid_t, windowEntries: [WindowSnapshot.Entry]? = nil
+  ) -> PreparedModel? {
+    guard let model = preparedModels.current(pid: pid) else { return nil }
+    let entries =
+      windowEntries
+      ?? WindowSnapshot.windowList().map {
+        WindowSnapshot.entries(from: $0, primaryH: ScreenSpace.primaryHeight)
+      }
+    let occlusion = entries.flatMap { entries -> WindowSnapshot.OcclusionSignature? in
+      let snapshot = WindowSnapshot.build(
+        entries: entries, focusedPid: pid,
+        frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+        ignoringPids: [getpid()], walkedWindowFrame: model.occlusion?.frame)
+      return WindowSnapshot.OcclusionSignature(snapshot: snapshot, pid: pid)
+    }
+    return preparedModels.lookup(
       pid: pid,
       dirtyToken: dirtyTokens[pid] ?? 0,
       configRevision: configRevision,
-      now: DispatchTime.now())
+      now: DispatchTime.now(),
+      occlusion: occlusion)
   }
 
 }

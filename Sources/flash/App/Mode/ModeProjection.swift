@@ -12,6 +12,9 @@ enum ModeLabel: Equatable {
   case normal
   case command
   case terminal
+  case hyper
+  case visual
+  case drag
 }
 
 extension Mode {
@@ -23,7 +26,7 @@ extension Mode {
   var flashMode: FlashMode {
     switch self {
     case .disabled, .insert, .terminal: return .insert
-    case .normal, .command: return .normal
+    case .normal, .command, .hyper, .visual, .drag: return .normal
     }
   }
 
@@ -44,7 +47,7 @@ extension Mode {
     switch self {
     case .disabled, .insert, .terminal:
       return false
-    case .normal:
+    case .normal, .hyper, .visual, .drag:
       return !hasHints && !activationInFlight
     case .command:
       return true
@@ -63,17 +66,35 @@ extension Mode {
     // `.hints` hides the mouse cursor, but the user needs a visible cursor to
     // drive the context menu. Capture is off regardless (see `ownsKeyboard`); this
     // only governs cursor visibility / routing for when capture later resumes.
-    if nativeSurfaceSuspended, case .normal = self { return .normal }
+    if nativeSurfaceSuspended {
+      switch self {
+      case .normal, .hyper, .visual, .drag: return .normal
+      default: break
+      }
+    }
     switch self {
     case .disabled, .insert:
       return hasHints || activationInFlight ? .hints : .passive
     case .terminal:
       return .normal
-    case .normal:
+    case .normal, .hyper, .visual, .drag:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
     case .command:
       return .commandLine
+    }
+  }
+
+  /// The mapping scope this mode reads: its own table, NORMAL's while HYPER
+  /// is held over it, INSERT's while advanced mode is off.
+  var mappingScope: MappingScope {
+    switch self {
+    case .disabled, .insert: return .insert
+    case .normal, .hyper: return .normal
+    case .visual: return .visual
+    case .drag: return .drag
+    case .command: return .command
+    case .terminal: return .terminal
     }
   }
 
@@ -84,6 +105,9 @@ extension Mode {
     case .normal: return .normal
     case .command: return .command
     case .terminal: return .terminal
+    case .hyper: return .hyper
+    case .visual: return .visual
+    case .drag: return .drag
     }
   }
 
@@ -96,6 +120,9 @@ extension Mode {
     case .normal: return .normal
     case .command: return .command
     case .terminal: return .command
+    case .hyper: return .hyper
+    case .visual: return .visual
+    case .drag: return .drag
     }
   }
 }

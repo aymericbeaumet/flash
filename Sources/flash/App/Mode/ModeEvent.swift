@@ -13,12 +13,13 @@ enum ModeEvent: Equatable {
   /// The user asked to type. `targetPID` is the app to hand the keyboard to.
   case enterInsert(targetPID: pid_t?)
 
-  /// The user's explicit normal-mode hotkey / mapped `.normalMode`.
-  case enterNormal(targetPID: pid_t?)
+  /// The user's explicit normal-mode hotkey / mapped `.normalMode`. Leaving
+  /// a popup this way activates the app it covered, read from the mode.
+  case enterNormal
 
   /// Close the current transient surface, or leave INSERT for NORMAL.
   /// Active hints are dismissed without changing their underlying base mode.
-  case leaveMode(hasHints: Bool, targetPID: pid_t?)
+  case leaveMode(hasHints: Bool)
 
   /// `:` / flashlight / `enterCommand`. `restoreMode` mirrors the old
   /// `restore_mode=1` verbs: when true the surface returns to the entry mode,
@@ -29,11 +30,13 @@ enum ModeEvent: Equatable {
   case closeCommand(reason: String)
 
   /// A popup's local view became the input owner: `enter_terminal_mode`, a
-  /// click on a popup body, or a pinned status label.
-  case openTerminal
+  /// click on a popup body, or a pinned status label. `returnPID` is the app
+  /// the popup covers; it lives in the mode for as long as TERMINAL does.
+  case openTerminal(returnPID: pid_t?)
 
-  /// Restore the base mode; an explicit dismissal can reactivate its prior app.
-  case closeTerminal(targetPID: pid_t?)
+  /// Restore the base mode; an explicit dismissal (`restoresApp`) reactivates
+  /// the app the mode captured, a focus loss does not.
+  case closeTerminal(restoresApp: Bool)
 
   /// A click resolved by its source: physical clicks enter INSERT; primary
   /// hint and mouse-grid clicks enter it on a text input.
@@ -51,4 +54,19 @@ enum ModeEvent: Equatable {
   /// Workspace/app/space activation. Updates recapture only; NEVER flips
   /// insert↔normal (mode is global and sticky).
   case focusedAppChanged(pid: pid_t)
+
+  /// A mouse button is now held for `hold` (`mouse_button --mode`,
+  /// `enter_drag_mode`, pointer mode's `v`): VISUAL or DRAG. Accepted from
+  /// `.normal` and `.insert`.
+  case buttonHeld(ButtonHold)
+
+  /// The held button was released. Ignored outside VISUAL and DRAG.
+  case buttonReleased
+
+  /// The hyper key went down. Only accepted from `.normal`.
+  case enterHyper
+
+  /// The hyper key was released. Returns to the mode hyper was entered from.
+  /// Ignored unless the current mode is `.hyper`.
+  case exitHyper
 }

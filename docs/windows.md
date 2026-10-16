@@ -17,6 +17,16 @@ The direction is relative to the focused window. These commands can also be
 used in `[mode.*.mappings]`. Use `:flashlight @windows` when you know a window's
 title instead of its position.
 
+```sh
+flash window_focus --direction=next      # the window below the focused one in the stacking order
+flash window_focus --direction=previous  # the one above it
+flash window_focus --direction=behind    # the frontmost window below it that it overlaps
+```
+
+The stacking order is WindowServer's on-screen window list, read on the main
+thread and matched to the cataloged Accessibility windows by owner and frame;
+`next` and `previous` wrap around it.
+
 ## Place the focused window
 
 `window_move` supports named positions, a complete proportional frame, and
@@ -66,3 +76,9 @@ window once for the current configuration, so moving it by hand afterward does
 not fight an automatic resize. Saving the config evaluates existing
 non-minimized windows with frames on connected displays against the changed
 rules too. macOS Accessibility does not identify which Space each window is on.
+
+Unplugging a display puts tracked layouts back on a remaining screen. macOS
+does that itself for background windows and often leaves the frontmost window
+at the old size; Flash scales that window, and any other that no longer fits
+a connected display, onto the screen it lands on. A window parked off every
+display stays there.

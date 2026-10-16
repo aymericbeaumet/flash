@@ -12,8 +12,8 @@ plugins.
    subcommands to a CLI via `run_command`, with the argv plan kept pure and
    unit-tested. Command-only plugins are on-demand: the host spawns them at
    first use, not at startup.
-2. **Verbs + host RPCs + persistence — `Plugins/marks` (~200 LOC).**
-   Vim-style marks: manifest `verbs`, `host.normal_mode_target` and
+2. **Commands + host RPCs + persistence — `Plugins/marks` (~200 LOC).**
+   Vim-style marks: `flash marks set` / `flash marks jump`, `host.normal_mode_target` and
    `host.activate` host RPCs (the `app_control` capability), JSON state
    persisted under `share_dir()`, and `listen` events keeping it fresh.
 3. **Push catalog via native APIs — `Plugins/processes` (~300 LOC).** A

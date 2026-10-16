@@ -19,10 +19,10 @@ final class NativeStatusBarSurface {
   /// segment. All sit beneath the run containers, which stay transparent over
   /// the default background so the bar's gradient shows through.
   let hairline = CALayer()
-  /// A recess mimicking the camera-housing notch, drawn behind the
-  /// absolute-centre component and sized to its reservation (content plus
-  /// gutters), so the side lanes stop at its edges. Hidden on a screen with a
-  /// physical notch (the centre is hidden there) and when nothing is centred.
+  /// A recess mimicking the camera-housing notch, drawn behind the centred
+  /// lane (`#[align=centre]` and `#[align=notch]`) at the middle of the bar.
+  /// Hidden on a screen with a physical notch, where that lane is hidden,
+  /// and when the lane is empty.
   let centreNotch = CAShapeLayer()
   let hoverHighlight = CALayer()
   private var hoverBand = CGRect.zero
@@ -52,9 +52,10 @@ final class NativeStatusBarSurface {
   /// run's text instead of only the runs whose value changed.
   func invalidateDrawnRuns() { renderer.invalidateDrawnRuns() }
 
-  /// `notchWidth` is the real camera housing's width: the centre reservation
-  /// (and the recess drawn behind it) is never narrower, and widens to hold a
-  /// longer centred label. Zero lets the reservation hug the centred content.
+  /// `notchWidth` is the camera housing's width. The centred lane reserves
+  /// that width at the middle of the bar and draws it as a recess. The
+  /// housing does not grow or move for a longer label. Zero lets the
+  /// reservation hug the label.
   func render(
     document: StatusFormatDocument, barFrame: CGRect, screenFrame: CGRect,
     scale: CGFloat, notch: CGRect?, font: NSFont, labels: Config.Mode.Labels,
@@ -73,10 +74,17 @@ final class NativeStatusBarSurface {
     availableColumns = max(
       0, Int((barFrame.width - OverlayPanel.statusBarEdgePadding * 2) / cellWidth))
     var sizingLabels = labels
-    // A transient TERMINAL label must not widen the persistent base-mode pill.
+    // Transient TERMINAL and HYPER labels must not widen the persistent
+    // base-mode pill. Holding the leader should not resize the bar.
     sizingLabels.terminal = ""
+    sizingLabels.hyper = ""
+    sizingLabels.visual = ""
+    sizingLabels.drag = ""
     let longestPill =
-      document.runs.filter { $0.pill && !$0.isStyleBoundary && $0.text != labels.terminal }
+      document.runs.filter {
+        $0.pill && !$0.isStyleBoundary && $0.text != labels.terminal && $0.text != labels.hyper
+          && $0.text != labels.visual && $0.text != labels.drag
+      }
       .map { $0.text.count }.max() ?? 0
     let pillWidth = max(
       OverlayPanel.modeBadgeWidth(labels: sizingLabels, currentText: "", fontSize: font.pointSize),
@@ -86,25 +94,26 @@ final class NativeStatusBarSurface {
       (padded: Self.paddedPillText($0.text, columns: pillColumns), label: $0.text)
     }
     let prepared = Self.preparedDocument(
-      document, pillColumns: pillColumns, hideCentre: notch != nil)
+      document, pillColumns: pillColumns, hideNotch: notch != nil)
     let notchLocal = notch.map {
       let start = $0.minX - screenFrame.minX - OverlayPanel.statusBarNotchMargin
       let end = $0.maxX - screenFrame.minX + OverlayPanel.statusBarNotchMargin
       return start..<end
     }
-    let leftColumns = notchLocal.map {
-      max(0, Int(floor(($0.lowerBound - OverlayPanel.statusBarEdgePadding) / cellWidth)))
+    let physicalNotch = notch.map {
+      CGRect(
+        x: $0.minX - screenFrame.minX, y: 0, width: $0.width,
+        height: barFrame.height)
     }
-    let fitted = Self.fitted(
-      prepared,
-      in: Self.overflowGeometry(
-        columns: availableColumns, cellWidth: cellWidth, notchWidth: notchWidth,
-        leftColumns: leftColumns))
-    layout = StatusFormatLayout.layout(fitted.document, columns: availableColumns)
+    let segments = Self.segments(
+      of: prepared, barWidth: barFrame.width, cellWidth: cellWidth, notchWidth: notchWidth,
+      physicalNotch: physicalNotch)
+    let fitted = Self.fitted(prepared, budgets: segments.budgets(columns: availableColumns))
+    layout = StatusFormatLayout.layout(fitted, columns: availableColumns)
     visibleRuns = Self.visibleRuns(layout, cellWidth: cellWidth, excluded: notchLocal)
     runFrames = Self.frames(
-      for: visibleRuns, cellWidth: cellWidth, pillWidth: pillWidth,
-      height: barFrame.height)
+      for: visibleRuns, segments: segments, cellWidth: cellWidth, pillWidth: pillWidth,
+      height: barFrame.height, edgePadding: OverlayPanel.statusBarEdgePadding)
     backgroundLayer.frame = OverlayPanel.snap(barFrame, scale: scale)
     backgroundLayer.contentsScale = scale
     backgroundLayer.opacity = 1
@@ -127,8 +136,8 @@ final class NativeStatusBarSurface {
       height: min(barFrame.height, textHeight + Self.hoverWashVerticalPadding * 2))
     hoverHighlight.contentsScale = scale
     renderCentreNotch(
-      reserve: fitted.reserve, barFrame: barFrame, scale: scale, fill: fillColor,
-      hidden: notch != nil)
+      notch: segments.notch, barFrame: barFrame, scale: scale, fill: fillColor,
+      hidden: notch != nil || !segments.drawsRecess)
     renderer.render(
       zip(visibleRuns, runFrames).map { run, frame in
         StatusRunRenderer.Item(
@@ -185,21 +194,18 @@ final class NativeStatusBarSurface {
     return path
   }
 
-  /// The notch spans the centre reservation exactly — the housing's width, or
-  /// the centred label plus gutters when that is wider — so the side lanes
-  /// (which stop the margin short of the reservation) clear the recess.
+  /// The centred lane's housing, at the middle of the bar. A label wider
+  /// than the interior is cut; the recess does not grow or move.
   private func renderCentreNotch(
-    reserve: Range<Int>, barFrame: CGRect, scale: CGFloat, fill: NSColor, hidden: Bool
+    notch: CGRect, barFrame: CGRect, scale: CGFloat, fill: NSColor, hidden: Bool
   ) {
-    guard !hidden, !reserve.isEmpty else {
+    guard !hidden, notch.width > 0 else {
       centreNotch.isHidden = true
       centreNotch.path = nil
       return
     }
     let rect = OverlayPanel.snap(
-      CGRect(
-        x: OverlayPanel.statusBarEdgePadding + CGFloat(reserve.lowerBound) * cellWidth, y: 0,
-        width: CGFloat(reserve.count) * cellWidth, height: barFrame.height),
+      CGRect(x: notch.minX, y: 0, width: notch.width, height: barFrame.height),
       scale: scale)
     centreNotch.frame = CGRect(x: 0, y: 0, width: barFrame.width, height: barFrame.height)
     centreNotch.contentsScale = scale
@@ -268,43 +274,99 @@ final class NativeStatusBarSurface {
 
   /// Native cells reserve enough room for Flash's pill, but the pill keeps its
   /// original point geometry. Remove only that reservation's rounding within
-  /// its alignment lane, retaining the native centre/right anchor.
+  /// its alignment lane, retaining the lane's anchor: the left segment starts
+  /// at the edge padding, the right segment ends at the opposite padding, the
+  /// Side lanes stay in their segment boxes. The centred lane is one strip
+  /// on the housing's midpoint, so a wider side cannot shift the notch.
   private static func frames(
-    for runs: [StatusFormatLayout.PositionedRun], cellWidth: CGFloat,
-    pillWidth: CGFloat, height: CGFloat
+    for runs: [StatusFormatLayout.PositionedRun], segments: StatusBarSegments,
+    cellWidth: CGFloat, pillWidth: CGFloat, height: CGFloat, edgePadding: CGFloat
   ) -> [CGRect] {
-    var excess: [StatusFormatAlignment: CGFloat] = [:]
-    for run in runs where run.segment.pill {
-      excess[run.segment.alignment, default: 0] += max(
-        0, CGFloat(run.columns) * cellWidth - pillWidth)
+    struct LaneBox {
+      var minColumn: Int
+      var maxEnd: Int
+      var excess: CGFloat
     }
-    var removed: [StatusFormatAlignment: CGFloat] = [:]
-    return runs.map { run in
-      let alignment = run.segment.alignment
-      let total = excess[alignment, default: 0]
+    func visualWidth(_ run: StatusFormatLayout.PositionedRun) -> CGFloat {
+      let reserved = CGFloat(run.columns) * cellWidth
+      return run.segment.pill ? min(pillWidth, reserved) : reserved
+    }
+    var boxes: [StatusBarOverflow.Lane: LaneBox] = [:]
+    for run in runs {
+      let lane = Self.lane(run.segment.alignment)
+      guard lane == .left || lane == .right else { continue }
+      let end = run.column + run.columns
+      var box = boxes[lane] ?? LaneBox(minColumn: run.column, maxEnd: end, excess: 0)
+      box.minColumn = min(box.minColumn, run.column)
+      box.maxEnd = max(box.maxEnd, end)
+      if run.segment.pill {
+        box.excess += max(0, CGFloat(run.columns) * cellWidth - pillWidth)
+      }
+      boxes[lane] = box
+    }
+    let full = CGRect(
+      x: edgePadding, y: 0, width: max(0, segments.barWidth - 2 * edgePadding), height: 0)
+    func contentRect(_ lane: StatusBarOverflow.Lane) -> CGRect {
+      switch lane {
+      case .right: return segments.right.width > 0 ? segments.right : full
+      case .notch, .centre:
+        return segments.centre.width > 0 ? segments.centre : full
+      case .left: return segments.left.width > 0 ? segments.left : full
+      }
+    }
+    // Layout parks this lane wherever the sides left a gap. Draw it as one
+    // strip on the housing instead, so the notch stays at the middle.
+    var centredX: [Int: CGFloat] = [:]
+    let centred = runs.indices.filter { Self.lane(runs[$0].segment.alignment) == .notch }
+    if !centred.isEmpty {
+      let total = centred.reduce(CGFloat(0)) { $0 + visualWidth(runs[$1]) }
+      var cursor = contentRect(.notch).midX - total / 2
+      for index in centred {
+        centredX[index] = cursor
+        cursor += visualWidth(runs[index])
+      }
+    }
+    var removed: [StatusBarOverflow.Lane: CGFloat] = [:]
+    return runs.indices.map { index in
+      let run = runs[index]
+      if let x = centredX[index] {
+        return CGRect(x: x, y: 0, width: visualWidth(run), height: height)
+      }
+      let lane = Self.lane(run.segment.alignment)
+      let box = boxes[lane] ?? LaneBox(minColumn: 0, maxEnd: 0, excess: 0)
+      let rect = contentRect(lane)
+      let base: CGFloat
       let anchor: CGFloat
-      switch alignment {
-      case .right: anchor = total
-      case .centre, .absoluteCentre: anchor = total / 2
-      case .left, .default: anchor = 0
+      switch lane {
+      case .right:
+        base = rect.maxX - CGFloat(box.maxEnd - run.column) * cellWidth
+        anchor = box.excess
+      case .left:
+        base = rect.minX + CGFloat(run.column - box.minColumn) * cellWidth
+        anchor = 0
+      case .notch, .centre:
+        base = 0
+        anchor = 0
       }
       let reservedWidth = CGFloat(run.columns) * cellWidth
       let width = run.segment.pill ? min(pillWidth, reservedWidth) : reservedWidth
-      let x =
-        OverlayPanel.statusBarEdgePadding + CGFloat(run.column) * cellWidth
-        + anchor - removed[alignment, default: 0]
-      removed[alignment, default: 0] += reservedWidth - width
+      let x = base + anchor - removed[lane, default: 0]
+      removed[lane, default: 0] += reservedWidth - width
       return CGRect(x: x, y: 0, width: width, height: height)
     }
   }
 
-  static func preparedDocument(_ document: StatusFormatDocument, pillColumns: Int, hideCentre: Bool)
+  static func preparedDocument(_ document: StatusFormatDocument, pillColumns: Int, hideNotch: Bool)
     -> StatusFormatDocument
   {
     var result: [FlashStatusTextSegment] = []
     for var run in document.runs {
       if !run.isStyleBoundary {
-        if hideCentre && (run.alignment == .centre || run.alignment == .absoluteCentre) { continue }
+        // A physical camera is the notch. Both centred alignments hide, and
+        // no software recess is drawn over the hardware.
+        if hideNotch && (run.alignment == .notch || run.alignment == .centre) {
+          continue
+        }
         if run.pill {
           run.text = paddedPillText(run.text, columns: pillColumns)
         }
@@ -333,12 +395,11 @@ final class NativeStatusBarSurface {
   /// notch — it clears the recess's rounded corners, which a real housing has
   /// no equivalent of because nothing is drawn inside it.
   static let centreGutterColumns = 2
-  /// Clearance between a side lane and the notch, as whole columns of the
-  /// shared `[statusbar] notch_margin` — the very same points a real camera
-  /// housing reserves above. A drawn recess is at least the real housing's
-  /// width and keeps the same margin, so a notched Mac and an external display
-  /// lay the bar out alike. Rounded up, so a lane never encroaches on the gap
-  /// by a fraction of a cell.
+  /// The column-budget form of `[statusbar] notch_margin`. Drawn segments use
+  /// the point margin itself, so both gaps beside the notch are that many
+  /// points and a glyph that clears the housing by less than a cell still
+  /// draws. This rounds up for callers that only have a column grid, where a
+  /// fractional cell cannot be reserved on its own.
   static func centreMarginColumns(cellWidth: CGFloat) -> Int {
     guard cellWidth > 0 else { return 0 }
     return Int(ceil(OverlayPanel.statusBarNotchMargin / cellWidth))
@@ -359,15 +420,36 @@ final class NativeStatusBarSurface {
       minimumLaneColumns: centreReservationMinimumLaneColumns)
   }
 
-  /// Resolve overflow before native drawing, and reserve the absolute
-  /// centre's columns. Explicit `#[shrink]` groups give way first, in any
-  /// section; only once they are exhausted does a section lose its own tail.
-  /// Both passes narrow the widest span that relieves a violated constraint
-  /// (`StatusBarOverflow.budgets`) and end the cut in "…", so a truncation is
-  /// always a prefix of the full text. A document that fits is returned
-  /// unchanged, and one without an absolute centre reserves nothing.
-  static func fitted(_ document: StatusFormatDocument, in geometry: StatusBarOverflow.Geometry)
-    -> (document: StatusFormatDocument, reserve: Range<Int>)
+  /// The segment boxes for one prepared document. `#[align=centre]` and
+  /// `#[align=notch]` are the centred lane, so either one reserves the
+  /// housing. Padding is outside the content boxes; the returned column
+  /// counts are what fits inside them.
+  static func segments(
+    of document: StatusFormatDocument, barWidth: CGFloat, cellWidth: CGFloat, notchWidth: CGFloat,
+    physicalNotch: CGRect?
+  ) -> StatusBarSegments {
+    func present(_ lane: StatusBarOverflow.Lane) -> Bool {
+      document.runs.contains { !$0.isStyleBoundary && self.lane($0.alignment) == lane }
+    }
+    return StatusBarSegments.make(
+      barWidth: barWidth, cellWidth: cellWidth,
+      edgePadding: OverlayPanel.statusBarEdgePadding,
+      notchMargin: OverlayPanel.statusBarNotchMargin, notchWidth: notchWidth,
+      gutterColumns: centreGutterColumns, hasLeft: present(.left), hasRight: present(.right),
+      hasNotch: present(.notch),
+      centreContentColumns: contentColumns(document.runs, .notch),
+      physicalNotch: physicalNotch,
+      minimumLaneColumns: centreReservationMinimumLaneColumns)
+  }
+
+  /// Resolve overflow before native drawing. Each segment is cut to its own
+  /// budget. The last `#[shrink]` span in a segment is cut first and ends in
+  /// `…`; only the overflow it cannot absorb reaches the segment edge, which
+  /// is the end of the left and centre segments and the start of the right.
+  /// Pills and native list content are never cut. A document that fits is
+  /// returned unchanged.
+  static func fitted(_ document: StatusFormatDocument, budgets: StatusBarOverflow.Budgets)
+    -> StatusFormatDocument
   {
     var runs = document.runs
     let ordinary = runs.indices.filter {
@@ -378,34 +460,7 @@ final class NativeStatusBarSurface {
     for index in ordinary {
       widths[index] = StatusFormatCells.width(runs[index].text, styles: false)
     }
-    func lane(_ index: Int) -> StatusBarOverflow.Lane {
-      switch runs[index].alignment {
-      case .default, .left: return .left
-      case .centre: return .centre
-      case .right: return .right
-      case .absoluteCentre: return .absoluteCentre
-      }
-    }
-    // Narrow each span to its budget, cutting only its `cut` runs; the rest
-    // of a span (a section's pills) keeps its width.
-    func contract(_ spans: [(runs: [Int], cut: [Int])]) {
-      var fixed: [StatusBarOverflow.Lane: Int] = [:]
-      let members = Set(spans.flatMap(\.runs))
-      for index in ordinary where !members.contains(index) {
-        fixed[lane(index), default: 0] += widths[index]
-      }
-      let full = spans.map { $0.runs.reduce(0) { $0 + widths[$1] } }
-      let kept = spans.indices.map { full[$0] - spans[$0].cut.reduce(0) { $0 + widths[$1] } }
-      let budgets = StatusBarOverflow.budgets(
-        spans.indices.map {
-          .init(lane: lane(spans[$0].runs[0]), width: full[$0], minimum: kept[$0] + 1)
-        }, fixed: fixed, in: geometry)
-      for (index, span) in spans.enumerated() where budgets[index] < full[index] {
-        truncate(&runs, span.cut, to: budgets[index] - kept[index])
-        for run in span.cut { widths[run] = StatusFormatCells.width(runs[run].text, styles: false) }
-      }
-    }
-    // The explicit truncation points: consecutive `#[shrink]` runs of a lane.
+    func lane(_ index: Int) -> StatusBarOverflow.Lane { self.lane(runs[index].alignment) }
     var groups: [[Int]] = []
     var open = false
     for index in ordinary {
@@ -416,51 +471,138 @@ final class NativeStatusBarSurface {
       }
       open = runs[index].shrink
     }
-    if !groups.isEmpty { contract(groups.map { ($0, $0) }) }
-    // The default truncation point: each section's tail. A section ranks by
-    // its whole width, but pills and native list content keep their own
-    // geometry and are never cut.
-    var sections: [(runs: [Int], cut: [Int])] = []
-    for index in ordinary {
-      let cut = !runs[index].pill && runs[index].list == .off
-      if let section = sections.firstIndex(where: { lane($0.runs[0]) == lane(index) }) {
-        sections[section].runs.append(index)
-        if cut { sections[section].cut.append(index) }
-      } else {
-        sections.append(([index], cut ? [index] : []))
+    func total(_ indices: [Int]) -> Int { indices.reduce(0) { $0 + widths[$1] } }
+    for laneCase in StatusBarOverflow.Lane.allCases {
+      let indices = ordinary.filter { lane($0) == laneCase }
+      guard !indices.isEmpty else { continue }
+      let budget = budgets.columns(for: laneCase)
+      guard total(indices) > budget else { continue }
+      if let last = groups.last(where: { lane($0[0]) == laneCase }) {
+        let shrinkWidth = total(last)
+        let keep = budget - (total(indices) - shrinkWidth)
+        if keep < shrinkWidth {
+          truncate(&runs, last, to: max(1, keep), edge: .trailing)
+          for index in last {
+            widths[index] = StatusFormatCells.width(runs[index].text, styles: false)
+          }
+        }
       }
+      guard total(indices) > budget else { continue }
+      let cut = indices.filter { !runs[$0].pill && runs[$0].list == .off }
+      guard !cut.isEmpty else { continue }
+      let fixed = total(indices) - total(cut)
+      truncate(&runs, cut, to: max(0, budget - fixed), edge: budgets.edge(for: laneCase))
     }
-    contract(sections.filter { !$0.cut.isEmpty })
-    let centre = ordinary.filter { lane($0) == .absoluteCentre }.reduce(0) { $0 + widths[$1] }
-    return (
-      StatusFormatDocument(runs: runs), StatusBarOverflow.reserve(centre: centre, in: geometry)
-    )
+    return StatusFormatDocument(runs: runs)
   }
 
-  /// Keep the head of the spanned runs within `width` cells, the last of them
-  /// an ellipsis; runs past the cut are emptied.
+  /// Column budgets from `geometry`, then `fitted(_:budgets:)`. A side that is
+  /// the only segment keeps the whole bar; two sides with no centred lane
+  /// split it. A centred lane reserves the housing at the middle.
+  static func fitted(_ document: StatusFormatDocument, in geometry: StatusBarOverflow.Geometry)
+    -> (document: StatusFormatDocument, reserve: Range<Int>)
+  {
+    let absolute = contentColumns(document.runs, .notch)
+    var budgets = StatusBarOverflow.plan(notchContent: absolute, in: geometry)
+    let hasLeft = document.runs.contains { !$0.isStyleBoundary && lane($0.alignment) == .left }
+    let hasRight = document.runs.contains { !$0.isStyleBoundary && lane($0.alignment) == .right }
+    if absolute == 0, geometry.leftColumns == nil, geometry.rightColumns == nil {
+      if hasLeft, hasRight {
+        let half = geometry.columns / 2
+        budgets.left = half
+        budgets.right = half
+      } else if hasLeft {
+        budgets.left = geometry.columns
+      } else if hasRight {
+        budgets.right = geometry.columns
+      }
+    }
+    return (fitted(document, budgets: budgets), budgets.reserve)
+  }
+
+  /// `#[align=centre]` and `#[align=notch]` share the centred lane.
+  static func lane(_ alignment: StatusFormatAlignment) -> StatusBarOverflow.Lane {
+    switch alignment {
+    case .default, .left: return .left
+    case .right: return .right
+    case .centre, .notch: return .notch
+    }
+  }
+
+  private static func contentColumns(
+    _ runs: [FlashStatusTextSegment], _ lane: StatusBarOverflow.Lane
+  ) -> Int {
+    runs.reduce(0) { total, run in
+      guard !run.isStyleBoundary, self.lane(run.alignment) == lane else { return total }
+      return total + StatusFormatCells.width(run.text, styles: false)
+    }
+  }
+
+  /// Keep `width` cells of `span`. `.trailing` keeps the head and ends with
+  /// `…`; `.leading` keeps the tail and starts with `…`. A non-positive width
+  /// clears the span.
   private static func truncate(
-    _ runs: inout [FlashStatusTextSegment], _ span: [Int], to width: Int
+    _ runs: inout [FlashStatusTextSegment], _ span: [Int], to width: Int,
+    edge: StatusBarOverflow.Edge
   ) {
-    var remaining = width - 1
-    var truncated = false
-    for index in span {
-      guard !truncated else {
-        runs[index].text = ""
-        continue
-      }
-      var kept = ""
-      for character in runs[index].text {
-        let cells = StatusFormatCells.width(String(character), styles: false)
-        guard cells <= remaining else {
-          kept.append("…")
-          truncated = true
-          break
+    guard width > 0 else {
+      for index in span { runs[index].text = "" }
+      return
+    }
+    switch edge {
+    case .trailing:
+      var remaining = width - 1
+      var truncated = false
+      for index in span {
+        guard !truncated else {
+          runs[index].text = ""
+          continue
         }
-        kept.append(character)
-        remaining -= cells
+        var kept = ""
+        for character in runs[index].text {
+          let cells = StatusFormatCells.width(String(character), styles: false)
+          guard cells <= remaining else {
+            kept.append("…")
+            truncated = true
+            break
+          }
+          kept.append(character)
+          remaining -= cells
+        }
+        runs[index].text = kept
       }
-      runs[index].text = kept
+    case .leading:
+      var units: [(index: Int, character: Character, cells: Int)] = []
+      for index in span {
+        for character in runs[index].text {
+          units.append(
+            (index, character, StatusFormatCells.width(String(character), styles: false)))
+        }
+      }
+      var remaining = width - 1
+      var start = units.count
+      var cursor = units.count - 1
+      while cursor >= 0 {
+        let cells = units[cursor].cells
+        if cells > remaining { break }
+        remaining -= cells
+        start = cursor
+        cursor -= 1
+        if remaining == 0 { break }
+      }
+      var rebuilt = [Int: String]()
+      for index in span { rebuilt[index] = "" }
+      if start < units.count {
+        rebuilt[units[start].index] = "…"
+        for unit in units[start...] {
+          var text = rebuilt[unit.index] ?? ""
+          text.append(unit.character)
+          rebuilt[unit.index] = text
+        }
+      } else if let first = span.first {
+        rebuilt[first] = "…"
+      }
+      for index in span { runs[index].text = rebuilt[index] ?? "" }
     }
   }
 
@@ -475,9 +617,16 @@ final class NativeStatusBarSurface {
       if let excluded, x < excluded.upperBound && end > excluded.lowerBound { continue }
       if var last = runs.last {
         var appearance = last.segment
-        appearance.text = cell.segment.text
-        if appearance == cell.segment, last.column + last.columns == index,
-          last.segment.pill
+        var incoming = cell.segment
+        // `#[shrink]` is a layout flag, not a paint style. A carousel title
+        // and the ` (domain)` after `#[noshrink]` are one article and must
+        // draw as one run, so they rise from the bottom together.
+        if last.segment.cycle, incoming.cycle {
+          incoming.shrink = last.segment.shrink
+        }
+        appearance.text = incoming.text
+        if appearance == incoming, last.column + last.columns == index,
+          last.segment.pill || last.segment.cycle
             || (last.segment.text.unicodeScalars.allSatisfy(\.isASCII)
               && cell.segment.text.unicodeScalars.allSatisfy(\.isASCII))
         {
@@ -490,6 +639,26 @@ final class NativeStatusBarSurface {
       runs.append(.init(column: index, columns: cell.columns, segment: cell.segment))
     }
     return runs
+  }
+
+  /// Drawn runs in screen coordinates, for a letter search of this bar.
+  func letterRuns(panelFrame: CGRect) -> [StatusBarLetterRun] {
+    let bar = backgroundLayer.frame
+    let originX = panelFrame.minX + bar.minX
+    let originY = panelFrame.minY + bar.minY
+    return zip(visibleRuns, runFrames).compactMap { run, frame in
+      guard !run.segment.hidden, cellWidth > 0 else { return nil }
+      let screen = frame.offsetBy(dx: originX, dy: originY)
+      if run.segment.pill {
+        let label = run.segment.text.trimmingCharacters(in: .whitespaces)
+        guard !label.isEmpty else { return nil }
+        return StatusBarLetterRun(
+          text: label, frame: screen, cellWidth: cellWidth, centered: true)
+      }
+      guard !run.segment.text.isEmpty else { return nil }
+      return StatusBarLetterRun(
+        text: run.segment.text, frame: screen, cellWidth: cellWidth, centered: false)
+    }
   }
 
   func interactionRects(
@@ -529,10 +698,13 @@ final class NativeStatusBarSurface {
           abs(previous.rect.maxX - bounds.minX) < 0.01
         {
           previous.rect.size.width += bounds.width
+          if previous.link == nil { previous.link = run.segment.link }
           popups[popups.count - 1] = previous
         } else {
           popups.append(
-            .init(rect: bounds, name: name, content: content, document: popupDocuments[name]))
+            .init(
+              rect: bounds, name: name, content: content, document: popupDocuments[name],
+              link: run.segment.link))
         }
       }
     }
