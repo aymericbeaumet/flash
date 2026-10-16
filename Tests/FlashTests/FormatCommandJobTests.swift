@@ -123,10 +123,12 @@ final class FormatCommandJobTests: XCTestCase {
       let started = ProcessInfo.processInfo.systemUptime
       XCTAssertEqual(StatusFormatCommandJob.shutdown([active]), [])
       XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.2)
+      // A reaped group ID can be reused by a process we cannot signal.
       XCTAssertEqual(kill(-active.processIdentifier, 0), -1)
-      XCTAssertEqual(errno, ESRCH)
-      XCTAssertEqual(waitpid(active.processIdentifier, nil, WNOHANG), -1)
-      XCTAssertEqual(errno, ECHILD)
+      let reaped = waitpid(active.processIdentifier, nil, WNOHANG)
+      let reapError = errno
+      XCTAssertEqual(reaped, -1)
+      XCTAssertEqual(reapError, ECHILD)
       job = nil
     }
   }
