@@ -570,7 +570,11 @@ Section semantics:
   the plugin resident.
 - **`sources`** — source descriptors for `@<source>` completion and ranking.
   `kind` is `"default"` (default) or `"locations"`; `priority` is the
-  semantic salience enum `low | normal | high | important | urgent`;
+  semantic salience enum `low | normal | high | important | urgent` and sets
+  the source's precedence weight in the flashlight (see
+  [flashlight ranking](flashlight.md#ranking)): it orders rows against other
+  sources inside one match tier and never lifts a partial hit above an exact
+  one. Bundled: `tmux.windows` is `important`, apps and browser tabs `high`.
   `live: true` marks a live (pull) source served by `search`.
 - **`query`** — registers the per-input evaluator. `prefixes` are exact
   literal markers (never regexes) that route matching input only to this

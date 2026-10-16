@@ -522,8 +522,8 @@ suggestion_count = 10
 # The default flashlight pool is intentionally location-only: apps, tabs,
 # tmux windows, and any plugin-provided location entities.
 # Other sources are hidden unless the query includes an explicit @source filter.
-# Bonus added to candidates backed by a running process, used as a tiebreaker
-# inside the same source.
+# Bonus added to candidates backed by a running process, ordering them ahead
+# of installed-but-not-running rows of the same source inside one match tier.
 precedence_alive_bonus = 10
 # App candidates hidden from the flashlight and the `app_open --name=...` verb.
 # Entries match display name, bundle identifier, bundle path, .app filename,
@@ -549,8 +549,12 @@ app_directories = [
 # "@ft" = "@firefox.tabs"
 
 [flashlight.precedence]
-# Optional source-order overrides used as tie-breakers for location rows or
-# explicit @source result sets. Keys are source labels or parent prefixes.
+# Optional source weights. Results rank by how the query hits a row's own name
+# first (exact > prefix > word > substring > secondary text), then by source
+# weight, then by match score and frecency. Unlisted sources derive their
+# weight from the plugin manifest's `sources[].priority` (bundled: tmux windows
+# `important`, apps and browser tabs `high`). Keys are source labels or parent
+# prefixes; higher wins inside one tier and never crosses tiers.
 # Example:
 # tmux = 200
 # "firefox.tabs" = 120

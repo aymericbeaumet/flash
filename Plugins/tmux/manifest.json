@@ -46,7 +46,7 @@
     {
       "name": "tmux.windows",
       "kind": "locations",
-      "priority": "high"
+      "priority": "important"
     }
   ],
   "actions": [

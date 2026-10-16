@@ -372,14 +372,15 @@ struct Config {
     /// "@ft" = "@firefox.tabs"
     /// ```
     var aliases: [String: String] = [:]
-    /// Source precedence override weights applied as the tiebreaker once
-    /// match score ties. Keys are source labels (or parent prefixes —
-    /// `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …). Higher
-    /// weight wins. Entries not listed use the source descriptor kind declared
-    /// by the native source or plugin manifest: location sources > default.
-    /// Weights cannot cross the location band's category ladder (tmux windows
-    /// > running apps > installed apps > browser tabs > the rest) — that
-    /// ordering is strict and compared before match score.
+    /// Source precedence override weights. Keys are source labels (or parent
+    /// prefixes — `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …).
+    /// Higher weight wins. Entries not listed derive their weight from the
+    /// source descriptor the native source or plugin manifest declares:
+    /// location sources start at 50, standard sources at 0, plus the
+    /// `sources[].priority` salience (`low` -20 … `important` +100).
+    /// Precedence orders rows inside one match tier only: a row whose own
+    /// name is what the user typed (exact, prefix, word, substring) always
+    /// leads rows the query merely touches, whatever their sources weigh.
     ///
     /// Example:
     /// ```toml
@@ -390,8 +391,9 @@ struct Config {
     var precedence: [String: Int] = [:]
     /// Bonus added to any candidate whose `pid != nil` so running
     /// processes outrank installed-but-not-running rows under the
-    /// same source. With the `locations` source kind this gives active
-    /// locations an effective rank of 60 vs. inactive 50.
+    /// same source and match tier. With the `locations` source kind this
+    /// gives active locations an effective weight of 60 vs. inactive 50
+    /// before the source's own priority.
     var precedenceAliveBonus: Int = 10
     /// Apps, by name, bundle id or path, left out of the installed-app
     /// catalog and the `app_open` verb.

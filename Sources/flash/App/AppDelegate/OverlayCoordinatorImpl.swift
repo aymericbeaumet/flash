@@ -1362,7 +1362,9 @@ extension AppDelegate {
   func openSourceItem(matching target: String) {
     sourceItemResolutionGeneration &+= 1
     let generation = sourceItemResolutionGeneration
-    registry.resolveCandidate(matching: target) { [weak self] item in
+    registry.resolveCandidate(
+      matching: target, precedence: buildCandidateFinderPrecedenceTable()
+    ) { [weak self] item in
       guard let self, generation == self.sourceItemResolutionGeneration else { return }
       guard let item else {
         FlashLog.warn("[app_open] no source item found")

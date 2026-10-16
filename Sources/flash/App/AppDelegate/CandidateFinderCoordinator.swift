@@ -806,8 +806,7 @@ extension AppDelegate {
         normalizedQuery: normalizedQuery,
         fuzzyScore: fuzzy,
         allowParallel: false)
-      let sorted = CandidateFinder.sortedMatches(
-        scored, precedence: precedenceTable(), normalizedQuery: normalizedQuery)
+      let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
       // Bang / source-completion pools are disjoint from the main flashlight
       // pool, so a saved incremental cache from a previous keystroke must
       // not survive into the next plain-query keystroke.
@@ -920,7 +919,7 @@ extension AppDelegate {
     // top-K for "t" can become the best match for "tmux".
     let sortLimit = max(commandBarSuggestionCount * 3, 30)
     let ranked = CandidateFinder.displayAndIncrementalMatches(
-      scored, precedence: precedenceTable(), limit: sortLimit, normalizedQuery: normalizedQuery)
+      scored, precedence: precedenceTable(), limit: sortLimit)
     let sorted = ranked.display
     let tSorted = CFAbsoluteTimeGetCurrent()
     // Re-check the generation — a re-entrant call (e.g. caches landing
@@ -951,7 +950,7 @@ extension AppDelegate {
   /// Build a `PrecedenceTable` from the live source descriptors and config
   /// overrides. Frozen once with the candidate snapshot so query-time sorting
   /// uses a prepared table.
-  private func buildCandidateFinderPrecedenceTable() -> CandidateFinder.PrecedenceTable {
+  func buildCandidateFinderPrecedenceTable() -> CandidateFinder.PrecedenceTable {
     CandidateFinder.PrecedenceTable(
       sources: registry.registeredCandidateSourceDescriptors(),
       overrides: config.flashlight.precedence,
