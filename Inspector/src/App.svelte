@@ -44,6 +44,9 @@
   const currentDoc = $derived(route.page === "docs" ? docs.find((doc) => doc.name === route.param || (doc.aliases ?? []).includes(route.param)) : undefined);
   const section = $derived(sections.find((candidate) => candidate.id === route.page));
   const freshCount = $derived(freshness(docs, loadSeen()).size);
+  const connectionMessage = $derived(store.state.snapshot_at_unix_ms
+    ? "Connection interrupted. Showing the last received snapshot; reconnecting automatically."
+    : "Connecting to Flash. Live information will appear when the resident app is available.");
   /** The path shown in the top bar: every crumb but the last is a link. */
   const crumbs = $derived.by(() => {
     const list: { label: string; href?: string }[] = [{ label: "Flash Help", href: "/" }];
@@ -85,7 +88,14 @@
   }
   function onKey(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); searchInput?.focus(); searchInput?.select(); return; }
-    if (event.key === "Escape") { shortcuts = false; mobileNav = false; pendingG = false; if (document.activeElement === searchInput) { search = ""; searchInput?.blur(); if (route.page === "search") history.back(); } return; }
+    if (event.key === "Escape") {
+      shortcuts = false; mobileNav = false; pendingG = false;
+      if (document.activeElement === searchInput) { search = ""; if (route.page === "search") history.back(); }
+      if (document.activeElement instanceof HTMLElement && (document.activeElement.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName))) {
+        document.activeElement.blur();
+      }
+      return;
+    }
     if (typing(event) || event.metaKey || event.ctrlKey || event.altKey) return;
     if (pendingG) {
       pendingG = false;
@@ -142,9 +152,9 @@
       <button class="mobile-toggle" aria-label="Toggle navigation" aria-expanded={mobileNav} aria-controls="sidebar" onclick={() => mobileNav = !mobileNav}><Icon name="menu" /></button>
       <nav class="breadcrumb" aria-label="Breadcrumb"><ol>{#each crumbs as crumb, position}<li>{#if crumb.href && position < crumbs.length - 1}<a href={crumb.href}>{crumb.label}</a>{:else}<strong aria-current={position === crumbs.length - 1 ? "page" : undefined}>{crumb.label}</strong>{/if}</li>{/each}</ol></nav>
       <form class="searchbox" role="search" onsubmit={(event) => { event.preventDefault(); if (results[selectedResult]) router.navigate(results[selectedResult].href); }}><Icon name="search" size={16} /><input bind:this={searchInput} bind:value={search} oninput={onSearchInput} onkeydown={onSearchKey} type="search" aria-label="Search all documentation, commands, mappings and plugins" placeholder="Search anything…" /><kbd>/</kbd></form>
-      <a href="/state" class="connection" class:connected={store.connected}><i></i>{store.connected ? "Live" : "Reconnecting"}</a>
+      <a href="/state" class="connection" class:connected={store.connected} aria-label={store.connected ? "Live connection to Flash" : connectionMessage} title={store.connected ? "Live connection to Flash" : connectionMessage}>{#if store.connected}<i></i>Live{:else}<Icon name="warning" size={18} />{/if}</a>
     </header>
-    {#if !store.connected}<div class="connection-note" role="status">{store.state.snapshot_at_unix_ms ? "Connection interrupted. Showing the last received snapshot; reconnecting automatically." : "Connecting to Flash. Live information will appear when the resident app is available."}</div>{/if}
+    <span class="sr-only" role="status">{store.connected ? "Connected to Flash. Live information is current." : connectionMessage}</span>
     <main id="main-content" tabindex="-1" bind:this={content}>
       {#if route.page === "search"}
         <div class="page"><div class="page-heading"><p class="eyebrow">Across your Flash</p><h1>Search</h1><p aria-live="polite">{route.param ? `${results.length} ${results.length === 1 ? "result" : "results"} for “${route.param}”` : "Type a feature, command, key or plugin name. Every word must match."}</p></div>
@@ -161,7 +171,7 @@
       {:else if route.page === "plugins"}<PluginsPanel {plugins} filter={route.param} sampledAt={store.state.snapshot_at_unix_ms} onresample={() => store.refresh()} />
       {:else if route.page === "state"}<RuntimePanel state={store.state} connected={store.connected} onrefresh={() => store.refresh()} />
       {:else if route.page === "logs"}<div class="page log-page"><div class="page-heading"><p class="eyebrow">Inspect</p><h1>Live logs</h1><p>Follow what Flash is doing. Select a record to inspect its full details.</p></div><div class="surface log-surface"><LogList logs={store.logs} /></div></div>
-      {:else if route.page === "clipboard"}<ClipboardPanel entries={store.state.clipboard ?? []} />
+      {:else if route.page === "clipboard"}<ClipboardPanel entries={store.state.clipboard ?? []} nextOffset={store.state.clipboard_next_offset ?? null} total={store.state.clipboard_total ?? 0} />
       {:else}<div class="page"><div class="page-heading"><p class="eyebrow">Flash Help</p><h1>Page not found</h1><p>This address is not part of Flash Help. Start from the homepage, browse the guides, or search above.</p></div><p class="not-found-links"><a href="/">Help homepage →</a><a href={paths.docs()}>All guides →</a></p></div>{/if}
     </main>
   </div>
@@ -169,11 +179,21 @@
     <div class="sheet-backdrop" role="presentation" onclick={() => shortcuts = false}></div>
     <div class="sheet surface" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
       <div class="sheet-head"><h2 id="shortcuts-title">Keyboard shortcuts</h2><button type="button" onclick={() => shortcuts = false}>Close</button></div>
+      <h3>Search</h3>
       <dl>
-        <dt><kbd>/</kbd> or <kbd>⌘ K</kbd></dt><dd>Search. <kbd>↓</kbd> <kbd>↑</kbd> pick a result, <kbd>↩</kbd> opens it, <kbd>Esc</kbd> leaves.</dd>
-        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous and next guide, in reading order.</dd>
-        <dt><kbd>g</kbd> then a letter</dt><dd>Jump to a page: {#each sections as item, position}{position ? ", " : ""}<kbd>{item.key}</kbd> {item.label.toLowerCase()}{/each}.</dd>
-        <dt><kbd>?</kbd></dt><dd>This sheet.</dd>
+        <dt><kbd>/</kbd></dt><dd>Focus search</dd>
+        <dt><kbd>⌘ K</kbd></dt><dd>Focus search</dd>
+        <dt><kbd>↓</kbd></dt><dd>Next result</dd>
+        <dt><kbd>↑</kbd></dt><dd>Previous result</dd>
+        <dt><kbd>↩</kbd></dt><dd>Open selected result</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Leave the focused field or close this sheet</dd>
+      </dl>
+      <h3>Navigation</h3>
+      <dl>
+        <dt><kbd>[</kbd></dt><dd>Previous guide</dd>
+        <dt><kbd>]</kbd></dt><dd>Next guide</dd>
+        {#each sections as item}<dt><kbd>g</kbd> <kbd>{item.key}</kbd></dt><dd>Go to {item.label}</dd>{/each}
+        <dt><kbd>?</kbd></dt><dd>Show or hide this sheet</dd>
       </dl>
       <p class="muted">Shortcuts pause while you type in a field. Flash's own keys are on the <a href="/mappings">key mappings</a> page.</p>
     </div>
@@ -181,20 +201,21 @@
 </div>
 
 <style>
-  .workspace { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100dvh; }
-  .sidebar { background: #f1f4ee; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 29px 18px 22px; overflow: auto; }
+  .workspace { display: grid; grid-template-columns: 270px minmax(0, 1fr); height: 100dvh; }
+  .sidebar { background: #f1f4ee; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 29px 14px 22px; overflow: auto; }
   .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 23px; font-weight: 650; line-height: 1.2; padding: 0 8px; text-decoration: none; }
   .brand-mark { display: grid; place-items: center; color: #eff6e7; background: #2e5b43; width: 38px; height: 43px; border-radius: 11px; }
   .brand-sub { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 4px; letter-spacing: .02em; }
   nav { margin-top: 36px; }
   .nav-group { margin-bottom: 24px; }
   .nav-group .eyebrow { padding: 0 12px; margin-bottom: 9px; font-size: 10px; }
-  nav a { display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 9px 12px; margin: 3px 0; border-radius: 7px; color: #4f5c52; font-size: 13px; font-weight: 500; text-decoration: none; }
+  nav a { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 9px; margin: 3px 0; border-radius: 7px; color: #4f5c52; font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+  nav a > span:nth-child(2) { min-width: 0; }
   nav a:hover { background: #e7ede1; }
   nav a.active { background: #e0e9d8; color: #244f38; font-weight: 600; }
   .nav-count { margin-left: auto; font-size: 11px; opacity: .8; }
   .nav-fresh { margin-left: auto; }
-  .nav-key { display: none; margin-left: auto; font-size: 10px; padding: 0 5px; opacity: .6; }
+  .nav-key { display: none; flex: none; margin-left: auto; font-size: 10px; padding: 0 4px; opacity: .6; }
   nav a:hover .nav-key, nav a:focus-visible .nav-key { display: inline-block; }
   nav a:hover .nav-count, nav a:hover .nav-fresh { display: none; }
   .sidebar-footer { margin-top: auto; padding: 20px 10px 0; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
@@ -214,10 +235,10 @@
   .searchbox { margin-left: auto; display: flex; align-items: center; gap: 8px; width: min(320px, 34vw); border: 1px solid var(--border); border-radius: 7px; padding: 0 10px; color: var(--muted); background: #f8faf6; }
   .searchbox input { border: 0; background: none; width: 100%; min-height: 38px; padding: 4px 0; font-size: 14px; outline-offset: 0; }
   .searchbox kbd { font-size: 10px; padding: 0 5px; color: var(--muted); }
-  .connection { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; min-height: 32px; }
+  .connection { display: flex; align-items: center; justify-content: center; gap: 6px; color: #996e2c; background: #fff5dc; border-radius: 8px; font-size: 12px; white-space: nowrap; min-width: 32px; min-height: 32px; }
+  .connection.connected { color: var(--muted); background: none; }
   .connection i { width: 6px; height: 6px; border-radius: 50%; background: #c99c55; }
   .connection.connected i { background: #5c9662; box-shadow: 0 0 0 3px #e9f1e4; }
-  .connection-note { padding: 8px 24px; font-size: 12px; color: #6a5720; background: #fff9e6; border-bottom: 1px solid #e7ddba; }
   main { flex: 1; overflow: auto; min-height: 0; display: flex; flex-direction: column; }
   main:focus { outline: none; }
   main > :global(*) { flex: none; }
@@ -238,14 +259,16 @@
   .skip-link { position: fixed; top: -100px; left: 12px; z-index: 100; background: #fff; border: 1px solid var(--border); padding: 10px; }
   .skip-link:focus { top: 12px; }
   .sheet-backdrop { position: fixed; inset: 0; background: #1f2a2166; z-index: 20; }
-  .sheet { position: fixed; z-index: 21; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(520px, calc(100vw - 32px)); padding: 22px 24px; box-shadow: 0 20px 60px #1f2a2133; }
+  .sheet { position: fixed; z-index: 21; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 22px 24px; box-shadow: 0 20px 60px #1f2a2133; }
   .sheet-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
   .sheet h2 { font-size: 18px; }
-  .sheet dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px 18px; margin: 0; font-size: 14px; }
+  .sheet h3 { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .1em; margin: 16px 0 8px; }
+  .sheet dl { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 4px 18px; margin: 0; font-size: 14px; }
   .sheet dt { white-space: nowrap; }
+  .sheet dt, .sheet dd { display: flex; align-items: center; min-height: 32px; }
   .sheet dd { margin: 0; color: var(--muted); }
   .sheet p { margin-top: 16px; font-size: 13px; }
-  @media (max-width: 1150px) { .topbar { padding: 14px 24px; gap: 16px; } .workspace { grid-template-columns: 212px minmax(0, 1fr); } }
+  @media (max-width: 1150px) { .topbar { padding: 14px 24px; gap: 16px; } }
   @media (max-width: 850px) { .breadcrumb li:not(:nth-last-child(-n+2)) { display: none; } .breadcrumb li:nth-last-child(2)::before { content: "…"; } .topbar { gap: 14px; } .searchbox { width: min(260px, 35vw); } }
   .not-found-links { display: flex; gap: 24px; font-size: 14px; }
   @media (max-width: 700px) {
@@ -260,12 +283,11 @@
     .searchbox { width: auto; flex: 1; }
     .searchbox kbd { display: none; }
     .connection { font-size: 11px; }
-    .sheet dl { grid-template-columns: 1fr; gap: 6px; }
-    .sheet dt { margin-top: 8px; }
+    .sheet dl { grid-template-columns: 80px minmax(0, 1fr); gap: 4px 8px; font-size: 13px; }
   }
   @media print {
     .workspace, .main-column, main, .log-page { display: block; height: auto; overflow: visible; }
-    .sidebar, .topbar, .connection-note, .skip-link, .sheet, .sheet-backdrop, .scrim { display: none !important; }
+    .sidebar, .topbar, .skip-link, .sheet, .sheet-backdrop, .scrim { display: none !important; }
     .search-results, .log-surface { overflow: visible; min-height: 0; border: 0; }
     .search-results a { break-inside: avoid; padding: 10px 0; }
   }

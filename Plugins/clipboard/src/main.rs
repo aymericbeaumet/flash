@@ -11,8 +11,9 @@ const HISTORY_FILE: &str = "history.json";
 /// `[plugin.clipboard] history_size`: entries kept, newest first.
 const DEFAULT_HISTORY_SIZE: usize = 1000;
 const MAX_HISTORY_SIZE: u64 = 10_000;
-/// The shown history stays well inside one protocol frame (10 MiB).
-const HISTORY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+/// JSON in `message` is escaped again in the 10 MiB protocol frame.
+const HISTORY_RESPONSE_BYTES: usize = 3 * 1024 * 1024;
+const HISTORY_PAGE_ENTRIES: usize = 100;
 const PREVIEW_CHARS: usize = 80;
 /// Plain text above this size is dropped. A rich copy keeps its image or
 /// HTML and truncates only the plain fallback, which the host already capped.
@@ -112,7 +113,10 @@ impl FlashPlugin for Clipboard {
         match (command.command.as_str(), command.subcommand.as_str()) {
             // `:clipboard show` hands the history to the host as JSON. Image
             // bytes stay on disk; `mime` means the host can read the file.
-            ("clipboard", "show") => self.history_response(),
+            ("clipboard", "show") => match history_offset(&command.args) {
+                Some(offset) => self.history_response(offset),
+                None => PerformResponse::fail("offset must be an integer in 0..10000"),
+            },
             ("clipboard", "delete") => self.delete(&ctx, &command.args).await,
             (other, _) => PerformResponse::fail(format!("unknown command: {other}")),
         }
@@ -153,26 +157,44 @@ impl Clipboard {
         Some((hist.clone(), drop_ids))
     }
 
-    fn history_response(&self) -> PerformResponse {
+    fn history_response(&self, offset: usize) -> PerformResponse {
         let Ok(hist) = self.history.lock() else {
             return PerformResponse::fail("clipboard history unavailable");
         };
-        // Newest first while they fit the budget; the rest stay stored.
-        let mut json = String::from("[");
-        for entry in hist.iter() {
+        // Each page fits one frame even after protocol JSON escapes it. The
+        // continuation lets the inspector retrieve every stored entry.
+        let mut json = String::from("{\"entries\":[");
+        let start = offset.min(hist.len());
+        let mut next = start;
+        for entry in hist.iter().skip(start) {
+            if next - start >= HISTORY_PAGE_ENTRIES {
+                break;
+            }
             let encoded = match serde_json::to_string(&HistoryEntry::from(entry)) {
                 Ok(encoded) => encoded,
                 Err(err) => return PerformResponse::fail(format!("encode history: {err}")),
             };
-            if json.len() + encoded.len() + 2 > HISTORY_RESPONSE_BYTES {
+            if json.len() + encoded.len() + 64 > HISTORY_RESPONSE_BYTES {
                 break;
             }
-            if json.len() > 1 {
+            if next > start {
                 json.push(',');
             }
             json.push_str(&encoded);
+            next += 1;
         }
-        json.push(']');
+        if next == start && next < hist.len() {
+            return PerformResponse::fail("clipboard entry exceeds history page limit");
+        }
+        json.push_str("],\"total\":");
+        json.push_str(&hist.len().to_string());
+        json.push_str(",\"next_offset\":");
+        if next < hist.len() {
+            json.push_str(&next.to_string());
+        } else {
+            json.push_str("null");
+        }
+        json.push('}');
         PerformResponse::ok().message(json)
     }
 
@@ -362,6 +384,22 @@ fn arg_id(args: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+fn history_offset(args: &[String]) -> Option<usize> {
+    match args {
+        [] => Some(0),
+        [arg] => {
+            let raw = arg.strip_prefix("offset=")?;
+            if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            raw.parse::<usize>()
+                .ok()
+                .filter(|offset| *offset <= MAX_HISTORY_SIZE as usize)
+        }
+        _ => None,
+    }
 }
 
 fn valid_id(id: &str) -> bool {
@@ -604,6 +642,11 @@ mod tests {
             )
             .await;
         assert!(response.is_ok());
+        serde_json::from_str::<serde_json::Value>(response.toast_message().unwrap()).unwrap()["entries"].clone()
+    }
+
+    fn page(plugin: &Clipboard, offset: usize) -> serde_json::Value {
+        let response = plugin.history_response(offset);
         serde_json::from_str(response.toast_message().unwrap()).unwrap()
     }
 
@@ -621,6 +664,20 @@ mod tests {
         ] {
             assert!(history_size(Some(bad)).is_err());
         }
+    }
+
+    #[test]
+    fn history_page_offsets_are_strict_and_out_of_range_is_empty() {
+        assert_eq!(history_offset(&[]), Some(0));
+        assert_eq!(history_offset(&["offset=100".into()]), Some(100));
+        for bad in ["offset=", "offset=-1", "offset=1.5", "offset=10001", "100"] {
+            assert_eq!(history_offset(&[bad.into()]), None);
+        }
+        let clipboard = plugin();
+        let beyond = page(&clipboard, 100);
+        assert_eq!(beyond["entries"].as_array().unwrap().len(), 0);
+        assert_eq!(beyond["total"], 0);
+        assert!(beyond["next_offset"].is_null());
     }
 
     #[tokio::test]
@@ -645,14 +702,29 @@ mod tests {
             .map(|entry| entry["value"].as_str().unwrap())
             .collect();
         assert_eq!(values, ["copy 4", "copy 3", "copy 2"]);
+        let second = clipboard
+            .on_command(
+                ctx.clone(),
+                CommandRequest {
+                    command: "clipboard".into(),
+                    subcommand: "show".into(),
+                    args: vec!["offset=1".into()],
+                    ..CommandRequest::default()
+                },
+            )
+            .await;
+        let second: serde_json::Value =
+            serde_json::from_str(second.toast_message().unwrap()).unwrap();
+        assert_eq!(second["entries"][0]["value"], "copy 3");
+        assert_eq!(second["total"], 3);
+        assert!(second["next_offset"].is_null());
         tokio::fs::remove_dir_all(ctx.data_dir()).await.unwrap();
     }
 
-    /// A long history of large copies would not fit one protocol frame: the
-    /// newest entries are shown while they fit the budget, the rest stay
-    /// stored.
+    /// A long history of large copies crosses multiple bounded responses,
+    /// without silently dropping older entries from the inspector.
     #[test]
-    fn the_shown_history_stays_inside_its_byte_budget() {
+    fn all_stored_entries_are_reachable_in_bounded_pages() {
         let clipboard = plugin();
         let big = "x".repeat(MAX_ENTRY_BYTES);
         {
@@ -661,12 +733,56 @@ mod tests {
                 hist.push(text_entry(index, big.clone()).unwrap());
             }
         }
-        let response = clipboard.history_response();
-        let json = response.toast_message().unwrap();
-        assert!(json.len() <= HISTORY_RESPONSE_BYTES, "{} bytes", json.len());
-        let shown: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
-        assert!(!shown.is_empty() && shown.len() < 120);
+        let mut offset = 0;
+        let mut seen = Vec::new();
+        loop {
+            let response = clipboard.history_response(offset);
+            let json = response.toast_message().unwrap();
+            assert!(json.len() <= HISTORY_RESPONSE_BYTES, "{} bytes", json.len());
+            assert!(
+                serde_json::to_vec(&response).unwrap().len() < 10 * 1024 * 1024,
+                "the escaped protocol response must fit one wire frame"
+            );
+            let shown = page(&clipboard, offset);
+            let entries = shown["entries"].as_array().unwrap();
+            assert!(!entries.is_empty());
+            assert_eq!(shown["total"], 120);
+            seen.extend(
+                entries
+                    .iter()
+                    .map(|entry| entry["id"].as_str().unwrap().to_owned()),
+            );
+            match shown["next_offset"].as_u64() {
+                Some(next) => offset = next as usize,
+                None => break,
+            }
+        }
+        assert_eq!(seen.len(), 120);
+        assert_eq!(
+            seen.iter().collect::<std::collections::HashSet<_>>().len(),
+            120
+        );
         assert_eq!(clipboard.history.lock().unwrap().len(), 120);
+        let beyond = page(&clipboard, 121);
+        assert!(beyond["entries"].as_array().unwrap().is_empty());
+        assert_eq!(beyond["total"], 120);
+        assert!(beyond["next_offset"].is_null());
+    }
+
+    #[test]
+    fn escaped_clipboard_text_still_fits_the_protocol_frame() {
+        let clipboard = plugin();
+        let escaped = "\\\n".repeat(MAX_ENTRY_BYTES / 2);
+        {
+            let mut hist = clipboard.history.lock().unwrap();
+            for index in 0..30 {
+                hist.push(text_entry(index, escaped.clone()).unwrap());
+            }
+        }
+        let response = clipboard.history_response(0);
+        assert!(response.is_ok());
+        assert!(serde_json::to_vec(&response).unwrap().len() < 10 * 1024 * 1024);
+        assert!(page(&clipboard, 0)["next_offset"].as_u64().is_some());
     }
 
     #[tokio::test]

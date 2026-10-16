@@ -188,6 +188,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var clipboardEntries: [ClipboardModalEntry] = [] {
     didSet { debugStateDidChange() }
   }
+  var clipboardNextOffset: Int?
+  var clipboardTotal = 0
+  /// MIME types for image entries served to the inspector, including pages
+  /// fetched after the first one.
+  var clipboardImageMimes = ClipboardImageCache()
   let pluginStateRefresh = PollDeadline("core:plugin_state_refresh", priority: .normal, on: .main)
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []

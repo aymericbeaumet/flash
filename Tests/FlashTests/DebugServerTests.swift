@@ -97,11 +97,26 @@ final class DebugServerTests: XCTestCase {
     XCTAssertEqual(DebugServer.route(path: "/api/logs"), .logs)
     XCTAssertEqual(DebugServer.route(path: "/api/traces"), .traces)
     XCTAssertEqual(DebugServer.route(path: "/api/events"), .events)
+    XCTAssertEqual(DebugServer.route(path: "/api/clipboard/history"), .clipboardHistory)
     XCTAssertEqual(DebugServer.route(path: "/api/config"), .config)
     XCTAssertEqual(DebugServer.route(path: "/api/config/purge"), .configPurge)
     let id = "0123456789abcdef0123456789abcdef"
     XCTAssertEqual(DebugServer.route(path: "/api/clipboard/\(id)"), .clipboardItem(id: id))
     XCTAssertEqual(DebugServer.requestMethod("DELETE /api/clipboard/\(id) HTTP/1.1\r\n"), "DELETE")
+    XCTAssertEqual(DebugServer.clipboardHistoryOffset("GET /api/clipboard/history HTTP/1.1\r\n"), 0)
+    XCTAssertEqual(
+      DebugServer.clipboardHistoryOffset("GET /api/clipboard/history?offset=100 HTTP/1.1\r\n"),
+      100)
+    for invalid in ["-1", "1.5", "abc", "10001", "", "1&offset=2", "1&other=2"] {
+      XCTAssertNil(
+        DebugServer.clipboardHistoryOffset(
+          "GET /api/clipboard/history?offset=\(invalid) HTTP/1.1\r\n"))
+    }
+    for invalid in ["?other=1", "?offset", "?"] {
+      XCTAssertNil(
+        DebugServer.clipboardHistoryOffset(
+          "GET /api/clipboard/history\(invalid) HTTP/1.1\r\n"))
+    }
     for path in [
       "/api", "/api/", "/api/state/x", "/api/docs", "/api/config/x", "/api/clipboard",
       "/api/clipboard/",
@@ -454,6 +469,34 @@ final class DebugServerTests: XCTestCase {
     let missingPort = try waitForListeningPort(missing)
     let unavailable = try fetchData(port: missingPort, method: "GET", path: "/api/clipboard/\(id)")
     XCTAssertEqual(unavailable.status, 503)
+  }
+
+  func testClipboardHistoryPagesAreBoundedByTheHandlerAndValidateOffsets() throws {
+    let calls = LockedCounter()
+    let server = DebugServer(
+      host: "localhost", port: 0,
+      clipboardHistoryHTTP: { offset, done in
+        calls.increment()
+        let body = "{\"entries\":[],\"total\":\(offset),\"next_offset\":null}"
+        done("200 OK", "application/json; charset=utf-8", Data(body.utf8))
+      },
+      stateProvider: { [:] }
+    )
+    server.start()
+    defer { server.stop() }
+    let port = try waitForListeningPort(server)
+
+    let page = try fetchData(port: port, method: "GET", path: "/api/clipboard/history?offset=100")
+    XCTAssertEqual(page.status, 200)
+    XCTAssertTrue(String(decoding: page.body, as: UTF8.self).contains("\"total\":100"))
+    XCTAssertEqual(page.cache, "no-store")
+    XCTAssertEqual(
+      try fetchData(port: port, method: "GET", path: "/api/clipboard/history?offset=-1").status,
+      400)
+    XCTAssertEqual(
+      try fetchData(port: port, method: "POST", path: "/api/clipboard/history").status,
+      405)
+    XCTAssertEqual(calls.value, 1)
   }
 
   func testWhenListeningAnswersFromTheListenerState() throws {

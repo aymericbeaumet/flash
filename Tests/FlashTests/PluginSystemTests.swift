@@ -1683,12 +1683,15 @@ final class PluginSystemTests: XCTestCase {
 
   // MARK: - Clipboard dashboard decode
 
-  func testDecodeClipboardModalEntriesRoundTripsPluginJSON() throws {
+  func testDecodeClipboardHistoryPageRoundTripsPluginJSON() throws {
     // The shape the Rust clipboard plugin emits for `:clipboard`.
     let json = """
-      [{"id":"0123456789abcdef0123456789abcdef","kind":"text","preview":"hello","value":"hello"},{"id":"fedcba9876543210fedcba9876543210","kind":"html","preview":"two…","value":"two lines\\nof text","html":"<p>two</p>"}]
+      {"entries":[{"id":"0123456789abcdef0123456789abcdef","kind":"text","preview":"hello","value":"hello"},{"id":"fedcba9876543210fedcba9876543210","kind":"html","preview":"two…","value":"two lines\\nof text","html":"<p>two</p>"}],"total":3,"next_offset":2}
       """
-    let entries = try XCTUnwrap(AppDelegate.decodeClipboardModalEntries(json))
+    let page = try XCTUnwrap(AppDelegate.decodeClipboardHistoryPage(json))
+    let entries = page.entries
+    XCTAssertEqual(page.total, 3)
+    XCTAssertEqual(page.nextOffset, 2)
     XCTAssertEqual(entries.map(\.preview), ["hello", "two…"])
     XCTAssertEqual(entries.map(\.value), ["hello", "two lines\nof text"])
     XCTAssertEqual(entries[1].html, "<p>two</p>")
@@ -1696,19 +1699,23 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(entries[0].mime)
   }
 
-  func testDecodeClipboardModalEntriesAcceptsEmptyHistory() throws {
-    let entries = try XCTUnwrap(AppDelegate.decodeClipboardModalEntries("[]"))
-    XCTAssertTrue(entries.isEmpty)
+  func testDecodeClipboardHistoryPageAcceptsEmptyHistory() throws {
+    let page = try XCTUnwrap(
+      AppDelegate.decodeClipboardHistoryPage("{\"entries\":[],\"total\":0,\"next_offset\":null}"))
+    XCTAssertTrue(page.entries.isEmpty)
+    XCTAssertNil(page.nextOffset)
   }
 
-  func testDecodeClipboardModalEntriesRejectsMalformedJSON() {
-    XCTAssertNil(AppDelegate.decodeClipboardModalEntries("not json"))
+  func testDecodeClipboardHistoryPageRejectsMalformedJSON() {
+    XCTAssertNil(AppDelegate.decodeClipboardHistoryPage("not json"))
     XCTAssertNil(
-      AppDelegate.decodeClipboardModalEntries("[{\"preview\":\"x\"}]"),
+      AppDelegate.decodeClipboardHistoryPage(
+        "{\"entries\":[{\"preview\":\"x\"}],\"total\":1,\"next_offset\":null}"),
       "an entry missing the required `value` field decodes to nil")
     XCTAssertNil(
-      AppDelegate.decodeClipboardModalEntries(
-        "[{\"preview\":\"x\",\"value\":\"x\",\"kind\":\"text\"}]"),
+      AppDelegate.decodeClipboardHistoryPage(
+        "{\"entries\":[{\"preview\":\"x\",\"value\":\"x\",\"kind\":\"text\"}],\"total\":1,\"next_offset\":null}"
+      ),
       "an entry missing `id` decodes to nil")
   }
 
@@ -1724,6 +1731,26 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(object["files"] as? [String], ["/tmp/shot.png"])
     XCTAssertNil(object["sha256"])
     XCTAssertNil(object["image"])
+  }
+
+  func testClipboardImageCacheKeepsTheNewestLoadedImagesWithinItsLimit() {
+    func image(_ byte: String) -> ClipboardModalEntry {
+      ClipboardModalEntry(
+        id: String(repeating: byte, count: 32), kind: "image", preview: "Image", value: "",
+        mime: "image/png")
+    }
+    let first = image("a")
+    let second = image("b")
+    let third = image("c")
+    let newest = image("d")
+    var cache = ClipboardImageCache(limit: 3)
+    cache.remember([first, second, third], offset: 0)
+    cache.remember([newest], offset: 0)
+    XCTAssertNil(cache.mime(for: third.id), "the oldest loaded image is evicted")
+    XCTAssertEqual(cache.mime(for: first.id), "image/png")
+    XCTAssertEqual(cache.mime(for: newest.id), "image/png")
+    cache.remove(first.id)
+    XCTAssertNil(cache.mime(for: first.id))
   }
 
   // MARK: - Official plugins

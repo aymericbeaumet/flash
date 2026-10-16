@@ -1,9 +1,16 @@
 <script lang="ts">
+  import { flushSync, onDestroy, onMount } from "svelte";
+  import { fetchHistory, type ClipboardPage } from "./clipboard-history";
   import Icon from "./Icon.svelte";
   import { linkSegments } from "./linkify";
   import type { ClipboardEntry } from "./types";
 
-  let { entries }: { entries: ClipboardEntry[] } = $props();
+  let { entries, nextOffset, total }: { entries: ClipboardEntry[]; nextOffset: number | null; total: number } = $props();
+  let history = $state<ClipboardEntry[]>([]);
+  let retained = $state(0);
+  let loading = $state(false);
+  let loadError = $state(false);
+  let displayLimit = $state(100);
   let query = $state("");
   let copied = $state<string | null>(null);
   let copying = $state<string | null>(null);
@@ -11,6 +18,75 @@
   let notice = $state("");
   let zoomed = $state<{ src: string; alt: string } | null>(null);
   let requestID = 0;
+  let historyGeneration = 0;
+  let historyRequest: AbortController | null = null;
+  let firstPageKey = "";
+  let initialized = false;
+
+  $effect(() => {
+    const key = `${entries.map((entry) => entry.id).join(",")}:${nextOffset ?? "end"}:${total}`;
+    if (key === firstPageKey) return;
+    firstPageKey = key;
+    if (!initialized) {
+      initialized = true;
+      history = [...entries];
+      retained = total;
+    }
+    void refresh();
+  });
+  onDestroy(() => { historyGeneration += 1; historyRequest?.abort(); });
+  onMount(() => {
+    const showAll = () => flushSync(() => { displayLimit = Number.MAX_SAFE_INTEGER; });
+    const restore = () => { displayLimit = 100; };
+    window.addEventListener("beforeprint", showAll);
+    window.addEventListener("afterprint", restore);
+    return () => {
+      window.removeEventListener("beforeprint", showAll);
+      window.removeEventListener("afterprint", restore);
+    };
+  });
+
+  function beginRequest(): { generation: number; signal: AbortSignal } {
+    historyRequest?.abort();
+    historyRequest = new AbortController();
+    historyGeneration += 1;
+    loading = true;
+    loadError = false;
+    return { generation: historyGeneration, signal: historyRequest.signal };
+  }
+
+  async function page(offset: number, signal: AbortSignal): Promise<ClipboardPage> {
+    const response = await fetch(`/api/clipboard/history?offset=${offset}`, { signal });
+    if (!response.ok) throw new Error(String(response.status));
+    const result: unknown = await response.json();
+    if (typeof result !== "object" || result === null || !("entries" in result) || !("next_offset" in result) || !("total" in result)
+      || !Array.isArray(result.entries)
+      || !(result.next_offset === null || (Number.isSafeInteger(result.next_offset) && Number(result.next_offset) >= 0))
+      || !Number.isSafeInteger(result.total) || Number(result.total) < 0) {
+      throw new Error("Invalid clipboard history page");
+    }
+    return result as ClipboardPage;
+  }
+
+  async function refresh() {
+    const { generation, signal } = beginRequest();
+    try {
+      await fetchHistory((offset) => page(offset, signal), (loaded, _cursor, count) => {
+        if (generation !== historyGeneration) return;
+        history = loaded;
+        retained = count;
+      }, signal);
+      if (generation === historyGeneration) {
+        removed = removed.filter((id) => history.some((entry) => entry.id === id));
+      }
+    } catch {
+      if (generation === historyGeneration && !signal.aborted) {
+        loadError = true;
+      }
+    } finally {
+      if (generation === historyGeneration) loading = false;
+    }
+  }
 
   // The zoomed image closes with Escape as well as a click.
   $effect(() => {
@@ -24,11 +100,13 @@
     return () => window.removeEventListener("keydown", close);
   });
 
-  const visible = $derived(entries.filter((entry) => entry.id && !removed.includes(entry.id)));
+  const visible = $derived(history.filter((entry) => entry.id && !removed.includes(entry.id)));
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return visible.map((entry, index) => ({ ...entry, index })).filter((entry) => !q || haystack(entry).includes(q));
   });
+  const displayed = $derived(filtered.slice(0, displayLimit));
+  $effect(() => { void query; displayLimit = 100; });
 
   function haystack(entry: ClipboardEntry): string {
     return [entry.kind, entry.preview, entry.value, entry.mime ?? "", ...(entry.files ?? [])].join("\n").toLowerCase();
@@ -87,6 +165,7 @@
     try {
       const response = await fetch(`/api/clipboard/${entry.id}`, { method: "DELETE" });
       if (!response.ok) throw new Error(String(response.status));
+      void refresh();
     } catch {
       removed = removed.filter((id) => id !== entry.id);
       notice = "Could not delete this entry.";
@@ -102,17 +181,19 @@
   {#if notice}<div class="notice error" role="alert">{notice}</div>{/if}
   <div class="sr-status" role="status" aria-live="polite">{copied !== null ? "Entry copied to your clipboard." : ""}</div>
   <div class="surface clipboard">
-    <div class="toolbar"><input type="search" aria-label="Search clipboard history" placeholder="Search clipboard history…" bind:value={query} /><span class="count">{filtered.length} of {visible.length} entries</span></div>
+    <div class="toolbar"><input type="search" aria-label="Search clipboard history" placeholder="Search clipboard history…" bind:value={query} /><span class="count">{filtered.length} matching · {visible.length} of {retained} retained</span><button type="button" class="refresh-button" onclick={refresh} disabled={loading}>Refresh</button></div>
+    {#if loading}<div class="history-status" role="status">Loading older clipboard entries…</div>{/if}
+    {#if loadError}<div class="history-status error" role="alert">Could not load the full history. <button type="button" onclick={refresh}>Retry</button></div>{/if}
     {#if filtered.length}
       <div class="entries">
-        {#each filtered as entry (entry.id)}
+        {#each displayed as entry (entry.id)}
           <article class="entry" class:copied={copied === entry.id}>
             <span class="entry-number">{String(entry.index + 1).padStart(2, "0")}</span>
             <div class="entry-content">
               <p class="preview">{@render linked(entry.preview || entry.value || kindLabel(entry.kind))}</p>
               <div class="entry-meta"><span class="badge neutral">{kindLabel(entry.kind)}</span>{#if entry.mime}<span>{entry.mime}</span>{/if}{#if entry.value}<span>{entry.value.length.toLocaleString()} characters</span>{/if}{#if entry.files?.length}<span>{entry.files.length} {entry.files.length === 1 ? "file" : "files"}</span>{/if}</div>
-              {#if imageURL(entry)}{@const src = imageURL(entry) ?? ""}<button type="button" class="image-button" aria-label="Zoom into this image" onclick={() => (zoomed = { src, alt: entry.preview || "Copied image" })}><img class="clip-image" {src} alt={entry.preview || "Copied image"} /></button>{/if}
-              {#if entry.kind === "html" && entry.html}<iframe class="clip-html" sandbox="" srcdoc={entry.html} title="Formatted clipboard entry" referrerpolicy="no-referrer"></iframe>{/if}
+              {#if imageURL(entry)}{@const src = imageURL(entry) ?? ""}<button type="button" class="image-button" aria-label="Zoom into this image" onclick={() => (zoomed = { src, alt: entry.preview || "Copied image" })}><img class="clip-image" {src} alt={entry.preview || "Copied image"} loading="lazy" /></button>{/if}
+              {#if entry.kind === "html" && entry.html}<iframe class="clip-html" sandbox="" srcdoc={entry.html} title="Formatted clipboard entry" referrerpolicy="no-referrer" loading="lazy"></iframe>{/if}
               {#if entry.files?.length}<ul class="files">{#each entry.files as file (file)}<li>{file}</li>{/each}</ul>{/if}
               {#if entry.value}<details><summary>View plain text</summary><pre>{@render linked(entry.value)}</pre></details>{/if}
             </div>
@@ -123,6 +204,7 @@
           </article>
         {/each}
       </div>
+      {#if displayed.length < filtered.length}<button type="button" class="show-more" onclick={() => displayLimit += 100}>Show 100 more entries ({filtered.length - displayed.length} remaining)</button>{/if}
     {:else}
       <div class="empty"><span class="empty-icon"><Icon name="clipboard" size={25} /></span><strong>{visible.length ? "No matching entries" : "Your clipboard history is empty"}</strong><p>{visible.length ? "Try another word or clear the search." : "Copy something in another app. If nothing appears, check that the clipboard plugin is running."}</p>{#if visible.length}<button type="button" onclick={() => query = ""}>Clear search</button>{:else}<a href="/plugins/clipboard">Check clipboard plugin <span>→</span></a>{/if}</div>
     {/if}
@@ -138,6 +220,11 @@
   .privacy-note :global(svg) { flex-shrink: 0; margin-top: 1px; }
   .privacy-note a { margin-left: auto; white-space: nowrap; }
   .clipboard { overflow: hidden; }
+  .history-status { padding: 9px 18px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border-soft); }
+  .history-status.error { color: var(--danger); }
+  .history-status button { min-height: 28px; margin-left: 8px; padding: 3px 8px; font-size: 12px; }
+  .refresh-button { min-height: 32px; font-size: 12px; padding: 5px 10px; }
+  .show-more { display: block; margin: 14px auto; font-size: 12px; }
   .entry { display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; align-items: start; gap: 16px; padding: 21px 23px; border-bottom: 1px solid var(--border-soft); }
   .entry:last-child { border-bottom: 0; }
   .entry.copied { background: #f5f9ef; }

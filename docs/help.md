@@ -31,15 +31,16 @@ troubleshooting and development. Plugin manifests add their own topics.
 | Plugins | Loaded manifests, process health, errors and capabilities |
 | Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. The same page edits the TOML file; Purge defaults removes bundled values in the editor and Save writes the file |
 | Logs | Recent structured diagnostics and interaction traces |
-| Clipboard | Recent text, images, formatted copies, and files from the clipboard plugin. Each entry can be copied back or deleted |
+| Clipboard | Recent text, images, formatted copies, and files from the clipboard plugin. The page requests history directly on opening, loads the full configured history in pages, can refresh it, and can copy back or delete each entry |
 
 The browser follows the resident's event stream: Flash pushes a snapshot when
 something it shows changes, never on a timer, and the page derives uptimes
 from the start times it carries. Plugin CPU time and memory change without an
 event, so they read as of the last snapshot; Refresh on the runtime page and
 Resample on a plugin's details ask for a fresh one. A disconnected browser
-keeps its last snapshot and marks the connection state; it must not present
-that snapshot as current. Runtime state can include private app or clipboard data;
+keeps its last snapshot and marks the connection state with a small warning
+icon in the top bar. The icon's title explains that the snapshot may be stale;
+the page must not present that snapshot as current. Runtime state can include private app or clipboard data;
 see [privacy](privacy.md#local-inspector) before sharing it.
 
 ## Routes and ownership
@@ -59,6 +60,7 @@ the browser commands needs it, or at launch with
 | `/search?q=<text>` | Results across guide sections, commands, mappings and plugins. Typing in the top bar rewrites the query in place, so a search reloads and can be shared; `↓` `↑` `↩` pick a result |
 | `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read; `/api/state?refresh=1` takes a fresh snapshot |
 | `/api/clipboard/<id>` | `GET` returns one history image. `DELETE` removes that entry. The id is 32 lowercase hex characters |
+| `/api/clipboard/history?offset=<n>` | Up to 100 history entries from newest to oldest, plus the next offset or null at the end |
 
 The page routes itself with the History API: same-origin page links navigate
 in place, back/forward restore each page's scroll position, and modified,
@@ -67,7 +69,8 @@ the path as a breadcrumb (home › page › group › guide) and the tab title
 names the guide. After a navigation focus moves to the main region and the
 new title is announced to assistive technology. Shortcuts outside a text
 field: `/` or `⌘K` search, `[` and `]` previous and next guide, `g` then a
-letter jumps to a page, `?` opens the shortcut sheet. The server answers
+letter jumps to a page, `?` opens the shortcut sheet. Escape blurs a focused
+field so these page shortcuts work again. The server answers
 a direct load or reload of any page with the app, an unknown path with the
 app's not-found page and a 404 status, and an unknown `/api/` path with a
 plain 404. `DebugServer.Page` and `Inspector/src/lib/routes.ts` hold the same

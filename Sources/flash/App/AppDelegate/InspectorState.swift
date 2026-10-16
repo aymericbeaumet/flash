@@ -36,6 +36,14 @@ extension AppDelegate {
         }
         self.serveClipboardHTTP(method: method, id: id, completion: completion)
       },
+      clipboardHistoryHTTP: { [weak self] offset, completion in
+        guard let self else {
+          completion(
+            "503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
+          return
+        }
+        self.serveClipboardHistoryHTTP(offset: offset, completion: completion)
+      },
       configHTTP: { [weak self] method, purge, body, completion in
         guard let self else {
           completion(
@@ -118,6 +126,39 @@ extension AppDelegate {
       ?? Data("{}".utf8)
   }
 
+  func serveClipboardHistoryHTTP(
+    offset: Int,
+    completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        completion("503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
+        return
+      }
+      let invoked = self.pluginManager.invoke(
+        command: "clipboard", subcommand: "show", args: ["offset=\(offset)"],
+        raw: ":clipboard show offset=\(offset)", in: self.pluginSelectorContext()
+      ) { [weak self] ok, _, stdout, _ in
+        let type = "application/json; charset=utf-8"
+        guard ok, let stdout, let page = Self.decodeClipboardHistoryPage(stdout) else {
+          completion("503 Service Unavailable", type, Data("{}".utf8))
+          return
+        }
+        DispatchQueue.main.async {
+          guard let self else {
+            completion("503 Service Unavailable", type, Data("{}".utf8))
+            return
+          }
+          self.clipboardImageMimes.remember(page.entries, offset: offset)
+          completion("200 OK", type, Data(stdout.utf8))
+        }
+      }
+      if !invoked {
+        completion("503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
+      }
+    }
+  }
+
   /// `GET /api/clipboard/<id>` returns that entry's image. `DELETE` removes
   /// the entry from the clipboard plugin and from this cache.
   func serveClipboardHTTP(
@@ -147,8 +188,7 @@ extension AppDelegate {
     completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
   ) {
     guard
-      let entry = clipboardEntries.first(where: { $0.id == id }),
-      let mime = entry.mime,
+      let mime = clipboardImageMimes.mime(for: id),
       let url = ClipboardImageStore.fileURL(dataDir: Self.clipboardDataDir(), id: id, mime: mime)
     else {
       completion("404 Not Found", "text/plain; charset=utf-8", Data("not found".utf8))
@@ -183,6 +223,7 @@ extension AppDelegate {
           return
         }
         self.clipboardEntries.removeAll { $0.id == id }
+        self.clipboardImageMimes.remove(id)
         self.refreshClipboardDashboardCache()
         completion(
           "200 OK", "application/json; charset=utf-8", Data("{\"ok\":true}".utf8))
@@ -322,6 +363,8 @@ extension AppDelegate {
       "config_sources": config.resolvedConfigSources(),
       "commands": commands,
       "clipboard": clipboardEntries.map(Self.clipboardStateObject),
+      "clipboard_total": clipboardTotal,
+      "clipboard_next_offset": clipboardNextOffset as Any? ?? NSNull(),
       "docs": docs,
       "mappings": [
         "normal_leader": config.mode.normalLeader ?? "",

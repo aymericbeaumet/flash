@@ -54,7 +54,7 @@ the others make their own requests or run the CLI tools named here.
 | `~/.config/flash/flash.toml` | Your configuration. |
 | `~/Library/Logs/Flash/` | Logs. They never contain keys typed in other apps. Commands Flash's command line cannot run are logged with their text; the `trace` level also logs every submitted command line and AX tree dumps. |
 | `~/Library/Application Support/Flash/command-history.json` | The last 200 entries you submitted in Flash's command line, including flashlight queries. |
-| `~/Library/Application Support/Flash/Plugins/clipboard/` | Clipboard history: the last 1000 entries by default (`[plugin.clipboard] history_size`, up to 10000), readable only by you. Plain text is kept up to 128 KiB. Formatted HTML is kept up to 64 KiB. One image (PNG, JPEG, GIF, WebP, or a TIFF stored as PNG) is kept up to 4 MiB, including a preview when you copy a single image file of that size. A file copy records up to 20 paths. Items that password managers mark as concealed, transient, or auto-generated are never recorded. |
+| `~/Library/Application Support/Flash/Plugins/clipboard/` | Clipboard history: up to 1000 entries by default (`[plugin.clipboard] history_size`, 1–10000), readable only by you. This is a retention ceiling; Flash cannot recover copies made before it recorded them. The help page loads the retained entries in bounded pages. Plain text is kept up to 128 KiB. Formatted HTML is kept up to 64 KiB. One image (PNG, JPEG, GIF, WebP, or a TIFF stored as PNG) is kept up to 4 MiB, including a preview when you copy a single image file of that size. A file copy records up to 20 paths. Items that password managers mark as concealed, transient, or auto-generated are never recorded. |
 | `~/Library/Application Support/Flash/Plugins/history/` | Copies of Chrome's `History` and Firefox's `places.sqlite`, refreshed when the flashlight opens or you leave the browser, at most once a minute and only when the originals changed. They only feed explicit searches such as `@firefox.history`, never default results. |
 | `~/Library/Application Support/Flash/` (other files) | Ranking data for search results and plugin caches, such as exchange rates. |
 
@@ -186,7 +186,8 @@ app version and uptime, Accessibility/capture state, the configuration path and
 diagnostics, effective mappings for the focused app, logs, plugin state, and recent
 clipboard entries (text, images, formatted HTML, and file paths). The homepage
 remembers which of its guides this browser has opened, in that browser's
-`localStorage` only; Flash does not receive the list. A loopback client can delete one clipboard entry or fetch one stored image.
+`localStorage` only; Flash does not receive the list. A loopback client can read
+the full retained clipboard history in pages, delete one entry, or fetch one stored image.
 It can also read the configuration file Flash loaded and, on Save, replace
 that file. Purge defaults returns text and does not write. The server writes
 only that file, and only after the text parses as TOML. Plugin setting values

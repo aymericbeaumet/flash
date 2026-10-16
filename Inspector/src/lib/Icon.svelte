@@ -20,6 +20,7 @@
     chevron: "m9 5 7 7-7 7",
     shield: "m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z M8 12l3 3 5-6",
     menu: "M4 6h16 M4 12h16 M4 18h16",
+    warning: "M12 3 2 21h20L12 3z M12 9v5 M12 17h.01",
   };
 </script>
 

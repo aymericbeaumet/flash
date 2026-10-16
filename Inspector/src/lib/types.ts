@@ -167,5 +167,9 @@ export interface InspectorState {
   commands?: CommandInfo[];
   docs?: DocTopic[];
   clipboard?: ClipboardEntry[];
+  /** Offset of the next clipboard page, or null when this is the full history. */
+  clipboard_next_offset?: number | null;
+  /** Number of entries retained by the clipboard plugin. */
+  clipboard_total?: number;
   mappings?: MappingsState;
 }

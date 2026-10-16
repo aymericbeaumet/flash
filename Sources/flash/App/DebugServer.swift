@@ -11,6 +11,11 @@ final class DebugServer {
     _ method: String, _ id: String,
     _ completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
   ) -> Void
+  /// `GET /api/clipboard/history?offset=N`, one bounded page at a time.
+  typealias ClipboardHistoryHTTPHandler = (
+    _ offset: Int,
+    _ completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) -> Void
   /// `GET`/`PUT /api/config` and `POST /api/config/purge`. Nil answers 503.
   /// Invoked on the server queue; the completion may run on any queue.
   typealias ConfigHTTPHandler = (
@@ -20,6 +25,7 @@ final class DebugServer {
 
   private let stateProvider: () -> [String: Any]
   private let clipboardHTTP: ClipboardHTTPHandler?
+  private let clipboardHistoryHTTP: ClipboardHistoryHTTPHandler?
   private let configHTTP: ConfigHTTPHandler?
   /// How long the first change of a burst waits for the rest: every change
   /// inside the window joins one snapshot.
@@ -76,6 +82,7 @@ final class DebugServer {
   init(
     host: String, port: Int, coalescingWindowMs: Int = 100,
     clipboardHTTP: ClipboardHTTPHandler? = nil,
+    clipboardHistoryHTTP: ClipboardHistoryHTTPHandler? = nil,
     configHTTP: ConfigHTTPHandler? = nil,
     stateProvider: @escaping () -> [String: Any]
   ) {
@@ -83,6 +90,7 @@ final class DebugServer {
     self.port = port
     self.coalescingWindowMs = coalescingWindowMs
     self.clipboardHTTP = clipboardHTTP
+    self.clipboardHistoryHTTP = clipboardHistoryHTTP
     self.configHTTP = configHTTP
     self.stateProvider = stateProvider
   }
@@ -373,6 +381,8 @@ final class DebugServer {
       startEvents(connection)
     case .clipboardItem(let id):
       serveClipboardItem(id, request: headers, connection: connection)
+    case .clipboardHistory:
+      serveClipboardHistory(request: headers, connection: connection)
     case .config:
       serveConfig(purge: false, request: headers, body: body, connection: connection)
     case .configPurge:
@@ -458,6 +468,27 @@ final class DebugServer {
       return
     }
     clipboardHTTP(method, id) { [weak self] status, contentType, body in
+      guard let self else { return }
+      self.queue.async {
+        self.sendBytes(body, status: status, contentType: contentType, connection: connection)
+      }
+    }
+  }
+
+  private func serveClipboardHistory(request: String, connection: NWConnection) {
+    guard Self.requestMethod(request) == "GET" else {
+      sendText("method not allowed", status: "405 Method Not Allowed", connection: connection)
+      return
+    }
+    guard let offset = Self.clipboardHistoryOffset(request) else {
+      sendText("invalid offset", status: "400 Bad Request", connection: connection)
+      return
+    }
+    guard let clipboardHistoryHTTP else {
+      sendText("unavailable", status: "503 Service Unavailable", connection: connection)
+      return
+    }
+    clipboardHistoryHTTP(offset) { [weak self] status, contentType, body in
       guard let self else { return }
       self.queue.async {
         self.sendBytes(body, status: status, contentType: contentType, connection: connection)
@@ -653,6 +684,20 @@ final class DebugServer {
     return nil
   }
 
+  static func clipboardHistoryOffset(_ request: String) -> Int? {
+    let first = request.split(whereSeparator: \.isNewline).first ?? ""
+    let parts = first.split(separator: " ")
+    guard parts.count >= 2 else { return nil }
+    let target = parts[1].split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+    guard target.count == 2 else { return target.count == 1 ? 0 : nil }
+    guard target[1].hasPrefix("offset=") else { return nil }
+    let raw = target[1].dropFirst("offset=".count)
+    guard !raw.isEmpty, raw.utf8.allSatisfy({ (48...57).contains($0) }),
+      let offset = Int(raw), offset <= 10_000
+    else { return nil }
+    return offset
+  }
+
   /// How the server answers a request path. Data endpoints live under
   /// `/api/`; every other path belongs to the help app, found or not.
   enum Route: Equatable {
@@ -661,6 +706,7 @@ final class DebugServer {
     case logs
     case traces
     case events
+    case clipboardHistory
     case clipboardItem(id: String)
     case config
     case configPurge
@@ -673,6 +719,7 @@ final class DebugServer {
     case "/api/logs": return .logs
     case "/api/traces": return .traces
     case "/api/events": return .events
+    case "/api/clipboard/history": return .clipboardHistory
     case "/api/config": return .config
     case "/api/config/purge": return .configPurge
     default:

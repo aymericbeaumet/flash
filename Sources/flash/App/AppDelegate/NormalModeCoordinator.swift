@@ -45,6 +45,55 @@ struct ClipboardModalEntry: Decodable, Equatable {
   }
 }
 
+struct ClipboardHistoryPage: Decodable, Equatable {
+  var entries: [ClipboardModalEntry]
+  var total: Int
+  var nextOffset: Int?
+
+  private enum CodingKeys: String, CodingKey {
+    case entries
+    case total
+    case nextOffset = "next_offset"
+  }
+}
+
+/// Image MIME lookup for pages the browser has loaded. Rank is the entry's
+/// newest-first offset, so a rollover evicts the oldest known image first.
+struct ClipboardImageCache {
+  private struct Record {
+    var mime: String
+    var rank: Int
+    var seen: UInt64
+  }
+
+  private let limit: Int
+  private var records: [String: Record] = [:]
+  private var nextSeen: UInt64 = 0
+
+  init(limit: Int = 10_000) { self.limit = limit }
+
+  func mime(for id: String) -> String? { records[id]?.mime }
+
+  mutating func remember(_ entries: [ClipboardModalEntry], offset: Int) {
+    for (index, entry) in entries.enumerated() {
+      guard let mime = entry.mime else { continue }
+      nextSeen &+= 1
+      records[entry.id] = Record(mime: mime, rank: offset + index, seen: nextSeen)
+    }
+    while records.count > limit {
+      guard
+        let oldest = records.max(by: {
+          ($0.value.rank, UInt64.max - $0.value.seen)
+            < ($1.value.rank, UInt64.max - $1.value.seen)
+        })?.key
+      else { break }
+      records.removeValue(forKey: oldest)
+    }
+  }
+
+  mutating func remove(_ id: String) { records.removeValue(forKey: id) }
+}
+
 struct NormalModeKeyDispatchTarget {
   let processID: pid_t
   let bundleIdentifier: String
@@ -1523,17 +1572,25 @@ extension AppDelegate {
       command: "clipboard", subcommand: "show", args: [], raw: ":clipboard show",
       in: pluginSelectorContext()
     ) { [weak self] ok, _, stdout, _ in
-      let entries = (ok ? stdout : nil).flatMap(Self.decodeClipboardModalEntries) ?? []
+      let page = (ok ? stdout : nil).flatMap(Self.decodeClipboardHistoryPage)
       DispatchQueue.main.async {
         guard let self else { return }
-        self.clipboardEntries = entries
+        self.clipboardImageMimes.remember(page?.entries ?? [], offset: 0)
+        self.clipboardTotal = page?.total ?? 0
+        self.clipboardNextOffset = page?.nextOffset
+        self.clipboardEntries = page?.entries ?? []
       }
     }
   }
 
-  static func decodeClipboardModalEntries(_ json: String) -> [ClipboardModalEntry]? {
+  static func decodeClipboardHistoryPage(_ json: String) -> ClipboardHistoryPage? {
     guard let data = json.data(using: .utf8) else { return nil }
-    return try? JSONDecoder().decode([ClipboardModalEntry].self, from: data)
+    guard let page = try? JSONDecoder().decode(ClipboardHistoryPage.self, from: data),
+      (0...10_000).contains(page.total), page.entries.count <= 100,
+      page.entries.count <= page.total,
+      page.nextOffset.map({ $0 > 0 && $0 < page.total && !page.entries.isEmpty }) ?? true
+    else { return nil }
+    return page
   }
 
   /// One inspector clipboard row. Image bytes are not inlined; `mime` tells
