@@ -264,6 +264,12 @@ leader = "\\"
 "dF" = ["flash", "mouse_grid", "--double"]
 ```
 
+Mapping keys are characters, chords (`ctrl+e`, `cmd+shift+<lbracket>`) or
+sequences of them. A key that types nothing is written `<name>`: `<escape>` or
+`<esc>`, `<return>` or `<enter>` (the keypad's Enter too), `<tab>`, `<space>`,
+`<delete>` or `<backspace>`, `<delete_forward>`, `<left>` / `<right>` / `<up>`
+/ `<down>`, `<home>`, `<end>`, `<pageup>`, `<pagedown>`; each pair of aliases
+is the same key, so a mapping never misses its key by spelling.
 Mapping values are argv arrays, or inline tables with a `command` argv array and
 optional `repeat` metadata. Resolved configuration JSON reports that same argv,
 in canonical form. `repeat = true` repeats a completed normal-mode
@@ -303,8 +309,8 @@ key is the leader, a key with no hyper mapping can still complete a NORMAL
 `<leader>` sequence. A tap that presses nothing else arms that prefix on
 release, so `<leader>` sequences keep working. `+` is written `<plus>`.
 
-VISUAL (`v`, a visual selection) and DRAG (`D` / `cD`, a drag with a mouse
-button held) read `[mode.visual.mappings]` and `[mode.drag.mappings]` before
+VISUAL (`v`, a visual selection) and DRAG (`enter_drag_mode`, unmapped by
+default, a drag with a mouse button held) read `[mode.visual.mappings]` and `[mode.drag.mappings]` before
 NORMAL's; their labels are `mode.labels.visual` and `mode.labels.drag`. The
 [mode guide](normal-mode.md#visual-selection-visual) describes their keys and
 [dragging](normal-mode.md#dragging-drag).

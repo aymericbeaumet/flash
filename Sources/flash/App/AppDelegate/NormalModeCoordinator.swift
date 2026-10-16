@@ -1370,6 +1370,8 @@ extension AppDelegate {
       enterPointerMode()
     case .mouseButton(let request):
       performMouseButton(request)
+    case .dragMode(let button):
+      performMouseButton(.init(state: .toggle, button: button, hold: .drag))
     case .focusInput:
       focusTextInputInNormalMode(index: repeatCount)
     case .scrollTarget:

@@ -82,6 +82,16 @@ final class MouseButtonHoldTests: XCTestCase {
       parse(["state": "cancel"]), .mouseButton(.init(state: .cancel, button: .primary, hold: .drag))
     )
     XCTAssertNil(parse(["state": "toggle", "mode": "select"]))
+    // `enter_drag_mode` is the drag toggle by name.
+    XCTAssertEqual(
+      URLEventHandler.parse(verb: "enter_drag_mode", args: [:]), .dragMode(.primary))
+    XCTAssertEqual(
+      URLEventHandler.parse(verb: "enter_drag_mode", args: ["secondary": "1"]),
+      .dragMode(.secondary))
+    XCTAssertNil(
+      URLEventHandler.parse(verb: "enter_drag_mode", args: ["secondary": "1", "middle": "1"]))
+    XCTAssertEqual(
+      URLCommand.dragMode(.middle).diagnosticDescription, "flash enter_drag_mode --middle")
     XCTAssertEqual(
       URLCommand.mouseButton(.init(state: .toggle, button: .primary, hold: .visual))
         .diagnosticDescription,

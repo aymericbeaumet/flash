@@ -13,7 +13,7 @@ best.
 | --- | --- |
 | Normal mode: continuous movement with acceleration (`ijkl`, `hjkl`) | `mouse_pointer`: the layout's `hjkl` or the arrows, accelerating while held; `[hints] pointer_step`, `pointer_acceleration`, `pointer_max_step` |
 | Slow movement while a modifier is held | Shift: the 2-point fine step |
-| Press, release, toggle a button; drag | `m` `,` `.` in pointer mode, `v` to hold the button; `D` / `cD` (DRAG) anywhere |
+| Press, release, toggle a button; drag | `m` `,` `.` in pointer mode, `v` to hold the button; `enter_drag_mode` (DRAG) anywhere |
 | Jump to the screen edges, window edges, window centre | `mouse_warp --area=window|screen --edge=center|top|bottom|left|right` |
 | Wheel scrolling | `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` in NORMAL, `h` / `l` sideways, `scroll_target` to pick the area |
 | Hint grid (labels across the screen) | `mouse_grid`: one keyboard-shaped step per keypress, `mouse_grid --zoom-to-depth=N` to start deeper |

@@ -389,11 +389,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
     // A held mouse button is VISUAL or DRAG, by what it was pressed for:
-    // whichever path presses or releases it, the mode follows the hold, and
-    // only from NORMAL.
+    // whichever path presses or releases it, the mode follows the hold, from
+    // NORMAL or from INSERT (an all-mode `enter_drag_mode` chord).
     ActionDispatcher.heldButtonDidChange = { [weak self] held in
       guard let self else { return }
-      if let held, self.modeStore.mode == .normal {
+      if let held, self.modeStore.mode == .normal || self.modeStore.mode.isInsert {
         self.dispatchMode(.buttonHeld(held.purpose))
       } else if held == nil, self.modeStore.mode.buttonHold != nil {
         self.dispatchMode(.buttonReleased)
@@ -617,6 +617,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterPointerMode()
     case .mouseButton(let request):
       performMouseButton(request)
+    case .dragMode(let button):
+      performMouseButton(.init(state: .toggle, button: button, hold: .drag))
     case .focusInput:
       focusTextInputInNormalMode(index: 1)
     case .scrollTarget:

@@ -740,11 +740,10 @@ hyper = "<leader>"
 "mF" = ["flash", "mouse_grid", "--move"]
 "ms" = ["flash", "mouse_bigram", "--move"]
 # `v` starts a visual selection where the pointer is (VISUAL) and ends it,
-# leaving the text selected. `D` grabs what is under the pointer with the left
-# button (DRAG) and drops it; `cD` drags with the right button.
+# leaving the text selected. enter_drag_mode grabs what is under the pointer
+# (DRAG) and drops it again; it ships unmapped, e.g. in [mode.all.mappings]:
+# "cmd+ctrl+d" = ["flash", "enter_drag_mode"]
 "v" = ["flash", "mouse_button", "--state=toggle", "--mode=visual"]
-"D" = ["flash", "mouse_button", "--state=toggle", "--mode=drag"]
-"cD" = ["flash", "mouse_button", "--state=toggle", "--secondary", "--mode=drag"]
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]
 "ds" = ["flash", "mouse_bigram", "--double"]
@@ -866,11 +865,11 @@ hyper = "<leader>"
 "s" = ["flash", "mouse_bigram", "--move"]
 "<esc>" = ["flash", "mouse_button", "--state=release", "--mode=visual"]
 
-# DRAG is a drag with a mouse button held: `D` grabs with the left button,
-# `cD` with the right. These keys are read before NORMAL's, as for VISUAL.
+# DRAG is a drag with a mouse button held, entered by enter_drag_mode (bind
+# it yourself). These keys are read before NORMAL's, as for VISUAL.
 # h / j / k / l nudge what is dragged by 16 points and H / J / K / L by 96, a
-# picked target (f, F, s) is where it goes, Return or D drops it there, and
-# Escape puts it back where it was grabbed.
+# picked target (f, F, s) is where it goes, Return (or the key that entered
+# DRAG) drops it there, and Escape puts it back where it was grabbed.
 [mode.drag.mappings]
 "h" = ["flash", "mouse_nudge", "--direction=left", "--distance=16"]
 "j" = ["flash", "mouse_nudge", "--direction=down", "--distance=16"]
@@ -884,7 +883,6 @@ hyper = "<leader>"
 "F" = ["flash", "mouse_grid", "--move"]
 "s" = ["flash", "mouse_bigram", "--move"]
 "<return>" = ["flash", "mouse_button", "--state=release", "--mode=drag"]
-"D" = ["flash", "mouse_button", "--state=release", "--mode=drag"]
 "<esc>" = ["flash", "mouse_button", "--state=cancel", "--mode=drag"]
 
 # Override mappings for one exact, case-sensitive bundle ID. Supported scopes

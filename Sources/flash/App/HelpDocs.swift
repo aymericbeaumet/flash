@@ -480,11 +480,11 @@ enum HelpDocs {
       ## Select, drag or steer the pointer
 
       `v` starts a visual selection (VISUAL): motions such as `j`, `k`, `f`
-      and `s` extend it, and `v` or Escape ends it with the text selected. `D`
-      drags what is under the pointer with the left button (DRAG), `cD` with
-      the right: `h` `j` `k` `l` nudge it, `f` picks where it goes, Return
-      drops it and Escape puts it back. `mouse_pointer` opens keyboard
-      pointer control.
+      and `s` extend it, and `v` or Escape ends it with the text selected.
+      `enter_drag_mode` (unmapped by default; `--secondary` for the right
+      button) grabs what is under the pointer (DRAG): `h` `j` `k` `l` nudge
+      it, `f` picks where it goes, Return drops it and Escape puts it back.
+      `mouse_pointer` opens keyboard pointer control.
 
       See [commands](/commands) for exact flags and [mappings](/mappings)
       for the shortcuts effective in this running instance.

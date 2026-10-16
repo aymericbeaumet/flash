@@ -263,31 +263,36 @@ starts, so it fires at once.
 
 ## Dragging: DRAG
 
-DRAG drags something with a mouse button held down: `D` grabs what is under
-the pointer with the left button, `cD` with the right one. Then:
+DRAG drags something with a mouse button held down. `enter_drag_mode` grabs
+what is under the pointer with the left button (`--secondary` or `--middle`
+for another); it ships unmapped, so bind it where you like. Then:
 
 - `h` `j` `k` `l` nudge it 16 points, `H` `J` `K` `L` 96 points.
 - `f`, `F` and `s` pick where it goes: a target, a grid cell or a letter.
-- Return or `D` drops it where the pointer is; Escape puts it back where it
-  was grabbed and lets go.
+- Return, or the key that entered DRAG, drops it where the pointer is;
+  Escape puts it back where it was grabbed and lets go.
 
 The badge is yellow and shows `mode.labels.drag` (default `DRAG`). The keys
-live in `[mode.drag.mappings]`, read before NORMAL's like VISUAL's.
+live in `[mode.drag.mappings]`, read before NORMAL's like VISUAL's. An
+all-mode chord enters DRAG from INSERT as well, and the drop returns to
+NORMAL.
 
 ```toml
 [mode.normal.mappings]
 "v" = ["flash", "mouse_button", "--state=toggle", "--mode=visual"]
-"D" = ["flash", "mouse_button", "--state=toggle", "--mode=drag"]
-"cD" = ["flash", "mouse_button", "--state=toggle", "--secondary", "--mode=drag"]
+
+[mode.all.mappings]
+"cmd+ctrl+d" = ["flash", "enter_drag_mode"]
 ```
 
 ### How Flash does it
 
-Both modes are a mouse button Flash holds down (`mouse_button`): VISUAL holds
-the primary button where the selection starts, and every pointer move Flash
-makes while a button is held is a drag of it. The mode follows the hold
-exactly: whichever path presses the button from NORMAL enters the mode named
-by `--mode`, whichever releases it leaves, and leaving the mode any other way
+Both modes are a mouse button Flash holds down (`mouse_button`;
+`enter_drag_mode` is its DRAG toggle): VISUAL holds the primary button where
+the selection starts, and every pointer move Flash makes while a button is
+held is a drag of it. The mode follows the hold exactly: whichever path
+presses the button from NORMAL or INSERT enters the mode named by `--mode`,
+whichever releases it leaves, and leaving the mode any other way
 (`enter_normal_mode`, INSERT, the command line, `leave_mode`, quitting
 Flash, a committed click) releases the button. `mouse_pointer`'s `v` holds a
 drag the same way. A half-typed NORMAL sequence is dropped when the button

@@ -47,10 +47,10 @@ enum Mode: Equatable {
   /// before NORMAL's.
   case visual
 
-  /// Dragging with a mouse button held (`D` the left one, `cD` the right):
-  /// pointer moves drag what was grabbed, Return drops it where the pointer
-  /// is and Escape puts it back. `[mode.drag.mappings]` is read before
-  /// NORMAL's.
+  /// Dragging with a mouse button held (`enter_drag_mode`, unmapped by
+  /// default): pointer moves drag what was grabbed, Return drops it where
+  /// the pointer is and Escape puts it back. `[mode.drag.mappings]` is read
+  /// before NORMAL's.
   case drag
 
   /// Momentary layer while `mode.normal.hyper` is physically held. The default

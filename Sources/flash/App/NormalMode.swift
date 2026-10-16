@@ -259,7 +259,9 @@ enum NormalModeInterpreter {
     modifierFlags: CGEventFlags,
     mappings: CompiledMappings
   ) -> Bool {
-    let keys = mappings.physicalKeyAtoms(virtualKey: virtualKey, cgFlags: modifierFlags)
+    // Keypad Enter is Return to every mapping (`namedKeyAtom`).
+    let keys = mappings.physicalKeyAtoms(
+      virtualKey: HotkeySyntax.unifiedVirtualKey(virtualKey), cgFlags: modifierFlags)
     guard !keys.isEmpty else { return false }
     let state = pendingState(pending)
     if state.awaitingRegister {
@@ -451,13 +453,18 @@ enum NormalModeInterpreter {
     ).contains(atom) {
       return true
     }
-    switch Int(keyCode) {
-    case kVK_Space: return atom == "space"
-    case kVK_Tab: return atom == "tab"
-    case kVK_Escape: return atom == "escape"
-    case kVK_Return: return atom == "return" || atom == "enter"
-    default: return false
-    }
+    return namedKeyAtom(keyCode: keyCode) == atom
+  }
+
+  /// The atom a named (non-typeable) key is mapped by: Return (and keypad
+  /// Enter), Tab, Space, Delete, Forward Delete, Escape, the arrows, Home,
+  /// End, Page Up / Down and the function keys, spelled as
+  /// `HotkeySyntax.canonicalKeyName` spells them and as `<name>` in a
+  /// mapping canonicalizes (`KeySyntax.translateNamedKey`). Nil for every
+  /// typeable key: those match by the character the layout produces, never
+  /// by a US-ANSI position.
+  static func namedKeyAtom(keyCode: UInt16) -> String? {
+    HotkeySyntax.namedKeyAtom(virtualKey: UInt32(keyCode))
   }
 
   private static func mappingKeys(
@@ -505,19 +512,10 @@ enum NormalModeInterpreter {
     if keys.isEmpty, let ignoredChar {
       keys.append(String(ignoredChar))
     }
-    switch Int(keyCode) {
-    case kVK_Escape:
-      if !keys.contains("escape") { keys.append("escape") }
-    case kVK_Space:
-      if !keys.contains("space") { keys.append("space") }
-    case kVK_Tab:
-      if !keys.contains("tab") { keys.append("tab") }
-    case kVK_ForwardDelete:
-      for alias in ["delete_forward", "forward_delete"] where !keys.contains(alias) {
-        keys.append(alias)
-      }
-    default:
-      break
+    // A named key matches by its one atom, so `<return>` drops a drag and
+    // `<esc>` cancels it whatever character the event carries.
+    if let named = namedKeyAtom(keyCode: keyCode), !keys.contains(named) {
+      keys.append(named)
     }
     if let modified, !keys.contains(modified) {
       keys.append(modified)

@@ -535,10 +535,16 @@ final class ModeReducerTests: XCTestCase {
       let left = ModeReducer.reduce(mode, .buttonReleased)
       XCTAssertEqual(left.0, .normal)
       XCTAssertEqual(left.1, [.renderSurface])
-      for state in allStates where state != .normal {
+      for state in allStates where state != .normal && !state.isInsert {
         XCTAssertEqual(
           ModeReducer.reduce(state, .buttonHeld(hold)).0, state, "\(state) ignores the hold")
       }
+      // An all-mode chord holds the button from INSERT: the hold takes the
+      // keyboard as NORMAL entry does, and the release lands in NORMAL.
+      let fromInsert = ModeReducer.reduce(.insert, .buttonHeld(hold))
+      XCTAssertEqual(fromInsert.0, mode)
+      XCTAssertEqual(fromInsert.1, ModeReducer.enterEffects(for: .normal, targetPID: nil))
+      XCTAssertEqual(ModeReducer.reduce(fromInsert.0, .buttonReleased).0, .normal)
       XCTAssertEqual(mode.flashMode, .normal)
       XCTAssertEqual(mode.asReturnMode, .normal)
       XCTAssertTrue(mode.ownsKeyboard(hasHints: false, activationInFlight: false))
@@ -810,8 +816,8 @@ final class ModeReducerTests: XCTestCase {
   }
 
   /// DRAG moves what the button grabbed: `h` `j` `k` `l` nudge it, Return
-  /// and `D` drop it, Escape puts it back, and `f` picks where it goes. `D`
-  /// and `cD` grab with the left and right buttons from NORMAL.
+  /// drops it, Escape puts it back, and `f` picks where it goes. Entering it
+  /// is `enter_drag_mode`, a verb with no default key.
   func testDragMappingsMoveDropAndCancel() throws {
     let config = ConfigLoader.parse("")
     func key(_ raw: String) throws -> String {
@@ -830,12 +836,18 @@ final class ModeReducerTests: XCTestCase {
       .flashCommand(.mouseButton(.init(state: .cancel, button: .primary, hold: .drag))))
     XCTAssertEqual(drag.mapping(for: try key("f"))?.action, .flashCommand(.mouseTarget(.move)))
     let normal = config.mode.compiledNormal
-    XCTAssertEqual(
-      normal.mapping(for: try key("D"))?.action,
-      .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .drag))))
-    XCTAssertEqual(
-      normal.mapping(for: try key("cD"))?.action,
-      .flashCommand(.mouseButton(.init(state: .toggle, button: .secondary, hold: .drag))))
+    XCTAssertNil(normal.mapping(for: try key("D")))
+    XCTAssertNil(normal.mapping(for: try key("cD")))
+    XCTAssertNil(drag.mapping(for: try key("D")))
+    let defaults = [
+      config.mode.all, config.mode.normal, config.mode.insert, config.mode.visual,
+      config.mode.drag,
+    ].joined()
+    XCTAssertFalse(
+      defaults.contains { mapping in
+        if case .flashCommand(.dragMode) = mapping.action { return true }
+        return false
+      }, "enter_drag_mode ships unmapped")
     XCTAssertEqual(
       normal.mapping(for: try key("v"))?.action,
       .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .visual))))

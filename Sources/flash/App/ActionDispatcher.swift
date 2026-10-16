@@ -553,19 +553,19 @@ enum ActionDispatcher {
   static func moveCursor(to screenPoint: CGPoint) -> Bool {
     let screenH = ScreenSpace.primaryHeight
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+    let source = SyntheticEventSources.session
+    let previous = CGEvent(source: source)?.location ?? cgPoint
+    // The warp is immediate on every path: the next keystroke (a VISUAL
+    // `j`, a DRAG nudge) reads the pointer where this one left it, even
+    // while the drag event is still queued behind the press it follows.
+    warpCursor(to: cgPoint)
     if let held = heldButton {
       clickQueue.async {
-        let source = SyntheticEventSources.session
-        let previous = CGEvent(source: source)?.location ?? cgPoint
-        warpCursor(to: cgPoint)
         pointerMoveEvent(to: cgPoint, from: previous, holding: held, source: source)?
           .post(tap: .cghidEventTap)
       }
       return true
     }
-    let previous = CGEvent(source: nil)?.location ?? cgPoint
-    warpCursor(to: cgPoint)
-    let source = SyntheticEventSources.session
     pointerMoveEvent(to: cgPoint, from: previous, source: source)?.post(tap: .cghidEventTap)
     return true
   }

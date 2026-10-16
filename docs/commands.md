@@ -41,7 +41,8 @@ flash mouse_step --direction=down        # move the pointer one text line (up, d
 flash mouse_position --action=save       # remember the pointer position (hints, next, previous, unsave, clear)
 flash mouse_position --action=hints --move # label the saved positions and move to the one you pick
 flash mouse_button --state=toggle --mode=visual # start or end a visual selection (VISUAL)
-flash mouse_button --state=toggle --mode=drag   # grab or drop with the left button (DRAG; --secondary, --middle)
+flash enter_drag_mode                    # grab what is under the pointer, or drop it (DRAG; --secondary, --middle)
+flash mouse_button --state=toggle --mode=drag   # the same hold, spelled out
 flash mouse_button --state=release       # drop a drag, or end a selection, where the pointer is
 flash mouse_button --state=cancel        # put a drag back where it was grabbed
 flash mouse_nudge --direction=down --distance=16 # move the pointer (and a drag) a few points
@@ -157,7 +158,9 @@ Arguments use `--name=value` for values and bare flags such as `--secondary` or 
 `mouse_button --state=down|up|toggle|release|cancel [--mode=visual|drag]`
 starts a visual selection (`--mode=visual`, VISUAL) or a drag (`--mode=drag`,
 the default, DRAG) by holding a button where the pointer is, the primary one
-unless `--secondary` or `--middle` says otherwise. `release` lets go of
+unless `--secondary` or `--middle` says otherwise. `enter_drag_mode
+[--secondary|--middle]` is the drag toggle by name: it grabs, or drops when
+that button is already held; it ships unmapped. `release` lets go of
 whichever button is held, dropping a drag or ending a selection; `cancel`
 first drags back to where the button went down. `mouse_nudge
 --direction=up|down|left|right [--distance=<points>]` moves the pointer,

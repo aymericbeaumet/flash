@@ -100,6 +100,27 @@ enum HotkeySyntax {
     return nil
   }
 
+  /// The one virtual key a mapping sees for keys that are the same key to
+  /// it: keypad Enter is Return.
+  static func unifiedVirtualKey(_ virtualKey: UInt32) -> UInt32 {
+    virtualKey == UInt32(kVK_ANSI_KeypadEnter) ? UInt32(kVK_Return) : virtualKey
+  }
+
+  /// `canonicalKeyName` for the named (non-typeable) keys only; nil for a
+  /// typeable key, whose atom is the character the layout produces, never a
+  /// US-ANSI position.
+  static func namedKeyAtom(virtualKey: UInt32) -> String? {
+    switch Int(unifiedVirtualKey(virtualKey)) {
+    case kVK_Return, kVK_Tab, kVK_Space, kVK_Delete, kVK_ForwardDelete, kVK_Escape,
+      kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End,
+      kVK_PageUp, kVK_PageDown, kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8,
+      kVK_F9, kVK_F10, kVK_F11, kVK_F12:
+      return canonicalKeyName(virtualKey: unifiedVirtualKey(virtualKey))
+    default:
+      return nil
+    }
+  }
+
   static func canonicalKeyName(virtualKey: UInt32) -> String? {
     switch Int(virtualKey) {
     case kVK_Return: return "return"

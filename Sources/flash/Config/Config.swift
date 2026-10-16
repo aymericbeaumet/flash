@@ -1044,8 +1044,9 @@ struct Config {
       ])
 
     /// DRAG moves what the held button grabbed: `h` `j` `k` `l` nudge it,
-    /// `H` `J` `K` `L` further, a picked target is where it goes, Return or
-    /// `D` drops it and Escape puts it back.
+    /// `H` `J` `K` `L` further, a picked target is where it goes, Return
+    /// drops it and Escape puts it back. Entering it (`enter_drag_mode`)
+    /// ships unmapped.
     static let defaultDragMappings: [ModeMapping] = makeDefaultMappings(
       "drag",
       [
@@ -1061,7 +1062,6 @@ struct Config {
         ("F", .mouseGrid(.init(.move))),
         ("s", .mouseBigram(.move)),
         ("<return>", .mouseButton(.init(state: .release, button: .primary, hold: .drag))),
-        ("D", .mouseButton(.init(state: .release, button: .primary, hold: .drag))),
         ("<esc>", .mouseButton(.init(state: .cancel, button: .primary, hold: .drag))),
       ])
 
@@ -1145,8 +1145,6 @@ struct Config {
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
         ("ms", .flashCommand(.mouseBigram(.move))),
         ("v", .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .visual)))),
-        ("D", .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .drag)))),
-        ("cD", .flashCommand(.mouseButton(.init(state: .toggle, button: .secondary, hold: .drag)))),
         ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
         ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("ds", .flashCommand(.mouseBigram(.click(.doubleClick, modifiers: [])))),
@@ -1915,6 +1913,12 @@ extension URLCommand {
     case .mouseRepeat: return verb("mouse_repeat")
     case .mousePointer: return verb("mouse_pointer")
     case .mouseButton(let request): return verb("mouse_button", request.argTokens)
+    case .dragMode(let button):
+      switch button {
+      case .primary: return verb("enter_drag_mode")
+      case .secondary: return verb("enter_drag_mode", [flag("secondary")])
+      case .middle: return verb("enter_drag_mode", [flag("middle")])
+      }
     case .focusInput: return verb("focus_input")
     case .scrollTarget: return verb("scroll_target")
     case .mouseDock: return verb("mouse_dock")

@@ -141,9 +141,14 @@ enum ModeReducer {
     case .buttonHeld(let hold):
       // VISUAL and DRAG are NORMAL with a button held: the pill and the
       // mapping table (`Mode.mappingScope`) change, nothing else — a pointer
-      // or grid session that pressed the button keeps its keys.
-      guard case .normal = state else { return (state, []) }
-      return (hold.mode, [.renderSurface])
+      // or grid session that pressed the button keeps its keys. From INSERT
+      // (an all-mode `enter_drag_mode` chord) the hold takes the keyboard as
+      // NORMAL entry does; the release still returns to NORMAL.
+      switch state {
+      case .normal: return (hold.mode, [.renderSurface])
+      case .insert: return (hold.mode, enterEffects(for: .normal, targetPID: nil))
+      default: return (state, [])
+      }
 
     case .buttonReleased:
       guard state.buttonHold != nil else { return (state, []) }

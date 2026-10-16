@@ -69,6 +69,10 @@ indirect enum URLCommand: Hashable {
   /// Press, release or toggle a button at the pointer; moves drag while it
   /// is held.
   case mouseButton(MouseButtonRequest)
+  /// `enter_drag_mode`: grab what is under the pointer with `button` held
+  /// (DRAG), or drop it there when that button is already held. Sugar for
+  /// `mouse_button --state=toggle --mode=drag`; ships unmapped.
+  case dragMode(MouseButtonKind)
   /// Focus the first (or count-th) editable text input in the focused window
   /// while preserving the current mode.
   case focusInput
@@ -928,6 +932,17 @@ final class URLEventHandler: NSObject {
     "mouse_repeat": .init(parse: { a in a.args.isEmpty ? .mouseRepeat : nil }),
 
     "mouse_pointer": .init(parse: { a in a.args.isEmpty ? .mousePointer : nil }),
+
+    "enter_drag_mode": .init(
+      [.flag("secondary"), .flag("middle")],
+      parse: { a in
+        switch (a.bool("secondary"), a.bool("middle")) {
+        case (false, false): return .dragMode(.primary)
+        case (true, false): return .dragMode(.secondary)
+        case (false, true): return .dragMode(.middle)
+        case (true, true): return nil
+        }
+      }),
 
     "mouse_button": .init(
       [

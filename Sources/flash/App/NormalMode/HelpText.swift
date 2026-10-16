@@ -96,9 +96,10 @@ extension NormalModeDispatcher {
           `e`, `0` `$`, `f`, `F`, `s` and the scrolls extend it as in Vim; `y`
           copies it, `d` cuts it, `c` changes it, `p` pastes over it; `v` again
           or Escape ends it, leaving the text selected.
-        - `D` grabs what is under the pointer with the left button (DRAG),
-          `cD` with the right: `h` `j` `k` `l` nudge it, `f`, `F`, `s` pick
-          where it goes, Return drops it and Escape puts it back.
+        - `enter_drag_mode` (unmapped by default; `--secondary` for the right
+          button) grabs what is under the pointer (DRAG): `h` `j` `k` `l`
+          nudge it, `f`, `F`, `s` pick where it goes, Return drops it and
+          Escape puts it back.
 
         ## Mouse Grid
 
