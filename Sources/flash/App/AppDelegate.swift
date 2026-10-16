@@ -1071,6 +1071,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.cancelOverlay(departure: .focusLost)
         return
       }
+      if self.overlay.inputMode == .commandLine {
+        self.overlay.recoverCommandLineFocusAfterKeyLoss()
+        return
+      }
       if self.flashMode == .normal {
         self.scheduleNormalModeRecaptureAfterPointerFocusLoss()
       }

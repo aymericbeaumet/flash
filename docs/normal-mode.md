@@ -523,6 +523,9 @@ AppKit draws no caret. Closing the command line without running anything hands
 activation back this way; a submit that opens an app hands it over through that
 app's own activation. The command line's caret is AppKit's insertion point, and
 it is live only while the panel is key with the field editor as first responder.
+An earlier INSERT handoff may finish after a rapid command open and take key
+status back; the panel's key-resign event schedules a guarded recapture while
+the command field is still visible and no other Flash window owns focus.
 
 The tap source, Carbon callbacks, AX observer sources, and mode coordinator all
 share the main run loop. Treat that loop as the input latency budget:

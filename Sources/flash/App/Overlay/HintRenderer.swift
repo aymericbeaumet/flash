@@ -552,6 +552,26 @@ extension OverlayPanel {
     }
   }
 
+  func recoverCommandLineFocusAfterKeyLoss() {
+    let generation = commandLineKeyRecoveryGeneration
+    // A prior INSERT/NORMAL activation handoff can finish after the command
+    // panel has already acquired key focus. The open-time retry then stops,
+    // and the field editor loses its caret until another key event. Reclaim
+    // focus when AppKit reports that loss, after any intentional close has
+    // finished its mode transition.
+    DispatchQueue.main.async { [weak self] in
+      guard let self,
+        self.commandLineKeyRecoveryGeneration == generation,
+        self.inputMode == .commandLine,
+        self.commandTextFieldIsLaidOut,
+        self.isVisible,
+        !self.commandLineHoldsKeyboardFocus,
+        NSApp.keyWindow == nil || NSApp.keyWindow === self
+      else { return }
+      self.captureKeyboardInput()
+    }
+  }
+
   func captureKeyboardInput(recoveryAttempt: Int = 0) {
     let keyBefore = isKeyWindow
     refreshWindowLevelForCurrentContent()
