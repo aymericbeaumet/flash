@@ -552,6 +552,23 @@ extension OverlayPanel {
     }
   }
 
+  static func shouldRecoverCommandLineFocus(
+    scheduledGeneration: UInt64,
+    currentGeneration: UInt64,
+    inputMode: OverlayInputMode,
+    fieldIsLaidOut: Bool,
+    panelIsVisible: Bool,
+    holdsKeyboardFocus: Bool,
+    otherFlashWindowIsKey: Bool
+  ) -> Bool {
+    scheduledGeneration == currentGeneration
+      && inputMode == .commandLine
+      && fieldIsLaidOut
+      && panelIsVisible
+      && !holdsKeyboardFocus
+      && !otherFlashWindowIsKey
+  }
+
   func recoverCommandLineFocusAfterKeyLoss() {
     let generation = commandLineKeyRecoveryGeneration
     // A prior INSERT/NORMAL activation handoff can finish after the command
@@ -560,13 +577,17 @@ extension OverlayPanel {
     // focus when AppKit reports that loss, after any intentional close has
     // finished its mode transition.
     DispatchQueue.main.async { [weak self] in
-      guard let self,
-        self.commandLineKeyRecoveryGeneration == generation,
-        self.inputMode == .commandLine,
-        self.commandTextFieldIsLaidOut,
-        self.isVisible,
-        !self.commandLineHoldsKeyboardFocus,
-        NSApp.keyWindow == nil || NSApp.keyWindow === self
+      guard let self else { return }
+      let otherFlashWindowIsKey = NSApp.keyWindow.map { $0 !== self } ?? false
+      guard
+        Self.shouldRecoverCommandLineFocus(
+          scheduledGeneration: generation,
+          currentGeneration: self.commandLineKeyRecoveryGeneration,
+          inputMode: self.inputMode,
+          fieldIsLaidOut: self.commandTextFieldIsLaidOut,
+          panelIsVisible: self.isVisible,
+          holdsKeyboardFocus: self.commandLineHoldsKeyboardFocus,
+          otherFlashWindowIsKey: otherFlashWindowIsKey)
       else { return }
       self.captureKeyboardInput()
     }

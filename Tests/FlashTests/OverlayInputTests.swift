@@ -1186,58 +1186,32 @@ final class CommandLineKeyRecoveryTests: XCTestCase {
 }
 
 final class CommandLineKeyResignTests: XCTestCase {
-  func testAnOpenCommandLineRecapturesFocusAfterLosingTheKeyWindow() {
-    _ = NSApplication.shared
-    let panel = OverlayPanel()
-    defer {
-      panel.inputMode = .passive
-      panel.hide()
-      panel.orderOut(nil)
+  func testLateHandoffRecapturesOnlyTheSameOpenCommandLine() {
+    func recovers(
+      generation: UInt64 = 7,
+      mode: OverlayInputMode = .commandLine,
+      laidOut: Bool = true,
+      visible: Bool = true,
+      focused: Bool = false,
+      otherFlashWindowIsKey: Bool = false
+    ) -> Bool {
+      OverlayPanel.shouldRecoverCommandLineFocus(
+        scheduledGeneration: generation,
+        currentGeneration: 7,
+        inputMode: mode,
+        fieldIsLaidOut: laidOut,
+        panelIsVisible: visible,
+        holdsKeyboardFocus: focused,
+        otherFlashWindowIsKey: otherFlashWindowIsKey)
     }
-    panel.inputMode = .commandLine
-    panel.setModeSurface(
-      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false),
-      render: false)
-    panel.transientContentVisible = true
-    panel.orderFrontRegardless()
-    panel.displayCommandLine(":flashlight ")
-    XCTAssertTrue(panel.commandTextFieldIsLaidOut)
-    let previousRecovery = panel.commandLineKeyRecoveryGeneration
 
-    panel.recoverCommandLineFocusAfterKeyLoss()
-
-    let recovered = expectation(description: "command field recaptured")
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) {
-      XCTAssertGreaterThan(panel.commandLineKeyRecoveryGeneration, previousRecovery)
-      recovered.fulfill()
-    }
-    wait(for: [recovered], timeout: 1)
-  }
-
-  func testAClosedCommandLineDoesNotRecaptureFocus() {
-    _ = NSApplication.shared
-    let panel = OverlayPanel()
-    defer { panel.orderOut(nil) }
-    panel.inputMode = .commandLine
-    panel.setModeSurface(
-      .init(label: "COMMAND", style: .command, barVisible: false, capturesInput: false),
-      render: false)
-    panel.transientContentVisible = true
-    panel.orderFrontRegardless()
-    panel.displayCommandLine(":flashlight ")
-    XCTAssertTrue(panel.commandTextFieldIsLaidOut)
-    let previousRecovery = panel.commandLineKeyRecoveryGeneration
-
-    panel.recoverCommandLineFocusAfterKeyLoss()
-    panel.inputMode = .passive
-    panel.hide()
-
-    let stayedClosed = expectation(description: "closed command field stayed closed")
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) {
-      XCTAssertEqual(panel.commandLineKeyRecoveryGeneration, previousRecovery)
-      stayedClosed.fulfill()
-    }
-    wait(for: [stayedClosed], timeout: 1)
+    XCTAssertTrue(recovers())
+    XCTAssertFalse(recovers(generation: 6))
+    XCTAssertFalse(recovers(mode: .passive))
+    XCTAssertFalse(recovers(laidOut: false))
+    XCTAssertFalse(recovers(visible: false))
+    XCTAssertFalse(recovers(focused: true))
+    XCTAssertFalse(recovers(otherFlashWindowIsKey: true))
   }
 }
 
