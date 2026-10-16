@@ -209,7 +209,7 @@
 
   <div class="surface mapping-list">
     <div class="list-head"><strong>{searching ? `Matches in ${modeInfo.label}` : picked ? `Bindings on ${[...path, picked].map(stepText).join(" ")}` : path.length ? `After ${path.map(stepText).join(" ")}` : `${modeInfo.label} bindings`}</strong>{#if picked || path.length}<button type="button" class="clear" onclick={() => back(0)}>Show every key</button>{/if}<span class="count">{listed.length} of {modeRows.length}</span></div>
-    {#each groups as group (group.id)}<section class="mapping-group"><div class="group-label"><i data-category={group.id}></i><strong>{group.label}</strong><span>{group.rows.length}</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th class="key-column">Key</th><th>What it does</th><th class="from-column">Source</th><th class="help-column"><span class="sr">Change it</span></th></tr></thead><tbody>{#each group.rows as row (rowId(row))}<tr><td><kbd>{row.key}</kbd>{#if mode === "all" || mode === "visual" || mode === "drag"}<span class="scope">{row.scope}</span>{/if}</td><td><span class="does">{explainMapping(row, commands)}</span><code>{row.action}</code></td><td class="from"><SourceBadge {...sourceFromOrigin(row.origin)} /></td><td class="help"><button type="button" class="change" aria-label="Copy the TOML that changes this binding" onmouseenter={(event) => showTip(event, `Copy the flash.toml lines that rebind or remove ${row.key}:\n${mappingSnippet(row)}`, rowId(row))} onmouseleave={hideTip} onfocus={(event) => showTip(event, mappingSnippet(row), rowId(row))} onblur={hideTip} onclick={() => copy(mappingSnippet(row), rowId(row))}>{copied === rowId(row) ? "✓" : "TOML"}</button></td></tr>{/each}</tbody></table></div></section>{/each}
+    {#each groups as group (group.id)}<section class="mapping-group"><div class="group-label"><i data-category={group.id}></i><strong>{group.label}</strong><span>{group.rows.length}</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th class="key-column">Key</th><th>What it does</th><th class="from-column">Source</th><th class="help-column"><span class="sr">Copy configuration</span></th></tr></thead><tbody>{#each group.rows as row (rowId(row))}<tr><td><kbd>{row.key}</kbd>{#if mode === "all" || mode === "visual" || mode === "drag"}<span class="scope">{row.scope}</span>{/if}</td><td><span class="does">{explainMapping(row, commands)}</span><code>{row.action}</code></td><td class="from"><SourceBadge {...sourceFromOrigin(row.origin)} /></td><td class="help"><button type="button" class="change" aria-label="Copy the TOML that changes this binding" onmouseenter={(event) => showTip(event, `Copy the flash.toml lines that rebind or remove ${row.key}:\n${mappingSnippet(row)}`, rowId(row))} onmouseleave={hideTip} onfocus={(event) => showTip(event, mappingSnippet(row), rowId(row))} onblur={hideTip} onclick={() => copy(mappingSnippet(row), rowId(row))}><Icon name={copied === rowId(row) ? "check" : "copy"} size={15} /></button></td></tr>{/each}</tbody></table></div></section>{/each}
     {#if !listed.length}<div class="empty"><strong>No mappings match</strong>{searching ? "Try what it does, a key, or a command. A close spelling still counts." : "Nothing in this mode starts here; pick another key or mode."}</div>{/if}
   </div>
   {#if tip}<div id="mapping-explanation" class="why-pop" role="tooltip" style:top="{tip.top}px" style:left="{tip.left}px">{tip.text}</div>{/if}
@@ -270,7 +270,7 @@
   .group-label > span:last-child { margin-left: auto; font-size: 10px; color: var(--muted); }
   .key-column { width: 170px; }
   .from-column { width: 170px; }
-  .help-column, .help { position: sticky; right: 0; width: 64px; background: #fff; z-index: 1; }
+  .help-column, .help { position: sticky; right: 0; width: 48px; background: #fff; z-index: 1; }
   .help-column { background: #fafbf8; }
   .help { text-align: right; vertical-align: middle; }
   .data-table tbody tr:hover .help { background: #fbfcf9; }
@@ -279,7 +279,7 @@
   .does { display: block; font-size: 12px; color: var(--text); }
   .data-table code { display: block; margin-top: 3px; color: #6b7666; font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
   /* The shared button rule is a 36px field; this control stays a small mark. */
-  .change { min-height: 0; height: 24px; padding: 0 8px; border-radius: 999px; font-size: 10px; font-weight: 600; background: #f7f8f4; color: #6d7868; }
+  .change { display: inline-grid; place-items: center; min-height: 0; width: 28px; height: 28px; padding: 0; border-radius: 8px; background: #f7f8f4; color: #6d7868; }
   .change:hover, .change:focus-visible { color: #3f5a32; border-color: #6c875c; background: #f1f5ec; outline: none; }
   .why-pop { position: fixed; z-index: 40; width: min(300px, calc(100vw - 16px)); padding: 10px 12px; background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 28px rgba(40, 48, 32, .12); font-size: 11px; line-height: 1.45; white-space: pre-wrap; font-family: var(--mono); pointer-events: none; }
   .from { white-space: nowrap; }

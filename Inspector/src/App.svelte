@@ -49,7 +49,7 @@
     : "Connecting to Flash. Live information will appear when the resident app is available.");
   /** The path shown in the top bar: every crumb but the last is a link. */
   const crumbs = $derived.by(() => {
-    const list: { label: string; href?: string }[] = [{ label: "Flash Help", href: "/" }];
+    const list: { label: string; href?: string }[] = [];
     if (route.page === "home") return list;
     if (route.page === "search") return [...list, { label: "Search" }, ...(route.param ? [{ label: `“${route.param}”` }] : [])];
     if (route.page === "not-found") return [...list, { label: "Page not found" }];
@@ -150,7 +150,7 @@
   <div class="main-column">
     <header class="topbar">
       <button class="mobile-toggle" aria-label="Toggle navigation" aria-expanded={mobileNav} aria-controls="sidebar" onclick={() => mobileNav = !mobileNav}><Icon name="menu" /></button>
-      <nav class="breadcrumb" aria-label="Breadcrumb"><ol>{#each crumbs as crumb, position}<li>{#if crumb.href && position < crumbs.length - 1}<a href={crumb.href}>{crumb.label}</a>{:else}<strong aria-current={position === crumbs.length - 1 ? "page" : undefined}>{crumb.label}</strong>{/if}</li>{/each}</ol></nav>
+      {#if crumbs.length}<nav class="breadcrumb" aria-label="Breadcrumb"><ol>{#each crumbs as crumb, position}<li>{#if crumb.href && position < crumbs.length - 1}<a href={crumb.href}>{crumb.label}</a>{:else}<strong aria-current={position === crumbs.length - 1 ? "page" : undefined}>{crumb.label}</strong>{/if}</li>{/each}</ol></nav>{/if}
       <form class="searchbox" role="search" onsubmit={(event) => { event.preventDefault(); if (results[selectedResult]) router.navigate(results[selectedResult].href); }}><Icon name="search" size={16} /><input bind:this={searchInput} bind:value={search} oninput={onSearchInput} onkeydown={onSearchKey} type="search" aria-label="Search all documentation, commands, mappings and plugins" placeholder="Search anything…" /><kbd>/</kbd></form>
       <a href="/state" class="connection" class:connected={store.connected} aria-label={store.connected ? "Live connection to Flash" : connectionMessage} title={store.connected ? "Live connection to Flash" : connectionMessage}>{#if store.connected}<i></i>Live{:else}<Icon name="warning" size={18} />{/if}</a>
     </header>

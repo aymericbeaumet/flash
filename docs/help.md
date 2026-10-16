@@ -19,17 +19,19 @@ file, shortcuts, plugins, and the status bar from the resident's state, and it
 remembers which guides this browser has opened. Guides
 cover hints, grid/pointer control, modes, flashlight, mappings, configuration,
 status formats, the status bar, widgets, popups, plugins, privacy,
-troubleshooting and development. Plugin manifests add their own topics.
+troubleshooting and development. Items in "What is missing" open their linked
+guide or page when they have one; otherwise they jump to their checklist step.
+Plugin manifests add their own topics.
 
 ## Live reference
 
 | Page | What it describes |
 | --- | --- |
-| Mappings | Effective bindings after defaults, plugin contributions and user overrides, grouped by mode. A blank search stays alphabetical by command. The search ranks what a binding does, including typos, and each row's ? explains that binding. The Source column is the same badge as Commands |
+| Mappings | Effective bindings after defaults, plugin contributions and user overrides, grouped by mode. A blank search stays alphabetical by command. The search ranks what a binding does, including typos. Each row has a small copy control for a TOML snippet that changes the binding; the Source column links plugin origins to their details and config origins to the live editor |
 | Keyboard | The `[keyboard] layout` drawn as keys, each showing what it does in the mode Flash is in: the bindings of that mode and `all`, the hint alphabet with each key's ease while labels are up, the grid block while the grid is up, the adjust, pointer and search keys in their sessions, and the zone of `label_order = "zones"`. Follows the resident's mode and hint session over the event stream, or a mode picked by hand. Selecting a key lists its bindings. Nothing typed is shown, only what Flash is ready for |
 | Commands | Built-in and installed plugin command definitions, sorted alphabetically |
 | Plugins | Loaded manifests, process health, errors and capabilities |
-| Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. The same page edits the TOML file; Purge defaults removes bundled values in the editor and Save writes the file |
+| Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. Config provenance links jump to the editor on the same page; Purge defaults removes bundled values in the editor and Save writes the file |
 | Logs | Recent structured diagnostics and interaction traces |
 | Clipboard | Recent text, images, formatted copies, and files from the clipboard plugin. The page requests history directly on opening, loads the full configured history in pages, can refresh it, and can copy back or delete each entry |
 
@@ -65,7 +67,7 @@ the browser commands needs it, or at launch with
 The page routes itself with the History API: same-origin page links navigate
 in place, back/forward restore each page's scroll position, and modified,
 middle or new-window clicks keep the browser's behavior. The top bar shows
-the path as a breadcrumb (home › page › group › guide) and the tab title
+the path as a breadcrumb (page › group › guide), hidden on Home, and the tab title
 names the guide. After a navigation focus moves to the main region and the
 new title is announced to assistive technology. Shortcuts outside a text
 field: `/` or `⌘K` search, `[` and `]` previous and next guide, `g` then a

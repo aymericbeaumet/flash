@@ -95,19 +95,34 @@
         <ul>
           {#each model.blockers as blocker}
             <li>
-              <button type="button" onclick={() => show(blocker.id)}>
-                <strong>{blocker.title}</strong>
-                <span>{blocker.evidence}</span>
-              </button>
+              {#if blocker.href}
+                <a class="next" href={blocker.href}>
+                  <strong>{blocker.title}</strong>
+                  <span>{blocker.evidence}</span>
+                </a>
+              {:else}
+                <button type="button" onclick={() => show(blocker.id)}>
+                  <strong>{blocker.title}</strong>
+                  <span>{blocker.evidence}</span>
+                </button>
+              {/if}
             </li>
           {/each}
         </ul>
       {:else if model.next}
-        <button type="button" class="next" onclick={() => show(model.next?.id ?? "")}>
-          <span class="eyebrow">Next</span>
-          <strong>{model.next.title}</strong>
-          <span>{model.next.evidence}</span>
-        </button>
+        {#if model.next.href}
+          <a class="next" href={model.next.href}>
+            <span class="eyebrow">Next</span>
+            <strong>{model.next.title}</strong>
+            <span>{model.next.evidence}</span>
+          </a>
+        {:else}
+          <button type="button" class="next" onclick={() => show(model.next?.id ?? "")}>
+            <span class="eyebrow">Next</span>
+            <strong>{model.next.title}</strong>
+            <span>{model.next.evidence}</span>
+          </button>
+        {/if}
         {#if model.later > 0}<p class="later">{model.later} more after this.</p>{/if}
       {/if}
     </section>
@@ -183,6 +198,7 @@
   .missing ul { list-style: none; margin: 12px 0 0; padding: 0; }
   .missing li { border-top: 1px solid var(--border-soft); }
   .missing button, .next { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 0; padding: 12px 2px; min-height: 0; }
+  .next { color: inherit; text-decoration: none; }
   .missing button:hover, .next:hover { background: #f7faf4; }
   .missing strong, .next strong { font-size: 14px; }
   .missing span, .next span, .later { color: var(--muted); font-size: 13px; }

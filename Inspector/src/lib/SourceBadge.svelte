@@ -14,6 +14,8 @@
 
 {#if kind === "plugin"}
   <a class="badge neutral" href={paths.plugins(label)}>{text} <Icon name="chevron" size={11} /></a>
+{:else if kind === "config"}
+  <a class="badge neutral" href="/state#config-editor" aria-label={`Open ${label || "configuration"} in Runtime & config`}>{text} <Icon name="chevron" size={11} /></a>
 {:else if kind === "builtin"}
   <span class="badge">{text}</span>
 {:else}
