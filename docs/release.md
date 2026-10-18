@@ -10,13 +10,16 @@ plugin gate all pass.
 | Condition | Release | Cask |
 | --- | --- | --- |
 | `Resources/Info.plist` carries a version with no tag yet | That version: a release and tag `1.0.0` at this commit, with generated notes | `flash` |
-| The version is already tagged | Rolling `nightly` pre-release, one more asset | `flash@nightly` |
+| The version is already tagged | A `nightly-YYYYMMDD-SHA` pre-release for that commit | Rolling `flash@nightly` |
 | A `*.*.*` tag pushed by hand | That version | `flash` |
 
 So a release is one commit: bump `CFBundleShortVersionString` in
 `Resources/Info.plist`, merge to `main`, and CI cuts the tag, the release and
 the cask. The tag is created by the workflow token, which does not start a
-second run. `CFBundleVersion` is the workflow run number.
+second run. `CFBundleVersion` is the workflow run number. GitHub releases are
+immutable after publication, so CI creates each release with its archive
+attached before publishing it. A rerun accepts an existing release only when
+the expected archive is already present.
 
 ## Signing and notarization
 
