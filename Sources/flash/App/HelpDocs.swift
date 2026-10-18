@@ -327,8 +327,10 @@ enum HelpDocs {
       "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
       ```
 
-      In NORMAL, `f` opens hints, `F` opens the grid, `:` opens commands and
-      `?` opens your mappings. Unmapped keys are captured. Use your INSERT
+      In NORMAL, `f` opens hints, `F` opens the grid, and `?` opens your
+      mappings. To open commands, run `flash enter_command_mode` from a
+      terminal or bind `:` to `enter_command_mode` in `[mode.normal.mappings]`.
+      Unmapped keys are captured. Use your INSERT
       shortcut to type again; clicking or selecting an input, `/` (Find) and
       `t` (new tab) also enter INSERT. NORMAL otherwise stays active as you
       switch apps and tabs.
@@ -604,9 +606,10 @@ enum HelpDocs {
       and app state, and [logs](/logs) follows diagnostics as they happen.
       These describe this resident, including your changes.
 
-      `?` in NORMAL opens mappings. `:help` opens the [homepage](/), which
-      checks what this Mac has already set up and what is still missing.
-      `:help <topic>` opens a guide, for example `:help widgets`.
+      `?` in NORMAL opens mappings. `flash help_show` opens the [homepage](/),
+      which checks what this Mac has already set up and what is still missing.
+      `flash help_show --topic=widgets` opens a guide. In the command line,
+      `:help` and `:help widgets` do the same.
       Plugin guides appear alongside built-in topics when their manifests load.
 
       Start with [troubleshooting](/docs/troubleshooting) when behavior differs
@@ -1032,7 +1035,7 @@ enum HelpDocs {
     var lines = [
       "# Flash Help",
       "",
-      "Use `:help <topic>` to open one of these topics.",
+      "Use `flash help_show --topic=<topic>` from a terminal, or `:help <topic>` after opening the command line.",
       "",
     ]
     for topic in topics {

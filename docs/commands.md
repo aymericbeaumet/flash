@@ -1,7 +1,9 @@
 # Commands
 
 Run `flash <verb>` from a terminal or put the same argv in a mapping. Open
-`:commands` for the installed command inventory. `:help` or `flash help_show`
+`flash enter_command_mode` to use colon commands; no command-line shortcut is
+bound by default. In that command line, `:commands` opens the installed command
+inventory. `:help` or `flash help_show`
 opens the browser help homepage; `?`, `:mappings` or `flash mappings_show`
 opens the live mapping reference.
 

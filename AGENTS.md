@@ -83,6 +83,8 @@ tool, remove it rather than maintain both.
    `only_bundle_ids` and fed only by the host AX broker). Browser content
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
+   Held-button press, drag and release events clear inherited keyboard flags;
+   a modified shortcut must not turn a primary press into a Control-click.
 9. NORMAL is persistent. INSERT entry is explicit: `enter_insert_mode`, physical
    app clicks, primary hint and mouse-grid clicks on input targets (every
    target in a declared `terminal_emulators` app is one, tmux pane and window

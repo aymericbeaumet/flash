@@ -30,7 +30,7 @@
   </div>
   <div class="command-guide">
     <span class="guide-icon"><Icon name="commands" size={22} /></span>
-    <div><strong>Start with a colon.</strong><p>In NORMAL mode, press <kbd>:</kbd>, enter a command, then press <kbd>Return</kbd>. <kbd>Tab</kbd> completes command names.</p></div>
+    <div><strong>Open the command line.</strong><p>Run <code>flash enter_command_mode</code> from a terminal, or bind <kbd>:</kbd> to <code>enter_command_mode</code> in NORMAL. Enter a command and press <kbd>Return</kbd>; <kbd>Tab</kbd> completes command names.</p></div>
     <a href="/docs/verbs">Command guide <Icon name="arrow" size={15} /></a>
   </div>
   <div class="surface catalog">

@@ -1257,65 +1257,63 @@ extension URLEventHandler {
   static let helpTopic = HelpTopic(
     name: "verbs",
     title: "Flash verbs",
-    summary: "Verbs accepted by the `flash` CLI and by mapping config.",
+    summary: "Run Flash actions from a terminal, command line, or key mapping.",
     body: """
       # Flash verbs
 
-      Every resident action has a verb name. The same verb table is used by
-      the `flash` CLI (which AppleEvents the verb to the resident) and by
-      mapping config (which writes `["flash", "<verb>", "--key=value", ...]`
-      arrays and resolves them in-process).
+      A verb is a resident action. Run it from a terminal with `flash <verb>`,
+      type its name in COMMAND mode, or put the same words in a key mapping.
+      Open COMMAND mode with `flash enter_command_mode` or a shortcut you
+      define; `:` is not mapped by default. Flash's
+      [live command catalog](/commands) lists every built-in
+      and installed plugin command, its arguments, and what it does.
 
-      `flash status`, `flash doctor` and `flash config_check` are CLI queries,
-      not verbs: they report (as text, or JSON with `--json`) and cannot be
-      mapped. `:doctor` runs the doctor's checks from the command line.
-
-      `mouse_target` selects an app-discovered target. `mouse_bigram` types one
-      letter, then the two-character hint on each match in the focused window
-      and on the status bar of its screen. A textless terminal also matches
-      the tmux status line and pane titles. `v` and `V` match the same glyphs;
-      no match stays silent.
-      `--move` moves the pointer onto the
-      letter. `mouse_grid` selects
-      a precise screen position: the screen splits like the left half of
-      the keyboard (4 rows × 5 keys of the `hints.keys` layout, `12345` /
-      `qwert` / `asdfg` / `zxcvb` on QWERTY), and each key zooms into its
-      cell. `--bisect` keeps a half with the keys at the QWERTY h/j/k/l
-      positions of `[keyboard] layout` (h/j/k/l on QWERTY, h/n/e/i on Colemak,
-      d/h/t/n on Dvorak, c/t/s/r on Bépo) and a quadrant with the keys at y/u
-      and b/n. Bépo's top-left quadrant is the dead key `^`.
-      `--zoom-to-depth=N` starts N steps deep under the pointer.
-      `--multi` keeps clicking, discovering the targets again after each
-      click; `--sticky` keeps the same labels up instead; `--path` clicks
-      every target between the two you pick, in reading order; `--words`
-      labels the visible words of the focused window's text instead of its
-      controls. While labels are up, Tab moves the same click to the grid and
-      Shift-Tab widens it to the screen; Backspace returns. `mouse_screens`
-      labels each display, `mouse_warp` jumps the pointer to an edge or the
-      centre of the focused window or its screen, `mouse_step` moves it one
-      text line or character from the text under it, and `mouse_position` saves,
-      hints, cycles and forgets pointer positions. `mouse_dock`, `mouse_menubar` (the focused app's menu titles and
-      the status items) and `mouse_notifications` (Notification Center's
-      banners, alerts and buttons) hint surfaces outside the focused window.
-      `mouse_button --state=toggle --mode=visual|drag` starts a visual
-      selection (VISUAL) or a drag (DRAG); `release` drops or ends it and
-      `cancel` puts a drag back. `mouse_nudge` moves the pointer a few points.
-
-      `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode` and
-      `enter_terminal_mode` select a mode; `leave_mode` leaves the current
-      one. `enter_terminal_mode --name=<popup>` shows that popup centred and
-      focused, with its terminal owning the keyboard; without a name it
-      opens the built-in `terminal` popup. `leave_mode` closes it.
-
-      `window_move` accepts either a named `position` or a complete
-      percentage frame (`x`, `y`, `width`, and `height`, each suffixed with
-      `%`). Percentage origins are measured from the usable screen's top-left.
-      Flash retains either form as layout intent and reapplies it across
-      explicit screen moves and display topology or usable-frame changes.
+      ## Run and map a command
 
       ```text
-      \(URLEventHandler.usageText)
+      flash mouse_target --secondary
+      ["flash", "mouse_target", "--secondary"]
       ```
+
+      The CLI sends the action to the resident; a mapping dispatches it
+      in-process. See [Mapping Syntax](/docs/mappings) for the surrounding
+      TOML and key names.
+
+      ## Mouse and pointer
+
+      - `mouse_target` labels controls in the focused app. Use `--secondary`,
+        `--double`, `--move`, or `--words` to change what the selection does.
+      - `mouse_bigram` starts with a visible character, then a two-character
+        hint. It also reaches the status bar and terminal pane titles.
+      - `mouse_grid` reaches any screen position; `--bisect` selects halves
+        and quarters, and `--zoom-to-depth=N` starts near the pointer.
+      - `mouse_dock`, `mouse_menubar`, and `mouse_notifications` reach surfaces
+        outside the focused window. `mouse_screens`, `mouse_warp`,
+        `mouse_step`, and `mouse_position` move or save the pointer.
+      - `mouse_button --state=toggle --mode=visual|drag` starts a selection or
+        drag. `--state=release` ends it; `--state=cancel` returns a drag to its
+        starting point.
+
+      Read [Hints & mouse actions](/docs/hints) and
+      [Mouse grid & pointer](/docs/mouse-grid) for the interaction details.
+
+      ## Modes, windows, and popups
+
+      `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, and
+      `enter_terminal_mode` select a mode; `leave_mode` leaves the current one.
+      `enter_terminal_mode --name=<popup>` opens a configured popup.
+
+      `window_move --position=lefthalf` tiles a window. A complete percentage
+      frame (`--x=10% --y=10% --width=80% --height=80%`) places it relative
+      to the usable screen. `window_focus`, `window_minimize`,
+      `window_restore`, and `window_fullscreen` manage focus and state.
+
+      ## CLI queries
+
+      `flash status`, `flash doctor`, and `flash config_check` report state or
+      validate configuration. They are CLI queries, so a mapping cannot run
+      them. See the [command manual](https://aymericbeaumet.github.io/flash/commands/)
+      for their options and the complete verb reference.
       """)
 }
 

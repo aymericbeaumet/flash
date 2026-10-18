@@ -216,7 +216,7 @@ function headline(
 
 function lede(known: boolean, connected: boolean, done: number, total: number, blockers: number): string {
   if (!known && !connected) {
-    return "Open this page from a running Flash with :help or flash help_show. The list fills in from that Mac.";
+    return "Open this page from a running Flash with flash help_show. The list fills in from that Mac.";
   }
   if (total === 0) return "Live state is on its way.";
   if (blockers > 0) {

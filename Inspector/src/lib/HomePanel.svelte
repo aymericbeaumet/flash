@@ -177,7 +177,7 @@
   {/each}
 
   <footer class="home-footer">
-    <span>Open this page with <code>:help</code>. Jump to a guide with <code>:help &lt;topic&gt;</code>.</span>
+    <span>Open this page with <code>flash help_show</code>. Jump to a guide with <code>flash help_show --topic=&lt;topic&gt;</code>.</span>
     <span>Flash {snapshot.runtime?.version ?? ""}</span>
   </footer>
 </div>

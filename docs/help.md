@@ -1,7 +1,9 @@
 # Browser help
 
 Flash's browser help combines feature guides with the state of the running
-resident. `:help` opens its homepage. The default NORMAL `?` mapping opens
+resident. `flash help_show` opens its homepage; `:help` works after opening
+the command line with `flash enter_command_mode` or a user-defined shortcut.
+The default NORMAL `?` mapping opens
 the effective mapping table, as does `:mappings`; the mapping syntax guide
 remains available through `:help mappings`.
 
@@ -30,7 +32,7 @@ Plugin manifests add their own topics.
 | Mappings | Effective bindings after defaults, plugin contributions and user overrides, grouped by mode. A blank search stays alphabetical by command. The search ranks what a binding does, including typos. Each row has a small copy control for a TOML snippet that changes the binding; the Source column links plugin origins to their details and config origins to the live editor |
 | Keyboard | The `[keyboard] layout` drawn as keys, each showing what it does in the mode Flash is in: the bindings of that mode and `all`, the hint alphabet with each key's ease while labels are up, the grid block while the grid is up, the adjust, pointer and search keys in their sessions, and the zone of `label_order = "zones"`. Follows the resident's mode and hint session over the event stream, or a mode picked by hand. Selecting a key lists its bindings. Nothing typed is shown, only what Flash is ready for |
 | Commands | Built-in and installed plugin command definitions, sorted alphabetically |
-| Plugins | Loaded manifests, process health, errors and capabilities |
+| Plugins | Loaded manifests, process health, errors and capabilities. Selecting Inspect details opens a dialog; Escape or its close button dismisses it |
 | Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. Config provenance links jump to the editor on the same page; Purge defaults removes bundled values in the editor and Save writes the file |
 | Logs | Recent structured diagnostics and interaction traces |
 | Clipboard | Recent text, images, formatted copies, and files from the clipboard plugin. The page requests history directly on opening, loads the full configured history in pages, can refresh it, and can copy back or delete each entry |
@@ -56,7 +58,7 @@ the browser commands needs it, or at launch with
 | `/` | Help homepage: a live onboarding checklist |
 | `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
 | `/mappings`, `/commands` | Key mappings: your keyboard with what each key does in the mode picked under it (NORMAL, VISUAL, DRAG, HYPER, INSERT, COMMAND, TERMINAL or all), tinted by purpose, with free keys dashed and NORMAL's counts marked. Modifier buttons show the Shift, Control, Option and Command layers; a key that starts longer bindings opens what can follow it; picking a key lists its bindings, and a free key offers the TOML to map it. The list below follows the mode and key, groups bindings by purpose, leads with what each does, and copies the TOML that rebinds or removes it. A search ranks the whole mode and lights the keys it matches. The page also shows how each action resolves in the focused app, and never follows the live mode. Command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
-| `/plugins`, `/plugins/<id>` | Plugin list; one plugin's details |
+| `/plugins`, `/plugins/<id>` | Plugin list; a direct plugin link opens that plugin's details in a dialog |
 | `/state`, `/clipboard` | Runtime and clipboard pages |
 | `/logs` | Live logs. The record list fills the page height, and its search field is focused when the page opens |
 | `/search?q=<text>` | Results across guide sections, commands, mappings and plugins. Typing in the top bar rewrites the query in place, so a search reloads and can be shared; `↓` `↑` `↩` pick a result |

@@ -146,6 +146,42 @@ final class ActionDispatcherTests: XCTestCase {
       event.getIntegerValueField(.eventSourceUserData), ActionDispatcher.syntheticMouseEventTag)
   }
 
+  func testHeldButtonEventsDiscardShortcutModifiers() throws {
+    let event = try XCTUnwrap(
+      CGEvent(
+        mouseEventSource: CGEventSource(stateID: .privateState),
+        mouseType: .leftMouseDown,
+        mouseCursorPosition: CGPoint(x: 100, y: 200), mouseButton: .left))
+    event.flags = [.maskCommand, .maskControl]
+
+    ActionDispatcher.clearInheritedMouseModifiers(on: event)
+
+    XCTAssertEqual(event.flags, [])
+
+    let press = try XCTUnwrap(
+      ActionDispatcher.heldButtonEvent(
+        button: .primary, pressed: true, at: CGPoint(x: 100, y: 200),
+        source: CGEventSource(stateID: .combinedSessionState)))
+    XCTAssertEqual(press.type, .leftMouseDown)
+    XCTAssertEqual(press.flags, [])
+    XCTAssertEqual(
+      press.getIntegerValueField(.eventSourceUserData), ActionDispatcher.syntheticMouseEventTag)
+
+    let release = try XCTUnwrap(
+      ActionDispatcher.heldButtonEvent(
+        button: .primary, pressed: false, at: CGPoint(x: 100, y: 200),
+        source: CGEventSource(stateID: .combinedSessionState)))
+    XCTAssertEqual(release.type, .leftMouseUp)
+    XCTAssertEqual(release.flags, [])
+
+    let drag = try XCTUnwrap(
+      ActionDispatcher.pointerMoveEvent(
+        to: CGPoint(x: 120, y: 200), from: CGPoint(x: 100, y: 200),
+        holding: .primary, source: CGEventSource(stateID: .combinedSessionState)))
+    XCTAssertEqual(drag.type, .leftMouseDragged)
+    XCTAssertEqual(drag.flags, [])
+  }
+
   private func target(role: String) -> JumpTarget {
     JumpTarget(
       id: "target",

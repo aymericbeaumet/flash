@@ -214,10 +214,17 @@ enum ActionDispatcher {
         mouseEventSource: source, mouseType: button?.draggedEventType ?? .mouseMoved,
         mouseCursorPosition: point, mouseButton: button?.cgButton ?? .left)
     else { return nil }
+    clearInheritedMouseModifiers(on: move)
     move.setIntegerValueField(.mouseEventDeltaX, value: Int64((point.x - origin.x).rounded()))
     move.setIntegerValueField(.mouseEventDeltaY, value: Int64((point.y - origin.y).rounded()))
     move.setIntegerValueField(.eventSourceUserData, value: syntheticMouseEventTag)
     return move
+  }
+
+  /// A held button is an unmodified gesture even when its hotkey is still
+  /// physically down. A Control+Command shortcut must not become a Control-click.
+  static func clearInheritedMouseModifiers(on event: CGEvent) {
+    event.flags = []
   }
 
   static func clickEvents(
@@ -484,17 +491,28 @@ enum ActionDispatcher {
         case .release(let releasedButton): (button, pressed) = (releasedButton, false)
         }
         guard
-          let event = CGEvent(
-            mouseEventSource: source, mouseType: button.eventType(pressed: pressed),
-            mouseCursorPosition: cgPoint, mouseButton: button.cgButton)
+          let event = heldButtonEvent(
+            button: button, pressed: pressed, at: cgPoint, source: source)
         else { continue }
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
-        event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
         event.post(tap: .cghidEventTap)
         postedHeldButton = pressed ? button : nil
         FlashLog.trace("[mouse_button] \(pressed ? "press" : "release") button=\(button.rawValue)")
       }
     }
+  }
+
+  static func heldButtonEvent(
+    button: MouseButtonKind, pressed: Bool, at point: CGPoint, source: CGEventSource?
+  ) -> CGEvent? {
+    guard
+      let event = CGEvent(
+        mouseEventSource: source, mouseType: button.eventType(pressed: pressed),
+        mouseCursorPosition: point, mouseButton: button.cgButton)
+    else { return nil }
+    clearInheritedMouseModifiers(on: event)
+    event.setIntegerValueField(.mouseEventClickState, value: 1)
+    event.setIntegerValueField(.eventSourceUserData, value: syntheticMouseEventTag)
+    return event
   }
 
   /// The button whose press `clickQueue` posted and whose release it has

@@ -124,8 +124,10 @@ extension NormalModeDispatcher {
 
         ## Command Line
 
-        `:` opens the command line in NORMAL. You can also bind
-        `enter_command_mode` to a shortcut of your choice. Use `:help` for
+        The command line has no default shortcut. Run
+        `flash enter_command_mode` from a terminal, or bind `:` in
+        `[mode.normal.mappings]` to `["flash", "enter_command_mode"]`.
+        Use `:help` for
         the browser help homepage, `:help plugins` for plugin docs, and
         `?` or `:mappings` for the live mapping reference.
         `:flashlight <query>` searches source candidates;

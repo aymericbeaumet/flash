@@ -1,7 +1,7 @@
 # Getting started
 
 Flash starts with one hotkey and grows one table at a time. Everything here
-is also in the browser help (`:help`), with your own mappings filled in.
+is also in the browser help (`flash help_show`), with your own mappings filled in.
 
 ## 1. One hotkey
 

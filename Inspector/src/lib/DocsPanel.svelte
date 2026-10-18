@@ -23,6 +23,7 @@
   const fresh = $derived(freshness(docs, seen));
   const freshTopics = $derived(docs.filter((doc) => fresh.get(doc.name)));
   const releaseURL = $derived(version ? `https://github.com/aymericbeaumet/flash/releases` : undefined);
+  const helpCommand = $derived(selected ? `flash help_show --topic='${selected.name.replaceAll("'", "'\\''")}'` : "");
 
   // The first visit records every guide as seen: badges mark what changes
   // from here on. Opening a guide acknowledges its current body.
@@ -68,7 +69,7 @@
 
   async function copyHelp() {
     if (!selected) return;
-    try { await navigator.clipboard.writeText(`:help ${selected.name}`); copiedHelp = true; setTimeout(() => { copiedHelp = false; }, 1600); } catch { copiedHelp = false; }
+    try { await navigator.clipboard.writeText(helpCommand); copiedHelp = true; setTimeout(() => { copiedHelp = false; }, 1600); } catch { copiedHelp = false; }
   }
   function badge(name: string): Freshness { return fresh.get(name); }
 </script>
@@ -91,7 +92,7 @@
           <p class="summary">{selected.summary}</p>
           <div class="article-meta">
             <span>{minutes} min read</span><span aria-hidden="true">·</span>
-            <button type="button" class="help-copy" onclick={copyHelp} aria-label="Copy the :help command for this guide"><code>:help {selected.name}</code> <span>{copiedHelp ? "copied" : "copy"}</span></button>
+            <button type="button" class="help-copy" onclick={copyHelp} aria-label="Copy the flash help command for this guide"><code>{helpCommand}</code> <span>{copiedHelp ? "copied" : "copy"}</span></button>
             {#if selected.manual}<span aria-hidden="true">·</span><a href={selected.manual} target="_blank" rel="noopener noreferrer">Full reference in the manual <span aria-hidden="true">↗</span></a>{/if}
           </div>
         </header>
@@ -146,9 +147,9 @@
   .title-badge { font-size: 11px; }
   .summary { font-size: 16px; color: var(--muted); margin-top: 14px; line-height: 1.7; }
   .article-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 19px; color: var(--muted); font-size: 12px; }
-  .help-copy { border: 0; background: none; padding: 0; min-height: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .help-copy { border: 0; background: none; padding: 0; min-height: 40px; max-width: 100%; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; text-align: left; }
   .help-copy:hover { background: none; color: var(--accent); }
-  .article-meta code { font-size: 12px; }
+  .article-meta code { font-size: 12px; overflow-wrap: anywhere; }
   .toc-inline { display: none; margin-bottom: 24px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
   .toc-inline summary { cursor: pointer; font-weight: 600; font-size: 13px; }
   .toc-inline nav { display: flex; flex-direction: column; padding-top: 8px; }

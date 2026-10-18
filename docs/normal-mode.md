@@ -160,9 +160,12 @@ mappings.
   bound; see [commands](commands.md).
 - `cF`, `dF` and `mF` use the [mouse grid](#mouse-grid) for a right-click, a
   double click and a move.
-- `?` and `:mappings` open the browser mapping reference for the focused app,
-  with both effective plugin-merged and configured mappings, including expanded leader
-  bindings and argv mappings. Each row names where the binding comes from:
+- `?` opens the browser mapping reference for the focused app. In the command
+  line, `:mappings` does the same. The command line has no default entry
+  shortcut; run `flash enter_command_mode` or bind one in your configuration.
+  The reference shows effective plugin-merged and configured mappings,
+  including expanded leader bindings and argv mappings. Each row names where
+  the binding comes from:
   a built-in default, a config file, or a plugin.
 - `:help` opens the browser help homepage; `:help <topic>` opens a feature guide.
 
@@ -290,8 +293,10 @@ NORMAL.
 Both modes are a mouse button Flash holds down (`mouse_button`;
 `enter_drag_mode` is its DRAG toggle): VISUAL holds the primary button where
 the selection starts, and every pointer move Flash makes while a button is
-held is a drag of it. The mode follows the hold exactly: whichever path
-presses the button from NORMAL or INSERT enters the mode named by `--mode`,
+held is a drag of it. The press, drag and release do not inherit modifiers
+from the shortcut that started the hold, so a Control shortcut does not turn
+the press into a context click. The mode follows the hold exactly: whichever
+path presses the button from NORMAL or INSERT enters the mode named by `--mode`,
 whichever releases it leaves, and leaving the mode any other way
 (`enter_normal_mode`, INSERT, the command line, `leave_mode`, quitting
 Flash, a committed click) releases the button. `mouse_pointer`'s `v` holds a
