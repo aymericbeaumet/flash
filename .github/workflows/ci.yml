@@ -48,6 +48,8 @@ jobs:
           install_args: python
       - name: Check hard-rule guardrails
         run: ./Scripts/check-guardrails.sh
+      - name: Test release publication
+        run: bash Scripts/test-publish-github-release.sh
 
   plugin-gate:
     name: Plugins (gate)
@@ -226,7 +228,8 @@ jobs:
           # A push to main whose Resources/Info.plist version has no tag yet
           # cuts that version: the release is created at this commit, which
           # also creates the tag (a tag made with the workflow token does not
-          # start a second run). Every other main push is the rolling nightly.
+          # start a second run). Every other main push gets an immutable
+          # versioned nightly release, while the nightly cask keeps rolling.
           # A tag pushed by hand builds that version too. See docs/release.md.
           plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
           prerelease="false"
@@ -241,7 +244,7 @@ jobs:
             short_sha="${GITHUB_SHA::8}"
             build_date="$(date -u +%Y%m%d)"
             version="nightly-${build_date}-${short_sha}"
-            release_tag="nightly"
+            release_tag="$version"
             cask_token="flash@nightly"
             asset_name="Flash-${version}.zip"
             marketing_version=""
@@ -352,21 +355,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          release_tag="${{ steps.meta.outputs.release_tag }}"
-          title="Flash ${{ steps.meta.outputs.version }}"
-          if ! gh release view "$release_tag" >/dev/null 2>&1; then
-            args=(release create "$release_tag" --target "$GITHUB_SHA" --title "$title")
-            if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
-              args+=(--prerelease --notes "Automated build from ${GITHUB_SHA}.")
-            else
-              args+=(--generate-notes)
-            fi
-            gh "${args[@]}"
-          fi
-          gh release upload \
-            "$release_tag" \
-            "${{ steps.package.outputs.zip_path }}#${{ steps.meta.outputs.asset_name }}" \
-            --clobber
+          bash Scripts/publish-github-release.sh \
+            "${{ steps.meta.outputs.release_tag }}" \
+            "${{ steps.package.outputs.zip_path }}" \
+            "${{ steps.meta.outputs.asset_name }}" \
+            "Flash ${{ steps.meta.outputs.version }}" \
+            "${{ steps.meta.outputs.prerelease }}" \
+            "$GITHUB_SHA"
 
       - name: Check Homebrew tap token
         if: steps.meta.outputs.deploy == 'true'
