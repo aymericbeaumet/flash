@@ -45,8 +45,8 @@ enum MouseButtonState: String, CaseIterable, Hashable {
   case cancel
 }
 
-/// `mouse_button --state=<state> [--secondary|--middle] [--mode=drag]`.
-/// The held button enters DRAG.
+/// `mouse_button --state=<state> [--secondary|--middle] [--mode=hold]`.
+/// The held button enters HOLD.
 struct MouseButtonRequest: Hashable {
   var state: MouseButtonState
   var button: MouseButtonKind

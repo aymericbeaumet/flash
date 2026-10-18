@@ -56,11 +56,11 @@ enum ModeEvent: Equatable {
   case focusedAppChanged(pid: pid_t)
 
   /// A mouse button is now held for `hold` (`mouse_button --mode`,
-  /// `enter_drag_mode`, pointer mode's `v`): DRAG. Accepted from
+  /// `enter_hold_mode`, pointer mode's `v`): HOLD. Accepted from
   /// `.normal` and `.insert`.
   case buttonHeld(ButtonHold)
 
-  /// The held button was released. Ignored outside DRAG.
+  /// The held button was released. Ignored outside HOLD.
   case buttonReleased
 
   /// The hyper key went down. Only accepted from `.normal`.

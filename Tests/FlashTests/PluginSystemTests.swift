@@ -1182,7 +1182,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains(
-          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, or drag"
+          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, or hold"
         ))
     }
   }
@@ -1206,7 +1206,7 @@ final class PluginSystemTests: XCTestCase {
             { "key": "cmd+x", "mode": "terminal", "command": ["true"] },
             { "key": "cmd+x", "mode": "command", "command": ["true"] },
             { "key": "x", "mode": "hyper", "command": ["true"] },
-            { "key": "x", "mode": "drag", "command": ["true"] }
+            { "key": "x", "mode": "hold", "command": ["true"] }
           ]
         }
         """)
@@ -1214,7 +1214,7 @@ final class PluginSystemTests: XCTestCase {
     let manifest = try PluginManifest.load(from: root)
     XCTAssertEqual(
       manifest.mappings.map(\.scope),
-      [.all, .normal, .insert, .terminal, .command, .hyper, .drag])
+      [.all, .normal, .insert, .terminal, .command, .hyper, .hold])
 
     let bare = try temporaryPluginRoot(
       manifest: """

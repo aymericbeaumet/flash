@@ -1,10 +1,10 @@
 import CoreGraphics
 
-/// DRAG holds a mouse button, so the text an app selects runs from where
+/// HOLD holds a mouse button, so the text an app selects runs from where
 /// the button went down to where the pointer is. A motion extends it the way
 /// Vim's selection extends from the cursor: by moving the pointer, or by
 /// moving the page under a pointer that stays put and telling the app.
-enum DragSelection {
+enum HoldSelection {
   /// An app extends a drag selection only on a drag event, so after a
   /// scroll the held button's drag is re-posted where the pointer is: once
   /// a frame after the scroll's last wheel step (`scrollMs` after it starts),

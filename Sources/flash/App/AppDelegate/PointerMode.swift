@@ -78,7 +78,7 @@ extension AppDelegate {
     case .toggleDrag:
       // The same hold as `mouse_button --state=toggle`: a button another
       // press left down is released first.
-      ActionDispatcher.setMouseButton(.toggle, .primary, for: .drag, at: location)
+      ActionDispatcher.setMouseButton(.toggle, .primary, for: .hold, at: location)
       overlay.movePointerMarker(to: location)
       FlashLog.trace("[pointer_mode] drag held=\(ActionDispatcher.heldButton != nil)")
     case .commitClick:
@@ -169,6 +169,12 @@ extension AppDelegate {
 }
 
 extension AppDelegate {
+  /// HOLD needs NORMAL's keyboard capture to release or cancel it.
+  func toggleHoldMode(_ button: MouseButtonKind) {
+    guard modeStore.mode.canToggleHoldMode else { return }
+    performMouseButton(.init(state: .toggle, button: button, hold: .hold))
+  }
+
   /// `mouse_button`: press, release or toggle a button where the pointer is.
   /// `ActionDispatcher` owns the hold; pointer moves drag until the button
   /// is released here, by Escape in a Flash overlay, `leave_mode` or quit.

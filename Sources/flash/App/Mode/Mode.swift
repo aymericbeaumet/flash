@@ -40,11 +40,11 @@ enum Mode: Equatable {
   /// INSERT exit can activate an app a popup once covered.
   case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
 
-  /// Dragging with a mouse button held (`enter_drag_mode`, unmapped by
-  /// default): pointer moves drag what was grabbed, Return drops it where
-  /// the pointer is and Escape puts it back. `[mode.drag.mappings]` is read
+  /// Dragging with a mouse button held (`enter_hold_mode`, Command-Control-H
+  /// by default): pointer moves drag what was grabbed, Return drops it where
+  /// the pointer is and Escape puts it back. `[mode.hold.mappings]` is read
   /// before NORMAL's.
-  case drag
+  case hold
 
   /// Momentary layer while `mode.normal.hyper` is physically held. The default
   /// key is `<leader>`. Mappings come from `[mode.hyper.mappings]`. Releasing
@@ -55,10 +55,10 @@ enum Mode: Equatable {
 
 /// What a held mouse button means, which is the mode it enters.
 enum ButtonHold: String, CaseIterable, Equatable {
-  case drag
+  case hold
 
   var mode: Mode {
-    .drag
+    .hold
   }
 }
 
@@ -85,7 +85,7 @@ extension Mode {
     switch self {
     case .disabled: return .disabled
     case .insert: return .insert
-    case .normal, .drag: return .normal
+    case .normal, .hold: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(let restoreTo), .hyper(let restoreTo):
       return restoreTo
@@ -112,12 +112,19 @@ extension Mode {
     return false
   }
 
-  var isDrag: Bool { self == .drag }
+  var isHold: Bool { self == .hold }
 
-  /// The held button's purpose in DRAG; nil in every other mode.
+  var canToggleHoldMode: Bool {
+    switch self {
+    case .normal, .insert, .hold: return true
+    default: return false
+    }
+  }
+
+  /// The held button's purpose in HOLD; nil in every other mode.
   var buttonHold: ButtonHold? {
     switch self {
-    case .drag: return .drag
+    case .hold: return .hold
     default: return nil
     }
   }

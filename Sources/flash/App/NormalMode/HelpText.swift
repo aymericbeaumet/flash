@@ -92,8 +92,8 @@ extension NormalModeDispatcher {
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
           items) and `mouse_notifications` hint surfaces outside the window;
           bind them to use them.
-        - `enter_drag_mode` (unmapped by default; `--secondary` for the right
-          button) grabs what is under the pointer (DRAG): `h` `j` `k` `l`
+        - `enter_hold_mode` (⌘⌃H by default; `--secondary` for the right
+          button) grabs what is under the pointer (HOLD): `h` `j` `k` `l`
           nudge it; `w` `b` `e` `0` `$` jump by text, `f` `F` `s` pick where
           it goes. `y` copies text and clears the selection; `d` / `x` cut,
           `c` changes, and `p` pastes over it. Return drops; Escape puts it back.
@@ -247,7 +247,7 @@ extension NormalModeDispatcher {
   static func mappingsJSON(mode: Config.Mode) -> [[String: String]] {
     (mappingRows(scope: "all", mappings: Config.Mode.resolveMappings(mode.all))
       + mappingRows(scope: "normal", mappings: Config.Mode.resolveMappings(mode.normal))
-      + mappingRows(scope: "drag", mappings: Config.Mode.resolveMappings(mode.drag))
+      + mappingRows(scope: "hold", mappings: Config.Mode.resolveMappings(mode.hold))
       + mappingRows(scope: "hyper", mappings: Config.Mode.resolveMappings(mode.hyper))
       + mappingRows(scope: "insert", mappings: Config.Mode.resolveMappings(mode.insert))
       + mappingRows(scope: "terminal", mappings: mode.effectiveTerminalMappings)

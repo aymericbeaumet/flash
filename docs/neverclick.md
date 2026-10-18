@@ -30,7 +30,7 @@ hints and highlighting the text between two words.
 | Sticky Hints Tool | `mouse_target --sticky`: the same labels stay up after each click |
 | Text detection in editors, word boundaries | `mouse_target --words`: a label on every visible word, landing on its leading edge |
 | Text Highlighting Tool (coming soon) | `mouse_target --words --select`: pick two words |
-| Drag tool (coming soon) | `mouse_target --drag`, `mouse_grid --drag`, DRAG (`enter_drag_mode`) |
+| Drag tool (coming soon) | `mouse_target --drag`, `mouse_grid --drag`, HOLD (`enter_hold_mode`) |
 | Scroll | `ctrl+e` / `ctrl+y`, `ctrl+d` / `ctrl+u`, `gg` / `G`, `scroll_target` to pick the area |
 | Move window between monitors | `window_move --screen=+1` |
 | Move window between virtual desktops | Not available: macOS exposes no public API for Spaces |

@@ -31,7 +31,7 @@ extension OverlayPanel {
     case .insert: style = .init(color: nordFrost2CG, lineWidth: 2, glow: true)
     case .command: style = .init(color: nordAuroraPurpleCG, lineWidth: 1, glow: false)
     case .hyper: style = .init(color: hyperPurpleCG, lineWidth: 1, glow: false)
-    case .drag: style = .init(color: nordAuroraYellowCG, lineWidth: 1, glow: false)
+    case .hold: style = .init(color: nordAuroraYellowCG, lineWidth: 1, glow: false)
     }
     // `[overlay] window_border_size` / `window_border_color` apply across
     // every mode; the defaults (0 / nil) keep the per-mode identity above.

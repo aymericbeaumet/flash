@@ -13,7 +13,7 @@ enum ModeLabel: Equatable {
   case command
   case terminal
   case hyper
-  case drag
+  case hold
 }
 
 extension Mode {
@@ -25,7 +25,7 @@ extension Mode {
   var flashMode: FlashMode {
     switch self {
     case .disabled, .insert, .terminal: return .insert
-    case .normal, .command, .hyper, .drag: return .normal
+    case .normal, .command, .hyper, .hold: return .normal
     }
   }
 
@@ -46,7 +46,7 @@ extension Mode {
     switch self {
     case .disabled, .insert, .terminal:
       return false
-    case .normal, .hyper, .drag:
+    case .normal, .hyper, .hold:
       return !hasHints && !activationInFlight
     case .command:
       return true
@@ -67,7 +67,7 @@ extension Mode {
     // only governs cursor visibility / routing for when capture later resumes.
     if nativeSurfaceSuspended {
       switch self {
-      case .normal, .hyper, .drag: return .normal
+      case .normal, .hyper, .hold: return .normal
       default: break
       }
     }
@@ -76,7 +76,7 @@ extension Mode {
       return hasHints || activationInFlight ? .hints : .passive
     case .terminal:
       return .normal
-    case .normal, .hyper, .drag:
+    case .normal, .hyper, .hold:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
     case .command:
@@ -90,7 +90,7 @@ extension Mode {
     switch self {
     case .disabled, .insert: return .insert
     case .normal, .hyper: return .normal
-    case .drag: return .drag
+    case .hold: return .hold
     case .command: return .command
     case .terminal: return .terminal
     }
@@ -104,7 +104,7 @@ extension Mode {
     case .command: return .command
     case .terminal: return .terminal
     case .hyper: return .hyper
-    case .drag: return .drag
+    case .hold: return .hold
     }
   }
 
@@ -118,7 +118,7 @@ extension Mode {
     case .command: return .command
     case .terminal: return .command
     case .hyper: return .hyper
-    case .drag: return .drag
+    case .hold: return .hold
     }
   }
 }

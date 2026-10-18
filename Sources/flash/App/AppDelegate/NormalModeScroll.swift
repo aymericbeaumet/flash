@@ -69,20 +69,20 @@ extension AppDelegate {
     }
   }
 
-  /// DRAG: the scroll extends a text selection, as a Vim motion extends it
+  /// HOLD: the scroll extends a text selection, as a Vim motion extends it
   /// from the cursor. `gg` / `G` drag the pointer to the window's top /
-  /// bottom edge, so the selection reaches the first / last line. In DRAG
-  /// and DRAG every scroll then re-posts the held button's drag where the
+  /// bottom edge, so the selection reaches the first / last line. In HOLD
+  /// and HOLD every scroll then re-posts the held button's drag where the
   /// pointer is, so the app sees the pointer over what scrolled under it.
   /// Without a held button, nothing.
   func extendHeldSelection(after kind: NormalModeDispatcher.ScrollKind) {
     guard ActionDispatcher.heldButton != nil else { return }
     // Only a selection extends to the first / last line; a drag stays put.
-    if kind == .top || kind == .bottom, modeStore.mode.isDrag,
+    if kind == .top || kind == .bottom, modeStore.mode.isHold,
       let window = normalModeContext()?.frontWindowFrame, !window.isNull, !window.isEmpty
     {
       ActionDispatcher.moveCursor(
-        to: DragSelection.edgePoint(
+        to: HoldSelection.edgePoint(
           top: kind == .top, pointer: NSEvent.mouseLocation, window: window))
     }
     ActionDispatcher.catchUpHeldSelection(afterScrollMs: FlashTunables.scrollSmoothMs)

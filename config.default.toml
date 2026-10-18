@@ -574,8 +574,8 @@ app_directories = [
 
 [mode]
 # Mode labels shown after the active app name in the persistent status bar
-# when advanced mode is enabled. `terminal`, `hyper` and `drag`
-# (defaults TERMINAL, HYPER, DRAG) label the popup, the held leader and a drag.
+# when advanced mode is enabled. `terminal`, `hyper` and `hold`
+# (defaults TERMINAL, HYPER, HOLD) label the popup, the held leader and a drag.
 labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 
 # Time (in ms) the interpreter waits for the next key in a pending
@@ -617,6 +617,8 @@ send_key_interval_ms = 35
 #
 # Single modified-key mappings use Carbon. Non-modified keys and sequences
 # are read only by the overlay while Flash is capturing normal-mode input.
+# Command-Control-H toggles HOLD from NORMAL or INSERT.
+"cmd+ctrl+h" = ["flash", "enter_hold_mode"]
 #
 # Examples:
 # "cmd+shift+space" = ["flash", "mouse_target"]
@@ -738,9 +740,8 @@ hyper = "<leader>"
 "mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
 "ms" = ["flash", "mouse_bigram", "--move"]
-# enter_drag_mode grabs what is under the pointer and drops it again; it ships
-# unmapped, e.g. in [mode.all.mappings]:
-# "cmd+ctrl+d" = ["flash", "enter_drag_mode"]
+# enter_hold_mode grabs what is under the pointer and drops it again;
+# cmd+ctrl+h is its default all-mode toggle.
 "df" = ["flash", "mouse_target", "--double"]
 "dF" = ["flash", "mouse_grid", "--double"]
 "ds" = ["flash", "mouse_bigram", "--double"]
@@ -832,13 +833,13 @@ hyper = "<leader>"
 "shift+-" = ["flash", "function_key", "--key=f11"]
 "shift+=" = ["flash", "function_key", "--key=f12"]
 
-# DRAG is a drag with a mouse button held, entered by enter_drag_mode (bind
-# it yourself). These keys are read before NORMAL's.
+# HOLD is a drag with a mouse button held, entered by enter_hold_mode.
+# These keys are read before NORMAL's.
 # h / j / k / l nudge what is dragged by 16 points and H / J / K / L by 96, a
 # picked target (f, F, s) is where it goes; w / b / e and 0 / $ jump by text.
 # y copies and clears a text selection; d / x cut, c changes and p pastes over
-# it. Return (or the key that entered DRAG) drops it; Escape returns to origin.
-[mode.drag.mappings]
+# it. Return (or the key that entered HOLD) drops it; Escape returns to origin.
+[mode.hold.mappings]
 "y" = ["flash", "selection", "--action=copy"]
 "d" = ["flash", "selection", "--action=cut"]
 "x" = ["flash", "selection", "--action=cut"]
@@ -860,11 +861,11 @@ hyper = "<leader>"
 "f" = ["flash", "mouse_target", "--move"]
 "F" = ["flash", "mouse_grid", "--move"]
 "s" = ["flash", "mouse_bigram", "--move"]
-"<return>" = ["flash", "mouse_button", "--state=release", "--mode=drag"]
-"<esc>" = ["flash", "mouse_button", "--state=cancel", "--mode=drag"]
+"<return>" = ["flash", "mouse_button", "--state=release", "--mode=hold"]
+"<esc>" = ["flash", "mouse_button", "--state=cancel", "--mode=hold"]
 
 # Override mappings for one exact, case-sensitive bundle ID. Supported scopes
-# are all, normal, insert, command, terminal, hyper and drag. `false` removes an
+# are all, normal, insert, command, terminal, hyper and hold. `false` removes an
 # inherited mapping only while that app is focused. See docs/configuration.md.
 # [mode.apps."com.apple.Safari".normal.mappings]
 # "f" = ["flash", "mouse_target", "--search"]

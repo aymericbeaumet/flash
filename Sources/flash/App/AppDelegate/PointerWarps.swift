@@ -77,13 +77,13 @@ extension AppDelegate {
 
   /// `mouse_step`: one text line or character from the glyph under the
   /// pointer, read from Accessibility on the geometry queue, never on main.
-  /// In DRAG a horizontal step lands one point past the character's centre
+  /// In HOLD a horizontal step lands one point past the character's centre
   /// (as `s` does), so the held button's selection takes that character.
   func performMouseStep(_ direction: TextStep.Direction) {
     let primaryH = ScreenSpace.primaryHeight
     let pointer = NSEvent.mouseLocation
     let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
-    let selectingThrough = modeStore.mode.isDrag
+    let selectingThrough = modeStore.mode.isHold
     monitor.geometryQueue.async {
       let target = TextStep.target(
         pointer: topLeft, direction: direction,
@@ -98,13 +98,13 @@ extension AppDelegate {
   }
 
   /// `mouse_step --to`: a word or line jump from the glyph under the pointer,
-  /// read on the geometry queue. In DRAG it lands just past the glyph's
+  /// read on the geometry queue. In HOLD it lands just past the glyph's
   /// centre, so the selection takes that character.
   func performMouseJump(_ jump: TextStep.Jump) {
     let primaryH = ScreenSpace.primaryHeight
     let pointer = NSEvent.mouseLocation
     let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
-    let selectingThrough = modeStore.mode.isDrag
+    let selectingThrough = modeStore.mode.isHold
     monitor.geometryQueue.async {
       let target = TextStep.target(
         pointer: topLeft, jump: jump,
@@ -162,7 +162,7 @@ extension AppDelegate {
   }
 
   /// `mouse_nudge`: the pointer moves `distance` points; while a button is
-  /// held (DRAG) the move drags.
+  /// held (HOLD) the move drags.
   func performMouseNudge(_ direction: TextStep.Direction, distance: Int) {
     let pointer = NSEvent.mouseLocation
     let step = CGFloat(distance)

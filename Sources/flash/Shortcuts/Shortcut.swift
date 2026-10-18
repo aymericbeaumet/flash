@@ -7,14 +7,14 @@ enum ModeScope: String, CaseIterable, Hashable {
   case terminal
   case command
   case hyper
-  /// Read before NORMAL in DRAG (a held button dragging); NORMAL answers
-  /// every key DRAG leaves unmapped.
-  case drag
+  /// Read before NORMAL in HOLD (a held button dragging); NORMAL answers
+  /// every key HOLD leaves unmapped.
+  case hold
 }
 
 /// One entry from `[mode.all.mappings]`, `[mode.normal.mappings]`,
 /// `[mode.insert.mappings]`, `[mode.command.mappings]`, `[mode.terminal.mappings]`,
-/// `[mode.hyper.mappings]` or `[mode.drag.mappings]`.
+/// `[mode.hyper.mappings]` or `[mode.hold.mappings]`.
 /// Terminal mappings are evaluated locally by the focused terminal popup.
 /// The key is the mapping lhs and the action is resolved at config load.
 /// `repeatsOnFinalKey` keeps a completed normal-mode sequence armed so each

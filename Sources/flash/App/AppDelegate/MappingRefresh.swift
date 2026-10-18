@@ -34,7 +34,7 @@ extension AppDelegate {
     }
   }
 
-  /// The NORMAL interpreter's table for `scope`: DRAG's entries over
+  /// The NORMAL interpreter's table for `scope`: HOLD's entries over
   /// NORMAL's while a button is held, NORMAL's otherwise. A half-typed
   /// sequence belongs to the table it was typed against, so a switch drops it.
   func applyInterpreterTable(for scope: MappingScope) {
@@ -45,10 +45,10 @@ extension AppDelegate {
     resetPendingNormalSequence(reason: "mapping_scope")
   }
 
-  /// DRAG's own table; NORMAL's for every other scope.
+  /// HOLD's own table; NORMAL's for every other scope.
   static func interpreterTable(for scope: MappingScope, in mode: Config.Mode) -> CompiledMappings {
     switch scope {
-    case .drag: return mode.compiledDrag
+    case .hold: return mode.compiledHold
     case .normal, .insert, .command, .terminal: return mode.compiledNormal
     }
   }
@@ -92,6 +92,6 @@ extension AppDelegate {
     guard let old else { return true }
     return old.all != new.all || old.normal != new.normal || old.insert != new.insert
       || old.command != new.command || old.terminal != new.terminal || old.hyper != new.hyper
-      || old.drag != new.drag
+      || old.hold != new.hold
   }
 }

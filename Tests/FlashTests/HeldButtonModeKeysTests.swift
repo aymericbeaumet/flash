@@ -3,7 +3,7 @@ import XCTest
 
 @testable import flash
 
-/// The keys the DRAG table binds by name must resolve through the
+/// The keys the HOLD table binds by name must resolve through the
 /// interpreter from the physical key: Return drops a drag, Escape cancels or
 /// ends one, as `config.default.toml` promises. A named key has one atom,
 /// whichever alias the mapping spelled and whatever character the event
@@ -19,20 +19,20 @@ final class HeldButtonModeKeysTests: XCTestCase {
   }
 
   func testReturnDropsAndEscapeCancelsADrag() {
-    let drag = Config.default.mode.drag
-    let drop = URLCommand.mouseButton(.init(state: .release, button: .primary, hold: .drag))
+    let drag = Config.default.mode.hold
+    let drop = URLCommand.mouseButton(.init(state: .release, button: .primary, hold: .hold))
     XCTAssertEqual(command(keyCode: kVK_Return, characters: "\r", mappings: drag), drop)
     XCTAssertEqual(
       command(keyCode: kVK_ANSI_KeypadEnter, characters: "\u{3}", mappings: drag), drop)
     XCTAssertEqual(command(keyCode: kVK_Return, characters: nil, mappings: drag), drop)
     XCTAssertEqual(
       command(keyCode: kVK_Escape, characters: "\u{1B}", mappings: drag),
-      .mouseButton(.init(state: .cancel, button: .primary, hold: .drag)))
+      .mouseButton(.init(state: .cancel, button: .primary, hold: .hold)))
   }
 
-  func testYankEndsHeldSelectionInDragMode() {
+  func testYankEndsHeldSelectionInHoldMode() {
     XCTAssertEqual(
-      command(keyCode: kVK_ANSI_Y, characters: "y", mappings: Config.default.mode.drag),
+      command(keyCode: kVK_ANSI_Y, characters: "y", mappings: Config.default.mode.hold),
       .selection(.copy))
   }
 

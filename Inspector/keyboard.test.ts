@@ -38,20 +38,20 @@ test("the live mode reads its own scope and all", () => {
   assert.deepEqual(scopesForMode("hyper"), ["hyper"]);
   assert.deepEqual(scopesForMode("insert"), ["insert", "all"]);
   assert.deepEqual(scopesForMode(undefined), ["all"]);
-  assert.deepEqual(scopesForMode("drag"), ["drag", "normal", "all"]);
+  assert.deepEqual(scopesForMode("hold"), ["hold", "normal", "all"]);
 });
 
 test("the mode buttons pick what the keyboard lights and the list shows", () => {
-  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "drag", "hyper", "insert", "command", "terminal"]);
+  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "hold", "hyper", "insert", "command", "terminal"]);
   const rows: MappingRow[] = [
     { scope: "normal", key: "f", action: "flash mouse_target" },
-    { scope: "drag", key: "j", action: "flash mouse_nudge --direction=down --distance=16" },
+    { scope: "hold", key: "j", action: "flash mouse_nudge --direction=down --distance=16" },
     { scope: "all", key: "cmd+space", action: "flash candidate_finder" },
     { scope: "insert", key: "ctrl+[", action: "flash enter_normal_mode" },
     { scope: "hyper", key: "1", action: "flash system_key --key=brightness_down" },
   ];
   assert.deepEqual(rowsForMode(rows, "all").length, 5);
-  assert.deepEqual(rowsForMode(rows, "drag").map((row) => row.key), ["f", "j", "cmd+space"]);
+  assert.deepEqual(rowsForMode(rows, "hold").map((row) => row.key), ["f", "j", "cmd+space"]);
   assert.deepEqual(rowsForMode(rows, "hyper").map((row) => row.key), ["1"]);
   assert.deepEqual(rowsForMode(rows, "insert").map((row) => row.key), ["cmd+space", "ctrl+["]);
 });
@@ -132,8 +132,8 @@ test("a binding's snippet remaps or removes it in its own table", () => {
     '[mode.normal.mappings]\n"f" = ["flash", "mouse_target"]  # change the command\n# "f" = false  # or remove the key',
   );
   assert.equal(
-    mappingSnippet({ scope: "drag", key: "j", action: "flash mouse_nudge --direction=down --distance=16" }),
-    '[mode.drag.mappings]\n"j" = ["flash", "mouse_nudge", "--direction=down", "--distance=16"]  # change the command\n# "j" = false  # or remove the key',
+    mappingSnippet({ scope: "hold", key: "j", action: "flash mouse_nudge --direction=down --distance=16" }),
+    '[mode.hold.mappings]\n"j" = ["flash", "mouse_nudge", "--direction=down", "--distance=16"]  # change the command\n# "j" = false  # or remove the key',
   );
 });
 

@@ -211,7 +211,7 @@ extension AppDelegate {
     // The one reset point for the hold: every exit from HYPER ends it here,
     // whichever event caused the exit.
     overlay.hyperHold.modeChanged(from: previous, to: next)
-    // DRAG is the held button: leaving it any other way
+    // HOLD is the held button: leaving it any other way
     // (`enter_normal_mode`, INSERT, the command line, advanced mode turning
     // off) lets the button go.
     if let hold = previous.buttonHold, next.buttonHold == nil {
@@ -267,7 +267,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command, .terminal, .hyper, .drag:
+    case .command, .terminal, .hyper, .hold:
       break
     }
   }
@@ -307,7 +307,7 @@ extension AppDelegate {
     case .command: return config.mode.labels.command
     case .terminal: return config.mode.labels.terminal
     case .hyper: return config.mode.labels.hyper
-    case .drag: return config.mode.labels.drag
+    case .hold: return config.mode.labels.hold
     }
   }
 
@@ -1369,8 +1369,8 @@ extension AppDelegate {
       enterPointerMode()
     case .mouseButton(let request):
       performMouseButton(request)
-    case .dragMode(let button):
-      performMouseButton(.init(state: .toggle, button: button, hold: .drag))
+    case .holdMode(let button):
+      toggleHoldMode(button)
     case .focusInput:
       focusTextInputInNormalMode(index: repeatCount)
     case .scrollTarget:

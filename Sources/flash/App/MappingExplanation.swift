@@ -69,14 +69,14 @@ extension URLCommand {
       return "Moves the pointer from the keyboard."
     case .mouseButton(let request):
       return buttonExplanation(request)
-    case .dragMode(let button):
+    case .holdMode(let button):
       let name: String
       switch button {
       case .primary: name = "left"
       case .secondary: name = "right"
       case .middle: name = "middle"
       }
-      return "Grabs what is under the pointer with the \(name) button (DRAG), or drops it."
+      return "Grabs what is under the pointer with the \(name) button (HOLD), or drops it."
     case .focusInput:
       return "Moves into an editable field in the focused window without changing mode."
     case .scrollTarget:

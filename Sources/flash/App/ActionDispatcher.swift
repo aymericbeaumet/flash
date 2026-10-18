@@ -431,7 +431,7 @@ enum ActionDispatcher {
   static var heldButton: MouseButtonKind? { buttonHold.held?.button }
 
   /// Told, on main, each time the held button changes, with the hold now in
-  /// place: DRAG follows it, whichever path pressed or
+  /// place: HOLD follows it, whichever path pressed or
   /// released it — `mouse_button`, pointer mode's `v`, an overlay cancel, a
   /// committed gesture freeing the buttons, quit.
   static var heldButtonDidChange: ((MouseButtonHold.Held?) -> Void)?
@@ -524,10 +524,10 @@ enum ActionDispatcher {
   /// an app extends a drag selection only on a drag event. Re-posts the held
   /// button's drag where the pointer is, after the scroll's wheel steps and
   /// again once the app's own smooth scroll settles
-  /// (`DragSelection.catchUpDelays`). Nothing is posted once released.
+  /// (`HoldSelection.catchUpDelays`). Nothing is posted once released.
   static func catchUpHeldSelection(afterScrollMs scrollMs: Int) {
     let start = DispatchTime.now()
-    for delay in DragSelection.catchUpDelays(scrollMs: scrollMs) {
+    for delay in HoldSelection.catchUpDelays(scrollMs: scrollMs) {
       clickQueue.asyncAfter(deadline: start + .milliseconds(delay)) {
         guard let held = postedHeldButton, let location = CGEvent(source: nil)?.location else {
           return
@@ -573,8 +573,8 @@ enum ActionDispatcher {
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
     let source = SyntheticEventSources.session
     let previous = CGEvent(source: source)?.location ?? cgPoint
-    // The warp is immediate on every path: the next keystroke (a DRAG
-    // `j`, a DRAG nudge) reads the pointer where this one left it, even
+    // The warp is immediate on every path: the next keystroke (a HOLD
+    // `j`, a HOLD nudge) reads the pointer where this one left it, even
     // while the drag event is still queued behind the press it follows.
     warpCursor(to: cgPoint)
     if let held = heldButton {

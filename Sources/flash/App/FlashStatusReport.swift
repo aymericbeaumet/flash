@@ -42,11 +42,11 @@ struct FlashStatusReport: Equatable {
 
   var version: String
   var build: String
-  /// `disabled`, `insert`, `normal`, `drag`, `hyper`, `command` or
+  /// `disabled`, `insert`, `normal`, `hold`, `hyper`, `command` or
   /// `terminal`.
   var mode: String
   /// The mapping table the mode reads and whose chords are registered:
-  /// `insert`, `normal`, `drag`, `command` or `terminal`.
+  /// `insert`, `normal`, `hold`, `command` or `terminal`.
   var mappingScope: String
   /// `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`
   /// or `bigram`.
@@ -94,7 +94,7 @@ struct FlashStatusReport: Equatable {
     case .command: return "command"
     case .terminal: return "terminal"
     case .hyper: return "hyper"
-    case .drag: return "drag"
+    case .hold: return "hold"
     }
   }
 

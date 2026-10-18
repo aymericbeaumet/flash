@@ -166,7 +166,7 @@ enum HelpDocs {
       the command list. The page focuses its search when it opens. Press `?`
       in NORMAL or run `:mappings` to open it. Above the list, your layout is
       drawn with what each key does in the mode picked under it: NORMAL,
-      DRAG, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
+      HOLD, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
       dashed. Modifier buttons show the chord layers, a prefix key opens what
       can follow it, and picking a key keeps its bindings in the list, each
       with the TOML that rebinds or removes it. The keyboard can show the hint
@@ -483,8 +483,8 @@ enum HelpDocs {
 
       ## Select, drag or steer the pointer
 
-      `enter_drag_mode` (unmapped by default; `--secondary` for the right
-      button) grabs what is under the pointer (DRAG): `h` `j` `k` `l` nudge
+      `enter_hold_mode` (⌘⌃H by default; `--secondary` for the right
+      button) grabs what is under the pointer (HOLD): `h` `j` `k` `l` nudge
       it, `w` / `b` jump by word and `f` picks where it goes. On selected text,
       `y` copies and clears the highlight; `d` cuts. Return drops and Escape
       puts it back.

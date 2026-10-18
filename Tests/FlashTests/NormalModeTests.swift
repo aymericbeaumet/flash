@@ -2756,7 +2756,7 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testRegisterPrefixRoutesDragCopyAndPasteToNamedRegisters() {
-    let mappings = Config.default.mode.drag
+    let mappings = Config.default.mode.hold
     XCTAssertEqual(
       command(pending: "\"a", chars: "y", mappings: mappings),
       .selection(.copy, register: "a"))
@@ -2767,7 +2767,7 @@ final class NormalModeTests: XCTestCase {
 
   func testRegisterPrefixRoutesDragCopyToNamedRegister() {
     XCTAssertEqual(
-      command(pending: "\"a", chars: "y", mappings: Config.default.mode.drag),
+      command(pending: "\"a", chars: "y", mappings: Config.default.mode.hold),
       .selection(.copy, register: "a"))
   }
 

@@ -8,19 +8,19 @@ import XCTest
 final class MouseButtonHoldTests: XCTestCase {
   func testDownPressesOnceAndUpReleasesOnce() {
     var hold = MouseButtonHold()
-    XCTAssertEqual(hold.apply(.down, .primary, for: .drag, at: .zero), [.press(.primary)])
+    XCTAssertEqual(hold.apply(.down, .primary, for: .hold, at: .zero), [.press(.primary)])
     XCTAssertEqual(hold.held?.button, .primary)
-    XCTAssertEqual(hold.apply(.down, .primary, for: .drag, at: .zero), [], "already held")
-    XCTAssertEqual(hold.apply(.up, .primary, for: .drag, at: .zero), [.release(.primary)])
+    XCTAssertEqual(hold.apply(.down, .primary, for: .hold, at: .zero), [], "already held")
+    XCTAssertEqual(hold.apply(.up, .primary, for: .hold, at: .zero), [.release(.primary)])
     XCTAssertNil(hold.held)
-    XCTAssertEqual(hold.apply(.up, .primary, for: .drag, at: .zero), [], "nothing held")
+    XCTAssertEqual(hold.apply(.up, .primary, for: .hold, at: .zero), [], "nothing held")
   }
 
   func testToggleAlternates() {
     var hold = MouseButtonHold()
-    XCTAssertEqual(hold.apply(.toggle, .secondary, for: .drag, at: .zero), [.press(.secondary)])
-    XCTAssertEqual(hold.apply(.toggle, .secondary, for: .drag, at: .zero), [.release(.secondary)])
-    XCTAssertEqual(hold.apply(.toggle, .middle, for: .drag, at: .zero), [.press(.middle)])
+    XCTAssertEqual(hold.apply(.toggle, .secondary, for: .hold, at: .zero), [.press(.secondary)])
+    XCTAssertEqual(hold.apply(.toggle, .secondary, for: .hold, at: .zero), [.release(.secondary)])
+    XCTAssertEqual(hold.apply(.toggle, .middle, for: .hold, at: .zero), [.press(.middle)])
     XCTAssertEqual(hold.held?.button, .middle)
   }
 
@@ -28,14 +28,14 @@ final class MouseButtonHoldTests: XCTestCase {
   /// releasing a button that is not held leaves the held one alone.
   func testAnotherButtonReplacesTheHeldOne() {
     var hold = MouseButtonHold()
-    _ = hold.apply(.down, .primary, for: .drag, at: .zero)
-    XCTAssertEqual(hold.apply(.up, .secondary, for: .drag, at: .zero), [])
+    _ = hold.apply(.down, .primary, for: .hold, at: .zero)
+    XCTAssertEqual(hold.apply(.up, .secondary, for: .hold, at: .zero), [])
     XCTAssertEqual(hold.held?.button, .primary)
     XCTAssertEqual(
-      hold.apply(.down, .secondary, for: .drag, at: .zero),
+      hold.apply(.down, .secondary, for: .hold, at: .zero),
       [.release(.primary), .press(.secondary)])
     XCTAssertEqual(
-      hold.apply(.toggle, .primary, for: .drag, at: .zero),
+      hold.apply(.toggle, .primary, for: .hold, at: .zero),
       [.release(.secondary), .press(.primary)])
     XCTAssertEqual(hold.held?.button, .primary)
   }
@@ -45,7 +45,7 @@ final class MouseButtonHoldTests: XCTestCase {
   func testReleaseConsumesTheHoldExactlyOnce() {
     var hold = MouseButtonHold()
     XCTAssertEqual(hold.release(), [])
-    _ = hold.apply(.down, .middle, for: .drag, at: .zero)
+    _ = hold.apply(.down, .middle, for: .hold, at: .zero)
     XCTAssertEqual(hold.release(), [.release(.middle)])
     XCTAssertEqual(hold.release(), [])
     XCTAssertNil(hold.held)
@@ -56,16 +56,16 @@ final class MouseButtonHoldTests: XCTestCase {
   func testTheHoldRecordsItsPurposeAndWhereItWentDown() {
     var hold = MouseButtonHold()
     let origin = CGPoint(x: 120, y: 340)
-    XCTAssertEqual(hold.apply(.down, .primary, for: .drag, at: origin), [.press(.primary)])
-    XCTAssertEqual(hold.held, .init(button: .primary, purpose: .drag, origin: origin))
+    XCTAssertEqual(hold.apply(.down, .primary, for: .hold, at: origin), [.press(.primary)])
+    XCTAssertEqual(hold.held, .init(button: .primary, purpose: .hold, origin: origin))
     XCTAssertEqual(
-      hold.apply(.toggle, .secondary, for: .drag, at: .zero),
+      hold.apply(.toggle, .secondary, for: .hold, at: .zero),
       [.release(.primary), .press(.secondary)])
-    XCTAssertEqual(hold.held?.purpose, .drag)
+    XCTAssertEqual(hold.held?.purpose, .hold)
     XCTAssertEqual(hold.held?.origin, .zero)
-    XCTAssertEqual(hold.apply(.cancel, .secondary, for: .drag, at: .zero), [.release(.secondary)])
+    XCTAssertEqual(hold.apply(.cancel, .secondary, for: .hold, at: .zero), [.release(.secondary)])
     XCTAssertNil(hold.held)
-    XCTAssertEqual(hold.apply(.cancel, .primary, for: .drag, at: .zero), [], "nothing to cancel")
+    XCTAssertEqual(hold.apply(.cancel, .primary, for: .hold, at: .zero), [], "nothing to cancel")
   }
 
   func testVerbParsesTheModeAndCancel() {
@@ -74,26 +74,37 @@ final class MouseButtonHoldTests: XCTestCase {
     }
     XCTAssertNil(parse(["state": "toggle", "mode": "visual"]))
     XCTAssertEqual(
-      parse(["state": "toggle", "secondary": "1", "mode": "drag"]),
-      .mouseButton(.init(state: .toggle, button: .secondary, hold: .drag)))
+      parse(["state": "toggle", "secondary": "1", "mode": "hold"]),
+      .mouseButton(.init(state: .toggle, button: .secondary, hold: .hold)))
     XCTAssertEqual(
-      parse(["state": "cancel"]), .mouseButton(.init(state: .cancel, button: .primary, hold: .drag))
+      parse(["state": "cancel"]), .mouseButton(.init(state: .cancel, button: .primary, hold: .hold))
     )
     XCTAssertNil(parse(["state": "toggle", "mode": "select"]))
-    // `enter_drag_mode` is the drag toggle by name.
+    // `enter_hold_mode` is the drag toggle by name.
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "enter_drag_mode", args: [:]), .dragMode(.primary))
+      URLEventHandler.parse(verb: "enter_hold_mode", args: [:]), .holdMode(.primary))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "enter_drag_mode", args: ["secondary": "1"]),
-      .dragMode(.secondary))
+      URLEventHandler.parse(verb: "enter_hold_mode", args: ["secondary": "1"]),
+      .holdMode(.secondary))
     XCTAssertNil(
-      URLEventHandler.parse(verb: "enter_drag_mode", args: ["secondary": "1", "middle": "1"]))
+      URLEventHandler.parse(verb: "enter_hold_mode", args: ["secondary": "1", "middle": "1"]))
     XCTAssertEqual(
-      URLCommand.dragMode(.middle).diagnosticDescription, "flash enter_drag_mode --middle")
+      URLCommand.holdMode(.middle).diagnosticDescription, "flash enter_hold_mode --middle")
     XCTAssertEqual(
-      URLCommand.mouseButton(.init(state: .toggle, button: .primary, hold: .drag))
+      URLCommand.mouseButton(.init(state: .toggle, button: .primary, hold: .hold))
         .diagnosticDescription,
-      "flash mouse_button --state=toggle --mode=drag")
+      "flash mouse_button --state=toggle --mode=hold")
+  }
+
+  func testHoldVerbReplacesDragVerb() {
+    XCTAssertEqual(
+      URLEventHandler.parse(verb: "enter_hold_mode", args: [:]), .holdMode(.primary))
+    XCTAssertNil(URLEventHandler.parse(verb: "enter_drag_mode", args: [:]))
+    XCTAssertEqual(
+      URLEventHandler.parse(verb: "mouse_button", args: ["state": "toggle", "mode": "hold"]),
+      .mouseButton(.init(state: .toggle, button: .primary, hold: .hold)))
+    XCTAssertNil(
+      URLEventHandler.parse(verb: "mouse_button", args: ["state": "toggle", "mode": "drag"]))
   }
 
   func testEachButtonPostsItsOwnEventTypes() {
@@ -134,13 +145,13 @@ final class MouseButtonHoldTests: XCTestCase {
       URLEventHandler.parse(verb: "mouse_button", args: args)
     }
     XCTAssertEqual(
-      parse(["state": "down"]), .mouseButton(.init(state: .down, button: .primary, hold: .drag)))
+      parse(["state": "down"]), .mouseButton(.init(state: .down, button: .primary, hold: .hold)))
     XCTAssertEqual(
       parse(["state": "up", "secondary": "1"]),
-      .mouseButton(.init(state: .up, button: .secondary, hold: .drag)))
+      .mouseButton(.init(state: .up, button: .secondary, hold: .hold)))
     XCTAssertEqual(
       parse(["state": "toggle", "middle": "true"]),
-      .mouseButton(.init(state: .toggle, button: .middle, hold: .drag)))
+      .mouseButton(.init(state: .toggle, button: .middle, hold: .hold)))
     XCTAssertNil(parse([:]), "--state is required")
     XCTAssertNil(parse(["state": "press"]))
     XCTAssertNil(parse(["state": ""]))
@@ -148,17 +159,17 @@ final class MouseButtonHoldTests: XCTestCase {
     XCTAssertNil(parse(["state": "down", "double": "1"]))
     XCTAssertEqual(
       parse(["state": "down", "secondary": "0"]),
-      .mouseButton(.init(state: .down, button: .primary, hold: .drag)))
+      .mouseButton(.init(state: .down, button: .primary, hold: .hold)))
   }
 
   func testVerbRoundTripsThroughMappingsAndDiagnostics() {
-    let command = URLCommand.mouseButton(.init(state: .toggle, button: .secondary, hold: .drag))
+    let command = URLCommand.mouseButton(.init(state: .toggle, button: .secondary, hold: .hold))
     XCTAssertEqual(
-      command.diagnosticDescription, "flash mouse_button --state=toggle --secondary --mode=drag")
+      command.diagnosticDescription, "flash mouse_button --state=toggle --secondary --mode=hold")
     XCTAssertEqual(
-      URLCommand.mouseButton(.init(state: .down, button: .primary, hold: .drag))
+      URLCommand.mouseButton(.init(state: .down, button: .primary, hold: .hold))
         .diagnosticDescription,
-      "flash mouse_button --state=down --mode=drag")
+      "flash mouse_button --state=down --mode=hold")
     let config = ConfigLoader.parse(
       """
       [mode.normal.mappings]

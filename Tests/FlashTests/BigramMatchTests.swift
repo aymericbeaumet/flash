@@ -142,7 +142,7 @@ final class BigramMatchTests: XCTestCase {
 
   /// The commit re-reads the glyph's bounds and keeps the landing the caller
   /// chose on the captured rect: one point left of centre in NORMAL, one
-  /// point right in DRAG.
+  /// point right in HOLD.
   func testTheCommitKeepsTheCallersLandingOnTheReReadGlyph() {
     let captured = CGRect(x: 10, y: 0, width: 8, height: 10)
     let reread = CGRect(x: 100, y: 20, width: 6, height: 10)
@@ -283,7 +283,7 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertEqual(
       targets[0].resolvedClickPoint(preferred: .zero),
       BigramMatcher.clickPoint(in: targets[0].frame))
-    // DRAG lands one point right instead, so a held button's selection
+    // HOLD lands one point right instead, so a held button's selection
     // ends on the letter rather than before it.
     let frame = targets[0].frame
     XCTAssertEqual(

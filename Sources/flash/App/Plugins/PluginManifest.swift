@@ -1095,7 +1095,7 @@ struct PluginManifest: Decodable, Equatable {
       guard let scope = ModeScope(rawValue: mapping.mode) else {
         throw PluginError.failure(
           "plugin mapping mode \(mapping.mode) must be all, normal, insert, terminal, command, "
-            + "hyper, or drag")
+            + "hyper, or hold")
       }
       // The config's rule: the command line reads only native chords.
       if scope == .command, ModeMapping.parseNativeHotkey(mapping.key) == nil {

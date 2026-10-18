@@ -22,7 +22,7 @@ mappings.
   its text in `"0`, while a named yank leaves `"0` alone. Yanks update the
   unnamed register, which Flash shares with the system clipboard; `"+` and
   `"*` select that clipboard explicitly. `"_y` discards text without changing
-  any register. The prefix also works for DRAG copy and paste. The command
+  any register. The prefix also works for HOLD copy and paste. The command
   equivalents accept `--register=<name>`.
 - `/` opens Find (`app_find`, Cmd-F) and enters INSERT, so typing goes to the
   find field.
@@ -96,7 +96,7 @@ mappings.
   does what `f` does there; a letter on plain bar text moves the pointer onto
   it. The click and the move land one point left of the glyph's centre, still
   on the letter, so a later selection can start on that glyph's leading side;
-  in DRAG they land one point right of it, so the selection a held button
+  in HOLD they land one point right of it, so the selection a held button
   draws ends on that letter.
   Hint labels are uppercase and accept either case. Backspace
   edits the letter, Escape cancels, and no match stays silent. Holding the
@@ -246,11 +246,11 @@ on both sides, or on `return`; the other grid keys work as above.
 pointer, on the pointer's display, stopping while one selection remains;
 Backspace walks back out.
 
-## Dragging: DRAG
+## HOLD: dragging and selecting
 
-DRAG drags something with a mouse button held down. `enter_drag_mode` grabs
+HOLD drags something with a mouse button held down. `enter_hold_mode` grabs
 what is under the pointer with the left button (`--secondary` or `--middle`
-for another); it ships unmapped, so bind it where you like. Then:
+for another). ⌘⌃H toggles HOLD from NORMAL or INSERT. Then:
 
 - `h` `j` `k` `l` nudge it 16 points, `H` `J` `K` `L` 96 points.
 - `w` / `b` jump to the next or previous word; `e` reaches a word's end;
@@ -263,28 +263,28 @@ for another); it ships unmapped, so bind it where you like. Then:
   last line.
 - `y` releases the button, copies selected text and clears the highlight after
   the copy succeeds. `d` / `x` cut, `c` cuts and enters INSERT, and `p` pastes
-  over the selected text. These operators end DRAG.
-- Return, or the key that entered DRAG, drops it where the pointer is;
+  over the selected text. These operators end HOLD.
+- Return, or the key that entered HOLD, drops it where the pointer is;
   Escape puts it back where it was grabbed and lets go.
 
-The badge is yellow and shows `mode.labels.drag` (default `DRAG`). The keys
-live in `[mode.drag.mappings]`, read before NORMAL's. An
-all-mode chord enters DRAG from INSERT as well, and the drop returns to
+The badge is yellow and shows `mode.labels.hold` (default `HOLD`). The keys
+live in `[mode.hold.mappings]`, read before NORMAL's. An
+all-mode chord enters HOLD from INSERT as well, and the drop returns to
 NORMAL.
 
 ```toml
 [mode.all.mappings]
-"cmd+ctrl+d" = ["flash", "enter_drag_mode"]
+"cmd+ctrl+h" = ["flash", "enter_hold_mode"]
 ```
 
 ### How Flash does it
 
-DRAG is a mouse button Flash holds down (`mouse_button`;
-`enter_drag_mode` is its toggle). Every pointer move Flash makes while a
+HOLD is a mouse button Flash holds down (`mouse_button`;
+`enter_hold_mode` is its toggle). Every pointer move Flash makes while a
 button is held is a drag of it. The press, drag and release do not inherit modifiers
 from the shortcut that started the hold, so a Control shortcut does not turn
 the press into a context click. The mode follows the hold exactly: whichever
-path presses the button from NORMAL or INSERT enters DRAG,
+path presses the button from NORMAL or INSERT enters HOLD,
 whichever releases it leaves, and leaving the mode any other way
 (`enter_normal_mode`, INSERT, the command line, `leave_mode`, quitting
 Flash, a committed click) releases the button. `mouse_pointer`'s `v` holds a

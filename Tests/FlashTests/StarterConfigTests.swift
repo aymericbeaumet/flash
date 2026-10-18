@@ -4,14 +4,15 @@ import XCTest
 @testable import flash
 
 final class StarterConfigTests: XCTestCase {
-  func testStarterParsesCleanlyAndBindsOnlyHints() throws {
+  func testStarterParsesCleanlyAndBindsHintsAndHold() throws {
     let config = try loadAsUserFile(StarterConfig.text)
     XCTAssertEqual(config.loadingDiagnostics.map(\.logMessage), [])
-    XCTAssertEqual(config.mode.all.map(\.key), [key("cmd+shift+space")])
-    let mapping = config.mode.all.first
+    XCTAssertEqual(
+      config.mode.all.map(\.key).sorted(), [key("cmd+shift+space"), key("cmd+ctrl+h")].sorted())
+    let mapping = config.mode.all.first { $0.key == key("cmd+shift+space") }
     XCTAssertEqual(mapping?.action.command, .mouseTarget(.click(.leftClick, modifiers: [])))
     XCTAssertNotNil(mapping?.nativeHotkey)
-    // Hints only: advanced mode stays off until the user opts in.
+    // HOLD remains gated until the user opts into advanced mode.
     XCTAssertFalse(config.mode.containsAdvancedModeMapping)
   }
 
@@ -31,7 +32,7 @@ final class StarterConfigTests: XCTestCase {
 
     let config = try loadAsUserFile(text)
     XCTAssertEqual(config.loadingDiagnostics.map(\.logMessage), [])
-    XCTAssertEqual(config.mode.all.count, 5)
+    XCTAssertEqual(config.mode.all.count, 6)
     // Every mapping is a single modified chord Carbon can register.
     for mapping in config.mode.all {
       XCTAssertNotNil(mapping.nativeHotkey, mapping.key)

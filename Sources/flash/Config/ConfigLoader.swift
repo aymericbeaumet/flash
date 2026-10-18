@@ -505,7 +505,7 @@ enum ConfigLoader {
       ],
       "mode": [
         "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "hyper",
-        "drag",
+        "hold",
         "apps",
         "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
         "click_hold_ms", "send_key_interval_ms",
@@ -1620,12 +1620,12 @@ enum ConfigLoader {
         (1...32).contains(command.count),
         (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count),
         (1...32).contains((parsed["hyper"] ?? config.mode.labels.hyper).count),
-        (1...32).contains((parsed["drag"] ?? config.mode.labels.drag).count)
+        (1...32).contains((parsed["hold"] ?? config.mode.labels.hold).count)
       {
         for key in parsed.keys
-        where !["normal", "insert", "command", "terminal", "hyper", "drag"].contains(key) {
+        where !["normal", "insert", "command", "terminal", "hyper", "hold"].contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, drag)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, hold)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
@@ -1634,7 +1634,7 @@ enum ConfigLoader {
           command: command,
           terminal: parsed["terminal"] ?? config.mode.labels.terminal,
           hyper: parsed["hyper"] ?? config.mode.labels.hyper,
-          drag: parsed["drag"] ?? config.mode.labels.drag)
+          hold: parsed["hold"] ?? config.mode.labels.hold)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
@@ -1767,7 +1767,7 @@ enum ConfigLoader {
       }
     }
 
-    for scope in [ModeScope.insert, .terminal, .hyper, .drag] {
+    for scope in [ModeScope.insert, .terminal, .hyper, .hold] {
       let name = scope.rawValue
       guard
         let scoped = sectionTable(
@@ -1828,7 +1828,7 @@ enum ConfigLoader {
           let scopePath = appPath + [scopeName]
           guard let scope = ModeScope(rawValue: scopeName) else {
             config.addDiagnostic(
-              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, drag",
+              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, hold",
               location: locations.location(for: scopePath))
             continue
           }
@@ -2428,9 +2428,9 @@ enum ConfigLoader {
     case .hyper:
       config.mode.hyper.removeAll { $0.key == key }
       config.mode.hyper.append(mapping)
-    case .drag:
-      config.mode.drag.removeAll { $0.key == key }
-      config.mode.drag.append(mapping)
+    case .hold:
+      config.mode.hold.removeAll { $0.key == key }
+      config.mode.hold.append(mapping)
     }
   }
 
@@ -2449,7 +2449,7 @@ enum ConfigLoader {
     case .terminal: config.mode.terminal.removeAll(where: removed)
     case .command: config.mode.command.removeAll(where: removed)
     case .hyper: config.mode.hyper.removeAll(where: removed)
-    case .drag: config.mode.drag.removeAll(where: removed)
+    case .hold: config.mode.hold.removeAll(where: removed)
     }
   }
 

@@ -47,14 +47,14 @@ indirect enum URLCommand: Hashable {
   /// window or its screen.
   case mouseWarp(MouseWarpRequest)
   /// `mouse_step`: the pointer moves one text line or one character from the
-  /// text under it; in DRAG that extends a text selection.
+  /// text under it; in HOLD that extends a text selection.
   case mouseStep(TextStep.Direction)
   /// `mouse_step --to`: Vim's word and line jumps on the text under the
   /// pointer (`w`, `b`, `e`, `0`, `$`).
   case mouseJump(TextStep.Jump)
   /// `selection`: act on the selected text, ending a drag first.
   case selection(SelectionAction, register: String? = nil)
-  /// `mouse_nudge`: the pointer moves a fixed distance; in DRAG the held
+  /// `mouse_nudge`: the pointer moves a fixed distance; in HOLD the held
   /// button drags what it grabbed.
   case mouseNudge(TextStep.Direction, distance: Int)
   /// `mouse_position`: the saved pointer positions — save, hint, cycle,
@@ -69,10 +69,10 @@ indirect enum URLCommand: Hashable {
   /// Press, release or toggle a button at the pointer; moves drag while it
   /// is held.
   case mouseButton(MouseButtonRequest)
-  /// `enter_drag_mode`: grab what is under the pointer with `button` held
-  /// (DRAG), or drop it there when that button is already held. Sugar for
-  /// `mouse_button --state=toggle --mode=drag`; ships unmapped.
-  case dragMode(MouseButtonKind)
+  /// `enter_hold_mode`: grab what is under the pointer with `button` held
+  /// (HOLD), or drop it there when that button is already held. Sugar for
+  /// `mouse_button --state=toggle --mode=hold`; bound to Command-Control-H.
+  case holdMode(MouseButtonKind)
   /// Focus the first (or count-th) editable text input in the focused window
   /// while preserving the current mode.
   case focusInput
@@ -937,13 +937,13 @@ final class URLEventHandler: NSObject {
 
     "mouse_pointer": .init(parse: { a in a.args.isEmpty ? .mousePointer : nil }),
 
-    "enter_drag_mode": .init(
+    "enter_hold_mode": .init(
       [.flag("secondary"), .flag("middle")],
       parse: { a in
         switch (a.bool("secondary"), a.bool("middle")) {
-        case (false, false): return .dragMode(.primary)
-        case (true, false): return .dragMode(.secondary)
-        case (false, true): return .dragMode(.middle)
+        case (false, false): return .holdMode(.primary)
+        case (true, false): return .holdMode(.secondary)
+        case (false, true): return .holdMode(.middle)
         case (true, true): return nil
         }
       }),
@@ -951,7 +951,7 @@ final class URLEventHandler: NSObject {
     "mouse_button": .init(
       [
         .text("state", "down|up|toggle|release|cancel", required: true), .flag("secondary"),
-        .flag("middle"), .text("mode", "drag"),
+        .flag("middle"), .text("mode", "hold"),
       ],
       parse: { a in
         guard let state = a.value("state").flatMap(MouseButtonState.init(rawValue:)) else {
@@ -962,7 +962,7 @@ final class URLEventHandler: NSObject {
           guard let parsed = ButtonHold(rawValue: mode) else { return nil }
           hold = parsed
         } else {
-          hold = .drag
+          hold = .hold
         }
         switch (a.bool("secondary"), a.bool("middle")) {
         case (false, false): return .mouseButton(.init(state: state, button: .primary, hold: hold))
@@ -1325,7 +1325,7 @@ extension URLEventHandler {
       - `mouse_dock`, `mouse_menubar`, and `mouse_notifications` reach surfaces
         outside the focused window. `mouse_screens`, `mouse_warp`,
         `mouse_step`, and `mouse_position` move or save the pointer.
-      - `mouse_button --state=toggle --mode=drag` starts a drag or text
+      - `mouse_button --state=toggle --mode=hold` starts a drag or text
         selection. `--state=release` ends it; `--state=cancel` returns a drag to its
         starting point.
 

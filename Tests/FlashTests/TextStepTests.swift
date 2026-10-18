@@ -136,11 +136,11 @@ final class TextStepTests: XCTestCase {
     XCTAssertEqual(
       URLCommand.selection(.copy, register: "a").diagnosticDescription,
       "flash selection --action=copy --register=a")
-    let drag = ConfigLoader.parse("").mode.compiledDrag
+    let drag = ConfigLoader.parse("").mode.compiledHold
     XCTAssertEqual(drag.mapping(for: "w")?.action, .flashCommand(.mouseJump(.nextWord)))
     XCTAssertEqual(drag.mapping(for: "$")?.action, .flashCommand(.mouseJump(.lineEnd)))
     XCTAssertEqual(drag.mapping(for: "y")?.action, .flashCommand(.selection(.copy)))
     XCTAssertEqual(drag.mapping(for: "d")?.action, .flashCommand(.selection(.cut)))
-    XCTAssertFalse(drag.hasStrictPrefix("d"), "DRAG's d does not wait on NORMAL's df")
+    XCTAssertFalse(drag.hasStrictPrefix("d"), "HOLD's d does not wait on NORMAL's df")
   }
 }

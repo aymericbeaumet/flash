@@ -42,13 +42,13 @@ flash mouse_warp --area=window --edge=center # jump the pointer to a window or s
 flash mouse_step --direction=down        # move the pointer one text line (up, down) or character (left, right)
 flash mouse_position --action=save       # remember the pointer position (hints, next, previous, unsave, clear)
 flash mouse_position --action=hints --move # label the saved positions and move to the one you pick
-flash enter_drag_mode                    # grab what is under the pointer, or drop it (DRAG; --secondary, --middle)
-flash mouse_button --state=toggle --mode=drag   # the same hold, spelled out
+flash enter_hold_mode                    # grab what is under the pointer, or drop it (HOLD; --secondary, --middle)
+flash mouse_button --state=toggle --mode=hold   # the same hold, spelled out
 flash mouse_button --state=release       # drop a drag, or end a selection, where the pointer is
 flash mouse_button --state=cancel        # put a drag back where it was grabbed
 flash mouse_nudge --direction=down --distance=16 # move the pointer (and a drag) a few points
 flash mouse_step --to=next_word          # jump to a word or line edge (previous_word, word_end, line_start, line_end)
-flash selection --action=copy            # copy the selection, ending DRAG (cut, change, paste)
+flash selection --action=copy            # copy the selection, ending HOLD (cut, change, paste)
 flash gesture --fingers=3 --motion=swipe_up # a trackpad gesture: tap, double_tap, pinch, spread, rotate_*, swipe_*
 flash look_up                            # the focused app's Look Up on the word under the pointer
 flash scroll_target                      # pick which scroll area the scroll keys drive
@@ -108,8 +108,8 @@ are fixed for `"schema": 4`:
 | --- | --- |
 | `schema` | `4` |
 | `version`, `build` | The app's version and build number |
-| `mode` | `disabled`, `insert`, `normal`, `drag`, `hyper`, `command` or `terminal` |
-| `mapping_scope` | The mapping table the mode reads and whose chords Flash registers: `insert`, `normal`, `drag`, `command` or `terminal`. It always follows `mode` |
+| `mode` | `disabled`, `insert`, `normal`, `hold`, `hyper`, `command` or `terminal` |
+| `mapping_scope` | The mapping table the mode reads and whose chords Flash registers: `insert`, `normal`, `hold`, `command` or `terminal`. It always follows `mode` |
 | `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer` or `bigram` |
 | `focused_app` | The focused app's bundle identifier, or `null` |
 | `frontmost_app` | The app macOS has frontmost, which receives every key Flash passes, or `null` |
@@ -156,15 +156,15 @@ not applied.
 
 Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
 
-`mouse_button --state=down|up|toggle|release|cancel [--mode=drag]`
+`mouse_button --state=down|up|toggle|release|cancel [--mode=hold]`
 starts a drag or text selection by holding a button where the pointer is, the primary one
-unless `--secondary` or `--middle` says otherwise. `enter_drag_mode
+unless `--secondary` or `--middle` says otherwise. `enter_hold_mode
 [--secondary|--middle]` is the drag toggle by name: it grabs, or drops when
-that button is already held; it ships unmapped. `release` lets go of
+that button is already held; ⌘⌃H is the default toggle. `release` lets go of
 whichever button is held, dropping a drag or ending a selection; `cancel`
 first drags back to where the button went down. `mouse_nudge
 --direction=up|down|left|right [--distance=<points>]` moves the pointer,
-16 points by default, dragging in DRAG.
+16 points by default, dragging in HOLD.
 While it is held, every pointer move Flash makes is a drag of that button:
 `mouse_target --move` (`mf`), `mouse_grid --move` (`mF`), `mouse_pointer`
 movement and grid cursor-follow. So a keyboard drag in any app is `down`, a
@@ -234,8 +234,8 @@ focused window (`--area=window`, the default) or of its display
 text line up or down, in its column, or one character left or right,
 measured from the glyph Accessibility reports under it; off text it moves a
 fixed line height or column. `mouse_step --to=next_word|previous_word|word_end|line_start|line_end`
-jumps as Vim's `w`, `b`, `e`, `0` and `$` do. DRAG binds them to those keys.
-`selection --action=copy|cut|change|paste` ends DRAG and acts on the selected text;
+jumps as Vim's `w`, `b`, `e`, `0` and `$` do. HOLD binds them to those keys.
+`selection --action=copy|cut|change|paste` ends HOLD and acts on the selected text;
 change cuts and enters INSERT. `mouse_position` keeps a
 bounded list of saved pointer positions, per app with `[hints]
 position_history_scope = "app"`: `save`, `unsave` the one under the pointer,

@@ -183,6 +183,15 @@ final class ConfigLoaderTests: XCTestCase {
     }
   }
 
+  func testHoldHasGlobalDefaultHotkey() {
+    for config in [Config.default, ConfigLoader.parse("")] {
+      let holdKey = key("cmd+ctrl+h")
+      XCTAssertEqual(
+        config.mode.all.first { $0.key == holdKey }?.action.command, .holdMode(.primary))
+      XCTAssertNil(config.mode.all.first { $0.key == key("cmd+ctrl+d") })
+    }
+  }
+
   func testExplicitModeTransitionMappingsAreAccepted() {
     let config = ConfigLoader.parse(
       """
@@ -195,7 +204,8 @@ final class ConfigLoaderTests: XCTestCase {
       """
     )
     XCTAssertTrue(config.diagnostics.isEmpty)
-    XCTAssertEqual(config.mode.all.first?.action.command, .leaveMode)
+    XCTAssertEqual(
+      config.mode.all.first { $0.key == key("cmd+ctrl+<escape>") }?.action.command, .leaveMode)
     XCTAssertEqual(config.mode.normal.first { $0.key == "i" }?.action.command, .insertMode)
     XCTAssertEqual(config.mode.normal.first { $0.key == key(":") }?.action.command, .commandMode)
     XCTAssertEqual(
@@ -379,7 +389,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
     XCTAssertEqual(c.mode.labels.insert, "INSERT")
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
-    XCTAssertTrue(c.mode.all.isEmpty)
+    XCTAssertEqual(c.mode.all.first?.action.command, .holdMode(.primary))
     XCTAssertTrue(c.mode.insert.isEmpty)
     XCTAssertTrue(c.flashlight.ignoredApps.isEmpty)
     XCTAssertEqual(c.flashlight.appDirectories, Config.Flashlight.defaultAppDirectories)
@@ -1066,10 +1076,12 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(flashlight["suggestion_count"] as? Int, 10)
     XCTAssertEqual(flashlight["precedence_alive_bonus"] as? Int, 10)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
-    XCTAssertEqual(
-      allMappings.first?["command"] as? [String],
-      ["sh", "~/.dotfiles/scripts/toggle-colors"])
-    XCTAssertEqual(allMappings.first?["repeat"] as? Bool, false)
+    XCTAssertNotNil(mode["hold"] as? [[String: Any]])
+    let customMapping = allMappings.first {
+      ($0["command"] as? [String]) == ["sh", "~/.dotfiles/scripts/toggle-colors"]
+    }
+    XCTAssertNotNil(customMapping)
+    XCTAssertEqual(customMapping?["repeat"] as? Bool, false)
     XCTAssertEqual(flashlight["ignored_apps"] as? [String], [])
     XCTAssertNil(root["open"])
     XCTAssertEqual(plugins["disabled"] as? [String], [])
@@ -1284,10 +1296,11 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.isEmpty)
-    XCTAssertEqual(c.mode.all.count, 1)
-    XCTAssertEqual(c.mode.all[0].key, "alt+shift+c")
+    XCTAssertEqual(c.mode.all.count, 2)
+    let mapping = c.mode.all.first { $0.key == "alt+shift+c" }
+    XCTAssertNotNil(mapping)
     XCTAssertEqual(
-      c.mode.all[0].action, .shellCommand(["sh", "~/.dotfiles/scripts/toggle-colors"]))
+      mapping?.action, .shellCommand(["sh", "~/.dotfiles/scripts/toggle-colors"]))
     XCTAssertFalse(c.mode.containsAdvancedModeMapping)
   }
 
@@ -1349,7 +1362,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(stringForm.warnings.count, 1)
     XCTAssertTrue(stringForm.warnings[0].contains("cmd+ctrl+space"))
     XCTAssertTrue(stringForm.warnings[0].contains("non-empty string array"))
-    XCTAssertTrue(stringForm.mode.all.isEmpty)
+    XCTAssertEqual(stringForm.mode.all.count, 1)
 
     let bareVerb = ConfigLoader.parse(
       """
@@ -2006,8 +2019,8 @@ final class ConfigLoaderTests: XCTestCase {
     builtinMode.normal.sort { $0.key < $1.key }
     loadedMode.hyper.sort { $0.key < $1.key }
     builtinMode.hyper.sort { $0.key < $1.key }
-    loadedMode.drag.sort { $0.key < $1.key }
-    builtinMode.drag.sort { $0.key < $1.key }
+    loadedMode.hold.sort { $0.key < $1.key }
+    builtinMode.hold.sort { $0.key < $1.key }
     loadedMode.recompileMappings()
     builtinMode.recompileMappings()
     XCTAssertEqual(loadedMode, builtinMode)

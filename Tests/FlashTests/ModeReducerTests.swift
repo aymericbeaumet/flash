@@ -22,7 +22,7 @@ final class ModeReducerTests: XCTestCase {
     .terminal(restoreTo: .insert, returnPID: nil),
     .terminal(restoreTo: .disabled, returnPID: nil),
     .hyper(restoreTo: .normal),
-    .drag,
+    .hold,
   ]
 
   // Representative events covering every case.
@@ -45,7 +45,7 @@ final class ModeReducerTests: XCTestCase {
     .focusedAppChanged(pid: 7),
     .enterHyper,
     .exitHyper,
-    .buttonHeld(.drag),
+    .buttonHeld(.hold),
     .buttonReleased,
   ]
 
@@ -158,7 +158,7 @@ final class ModeReducerTests: XCTestCase {
       let (next, effects) = ModeReducer.reduce(state, .focusedAppChanged(pid: 99))
       XCTAssertEqual(next, state, "focusedAppChanged must not change \(state)")
       switch state {
-      case .normal, .command, .hyper, .drag:
+      case .normal, .command, .hyper, .hold:
         XCTAssertEqual(effects, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         XCTAssertTrue(effects.isEmpty)
@@ -206,7 +206,7 @@ final class ModeReducerTests: XCTestCase {
       ModeReducer.reduce(.normal, .clickResolved(entersInsert: false, targetPID: 7)).0, .normal)
     // A click while a button is held still enters INSERT on an input.
     XCTAssertEqual(
-      ModeReducer.reduce(.drag, .clickResolved(entersInsert: true, targetPID: 7)).0, .insert)
+      ModeReducer.reduce(.hold, .clickResolved(entersInsert: true, targetPID: 7)).0, .insert)
     // From any other state, a click cannot change the mode.
     for state in allStates where !state.isNormal && state.buttonHold == nil {
       XCTAssertEqual(
@@ -511,17 +511,17 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.disabled.badgeStyle, .insert)
     XCTAssertEqual(Mode.hyper(restoreTo: .normal).badgeStyle, .hyper)
     XCTAssertEqual(Mode.hyper(restoreTo: .normal).label, .hyper)
-    XCTAssertEqual(Mode.drag.badgeStyle, .drag)
-    XCTAssertEqual(Mode.drag.label, .drag)
+    XCTAssertEqual(Mode.hold.badgeStyle, .hold)
+    XCTAssertEqual(Mode.hold.label, .hold)
   }
 
-  /// DRAG is the held mouse button over NORMAL: entered only from NORMAL,
+  /// HOLD is the held mouse button over NORMAL: entered only from NORMAL,
   /// left when the button goes, NORMAL in every projection, and `leave_mode`
   /// or an explicit base mode leaves it too.
   /// It enters from NORMAL and returns to NORMAL when released.
-  func testAHeldButtonEntersDrag() {
-    let hold = ButtonHold.drag
-    let mode = Mode.drag
+  func testAHeldButtonEntersHold() {
+    let hold = ButtonHold.hold
+    let mode = Mode.hold
     let entered = ModeReducer.reduce(.normal, .buttonHeld(hold))
     XCTAssertEqual(entered.0, mode)
     XCTAssertEqual(entered.1, [.renderSurface])
@@ -555,14 +555,23 @@ final class ModeReducerTests: XCTestCase {
     for state in allStates where state.buttonHold == nil {
       XCTAssertEqual(ModeReducer.reduce(state, .buttonReleased).0, state)
     }
-    XCTAssertEqual(FlashStatusReport.modeName(.drag), "drag")
-    XCTAssertEqual(Mode.drag.label, .drag)
-    XCTAssertEqual(Mode.drag.badgeStyle, .drag)
+    XCTAssertEqual(FlashStatusReport.modeName(.hold), "hold")
+    XCTAssertEqual(Mode.hold.label, .hold)
+    XCTAssertEqual(Mode.hold.badgeStyle, .hold)
     let labels = ConfigLoader.parse(
-      "[mode]\nlabels = { normal = \"N\", insert = \"I\", command = \"C\", drag = \"D\" }"
+      "[mode]\nlabels = { normal = \"N\", insert = \"I\", command = \"C\", hold = \"D\" }"
     )
-    XCTAssertEqual(labels.mode.labels.drag, "D")
-    XCTAssertEqual(Config().mode.labels.drag, "DRAG")
+    XCTAssertEqual(labels.mode.labels.hold, "D")
+    XCTAssertEqual(Config().mode.labels.hold, "HOLD")
+  }
+
+  func testHoldToggleNeedsANormalOrInsertBase() {
+    for state in allStates {
+      XCTAssertEqual(
+        state.canToggleHoldMode,
+        state == .normal || state == .insert || state == .hold,
+        "unexpected HOLD toggle availability in \(state)")
+    }
   }
 
   func testHyperIsALeaderHoldOnNormal() {
@@ -758,16 +767,16 @@ final class ModeReducerTests: XCTestCase {
         isRepeat: false))
   }
 
-  /// `[mode.drag.mappings]` is read before NORMAL while a button is held.
+  /// `[mode.hold.mappings]` is read before NORMAL while a button is held.
   func testDragMappingsLayerOverNormal() throws {
     let config = ConfigLoader.parse(
       """
-      [mode.drag.mappings]
+      [mode.hold.mappings]
       "ctrl+o" = ["flash", "scroll_top"]
       "x" = false
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
-    let drag = config.mode.compiledDrag
+    let drag = config.mode.compiledHold
     let normal = config.mode.compiledNormal
     XCTAssertEqual(
       drag.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("j")!)?.action,
@@ -779,48 +788,48 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       normal.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("h")!)?.action,
       .flashCommand(.scroll(.left)))
-    // A key DRAG leaves alone keeps NORMAL's meaning; a picked target
+    // A key HOLD leaves alone keeps NORMAL's meaning; a picked target
     // extends the selection instead of clicking.
     let t = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("t"))
     XCTAssertEqual(drag.mapping(for: t)?.action, normal.mapping(for: t)?.action)
     let f = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("f"))
     XCTAssertEqual(drag.mapping(for: f)?.action, .flashCommand(.mouseTarget(.move)))
-    // `false` in DRAG removes NORMAL's key there only.
+    // `false` in HOLD removes NORMAL's key there only.
     let x = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("x"))
     XCTAssertNil(drag.mapping(for: x))
     XCTAssertNotNil(normal.mapping(for: x))
-    // A DRAG chord wins over NORMAL's only while the button is held.
+    // A HOLD chord wins over NORMAL's only while the button is held.
     let chord = try XCTUnwrap(ModeMapping.parseNativeHotkey("ctrl+o"))
     XCTAssertEqual(
-      MappingsCoordinator.activeMappingTable(in: config.mode, scope: .drag)[chord]?.action,
+      MappingsCoordinator.activeMappingTable(in: config.mode, scope: .hold)[chord]?.action,
       .flashCommand(.scroll(.top)))
     XCTAssertNotEqual(
       MappingsCoordinator.activeMappingTable(in: config.mode, scope: .normal)[chord]?.action,
       .flashCommand(.scroll(.top)))
     XCTAssertEqual(
-      ConfigLoader.parse("[mode.apps.\"com.example.app\".drag.mappings]\n\"q\" = false")
+      ConfigLoader.parse("[mode.apps.\"com.example.app\".hold.mappings]\n\"q\" = false")
         .diagnostics, [])
   }
 
-  /// DRAG moves what the button grabbed: `h` `j` `k` `l` nudge it, Return
+  /// HOLD moves what the button grabbed: `h` `j` `k` `l` nudge it, Return
   /// drops it, Escape puts it back, and `f` picks where it goes. Entering it
-  /// is `enter_drag_mode`, a verb with no default key.
-  func testDragMappingsMoveDropAndCancel() throws {
+  /// is `enter_hold_mode`, bound to Command-Control-H by default.
+  func testHoldMappingsMoveDropAndCancel() throws {
     let config = ConfigLoader.parse("")
     func key(_ raw: String) throws -> String {
       try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey(raw))
     }
-    let drag = config.mode.compiledDrag
+    let drag = config.mode.compiledHold
     XCTAssertEqual(
       drag.mapping(for: try key("j"))?.action, .flashCommand(.mouseNudge(.down, distance: 16)))
     XCTAssertEqual(
       drag.mapping(for: try key("L"))?.action, .flashCommand(.mouseNudge(.right, distance: 96)))
     XCTAssertEqual(
       drag.mapping(for: try key("<return>"))?.action,
-      .flashCommand(.mouseButton(.init(state: .release, button: .primary, hold: .drag))))
+      .flashCommand(.mouseButton(.init(state: .release, button: .primary, hold: .hold))))
     XCTAssertEqual(
       drag.mapping(for: try key("<esc>"))?.action,
-      .flashCommand(.mouseButton(.init(state: .cancel, button: .primary, hold: .drag))))
+      .flashCommand(.mouseButton(.init(state: .cancel, button: .primary, hold: .hold))))
     XCTAssertEqual(drag.mapping(for: try key("f"))?.action, .flashCommand(.mouseTarget(.move)))
     let normal = config.mode.compiledNormal
     XCTAssertNil(normal.mapping(for: try key("D")))
@@ -828,13 +837,11 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertNil(drag.mapping(for: try key("D")))
     let defaults = [
       config.mode.all, config.mode.normal, config.mode.insert,
-      config.mode.drag,
+      config.mode.hold,
     ].joined()
-    XCTAssertFalse(
-      defaults.contains { mapping in
-        if case .flashCommand(.dragMode) = mapping.action { return true }
-        return false
-      }, "enter_drag_mode ships unmapped")
+    XCTAssertEqual(
+      defaults.filter { $0.action.command == .holdMode(.primary) }.map(\.key),
+      [try key("cmd+ctrl+h")])
     XCTAssertNil(normal.mapping(for: try key("v")))
   }
 
@@ -843,26 +850,26 @@ final class ModeReducerTests: XCTestCase {
   func testAHeldModeKeyHidesTheNormalSequencesItStarts() throws {
     let config = ConfigLoader.parse(
       """
-      [mode.drag.mappings]
+      [mode.hold.mappings]
       "d" = ["flash", "scroll_top"]
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
     let d = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("d"))
     let df = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("df"))
-    XCTAssertNil(config.mode.compiledDrag.mapping(for: df))
-    XCTAssertFalse(config.mode.compiledDrag.hasStrictPrefix(d))
+    XCTAssertNil(config.mode.compiledHold.mapping(for: df))
+    XCTAssertFalse(config.mode.compiledHold.hasStrictPrefix(d))
     XCTAssertNotNil(config.mode.compiledNormal.mapping(for: df))
   }
 
   /// The mapping scope is a projection of the mode, applied on every
   /// transition, so no path can leave INSERT reading NORMAL's chords (a
-  /// Command chord NORMAL maps would be swallowed in the app) or DRAG's
-  /// table outside DRAG. HYPER reads NORMAL's; advanced mode off reads
+  /// Command chord NORMAL maps would be swallowed in the app) or HOLD's
+  /// table outside HOLD. HYPER reads NORMAL's; advanced mode off reads
   /// INSERT's.
   func testEachModeReadsItsOwnMappingScope() {
     let expected: [(Mode, MappingScope)] = [
       (.disabled, .insert), (.insert, .insert), (.normal, .normal),
-      (.hyper(restoreTo: .normal), .normal), (.drag, .drag),
+      (.hyper(restoreTo: .normal), .normal), (.hold, .hold),
       (.command(restoreTo: .insert), .command), (.command(restoreTo: .normal), .command),
       (.terminal(restoreTo: .insert, returnPID: nil), .terminal),
     ]

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Text registers shared by NORMAL and DRAG yank/paste commands.
+/// Text registers shared by NORMAL and HOLD yank/paste commands.
 /// Flash uses Vim's `unnamedplus` clipboard behavior: the unnamed register
 /// reads the macOS pasteboard, while an explicit named yank also updates it.
 final class RegisterStore {

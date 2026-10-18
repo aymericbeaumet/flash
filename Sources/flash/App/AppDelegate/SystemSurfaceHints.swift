@@ -30,7 +30,7 @@ extension AppDelegate {
   /// sits on its top-left corner, where the close button appears on hover.
   /// A bigram's chip sits beside the letters, and the pointer lands one
   /// point left of the glyph centre.
-  /// `selectingThrough` (DRAG) lands a bigram one point right of its glyph
+  /// `selectingThrough` (HOLD) lands a bigram one point right of its glyph
   /// centre instead of one left, so the held button's selection ends on it.
   static func hintCommitPoint(
     for hint: AssignedHint, fontSize: CGFloat, selectingThrough: Bool = false

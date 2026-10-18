@@ -158,7 +158,7 @@ final class MappingsCoordinator {
     case .terminal: return false
     case .command: return scope == .all || scope == .command
     case .normal: return scope == .all || scope == .normal
-    case .drag: return scope == .all || scope == .normal || scope == .drag
+    case .hold: return scope == .all || scope == .normal || scope == .hold
     case .insert: return scope == .all || scope == .insert
     }
   }
@@ -176,7 +176,7 @@ final class MappingsCoordinator {
     // A held-button mode reads the interpreter's own table: its entries over
     // the NORMAL ones it leaves alone.
     switch scope {
-    case .drag: return mode.heldMappings(.drag).filter { $0.nativeHotkey != nil }
+    case .hold: return mode.heldMappings(.hold).filter { $0.nativeHotkey != nil }
     case .normal, .insert, .command, .terminal: break
     }
     let scopes: [(ModeScope, [ModeMapping])] = [

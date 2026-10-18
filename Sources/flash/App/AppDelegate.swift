@@ -389,9 +389,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
-    // A held mouse button enters DRAG:
+    // A held mouse button enters HOLD:
     // whichever path presses or releases it, the mode follows the hold, from
-    // NORMAL or from INSERT (an all-mode `enter_drag_mode` chord).
+    // NORMAL or from INSERT (an all-mode `enter_hold_mode` chord).
     ActionDispatcher.heldButtonDidChange = { [weak self] held in
       guard let self else { return }
       if let held, self.modeStore.mode == .normal || self.modeStore.mode.isInsert {
@@ -618,8 +618,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterPointerMode()
     case .mouseButton(let request):
       performMouseButton(request)
-    case .dragMode(let button):
-      performMouseButton(.init(state: .toggle, button: button, hold: .drag))
+    case .holdMode(let button):
+      toggleHoldMode(button)
     case .focusInput:
       focusTextInputInNormalMode(index: 1)
     case .scrollTarget:

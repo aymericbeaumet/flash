@@ -29,7 +29,7 @@ public enum BigramMatcher {
     CGPoint(x: frame.midX - 1, y: frame.midY)
   }
 
-  /// `selectingThrough` — DRAG, a button held — lands one point right of
+  /// `selectingThrough` — HOLD, a button held — lands one point right of
   /// the glyph centre instead, so the selection the held button draws ends
   /// on that letter.
   public static func clickPoint(in frame: CGRect, selectingThrough: Bool) -> CGPoint {
@@ -38,7 +38,7 @@ public enum BigramMatcher {
 
   /// The commit re-reads the glyph's bounds. `preferred` is the landing the
   /// caller chose on the `captured` rect (left of centre, or right of it in
-  /// DRAG); the same offset from the centre carries onto `bounds`.
+  /// HOLD); the same offset from the centre carries onto `bounds`.
   public static func clickPoint(
     in bounds: CGRect, keeping preferred: CGPoint, from captured: CGRect
   ) -> CGPoint {

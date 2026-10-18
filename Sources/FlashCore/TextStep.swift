@@ -2,7 +2,7 @@ import ApplicationServices
 import CoreGraphics
 
 /// `mouse_step`: the pointer moves one text line or one character, measured
-/// from the text under it, as Vim's `j` `k` `h` `l` move the cursor. In DRAG
+/// from the text under it, as Vim's `j` `k` `h` `l` move the cursor. In HOLD
 /// the held button drags, so the step extends the selection. All coordinates
 /// are Accessibility's: global, top-left origin.
 public enum TextStep {

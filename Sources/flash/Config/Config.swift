@@ -799,7 +799,7 @@ struct Config {
       var terminal: [ModeMapping] = []
       var command: [ModeMapping] = []
       var hyper: [ModeMapping] = []
-      var drag: [ModeMapping] = []
+      var hold: [ModeMapping] = []
       var unmapped: [ModeScope: Set<String>] = [:]
 
       func mappings(for scope: ModeScope) -> [ModeMapping] {
@@ -810,7 +810,7 @@ struct Config {
         case .terminal: return terminal
         case .command: return command
         case .hyper: return hyper
-        case .drag: return drag
+        case .hold: return hold
         }
       }
 
@@ -846,9 +846,9 @@ struct Config {
         case .hyper:
           hyper.removeAll(where: sameKey)
           hyper.insert(mapping, at: 0)
-        case .drag:
-          drag.removeAll(where: sameKey)
-          drag.insert(mapping, at: 0)
+        case .hold:
+          hold.removeAll(where: sameKey)
+          hold.insert(mapping, at: 0)
         }
       }
 
@@ -865,7 +865,7 @@ struct Config {
         case .terminal: terminal.removeAll(where: matches)
         case .command: command.removeAll(where: matches)
         case .hyper: hyper.removeAll(where: matches)
-        case .drag: drag.removeAll(where: matches)
+        case .hold: hold.removeAll(where: matches)
         }
       }
     }
@@ -876,15 +876,17 @@ struct Config {
       var command: String = "COMMAND"
       var terminal: String = "TERMINAL"
       var hyper: String = "HYPER"
-      var drag: String = "DRAG"
+      var hold: String = "HOLD"
 
       var longestCount: Int {
         max(
-          normal.count, insert.count, command.count, terminal.count, hyper.count, drag.count)
+          normal.count, insert.count, command.count, terminal.count, hyper.count, hold.count)
       }
     }
 
-    var all: [ModeMapping] = []
+    var all: [ModeMapping] = [
+      ModeMapping(key: "cmd+ctrl+h", action: .flashCommand(.holdMode(.primary)))
+    ]
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
@@ -892,9 +894,9 @@ struct Config {
     /// Keys read while the NORMAL leader is held. Not merged with `[mode.all]`:
     /// a hyper binding replaces NORMAL for that key for the duration of the hold.
     var hyper: [ModeMapping] = Self.defaultHyperMappings
-    /// Keys read before NORMAL in DRAG (a held button dragging). A key with
+    /// Keys read before NORMAL in HOLD (a held button dragging). A key with
     /// no entry here is NORMAL's.
-    var drag: [ModeMapping] = Self.defaultDragMappings
+    var hold: [ModeMapping] = Self.defaultHoldMappings
     /// Exact focused-app bundle identifier to per-scope additions/removals.
     var appMappings: [String: AppMappings] = [:]
     /// Keys a `"<key>" = false` entry removed, per table, after every layer.
@@ -1008,12 +1010,11 @@ struct Config {
       }
     }()
 
-    /// DRAG moves what the held button grabbed: `h` `j` `k` `l` nudge it,
+    /// HOLD moves what the held button grabbed: `h` `j` `k` `l` nudge it,
     /// `H` `J` `K` `L` further, a picked target is where it goes, Return
-    /// drops it and Escape puts it back. Entering it (`enter_drag_mode`)
-    /// ships unmapped.
-    static let defaultDragMappings: [ModeMapping] = makeDefaultMappings(
-      "drag",
+    /// drops it and Escape puts it back. `cmd+ctrl+h` enters or leaves it.
+    static let defaultHoldMappings: [ModeMapping] = makeDefaultMappings(
+      "hold",
       [
         ("y", .selection(.copy)),
         ("d", .selection(.cut)),
@@ -1036,8 +1037,8 @@ struct Config {
         ("f", .mouseTarget(.move)),
         ("F", .mouseGrid(.init(.move))),
         ("s", .mouseBigram(.move)),
-        ("<return>", .mouseButton(.init(state: .release, button: .primary, hold: .drag))),
-        ("<esc>", .mouseButton(.init(state: .cancel, button: .primary, hold: .drag))),
+        ("<return>", .mouseButton(.init(state: .release, button: .primary, hold: .hold))),
+        ("<esc>", .mouseButton(.init(state: .cancel, button: .primary, hold: .hold))),
       ])
 
     private static func makeDefaultMappings(
@@ -1178,16 +1179,17 @@ struct Config {
     private(set) var compiledInsert = CompiledMappings()
     private(set) var compiledTerminal = CompiledMappings()
     private(set) var compiledHyper = CompiledMappings()
-    /// The table the interpreter reads in DRAG (`heldMappings`).
-    private(set) var compiledDrag = CompiledMappings()
+    /// The table the interpreter reads in HOLD (`heldMappings`).
+    private(set) var compiledHold = CompiledMappings()
 
     /// What a held-button mode reads: its own entries, then the NORMAL and
     /// all-mode ones it leaves alone. An own key hides every NORMAL key it
-    /// starts (DRAG's `d` must not wait on NORMAL's `df`), and `false` in
+    /// starts (HOLD's `d` must not wait on NORMAL's `df`), and `false` in
     /// its table removes a NORMAL key there.
-    func heldMappings(_ hold: ButtonHold) -> [ModeMapping] {
-      let scope: ModeScope = .drag
-      let own = drag
+    func heldMappings(_ purpose: ButtonHold) -> [ModeMapping] {
+      assert(purpose == .hold)
+      let scope: ModeScope = .hold
+      let own = hold
       let separator = String(NormalModeInterpreter.keyAtomSeparator)
       let inherited = mappings(for: .normal).filter { base in
         !removes(base, in: scope)
@@ -1217,7 +1219,7 @@ struct Config {
       compiledInsert = CompiledMappings(mappings(for: .insert))
       compiledTerminal = CompiledMappings(effectiveTerminalMappings)
       compiledHyper = CompiledMappings(Self.resolveMappings(hyper))
-      compiledDrag = CompiledMappings(heldMappings(.drag))
+      compiledHold = CompiledMappings(heldMappings(.hold))
     }
 
     /// One mapping-key atom, or nil. `"<leader>"` becomes the leader atom, and
@@ -1250,7 +1252,7 @@ struct Config {
           origin: mapping.origin)
       }
       normal = normal.map(resolvingLeader)
-      drag = drag.map(resolvingLeader)
+      hold = hold.map(resolvingLeader)
     }
 
     var containsNormalModeMapping: Bool {
@@ -1572,6 +1574,7 @@ struct Config {
           "terminal": app.terminal.map(Self.mappingJSONValue),
           "command": app.command.map(Self.mappingJSONValue),
           "hyper": app.hyper.map(Self.mappingJSONValue),
+          "hold": app.hold.map(Self.mappingJSONValue),
           "unmapped": app.unmapped.reduce(into: [String: [String]]()) { result, entry in
             result[entry.key.rawValue] = entry.value.sorted()
           },
@@ -1586,9 +1589,10 @@ struct Config {
         "insert": mode.labels.insert,
         "normal": mode.labels.normal,
         "terminal": mode.labels.terminal,
-        "drag": mode.labels.drag,
+        "hold": mode.labels.hold,
       ],
       "hyper": mode.hyper.map(Self.mappingJSONValue),
+      "hold": mode.hold.map(Self.mappingJSONValue),
       "hyper_key": mode.hyperKey,
       "hyper_key_atom": mode.resolvedHyperKey ?? NSNull(),
       "normal": mode.normal.map(Self.mappingJSONValue),
@@ -1783,7 +1787,7 @@ struct Config {
     add(mode.effectiveTerminalMappings, at: ["mode", "terminal"])
     add(mode.command, at: ["mode", "command"])
     add(mode.hyper, at: ["mode", "hyper"])
-    add(mode.drag, at: ["mode", "drag"])
+    add(mode.hold, at: ["mode", "hold"])
     for (bundle, app) in mode.appMappings {
       for scope in ModeScope.allCases {
         add(app.mappings(for: scope), at: ["mode", "apps", bundle, scope.rawValue])
@@ -1887,11 +1891,11 @@ extension URLCommand {
     case .mouseRepeat: return verb("mouse_repeat")
     case .mousePointer: return verb("mouse_pointer")
     case .mouseButton(let request): return verb("mouse_button", request.argTokens)
-    case .dragMode(let button):
+    case .holdMode(let button):
       switch button {
-      case .primary: return verb("enter_drag_mode")
-      case .secondary: return verb("enter_drag_mode", [flag("secondary")])
-      case .middle: return verb("enter_drag_mode", [flag("middle")])
+      case .primary: return verb("enter_hold_mode")
+      case .secondary: return verb("enter_hold_mode", [flag("secondary")])
+      case .middle: return verb("enter_hold_mode", [flag("middle")])
       }
     case .focusInput: return verb("focus_input")
     case .scrollTarget: return verb("scroll_target")

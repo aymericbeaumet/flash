@@ -126,19 +126,19 @@ export type BoardView = "bindings" | "alphabet" | "grid" | "zones";
 export const mappingModes: { id: string; label: string; summary: string }[] = [
   { id: "all", label: "All", summary: "Every mapping, in every mode." },
   { id: "normal", label: "Normal", summary: "Navigate and act; unmapped keys are swallowed." },
-  { id: "drag", label: "Drag", summary: "A held mouse button for dragging or text selection: nudge, jump, copy, cut, drop or put it back." },
+  { id: "hold", label: "Hold", summary: "A held mouse button for dragging or text selection: nudge, jump, copy, cut, drop or put it back." },
   { id: "hyper", label: "Hyper", summary: "While the hyper key is held." },
   { id: "insert", label: "Insert", summary: "Typing in an app; only these keys are Flash's." },
   { id: "command", label: "Command", summary: "The command line is open." },
   { id: "terminal", label: "Terminal", summary: "A terminal popup has the keyboard." },
 ];
 
-/** The mapping scopes a mode reads: its own and `all`. DRAG reads
+/** The mapping scopes a mode reads: its own and `all`. HOLD reads
  * its own table first, then NORMAL's. */
 export function scopesForMode(mode: string | undefined): string[] {
   switch (mode) {
     case "normal": return ["normal", "all"];
-    case "drag": return ["drag", "normal", "all"];
+    case "hold": return ["hold", "normal", "all"];
     case "hyper": return ["hyper"];
     case "insert": return ["insert", "all"];
     case "command": return ["command", "all"];
