@@ -8,7 +8,7 @@ struct WindowScreenLayout: Equatable {
   let usableFrame: CGRect
 }
 
-enum WindowFocusDirection: String, Hashable {
+enum WindowFocusDirection: String, Hashable, CaseIterable {
   case left, right, up, down
 }
 
@@ -17,7 +17,65 @@ struct WindowFocusCandidate<ID: Hashable> {
   let frame: CGRect
 }
 
+/// One on-screen window as WindowServer orders it, front first.
+struct WindowFocusZEntry: Equatable {
+  let pid: pid_t
+  let frame: CGRect
+}
+
 enum WindowFocusPlanner {
+  /// Two frames of the same window read through Accessibility and through
+  /// WindowServer agree within this many points on every edge.
+  static let frameMatchTolerance: CGFloat = 2
+
+  /// The catalog's windows in WindowServer order: each z entry claims the
+  /// first unclaimed catalog window of its pid with the same frame. Windows
+  /// the z-order does not show (another Space, minimized) are left out.
+  static func zOrdered<ID: Hashable>(
+    _ windows: [WindowFocusCandidate<ID>], zOrder: [WindowFocusZEntry], pid: (ID) -> pid_t
+  ) -> [ID] {
+    var claimed = Set<ID>()
+    var ordered: [ID] = []
+    for entry in zOrder {
+      guard
+        let match = windows.first(where: { candidate in
+          !claimed.contains(candidate.id) && pid(candidate.id) == entry.pid
+            && framesMatch(candidate.frame, entry.frame)
+        })
+      else { continue }
+      claimed.insert(match.id)
+      ordered.append(match.id)
+    }
+    return ordered
+  }
+
+  static func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+    abs(a.minX - b.minX) <= frameMatchTolerance && abs(a.minY - b.minY) <= frameMatchTolerance
+      && abs(a.width - b.width) <= frameMatchTolerance
+      && abs(a.height - b.height) <= frameMatchTolerance
+  }
+
+  /// `window_focus --direction=next|previous|behind` over the z-ordered
+  /// catalog: the window below or above the focused one in the stacking
+  /// order, wrapping, or the frontmost window below it that overlaps it.
+  static func cycle<ID: Hashable>(
+    _ cycle: WindowFocusCycle, from sourceID: ID, ordered: [ID],
+    frames: [ID: CGRect]
+  ) -> ID? {
+    guard let index = ordered.firstIndex(of: sourceID), ordered.count > 1 else { return nil }
+    switch cycle {
+    case .next:
+      return ordered[(index + 1) % ordered.count]
+    case .previous:
+      return ordered[(index - 1 + ordered.count) % ordered.count]
+    case .behind:
+      guard let source = frames[sourceID] else { return nil }
+      return ordered.dropFirst(index + 1).first { id in
+        frames[id].map { $0.intersects(source) } ?? false
+      }
+    }
+  }
+
   static func nearest<ID: Hashable>(
     _ direction: WindowFocusDirection, from sourceID: ID,
     in windows: [WindowFocusCandidate<ID>]
@@ -126,6 +184,10 @@ final class WindowLayoutManager {
   private var currentScreens: [WindowScreenLayout] = []
   private var screenChangeGeneration: UInt64 = 0
   private var screenChangeKeys: Set<WindowKey> = []
+  /// Displays as they were before this change. Recovery uses them to scale a
+  /// window that macOS left on a display that is gone.
+  private var screenChangeBaseline: [WindowScreenLayout] = []
+  private var screenChangeTopologyChanged = false
   private var screenChangeActiveUntil = DispatchTime(uptimeNanoseconds: 0)
   private var selfAuthoredChangesUntil: [WindowKey: DispatchTime] = [:]
   /// Accessibility cannot read or move windows while the session is locked or
@@ -267,25 +329,50 @@ final class WindowLayoutManager {
   func focusWindow(_ direction: WindowFocusDirection, targetPID: pid_t) {
     queue.async { [weak self] in
       guard let self, let source = self.focusedWindowKey, source.pid == targetPID else { return }
-      let candidates = self.navigationWindows.values.sorted {
-        if $0.key.pid != $1.key.pid { return $0.key.pid < $1.key.pid }
-        if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
-        return $0.frame.minY < $1.frame.minY
-      }.map {
-        WindowFocusCandidate(id: $0.key, frame: $0.frame)
-      }
-      guard let selected = WindowFocusPlanner.nearest(direction, from: source, in: candidates),
-        let target = self.navigationWindows[selected]
+      let candidates = self.sortedNavigationCandidates()
+      guard let selected = WindowFocusPlanner.nearest(direction, from: source, in: candidates)
       else { return }
-      _ = AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
-      _ = AXUIElementSetAttributeValue(
-        target.window, kAXMainAttribute as CFString, kCFBooleanTrue)
-      _ = AXUIElementSetAttributeValue(
-        target.window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-      DispatchQueue.main.async {
-        guard let app = NSRunningApplication(processIdentifier: selected.pid) else { return }
-        RunningApplicationActivation.activate(app, restoringMinimizedWindows: false)
-      }
+      self.raiseNavigationWindow(selected)
+    }
+  }
+
+  /// `window_focus --direction=next|previous|behind`. `zOrder` is the
+  /// on-screen window list as read on the main thread by the caller
+  /// (`WindowSnapshot.windowList` must not run on this queue).
+  func focusWindow(cycle: WindowFocusCycle, targetPID: pid_t, zOrder: [WindowFocusZEntry]) {
+    queue.async { [weak self] in
+      guard let self, let source = self.focusedWindowKey, source.pid == targetPID else { return }
+      let candidates = self.sortedNavigationCandidates()
+      let ordered = WindowFocusPlanner.zOrdered(candidates, zOrder: zOrder) { $0.pid }
+      let frames = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0.frame) })
+      guard
+        let selected = WindowFocusPlanner.cycle(
+          cycle, from: source, ordered: ordered, frames: frames)
+      else { return }
+      self.raiseNavigationWindow(selected)
+    }
+  }
+
+  private func sortedNavigationCandidates() -> [WindowFocusCandidate<WindowKey>] {
+    navigationWindows.values.sorted {
+      if $0.key.pid != $1.key.pid { return $0.key.pid < $1.key.pid }
+      if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
+      return $0.frame.minY < $1.frame.minY
+    }.map {
+      WindowFocusCandidate(id: $0.key, frame: $0.frame)
+    }
+  }
+
+  private func raiseNavigationWindow(_ selected: WindowKey) {
+    guard let target = navigationWindows[selected] else { return }
+    _ = AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
+    _ = AXUIElementSetAttributeValue(
+      target.window, kAXMainAttribute as CFString, kCFBooleanTrue)
+    _ = AXUIElementSetAttributeValue(
+      target.window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    DispatchQueue.main.async {
+      guard let app = NSRunningApplication(processIdentifier: selected.pid) else { return }
+      RunningApplicationActivation.activate(app, restoringMinimizedWindows: false)
     }
   }
 
@@ -510,8 +597,11 @@ final class WindowLayoutManager {
       let continuingChange = now < self.screenChangeActiveUntil
       if !continuingChange {
         self.screenChangeKeys = Set(self.tracked.keys)
+        self.screenChangeBaseline = previousScreens
+        self.screenChangeTopologyChanged = previousScreens != initialScreens
       } else {
         self.screenChangeKeys.formUnion(self.tracked.keys)
+        if previousScreens != initialScreens { self.screenChangeTopologyChanged = true }
       }
       self.screenChangeActiveUntil =
         now + .milliseconds((self.screenRecoveryDelaysMs.last ?? 0) + Self.authoredChangeGraceMs)
@@ -530,6 +620,10 @@ final class WindowLayoutManager {
             if !screens.isEmpty {
               self.currentScreens = screens
               self.restoreTrackedLayouts(self.screenChangeKeys, using: screens)
+              if self.screenChangeTopologyChanged {
+                self.fitWindowsLeftOffTheDisplays(
+                  previous: self.screenChangeBaseline, current: screens)
+              }
               if let afterRecoveryPass {
                 DispatchQueue.main.async {
                   afterRecoveryPass(screens)
@@ -759,6 +853,90 @@ final class WindowLayoutManager {
         + "restored=\(counts[.restored] ?? 0) already_correct=\(counts[.alreadyCorrect] ?? 0) "
         + "refused=\(counts[.refused] ?? 0) unreadable=\(counts[.unreadable] ?? 0) "
         + "untracked=\(dropped) pending=\(pendingRestoreKeys.count)")
+  }
+
+  /// macOS moves background windows onto a remaining display and leaves the
+  /// frontmost one at the old size. Anything already tracked was restored
+  /// above. This pass scales the rest onto a connected display.
+  private func fitWindowsLeftOffTheDisplays(
+    previous: [WindowScreenLayout], current: [WindowScreenLayout]
+  ) {
+    guard !sessionSuspended,
+      let primaryHeight = WindowMover.primaryHeight(in: current)
+    else { return }
+    let flashPID = ProcessInfo.processInfo.processIdentifier
+    let pids = NSWorkspace.shared.runningApplications.compactMap { app -> pid_t? in
+      guard app.activationPolicy == .regular, !app.isTerminated,
+        app.processIdentifier != flashPID
+      else { return nil }
+      return app.processIdentifier
+    }
+    var fitted = 0
+    for pid in pids {
+      guard let windows = loadRecoveryWindows(pid: pid, primaryHeight: primaryHeight) else {
+        continue
+      }
+      let bundleIdentifier = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+      let axApp = AXApp.make(pid: pid)
+      for candidate in windows {
+        let key = candidate.key
+        if tracked[key] != nil { continue }
+        guard
+          let frame = WindowMover.relocatedFrame(
+            candidate.frame, from: previous, to: current)
+        else { continue }
+        let outcome = GeckoAccessibility.withWindowManagement(
+          pid: pid,
+          bundleIdentifier: bundleIdentifier,
+          app: axApp
+        ) { axApp, prepareGeometry -> RestoreOutcome in
+          prepareGeometry()
+          switch WindowMover.apply(
+            rect: frame,
+            toWindow: candidate.window,
+            axApp: axApp,
+            primaryHeight: primaryHeight,
+            bundleIdentifier: bundleIdentifier)
+          {
+          case .converged: return .restored
+          case .refused: return .refused
+          case .unreadable: return .unreadable
+          }
+        }
+        if outcome == .restored {
+          fitted += 1
+          selfAuthoredChangesUntil[key] = .now() + .milliseconds(Self.authoredChangeGraceMs)
+          recordObservedLayout(
+            key: key, pid: pid, window: candidate.window, frame: frame, screens: current)
+        }
+      }
+    }
+    if fitted > 0 {
+      FlashLog.debug("[window_layout] fit_stranded count=\(fitted)")
+    }
+  }
+
+  private func loadRecoveryWindows(
+    pid: pid_t, primaryHeight: CGFloat
+  ) -> [NavigationWindow]? {
+    let axApp = AXApp.make(pid: pid)
+    AXUIElementSetMessagingTimeout(axApp, 1)
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &raw) == .success,
+      let windows = raw as? [AXUIElement]
+    else { return nil }
+    var snapshot: [NavigationWindow] = []
+    for window in windows {
+      AXUIElementSetMessagingTimeout(window, 1)
+      guard
+        let frame = WindowMover.readWindowFrameInNSCoords(
+          window: window, primaryHeight: primaryHeight), frame.width > 1, frame.height > 1,
+        !isMinimized(window)
+      else { continue }
+      snapshot.append(
+        NavigationWindow(key: WindowKey(pid: pid, window: window), window: window, frame: frame))
+    }
+    return snapshot
   }
 
   func appDidTerminate(pid: pid_t) {
@@ -1100,6 +1278,77 @@ enum WindowMover {
       layout: nil)
   }
 
+  /// Where a window should sit after a display is unplugged, when its frame
+  /// no longer fits a connected screen. Nil when the window already fits, or
+  /// when the move would not change it. A window that filled the departed
+  /// display fills the display it lands on; one that merely overflows is
+  /// pulled inside that display.
+  static func relocatedFrame(
+    _ frame: CGRect,
+    from previous: [WindowScreenLayout],
+    to current: [WindowScreenLayout]
+  ) -> CGRect? {
+    guard frame.width > 1, frame.height > 1, !current.isEmpty,
+      !frameFits(frame, on: current)
+    else { return nil }
+    let onCurrent = screenOwning(frame: frame, screens: current)
+    let source = screenOwning(frame: frame, screens: previous)
+    // Misses every display we have seen: the user parked it off-screen.
+    guard source != nil || onCurrent != nil else { return nil }
+    let destination = onCurrent ?? current[0]
+    let placed: CGRect
+    if let source,
+      !framesApproximatelyEqual(source.usableFrame, destination.usableFrame, tolerance: 1)
+    {
+      placed = fitted(
+        remap(frame: frame, from: source.usableFrame, to: destination.usableFrame),
+        within: destination.usableFrame)
+    } else {
+      placed = fitted(frame, within: destination.usableFrame)
+    }
+    guard !framesMatchPlacement(placed, frame) else { return nil }
+    return placed
+  }
+
+  /// True when `frame` lies inside some connected display, plus a few points
+  /// so AX rounding is not treated as an orphan.
+  static func frameFits(
+    _ frame: CGRect, on screens: [WindowScreenLayout], tolerance: CGFloat = 8
+  ) -> Bool {
+    screens.contains { screen in
+      screen.frame.insetBy(dx: -tolerance, dy: -tolerance).contains(frame)
+    }
+  }
+
+  /// The display that contains the frame's centre, or the one it overlaps
+  /// most. Nil when the frame misses every display: an intentionally
+  /// off-screen window, not one a departed display left behind.
+  static func screenOwning(
+    frame: CGRect, screens: [WindowScreenLayout]
+  ) -> WindowScreenLayout? {
+    let centre = CGPoint(x: frame.midX, y: frame.midY)
+    if let hit = screens.first(where: { $0.frame.contains(centre) }) { return hit }
+    guard
+      let best = screens.max(by: {
+        intersectionArea(frame, $0.frame) < intersectionArea(frame, $1.frame)
+      }), intersectionArea(frame, best.frame) > 0
+    else { return nil }
+    return best
+  }
+
+  /// Shrink and slide `frame` until it lies inside `usable`.
+  static func fitted(_ frame: CGRect, within usable: CGRect) -> CGRect {
+    guard usable.width > 1, usable.height > 1 else { return frame }
+    var result = frame
+    result.size.width = min(result.width, usable.width)
+    result.size.height = min(result.height, usable.height)
+    if result.minX < usable.minX { result.origin.x = usable.minX }
+    if result.minY < usable.minY { result.origin.y = usable.minY }
+    if result.maxX > usable.maxX { result.origin.x = usable.maxX - result.width }
+    if result.maxY > usable.maxY { result.origin.y = usable.maxY - result.height }
+    return result
+  }
+
   /// Resolve the destination for a tracked intent after any screen-topology or
   /// usable-frame change. A surviving display keeps ownership. If it vanished,
   /// follow macOS's relocated window to its new screen, falling back to the
@@ -1287,9 +1536,7 @@ enum WindowMover {
   static func nsRectFromAX(
     position: CGPoint, size: CGSize, primaryHeight: CGFloat
   ) -> CGRect {
-    CGRect(
-      x: position.x, y: primaryHeight - position.y - size.height,
-      width: size.width, height: size.height)
+    ScreenSpace.flip(CGRect(origin: position, size: size), height: primaryHeight)
   }
 
   /// Map a `WindowPosition` onto a slot of the supplied usable frame

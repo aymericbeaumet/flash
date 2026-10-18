@@ -53,17 +53,17 @@ impl Emitter {
         }
     }
 
-    fn encoded_len(value: &Value) -> Result<usize, EmitError> {
-        let mut count = FrameSize(0);
-        serde_json::to_writer(&mut count, value).map_err(|_| EmitError::Rejected)?;
-        Ok(count.0 + 1)
+    /// The frame's bytes, serialized once; `Rejected` past the frame cap,
+    /// at which point the bounded sink stops writing.
+    fn encode(value: &Value) -> Result<Vec<u8>, EmitError> {
+        let mut frame = BoundedFrame(Vec::with_capacity(256));
+        serde_json::to_writer(&mut frame, value).map_err(|_| EmitError::Rejected)?;
+        let mut payload = frame.0;
+        payload.push(b'\n');
+        Ok(payload)
     }
 
-    fn encode(value: &Value, bytes: OwnedSemaphorePermit, length: usize) -> OutboundFrame {
-        let mut payload = Vec::with_capacity(length);
-        // Counting already proved this immutable JSON value serializable.
-        serde_json::to_writer(&mut payload, value).expect("counted JSON serialization");
-        payload.push(b'\n');
+    fn frame(payload: Vec<u8>, bytes: OwnedSemaphorePermit) -> OutboundFrame {
         OutboundFrame {
             payload,
             _bytes: bytes,
@@ -75,7 +75,8 @@ impl Emitter {
     }
 
     async fn send(&self, value: &Value) -> Result<(), EmitError> {
-        let length = Self::encoded_len(value)?;
+        let payload = Self::encode(value)?;
+        let length = payload.len();
         let sender = self.sender().ok_or(EmitError::Closed)?;
         let slot = sender.reserve().await.map_err(|_| EmitError::Closed)?;
         let bytes = self
@@ -84,12 +85,13 @@ impl Emitter {
             .acquire_many_owned(length as u32)
             .await
             .map_err(|_| EmitError::Closed)?;
-        slot.send(Self::encode(value, bytes, length));
+        slot.send(Self::frame(payload, bytes));
         Ok(())
     }
 
     fn try_send(&self, value: &Value) -> Result<(), EmitError> {
-        let length = Self::encoded_len(value)?;
+        let payload = Self::encode(value)?;
+        let length = payload.len();
         let sender = self.sender().ok_or(EmitError::Closed)?;
         let slot = sender.try_reserve().map_err(|error| match error {
             mpsc::error::TrySendError::Full(_) => EmitError::Full,
@@ -100,7 +102,7 @@ impl Emitter {
             .clone()
             .try_acquire_many_owned(length as u32)
             .map_err(|_| EmitError::Full)?;
-        slot.send(Self::encode(value, bytes, length));
+        slot.send(Self::frame(payload, bytes));
         Ok(())
     }
 
@@ -182,14 +184,16 @@ impl Emitter {
     }
 }
 
-struct FrameSize(usize);
+/// A frame buffer that refuses to grow past the frame cap, so an oversized
+/// value is rejected while it is written rather than after.
+struct BoundedFrame(Vec<u8>);
 
-impl Write for FrameSize {
+impl Write for BoundedFrame {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
-        if self.0 > MAX_FRAME_BYTES {
+        if self.0.len().saturating_add(bytes.len()) > MAX_FRAME_BYTES {
             return Err(io::Error::other("outbound frame limit"));
         }
+        self.0.extend_from_slice(bytes);
         Ok(bytes.len())
     }
 

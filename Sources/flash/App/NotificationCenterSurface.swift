@@ -112,8 +112,6 @@ enum NotificationCenterSurface {
       AXValueGetValue(sizeRef as! AXValue, .cgSize, &extent),
       extent.width >= 3, extent.height >= 3
     else { return nil }
-    return CGRect(
-      x: origin.x, y: screenH - origin.y - extent.height, width: extent.width,
-      height: extent.height)
+    return ScreenSpace.flip(CGRect(origin: origin, size: extent), height: screenH)
   }
 }

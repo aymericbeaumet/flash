@@ -985,6 +985,65 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(nonLocationCalls, 0)
   }
 
+  // `app_open --name=<text>` ranks the plugin location pool with the
+  // flashlight scorer: an exact window title from a lower-priority source
+  // beats a heavier source whose row merely contains the text, and the
+  // winner is not whichever source answered first with a substring.
+  func testAppOpenNameResolutionPicksTheBestRankedPluginLocation() {
+    let completion = expectation(description: "ranked plugin app open")
+    let tmux = StubSource(
+      identifier: "plugin:tmux",
+      priority: 100,
+      capabilities: [.candidates, .appActivation],
+      candidateSourceDescriptors: [
+        CandidateSourceDescriptor(name: "tmux.windows", kind: .locations, priority: .important)
+      ],
+      candidatesHandler: { _ in
+        [
+          Candidate(
+            kind: .plugin("tmux_window"),
+            sourceID: "plugin:tmux",
+            source: "tmux.windows",
+            pid: 42,
+            title: "flash",
+            subtitle: "scratch:2 · zsh · ~/workspace/flash-extract-tools",
+            isLocation: true)
+        ]
+      })
+    let browsers = StubSource(
+      identifier: "plugin:browsers",
+      priority: 10,
+      capabilities: [.candidates, .appActivation],
+      candidateSourceDescriptors: [
+        CandidateSourceDescriptor(name: "firefox.tabs", kind: .locations, priority: .high)
+      ],
+      candidatesHandler: { _ in
+        [
+          Candidate(
+            kind: .plugin("browser_tab"),
+            sourceID: "plugin:browsers",
+            source: "firefox.tabs",
+            pid: 43,
+            title: "Extract",
+            url: URL(string: "https://analytics.example.test/extract"),
+            isLocation: true)
+        ]
+      })
+    let registry = SourceRegistry(
+      descriptors: [],
+      isTerminalEmulator: { _ in false },
+      runningApplications: [],
+      pluginSourcesProvider: { [tmux, browsers] })
+
+    registry.resolveCandidate(matching: "extract") { candidate in
+      XCTAssertEqual(candidate?.title, "Extract")
+      XCTAssertEqual(candidate?.sourceID, "plugin:browsers")
+      completion.fulfill()
+    }
+
+    wait(for: [completion], timeout: 1)
+  }
+
   func testQueryEvaluatorsAreAdditivePriorityOrderedAndDuplicateSafe() {
     let completion = expectation(description: "query evaluation")
     let lowCandidate = Candidate(title: "low")

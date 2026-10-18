@@ -30,17 +30,73 @@ keyboard_layout = "auto"
 
 # The active file is watched for live reload.
 
+# Logical key positions for hint labels, the mouse grid, bisect, pointer
+# movement and HYPER arrows. This is not the input source: that is
+# [app] keyboard_layout above.
+#   qwerty, colemak, dvorak, bepo
+# When hints.keys is still the bundled default, a layout other than qwerty
+# uses that layout's letters (home, top and bottom rows): colemak is
+# `<colemak>`. An explicit hints.keys token wins.
+[keyboard]
+layout = "qwerty"
+
 [hints]
 # Alphabet used to generate prefix-free hint labels.
 # Either a layout selector token or a literal string of ASCII letters.
 # Layout selector syntax: <$layout[_$row][_$hand]+...>
-#   layouts: qwerty, colemak, dvorak
+#   layouts: qwerty, colemak, dvorak, bepo
 #   rows: homerow, toprow, bottomrow
 #   hands: lefthand, righthand
+# One-key labels stay in front while the withheld keys can still spell
+# the rest as left/right alternations. A hand change ranks first, then
+# less travel between rows, then ease. Ease is the physical position,
+# the same formula on every layout: home row, then bottom row, then
+# top row; on a row, index, middle, the inward reach, ring, then pinky.
 keys = "<qwerty_homerow+qwerty_toprow>"
 
 # Floor on label length. Force longer labels by raising this.
 min_length = 1
+
+# Keys that outrank the layout's ease when labels are handed out, best
+# first, as a string of hint keys: "fjdk" gives f, j, d and k the first
+# one-key labels and the strongest two-key pairs. Every other key keeps its
+# place behind them. A key that is not in `keys` is reported and ignored.
+# Empty keeps the layout's own order.
+key_priority = ""
+
+# Which target gets the easiest label.
+#   "reading"  the first in reading order: top to bottom, left to right.
+#   "center"   the one nearest the centre of the window (or screen).
+#   "zones"    the first key of every label names the zone of the window
+#              the target sits in, laid out like your keyboard: with the
+#              default alphabet the window splits into two bands of ten
+#              columns, `q` top-left, `p` top-right, `a` to `;` below. The
+#              rest of the label is handed out as usual inside the zone, so
+#              a target's first key is predictable before the labels show.
+label_order = "reading"
+
+# What the digits do in `mouse_target --adjust`.
+#   "width"  `1`-`9` place the point across the target's width, in tenths.
+#   "grid"   a numeric keypad: `7` `8` `9` across the top third of the
+#            target, `4` `5` `6` the middle, `1` `2` `3` the bottom.
+adjust_digits = "width"
+
+# `mouse_position` saves pointer positions, labels them and cycles through
+# them. This many are kept; past it the oldest is forgotten.
+position_history_size = 16
+# "global" shares one list between every app; "app" keeps a list per app, so
+# a position saved in one never shows in another.
+position_history_scope = "global"
+
+# Bring the pointer to the centre of a newly focused app's window, when it
+# is outside that window, so the next scroll or pointer move lands there.
+pointer_follows_focus = false
+
+# `mouse_pointer` movement, in points: one keystroke at rest, what each
+# autorepeat adds, and the ceiling. Shift always moves by 2 points.
+pointer_step = 12
+pointer_acceleration = 6
+pointer_max_step = 90
 
 # Modifiers that can be held on the final hint key. Target and mouse-grid clicks
 # preserve them consistently; terminal links additionally require Shift so the
@@ -76,7 +132,8 @@ mouse_grid_steps = 3
 
 # Grid keys, one string per keyboard row, top row first. Empty derives the
 # left-hand block from the `keys` layout: qwerty 12345/qwert/asdfg/zxcvb,
-# colemak 12345/qwfpg/arstd/zxcvb, dvorak 12345/',.py/aoeui/;qjkx. A literal
+# colemak 12345/qwfpg/arstd/zxcvb, dvorak 12345/',.py/aoeui/;qjkx,
+# bepo $"«»(/bépoè/auie,/àyx.k. A literal
 # `keys` string has no layout and gets the qwerty block. Rows need the same
 # length (at least 2x2) and unique keys; "`" is reserved. For example:
 #   mouse_grid_keys = ["qwer", "asdf", "zxcv"]
@@ -90,6 +147,12 @@ mouse_grid_cursor_follow = false
 # opaque, 0.0 = invisible. The grid fills the screen during a precision
 # click, so a slight translucency keeps the underlying app visible.
 mouse_grid_opacity = 0.5
+
+# Draw the step that follows each cell faintly inside it, labelled with the
+# two keys that reach each of its cells (`qw` is `q`, then `w`), so the next
+# key can be read before the first is pressed. The step's own labels stay on
+# top; the clicking step and cells too small for a label show no preview.
+mouse_grid_preview = true
 
 [overlay]
 # Hint chip typography and colors. font_size drives the hint label size
@@ -121,7 +184,7 @@ window_border_size = 0
 window_border_color = ""
 # Seconds an alert_show toast stays up when the call passes no explicit
 # --duration.
-alert_duration = 2.0
+alert_duration = 3.0
 # Milliseconds a transient banner (command output, "Copied: ...") stays up.
 banner_duration_ms = 700
 # Where a hint chip sits relative to its target: "corner" (the target's
@@ -201,12 +264,10 @@ startup_timeout = 5
 # [plugin.tmux]
 # ssh_hosts = ["dev.example.com"] # destinations as typed, without user@
 #
-# The Claude quota only reads Claude Code's OAuth token; once it expires, the
-# quota shows as stale until Claude Code renews it. `true` lets Flash renew it
-# and write the rotated token back to Claude Code's store, which can sign
-# Claude Code out.
-# [plugin.aiproviders]
-# refresh_claude_code_credentials = false
+# Claude's weekly quota is the status-line sample at
+# ~/.cache/claude/rate-limits.json. Flash reads that file and leaves Claude
+# Code's credentials alone. A missing sample keeps the last percentage. The
+# Grok quota only reads ~/.grok/auth.json and never writes it.
 #
 # The cpu, memory, disks, network, and power status plugins share one display
 # setting. `compact` is the default: the bar keeps only the primary percentage
@@ -224,13 +285,21 @@ startup_timeout = 5
 # top_count = 5 # rows per table, 1-20
 
 # RSS headlines from the last 24 hours. No requests run until a URL is set.
-# Add #{flash.plugin.feed.summary} to a status format for the rotating title,
-# segment label, original domain/link, and whole-row article preview popup.
+# The template owns the name and the hovers. The name and the headline can
+# open different popups; `$FLASH_STATUS_LINK` is the headline's item link:
+#   #[popup=feed]#[label]NEWS#[default]#[nopopup] #[popup=feed-article]#{flash.plugin.feed.label}
+# `label` is the rotating headline. `summary` adds archive and source links
+# and an inline article preview. Neither segment prints a section name.
 # [plugin.feed]
-# label = "NEWS" # defaults to FEED
 # url = "https://example.com/feed.xml"
 # refresh_interval = 300 # seconds between feed requests
 # cycle_interval = 30    # seconds per headline; Flash rotates the carousel
+
+# Clipboard history, newest first. This is a retention ceiling, not a target
+# count or a way to recover copies made before Flash recorded them. Lowering
+# it drops the oldest entries (and their images) when Flash starts or reloads.
+# [clipboard]
+# history_size = 1000 # entries kept, 1..10000
 
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
@@ -254,11 +323,14 @@ font_size = 13
 # timeout. Native #(...) jobs and persistent PTY commands have no such timeout.
 command_timeout = 6.0
 # Points kept clear on each side of a notch — the real camera housing on a
-# notched screen, and the recess the bar draws behind its centre region
-# elsewhere. Both are the same width and use this same margin, so the bar lays
-# out identically on a notched Mac and an external display. The centre region
-# hides entirely on notched screens, where the hardware supplies the gap.
-notch_margin = 6
+# notched screen, and the recess the bar draws behind its centred lane
+# elsewhere. 4pt rather than 6: on the 16-inch housing a 6pt margin overlaps
+# the next cell by under a point and that whole glyph is dropped. Both notches
+# are the same width and use this same margin, so the lane lays out the
+# same way on a notched Mac and an external display. #[align=centre] and
+# #[align=notch] are that lane: a housing at the middle of the bar. It hides
+# entirely on notched screens, where the hardware supplies the gap.
+notch_margin = 4
 # One tmux 3.7c format string, written inline. Alignment and style markers can
 # appear inside conditionals. Newlines in the template are ignored, so a long
 # bar can span a multi-line """...""" string. Native formats, modifiers, #H/#h
@@ -273,18 +345,20 @@ notch_margin = 6
 #
 # Flash styles: link=URL/nolink, popup=name/nopopup (a [popup.<name>]),
 # popup=inline:<percent-encoded-rich-text>, breathing/nobreathing,
+# label/nolabel (the name colour, #EBCB8B),
 # pill/nopill, cyc/nocyc, meter=W[/MAX]/nometer (a W-cell bar of the first
 # number inside), spark[=MIN/MAX]/nospark (a sparkline of every number
-# inside) and shrink/noshrink (a span cut first, ending in "…", when the bar
-# overflows; after that each left/centre/right section loses its own end), e.g.
-# #[align=absolute-centre]#[shrink]#{flash.active_app_name}#[noshrink].
+# inside) and shrink/noshrink (the last marked span in a segment is cut first,
+# ending in "…"; otherwise the left and centre end with "…" and the right
+# starts with "…"), e.g.
+# #[align=centre]#[shrink]#{flash.active_app_name}#[noshrink].
 # Native range=user|name binds statusbar.click.
 # Values stay plain text unless a plugin intentionally publishes rich status.
 template = "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}"
-# A popup marker can wrap several labels at once, for example:
-# #[popup=btop]#{flash.plugin.cpu.label} #{flash.plugin.memory.label}#[nopopup]
-# CPU/MEM/DISK labels carry padded percentages; BAT is unpadded; NET carries a padded byte rate.
-# AI quota labels are aiproviders.claude_label / aiproviders.codex_label.
+# A popup marker can wrap several labels at once. The template owns each name:
+# #[popup=btop]#[label]CPU#[default] #{p-3:flash.plugin.cpu.label} #[label]MEM#[default] #{p-3:flash.plugin.memory.label}#[nopopup]
+# CPU/MEM/DSK are percentages (`p-3` keeps two digits); BAT is unpadded; NET is a byte rate (`p-4`).
+# Colour a name with #[label] and print the metric from a plugin or a source you own.
 # Example with combined metrics and the time on the right:
 # template = """
 # #[align=left]#[pill]#{flash.mode}#[nopill]
@@ -319,12 +393,12 @@ template = "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B
 "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
 
 # Popups: every popup runs in a real PTY and shares this chrome, whether it
-# previews under a #[popup=<name>] status label, is pinned by a click, or shows
+# previews under a #[popup=<name>] status label, is pinned by a right-click, or shows
 # standalone through `enter_terminal_mode --name=<name>`. Colours are #RRGGBB
 # or #RRGGBBAA; sizes are points.
 [popup]
 fg = "#D8DEE9"
-bg = "#2E3440F2"
+bg = "#2E3440"
 border = "#4C566A"
 border_size = 1
 corner_radius = 8
@@ -349,8 +423,9 @@ offset = 8
 #     cwd         working directory; relative paths follow the defining file.
 #     env         a table of extra environment variables.
 #     size        "COLUMNSxROWS": each side a cell count (1-1000) or a
-#                 percentage (1%-100%) of the screen the popup shows on, e.g.
-#                 "120x36" or "90%x85%". Defaults to 100x28.
+#                 percentage (1%-100%, fractions allowed) of the screen the
+#                 popup shows on, e.g. "120x36", "90%x85%" or "78.615%x78.615%".
+#                 Defaults to 100x28.
 #     persistent  true keeps one process from Flash startup, parsed while
 #                 hidden and restarted when it exits (after 100 ms, backing off
 #                 to 30 s on repeated immediate exits). The default runs a fresh
@@ -447,8 +522,8 @@ suggestion_count = 10
 # The default flashlight pool is intentionally location-only: apps, tabs,
 # tmux windows, and any plugin-provided location entities.
 # Other sources are hidden unless the query includes an explicit @source filter.
-# Bonus added to candidates backed by a running process, used as a tiebreaker
-# inside the same source.
+# Bonus added to candidates backed by a running process, ordering them ahead
+# of installed-but-not-running rows of the same source inside one match tier.
 precedence_alive_bonus = 10
 # App candidates hidden from the flashlight and the `app_open --name=...` verb.
 # Entries match display name, bundle identifier, bundle path, .app filename,
@@ -474,8 +549,12 @@ app_directories = [
 # "@ft" = "@firefox.tabs"
 
 [flashlight.precedence]
-# Optional source-order overrides used as tie-breakers for location rows or
-# explicit @source result sets. Keys are source labels or parent prefixes.
+# Optional source weights. Results rank by how the query hits a row's own name
+# first (exact > prefix > word > substring > secondary text), then by source
+# weight, then by match score and frecency. Unlisted sources derive their
+# weight from the plugin manifest's `sources[].priority` (bundled: tmux windows
+# `important`, apps and browser tabs `high`). Keys are source labels or parent
+# prefixes; higher wins inside one tier and never crosses tiers.
 # Example:
 # tmux = 200
 # "firefox.tabs" = 120
@@ -495,7 +574,8 @@ app_directories = [
 
 [mode]
 # Mode labels shown after the active app name in the persistent status bar
-# when advanced mode is enabled.
+# when advanced mode is enabled. `terminal`, `hyper` and `hold`
+# (defaults TERMINAL, HYPER, HOLD) label the popup, the held leader and a drag.
 labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 
 # Time (in ms) the interpreter waits for the next key in a pending
@@ -537,6 +617,8 @@ send_key_interval_ms = 35
 #
 # Single modified-key mappings use Carbon. Non-modified keys and sequences
 # are read only by the overlay while Flash is capturing normal-mode input.
+# Command-Control-H toggles HOLD from NORMAL or INSERT.
+"cmd+ctrl+h" = ["flash", "enter_hold_mode"]
 #
 # Examples:
 # "cmd+shift+space" = ["flash", "mouse_target"]
@@ -576,7 +658,10 @@ send_key_interval_ms = 35
 
 [mode.normal]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
+# false clears it. mode.normal.hyper of "<leader>" then does nothing.
 leader = "\\"
+# Key held to enter HYPER. "<leader>" follows leader above.
+hyper = "<leader>"
 
 [mode.normal.mappings]
 # Defaults map keys to high-level actions, never to raw key chords: each action
@@ -635,31 +720,40 @@ leader = "\\"
 "ctrl+i" = ["flash", "movement_forward"]
 "H" = ["flash", "history_back"]
 "L" = ["flash", "history_forward"]
-# f clicks normally; F applies the same Command-Shift gesture in every app.
-# Terminal links additionally require Shift so the terminal opens the link.
-# Lowercase f targets discovered elements, uppercase F targets a screen
-# position through the grid. A lowercase prefix picks the click on either:
-# none, s(econdary), d(ouble), m(ove). Modifiers ride the final hint key
-# (hints.magic_modifiers), so holding cmd+shift on it is a Command-Shift
-# click without a binding of its own. A prefix letter must not also be a
-# mapping on its own, or that mapping waits for sequence_timeout_ms before
-# it fires -- which is why triple click ships unbound: "tf" would stall the
-# bare "t" above. To add it, remove "t" first:
+# A mouse action is a prefix and a finisher.
+# Prefixes: none, m (move), d (double), c (context, the right-click).
+# Finishers: f (a discovered target), F (the grid), s (a visible letter).
+# c is the operator Vim and Vimium leave free. r is reload and s is a
+# finisher, so neither can be the right-click prefix. Modifiers on the
+# final hint key (hints.magic_modifiers) still ride the click. A prefix
+# letter must not also be a mapping on its own, or that mapping waits for
+# sequence_timeout_ms before it fires -- which is why triple click ships
+# unbound: "tf" would stall the bare "t" above. To add it, remove "t" first:
 #   "t" = false
 #   "tf" = ["flash", "mouse_target", "--triple"]
 #   "tF" = ["flash", "mouse_grid", "--triple"]
+# s starts no other mapping, so the EasyMotion jump fires at once. v and V
+# match the same glyphs. Backspace edits the letter and Escape cancels.
 "f" = ["flash", "mouse_target"]
 "F" = ["flash", "mouse_grid"]
-"sf" = ["flash", "mouse_target", "--secondary"]
-"sF" = ["flash", "mouse_grid", "--secondary"]
-"df" = ["flash", "mouse_target", "--double"]
-"dF" = ["flash", "mouse_grid", "--double"]
+"s" = ["flash", "mouse_bigram"]
 "mf" = ["flash", "mouse_target", "--move"]
 "mF" = ["flash", "mouse_grid", "--move"]
+"ms" = ["flash", "mouse_bigram", "--move"]
+# enter_hold_mode grabs what is under the pointer and drops it again;
+# cmd+ctrl+h is its default all-mode toggle.
+"df" = ["flash", "mouse_target", "--double"]
+"dF" = ["flash", "mouse_grid", "--double"]
+"ds" = ["flash", "mouse_bigram", "--double"]
+"cf" = ["flash", "mouse_target", "--secondary"]
+"cF" = ["flash", "mouse_grid", "--secondary"]
+"cs" = ["flash", "mouse_bigram", "--secondary"]
 "u" = ["flash", "app_undo"]
 "ctrl+r" = ["flash", "app_redo"]
-# x closes the current tab (tmux: its window, after tmux's confirmation) and X
-# reopens the last closed one. r reloads and R hard-reloads (tmux: refreshes
+# x closes the current tab (tmux: its window, after Flash asks [y]es / [n]o,
+# because the tmux plugin declares the action destructive) and X reopens the
+# last closed one. Gate any command the same way with
+# ["flash", "confirm", "--prompt=Really?", "--command=<verb [--arg=value]>"]. r reloads and R hard-reloads (tmux: refreshes
 # the client); apps without a reload, terminals included, do nothing.
 # y/p use the system clipboard unless prefixed with a register, e.g. "ay / "ap
 # for register a. y resolves immediately.
@@ -695,9 +789,84 @@ leader = "\\"
 "cmd+r" = ["flash", "popup_restart"] # restart now; a text popup rereads its values
 "cmd+w" = ["flash", "leave_mode"] # close; a persistent process keeps running
 
+# HYPER is on while mode.normal.hyper is held. The default is <leader>, which
+# follows mode.normal.leader. leader = false leaves that default unset, so
+# HYPER stays off until hyper is a real key ("a", "<space>", "cmd+space").
+# The status pill turns purple and shows mode.labels.hyper (default HYPER).
+# Keys in the mappings table run during the hold. While the hyper key is the
+# leader, a key with no hyper mapping can still finish a NORMAL <leader>
+# sequence. Releasing the leader returns to NORMAL. A tap that pressed
+# nothing else arms the <leader> prefix, so a <leader> sequence still works
+# as press, release, then the next key. `+` is written <plus>.
+# Holding a key also posts an arrow from the physical QWERTY ESDF positions
+# (up, left, down, right). F is the home-row index-finger mark, so the right
+# arrow sits on that bump. The keys are spelled as the letters [keyboard]
+# layout types there: QWERTY esdf, Colemak frst, Dvorak .oeu, Bépo puie.
+# Shift uses that same letter, so Colemak down is shift+s. A punctuation key
+# uses the character Shift types there, so Dvorak up is >. A mapping or `false` on one
+# of those keys wins. These bindings are derived, so they are not listed below.
+# The Apple function row, in the order printed on the keyboard. Shift plus
+# the same key sends F1–F12. `=` is the unshifted volume-up key.
+[mode.hyper.mappings]
+"1" = ["flash", "system_key", "--key=brightness_down"]
+"2" = ["flash", "system_key", "--key=brightness_up"]
+"3" = ["flash", "system_key", "--key=mission_control"]
+"4" = ["flash", "system_key", "--key=spotlight"]
+"5" = ["flash", "system_key", "--key=dictation"]
+"6" = ["flash", "system_key", "--key=focus"]
+"7" = ["flash", "system_key", "--key=media_previous"]
+"8" = ["flash", "system_key", "--key=media_play"]
+"9" = ["flash", "system_key", "--key=media_next"]
+"0" = ["flash", "system_key", "--key=mute"]
+"-" = ["flash", "system_key", "--key=volume_down"]
+"=" = ["flash", "system_key", "--key=volume_up"]
+"shift+1" = ["flash", "function_key", "--key=f1"]
+"shift+2" = ["flash", "function_key", "--key=f2"]
+"shift+3" = ["flash", "function_key", "--key=f3"]
+"shift+4" = ["flash", "function_key", "--key=f4"]
+"shift+5" = ["flash", "function_key", "--key=f5"]
+"shift+6" = ["flash", "function_key", "--key=f6"]
+"shift+7" = ["flash", "function_key", "--key=f7"]
+"shift+8" = ["flash", "function_key", "--key=f8"]
+"shift+9" = ["flash", "function_key", "--key=f9"]
+"shift+0" = ["flash", "function_key", "--key=f10"]
+"shift+-" = ["flash", "function_key", "--key=f11"]
+"shift+=" = ["flash", "function_key", "--key=f12"]
+
+# HOLD is a drag with a mouse button held, entered by enter_hold_mode.
+# These keys are read before NORMAL's.
+# h / j / k / l nudge what is dragged by 16 points and H / J / K / L by 96, a
+# picked target (f, F, s) is where it goes; w / b / e and 0 / $ jump by text.
+# y copies and clears a text selection; d / x cut, c changes and p pastes over
+# it. Return (or the key that entered HOLD) drops it; Escape returns to origin.
+[mode.hold.mappings]
+"y" = ["flash", "selection", "--action=copy"]
+"d" = ["flash", "selection", "--action=cut"]
+"x" = ["flash", "selection", "--action=cut"]
+"c" = ["flash", "selection", "--action=change"]
+"p" = ["flash", "selection", "--action=paste"]
+"w" = ["flash", "mouse_step", "--to=next_word"]
+"b" = ["flash", "mouse_step", "--to=previous_word"]
+"e" = ["flash", "mouse_step", "--to=word_end"]
+"0" = ["flash", "mouse_step", "--to=line_start"]
+"$" = ["flash", "mouse_step", "--to=line_end"]
+"h" = ["flash", "mouse_nudge", "--direction=left", "--distance=16"]
+"j" = ["flash", "mouse_nudge", "--direction=down", "--distance=16"]
+"k" = ["flash", "mouse_nudge", "--direction=up", "--distance=16"]
+"l" = ["flash", "mouse_nudge", "--direction=right", "--distance=16"]
+"H" = ["flash", "mouse_nudge", "--direction=left", "--distance=96"]
+"J" = ["flash", "mouse_nudge", "--direction=down", "--distance=96"]
+"K" = ["flash", "mouse_nudge", "--direction=up", "--distance=96"]
+"L" = ["flash", "mouse_nudge", "--direction=right", "--distance=96"]
+"f" = ["flash", "mouse_target", "--move"]
+"F" = ["flash", "mouse_grid", "--move"]
+"s" = ["flash", "mouse_bigram", "--move"]
+"<return>" = ["flash", "mouse_button", "--state=release", "--mode=hold"]
+"<esc>" = ["flash", "mouse_button", "--state=cancel", "--mode=hold"]
+
 # Override mappings for one exact, case-sensitive bundle ID. Supported scopes
-# are all, normal, insert, command, and terminal. `false` removes an inherited
-# mapping only while that app is focused. See docs/configuration.md.
+# are all, normal, insert, command, terminal, hyper and hold. `false` removes an
+# inherited mapping only while that app is focused. See docs/configuration.md.
 # [mode.apps."com.apple.Safari".normal.mappings]
 # "f" = ["flash", "mouse_target", "--search"]
 # "r" = false

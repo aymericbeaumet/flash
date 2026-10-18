@@ -36,7 +36,7 @@ dev app settled at a 126.54 MiB median physical footprint for Flash plus its
 inside the existing 130 MiB budget.
 
 Those figures predate status-bound activation. The status-only monitors
-(`cpu`, `memory`, `disks`, `power`, `caffeinate`, `feed`, `aiproviders`) now
+(`cpu`, `memory`, `disks`, `power`, `caffeinate`, `feed`) now
 spawn only while the enabled status bar shows one of their segments, so with
 the bar off (the default) none of them runs until its command does.
 
@@ -100,6 +100,14 @@ least 50 ms.
   outbound budget (see [event coalescing](plugin-protocol.md#event-coalescing)). Deadlines include time spent awaiting
   queue admission, and teardown invalidates work from the old child generation.
   Stderr drains on its pipe callback without scheduling lifecycle work.
+- Host → plugin fan-out resolves the listeners of an event name once per
+  published plugin set, and derives an event's frame and coalescing key once
+  for every listener. `core:ax.changed` carries the bundle id the observer
+  recorded at install, never a LaunchServices lookup per notification. A
+  `status` that restates every segment unchanged schedules no re-evaluation.
+  The Rust runtime moves `params` out of the envelope instead of cloning it,
+  encodes each outbound frame once, and flushes frames queued together with
+  one write.
 - Third-party installation drains stdout/stderr concurrently on its own job
   queue; output retention is capped at 4 MiB / 256 KiB. Stop/reload never waits
   on an install script, and its process group receives bounded TERM/KILL

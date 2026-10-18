@@ -1,7 +1,9 @@
 # Commands
 
 Run `flash <verb>` from a terminal or put the same argv in a mapping. Open
-`:commands` for the installed command inventory. `:help` or `flash help_show`
+`flash enter_command_mode` to use colon commands; no command-line shortcut is
+bound by default. In that command line, `:commands` opens the installed command
+inventory. `:help` or `flash help_show`
 opens the browser help homepage; `?`, `:mappings` or `flash mappings_show`
 opens the live mapping reference.
 
@@ -18,21 +20,41 @@ flash mouse_grid --drag                  # drag between two grid positions
 flash mouse_target --select              # click a start point, shift-click an end point
 flash mouse_grid --select                # select text between two grid positions
 flash mouse_target --multi               # click several targets, rediscovered after each click; Escape ends
+flash mouse_target --sticky              # click several targets, the same labels stay up; Escape ends
+flash mouse_target --path                # pick two targets, click every one between them in reading order
+flash mouse_target --words               # a label on every visible word, landing on its leading edge
+flash mouse_target --words --select      # highlight the text between two words
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
 flash mouse_target --search              # type visible text to pick the target (seek & click)
+flash mouse_target --gesture=look_up     # Look Up the word at the target (smart_zoom: two-finger double tap there)
+flash mouse_bigram                       # type a visible character (v/V and 3/# match) in the window or status bar, then its hint bigram
+flash mouse_bigram --secondary           # right-click that letter
+flash mouse_bigram --double              # double-click that letter
+flash mouse_bigram --move                # move the pointer onto that letter
 flash mouse_target --scope=screen        # hints across every app on the screen
 flash mouse_dock                         # hint the Dock's items
 flash mouse_menubar                      # hint the focused app's menu titles and the status items
 flash mouse_notifications                # hint Notification Center's banners, alerts and buttons
-flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
-flash mouse_button --state=down          # press the primary button where the pointer is
-flash mouse_button --state=up            # release it
-flash mouse_button --state=toggle --secondary # press or release the secondary button (or --middle)
+flash mouse_pointer                      # freestyle cursor control (layout hjkl, m/,/. click, v drag)
+flash mouse_screens                      # one label per display; the pointer lands on its centre
+flash mouse_warp --area=window --edge=center # jump the pointer to a window or screen edge or centre
+flash mouse_step --direction=down        # move the pointer one text line (up, down) or character (left, right)
+flash mouse_position --action=save       # remember the pointer position (hints, next, previous, unsave, clear)
+flash mouse_position --action=hints --move # label the saved positions and move to the one you pick
+flash enter_hold_mode                    # grab what is under the pointer, or drop it (HOLD; --secondary, --middle)
+flash mouse_button --state=toggle --mode=hold   # the same hold, spelled out
+flash mouse_button --state=release       # drop a drag, or end a selection, where the pointer is
+flash mouse_button --state=cancel        # put a drag back where it was grabbed
+flash mouse_nudge --direction=down --distance=16 # move the pointer (and a drag) a few points
+flash mouse_step --to=next_word          # jump to a word or line edge (previous_word, word_end, line_start, line_end)
+flash selection --action=copy            # copy the selection, ending HOLD (cut, change, paste)
+flash gesture --fingers=3 --motion=swipe_up # a trackpad gesture: tap, double_tap, pinch, spread, rotate_*, swipe_*
+flash look_up                            # the focused app's Look Up on the word under the pointer
 flash scroll_target                      # pick which scroll area the scroll keys drive
 # In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
 flash mouse_grid                         # target any screen position (keyboard-shaped grid)
-flash mouse_grid --bisect                # halve the screen with h/j/k/l, quarter it with y/u/b/n
+flash mouse_grid --bisect                # half at the layout's hjkl columns, quarter at y/u and b/n
 flash mouse_grid --zoom-to-depth=2       # start two steps deep under the pointer
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window
@@ -42,8 +64,17 @@ flash window_restore                      # restore the most recently minimized 
 flash window_fullscreen                   # toggle native macOS full screen
 flash window_fullscreen --state=on        # enter native full screen (off exits)
 flash window_focus --direction=right      # focus the nearest window to the right
-flash media_input                         # list input devices in Flash's message overlay
-flash media_output --device='Studio Speakers' # select the default output device
+flash window_focus --direction=behind     # focus the window just behind the focused one (next, previous cycle the stack)
+flash media input                        # list input devices in Flash's message overlay
+flash media output 'Studio Speakers'     # select the default output device
+flash media volumedown                   # one macOS volume step; the alert shows the percent
+flash system_key --key=brightness_down   # an Apple function-row key
+flash function_key --key=f1              # plain F1, as shift+hyper+1 does
+flash arrow --direction=left             # one arrow; --shift holds Shift. HYPER uses the layout's ESDF positions
+flash caffeinate toggle                  # plugin command, same words as :caffeinate toggle
+flash clipboard show                     # plugin command, same words as :clipboard show
+flash clipboard delete <id>              # remove one history entry; <id> is 32 hex characters
+flash confirm --prompt='Close it?' --command='tab_close' # ask first: y runs the verb line, any other key closes the question
 flash enter_command_mode                 # open the command line
 flash enter_terminal_mode                # show and focus the terminal popup; see docs/popups.md
 flash enter_terminal_mode --name=btop    # show a [popup.<name>] centred and focused
@@ -71,18 +102,24 @@ flash config_check --file=~/dotfiles/flash.toml
 ```
 
 `flash status` asks the running resident. `--json` prints this object; the keys
-are fixed for `"schema": 2`:
+are fixed for `"schema": 4`:
 
 | Key | Value |
 | --- | --- |
-| `schema` | `2` |
+| `schema` | `4` |
 | `version`, `build` | The app's version and build number |
-| `mode` | `disabled`, `insert`, `normal`, `command` or `terminal` |
-| `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting` or `pointer` |
+| `mode` | `disabled`, `insert`, `normal`, `hold`, `hyper`, `command` or `terminal` |
+| `mapping_scope` | The mapping table the mode reads and whose chords Flash registers: `insert`, `normal`, `hold`, `command` or `terminal`. It always follows `mode` |
+| `hint_session` | `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer` or `bigram` |
 | `focused_app` | The focused app's bundle identifier, or `null` |
+| `frontmost_app` | The app macOS has frontmost, which receives every key Flash passes, or `null` |
+| `flash_active` | Whether Flash itself is the active app. While it is, keys Flash passes reach Flash instead of the window that looks focused |
 | `accessibility` | Whether Flash has the Accessibility grant |
 | `capture` | How hint keys arrive: `tap`, or `key_window` without a tap or under secure input |
-| `secure_input` | Whether secure input is on (a password field has focus) |
+| `chord_routing` | What the keyboard tap does with a Command, Control or Option chord right now: `pass` (it reaches the app), `mapped_only` (INSERT: only chords a mapping claims are taken), `native_surface` (a menu or About owns input: only mapped keys are taken), `swallowed` (NORMAL and hints take every chord) or `tap_off` (no live tap: only `global_chords` are taken) |
+| `held_modifiers` | Modifiers the session's event state holds down: `cmd`, `ctrl`, `alt`, `shift`, `fn`, `caps_lock`. Empty unless a key is held, so an entry while nothing is pressed is a stuck key that rides every keystroke |
+| `secure_input` | Whether secure input is on (a password field has focus, or an app left the hold on) |
+| `global_chords` | The configured mapping keys Flash holds as system-wide hotkeys right now. Those chords never reach the focused app, so a native shortcut that stops working shows up here |
 | `input_source` | The selected input source's ID |
 | `keyboard_layout` | `[app] keyboard_layout` as configured |
 | `reference_layout` | The layout keys are read on, or `null` while they read as typed |
@@ -93,8 +130,14 @@ are fixed for `"schema": 2`:
 
 The text rendering lists the three busiest apps under `hints`.
 
+When a native shortcut stops reaching an app, run `flash status` while it
+happens. `chord_routing`, `flash_active`, `frontmost_app`, `held_modifiers`
+and `global_chords` together say whether Flash took the chord, sent it
+elsewhere, or never saw it.
+
 `flash doctor` runs every check `:doctor` runs and prints one line per check:
-Accessibility, the keyboard tap, secure input (and which app holds it), the
+Accessibility, the keyboard tap, secure input (and which app holds it; a stuck
+hold is released automatically, a focused password field is not), the
 app's code signature (an ad-hoc signature can lose the Accessibility grant on
 update), other Flash residents, config diagnostics, hotkeys another app
 registered first, plugin health, hint and grid keys the current keyboard layout
@@ -113,8 +156,15 @@ not applied.
 
 Arguments use `--name=value` for values and bare flags such as `--secondary` or `--restore-mode` for booleans.
 
-`mouse_button --state=down|up|toggle` presses or releases a button where the
-pointer is, the primary one unless `--secondary` or `--middle` says otherwise.
+`mouse_button --state=down|up|toggle|release|cancel [--mode=hold]`
+starts a drag or text selection by holding a button where the pointer is, the primary one
+unless `--secondary` or `--middle` says otherwise. `enter_hold_mode
+[--secondary|--middle]` is the drag toggle by name: it grabs, or drops when
+that button is already held; ⌘⌃H is the default toggle. `release` lets go of
+whichever button is held, dropping a drag or ending a selection; `cancel`
+first drags back to where the button went down. `mouse_nudge
+--direction=up|down|left|right [--distance=<points>]` moves the pointer,
+16 points by default, dragging in HOLD.
 While it is held, every pointer move Flash makes is a drag of that button:
 `mouse_target --move` (`mf`), `mouse_grid --move` (`mF`), `mouse_pointer`
 movement and grid cursor-follow. So a keyboard drag in any app is `down`, a
@@ -135,9 +185,62 @@ walks each one through Accessibility by its frame. The Accessibility shapes of
 these surfaces vary across macOS versions and have not been verified on every
 release, so a player or strip that exposes nothing pressable stays silent.
 
-`mouse_grid` takes the click flags of `mouse_target` except `--adjust` and
-`--search`, plus `--bisect` and `--zoom-to-depth=N` (N ≥ 1), which combine with
-every click flag. The screen splits like the left half of the keyboard; see
+`mouse_grid` takes the click flags of `mouse_target` except `--adjust`,
+`--search`, `--path` and `--sticky`, plus `--bisect` and `--zoom-to-depth=N`
+(N ≥ 1), which combine with every click flag.
+
+`mouse_target --path` picks two labels and clicks every target between them,
+in reading order from the first pick to the second; `--sticky` keeps the same
+labels up after each click with no new walk, where `--multi` discovers the
+targets again. `--words` labels the visible words of the focused window's
+text instead of its controls; it takes the click flags, `--move`, `--drag` and
+`--select`, and the click lands on the word's leading edge. While labels are
+up, `Tab` restarts the same click on the grid and `Shift-Tab` widens it to
+every app on the screen (and back); `Backspace` with nothing typed returns to
+the surface the session came from.
+
+`mouse_target`, `mouse_bigram` and `mouse_grid` take
+`--gesture=look_up|smart_zoom` alone: the pointer lands on the pick as with
+`--move`, then Flash runs that trackpad gesture there. In NORMAL a count
+before a mouse finisher is a finger count, as on a trackpad: `2f` (or `2F`,
+`2s`) secondary-clicks, `3f` looks up and `2df` smart-zooms at the pick.
+Other counts change nothing.
+
+`gesture --fingers=2..5 --motion=<motion>` performs what that trackpad
+gesture does under the default macOS trackpad settings, where the pointer is:
+
+| Fingers | Motion | Effect |
+|---------|--------|--------|
+| 2 | `tap`, `double_tap` | secondary click, smart zoom |
+| 2 | `pinch`, `spread`, `rotate_left`, `rotate_right` | zoom out, zoom in, rotate |
+| 2 | `swipe_right`, `swipe_left` | back, forward (`history_back`, `history_forward`) |
+| 3 | `tap` | Look Up (`look_up`) |
+| 3, 4 | `swipe_up`, `swipe_down` | Mission Control, App Exposé |
+| 3, 4 | `swipe_left`, `swipe_right` | the Space to the right, to the left |
+| 4, 5 | `pinch`, `spread` | Launchpad, show desktop |
+
+Zoom, rotate and smart zoom post the same gesture events a trackpad does, so
+an app that ignores a real trackpad's gesture ignores Flash's too. Look Up
+and history are app actions; Spaces use the system shortcuts; Mission
+Control, App Exposé and show desktop ask the Dock directly. Launchpad opens
+the Apps launcher that replaced it in macOS 26, or asks the Dock before it.
+A combination macOS gives no meaning to, such as a three-finger pinch, is a
+config error.
+
+`mouse_screens` labels the centre of every display; committing moves the
+pointer there. `mouse_warp` moves the pointer to the centre or a side of the
+focused window (`--area=window`, the default) or of its display
+(`--area=screen`), a few points inside the edge. `mouse_step` moves it one
+text line up or down, in its column, or one character left or right,
+measured from the glyph Accessibility reports under it; off text it moves a
+fixed line height or column. `mouse_step --to=next_word|previous_word|word_end|line_start|line_end`
+jumps as Vim's `w`, `b`, `e`, `0` and `$` do. HOLD binds them to those keys.
+`selection --action=copy|cut|change|paste` ends HOLD and acts on the selected text;
+change cuts and enters INSERT. `mouse_position` keeps a
+bounded list of saved pointer positions, per app with `[hints]
+position_history_scope = "app"`: `save`, `unsave` the one under the pointer,
+`clear`, `next` and `previous` cycle from the one the pointer is on, and
+`hints` labels them, taking the click flags and `--move`. The screen splits like the left half of the keyboard; see
 [normal mode](normal-mode.md#mouse-grid) for its keys.
 
 `window_move` accepts named positions (`topleft`, `topright`, `bottomleft`,
@@ -166,7 +269,8 @@ Accessibility requests away from
 Flash's keyboard input loop.
 
 `window_focus --direction=left|right|up|down` chooses the nearest cataloged
-non-minimized window in that direction. See [window navigation and placement](windows.md)
-for automatic placement rules. The media plugin's `media_input` and
-`media_output` verbs accept an optional `--device=<exact name or UID>`; see
-[audio devices](audio.md) for command-bar listing and selection.
+non-minimized window in that direction. `next` and `previous` cycle the
+cataloged windows in WindowServer's stacking order, and `behind` focuses the
+frontmost window below the focused one that it overlaps. See [window navigation and placement](windows.md)
+for automatic placement rules. `flash media input` and `flash media output`
+list or select the default device; see [audio devices](audio.md).

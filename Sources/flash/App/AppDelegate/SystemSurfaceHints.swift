@@ -28,10 +28,19 @@ extension AppDelegate {
   /// at their chip, which sits on the target; a menu title, status item or
   /// notification control is clicked at its centre instead — a banner's chip
   /// sits on its top-left corner, where the close button appears on hover.
-  static func hintCommitPoint(for hint: AssignedHint, fontSize: CGFloat) -> CGPoint {
+  /// A bigram's chip sits beside the letters, and the pointer lands one
+  /// point left of the glyph centre.
+  /// `selectingThrough` (HOLD) lands a bigram one point right of its glyph
+  /// centre instead of one left, so the held button's selection ends on it.
+  static func hintCommitPoint(
+    for hint: AssignedHint, fontSize: CGFloat, selectingThrough: Bool = false
+  ) -> CGPoint {
     let provider = hint.target.providerID
     if provider == menuBarProviderID || provider == notificationsProviderID {
       return CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
+    }
+    if provider == BigramTextCollector.providerID {
+      return BigramMatcher.clickPoint(in: hint.target.frame, selectingThrough: selectingThrough)
     }
     let chip = OverlayPanel.chipFrame(for: hint, fontSize: fontSize)
     return CGPoint(x: chip.midX, y: chip.midY)
@@ -49,7 +58,7 @@ extension AppDelegate {
       return
     }
     let pid = dock.processIdentifier
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let token = activationLifecycle.begin()
     applyModeOverlay()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -68,7 +77,7 @@ extension AppDelegate {
     guard prepareHintActivation(.menuBar) else { return }
     let token = activationLifecycle.begin()
     let ownPID = ProcessInfo.processInfo.processIdentifier
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let screens = NSScreen.screens.map(\.frame)
     // The flashlight or the command bar may hold activation; the menus on
     // screen belong to the app that owns the menu bar.
@@ -109,7 +118,7 @@ extension AppDelegate {
       return
     }
     let pid = center.processIdentifier
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     let token = activationLifecycle.begin()
     applyModeOverlay()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in

@@ -2,8 +2,10 @@ import Foundation
 
 /// Which native mapping set Carbon should own. Terminal input suspends every
 /// global registration so only the popup's local mappings can intercept keys.
-enum MappingScope: Equatable {
+enum MappingScope: String, Hashable {
   case normal
+  /// Dragging: `[mode.hold.mappings]` over NORMAL.
+  case hold
   case insert
   case command
   case terminal
@@ -22,10 +24,6 @@ enum ModeEffect: Equatable {
 
   /// Reset transient capture context once when an explicit transition enters a mode.
   case prepareModeEntry
-
-  /// Reconcile Carbon hotkeys for the active surface. Terminal focus suspends
-  /// every registration; the executor dedupes no-op re-applies.
-  case setMappingScope(MappingScope)
 
   /// Recompute and push everything derived from `Mode`: `overlay.inputMode`,
   /// the badge (text/style/visibility/capture), the status-bar label, and the

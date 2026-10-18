@@ -120,10 +120,13 @@ final class InspectorStatePushTests: XCTestCase {
     assertOnePush("secure input") { delegate.noteSecureInput(true) }
     assertOnePush("keyboard capture") {
       delegate.keyboardCaptureTap = KeyboardCaptureTap(
-        shouldSwallow: { _ in false }, handle: { _ in })
+        shouldSwallow: { _ in .pass }, handle: { _ in })
     }
     assertOnePush("clipboard") {
-      delegate.clipboardEntries = [ClipboardModalEntry(preview: "hello", value: "hello")]
+      delegate.clipboardEntries = [
+        ClipboardModalEntry(
+          id: "0123456789abcdef0123456789abcdef", kind: "text", preview: "hello", value: "hello")
+      ]
     }
     // The trust list is re-read once more a second later: the notification
     // can precede the database it announces.

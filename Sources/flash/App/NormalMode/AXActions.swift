@@ -32,7 +32,7 @@ extension NormalModeDispatcher {
     flags: CGEventFlags = [],
     to pid: pid_t
   ) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
@@ -76,23 +76,56 @@ extension NormalModeDispatcher {
     virtualKey: CGKeyCode,
     flags: CGEventFlags
   ) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    guard let events = focusedKeyEvents(virtualKey: virtualKey, flags: flags) else { return false }
+    events.down.post(tap: .cghidEventTap)
+    events.up.post(tap: .cghidEventTap)
+    return true
+  }
+
+  /// Test seam. Production posts at the annotated session tap: downstream of
+  /// `KeyboardCaptureTap`, so the stroke is not swallowed as another hyper
+  /// key, and the window server attaches it to the key window. `postToPid`
+  /// has no window, so Alacritty drops it while the hyper key is still
+  /// physically down. Volume is an auxiliary system event and does not take
+  /// this path.
+  static var focusedKeyPoster: (CGEvent) -> Void = { event in
+    event.post(tap: .cgAnnotatedSessionEventTap)
+  }
+
+  /// One key down/up for the focused app. A private source keeps the held
+  /// hyper key out of the event; the session keyboard type still fills the
+  /// function-key unicode arrows and F-keys need.
+  static func focusedKeyEvents(
+    virtualKey: CGKeyCode,
+    flags: CGEventFlags
+  ) -> (down: CGEvent, up: CGEvent)? {
+    let source = SyntheticEventSources.focusedKeyboardSource()
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
-    else { return false }
+    else { return nil }
     down.flags = flags
     up.flags = flags
     down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
     up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    return (down, up)
+  }
+
+  /// Posts one key into the focused app's key window. See `focusedKeyPoster`.
+  @discardableResult
+  static func sendFocusedKey(
+    virtualKey: CGKeyCode,
+    flags: CGEventFlags = []
+  ) -> Bool {
+    guard let events = focusedKeyEvents(virtualKey: virtualKey, flags: flags) else { return false }
+    focusedKeyPoster(events.down)
+    focusedKeyPoster(events.up)
     return true
   }
 
   @discardableResult
   static func typeText(_ text: String, to pid: pid_t) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     var ok = true
     for unit in text.utf16 {
       guard
@@ -118,7 +151,7 @@ extension NormalModeDispatcher {
   /// this carries the full UTF-16 in one event, so emoji insert correctly.
   @discardableResult
   static func insertUnicode(_ text: String, to pid: pid_t) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
+    let source = SyntheticEventSources.session
     guard
       let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
       let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
@@ -151,6 +184,33 @@ extension NormalModeDispatcher {
       !text.isEmpty
     else { return nil }
     return text
+  }
+
+  /// Collapse a selection at its trailing edge. Some apps expose the text but
+  /// do not permit setting its AX range; the caller can then use a navigation
+  /// key after the copy is complete.
+  static func collapseSelectedText(pid: pid_t) -> Bool {
+    let app = AXApp.make(pid: pid)
+    guard let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
+      return false
+    }
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(
+        focused, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
+      let raw, CFGetTypeID(raw) == AXValueGetTypeID()
+    else { return false }
+    let value = raw as! AXValue
+    guard AXValueGetType(value) == .cfRange else { return false }
+    var range = CFRange(location: 0, length: 0)
+    guard AXValueGetValue(value, .cfRange, &range), range.location >= 0, range.length >= 0,
+      range.location <= Int.max - range.length
+    else { return false }
+    if range.length == 0 { return true }
+    var collapsed = CFRange(location: range.location + range.length, length: 0)
+    guard let collapsedValue = AXValueCreate(.cfRange, &collapsed) else { return false }
+    return AXUIElementSetAttributeValue(
+      focused, kAXSelectedTextRangeAttribute as CFString, collapsedValue) == .success
   }
 
   /// Forward argv to `/usr/bin/open` verbatim. Deliberately dumb: whatever

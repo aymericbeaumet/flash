@@ -22,27 +22,13 @@
       "description": "Copy a capture of the focused window to the clipboard"
     }
   ],
-  "verbs": [
-    {
-      "name": "screenshot_screen",
-      "command": "screenshot",
-      "subcommand": "screen",
-      "description": "Copy a capture of every display to the clipboard."
-    },
-    {
-      "name": "screenshot_window",
-      "command": "screenshot",
-      "subcommand": "window",
-      "description": "Copy a capture of the focused window to the clipboard."
-    }
-  ],
   "help": {
     "topics": [
       {
         "name": "screenshot",
         "title": "Screenshot",
         "summary": "Capture the screen or the focused window to the clipboard.",
-        "body": "# Screenshot\n\nTwo captures, both to the clipboard, neither needing a click.\n\n- `:screenshot screen` - every display\n- `:screenshot window` - the focused window\n\nApple's `screencapture` does the work and writes straight to the clipboard, so no image data passes through Flash and the captures do not depend on the macOS Screenshot shortcuts being enabled or unchanged. It does need Flash to hold Screen Recording in System Settings > Privacy & Security; macOS asks the first time, and until it is granted both captures fail with `could not create image from display`.\n\nThe window capture names the focused window by its WindowServer id, which is why it never opens a picker.\n\nDirect CLI verbs: `flash screenshot_screen` and `flash screenshot_window`. For mappings, use the plugin-command form, e.g. `[\"flash\", \"plugin_command\", \"--command=screenshot\", \"--subcommand=window\"]`.\n"
+        "body": "# Screenshot\n\nTwo captures, both to the clipboard, neither needing a click.\n\n- `:screenshot screen` - every display\n- `:screenshot window` - the focused window\n\nApple's `screencapture` does the work and writes straight to the clipboard, so no image data passes through Flash and the captures do not depend on the macOS Screenshot shortcuts being enabled or unchanged. It does need Flash to hold Screen Recording in System Settings > Privacy & Security; macOS asks the first time, and until it is granted both captures fail with `could not create image from display`.\n\nThe window capture names the focused window by its WindowServer id, which is why it never opens a picker.\n\n`flash screenshot screen` and `flash screenshot window` run them, and so does a mapping such as `[\"flash\", \"screenshot\", \"window\"]`.\n"
       }
     ]
   }

@@ -22,8 +22,16 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertEqual(session.keyRoute, .adjustment)
     session.phase = .pointer(.init())
     XCTAssertEqual(session.keyRoute, .pointer)
+    session.phase = .bigram
+    session.bigramQuery = "th"
+    XCTAssertEqual(session.keyRoute, .bigram)
     XCTAssertNil(session.search, "entering one phase leaves the others")
     XCTAssertNil(session.anchor)
+    let question = HintSession.Confirmation(prompt: "Close?", command: .tabClose, repeatCount: 2)
+    session.phase = .confirming(question)
+    XCTAssertEqual(session.keyRoute, .confirmation)
+    XCTAssertEqual(session.confirmation, question)
+    XCTAssertNil(session.pointer)
   }
 
   func testLabelTypingNeedsHintsWhileTheOtherPhasesOwnInputRegardless() {
@@ -33,7 +41,8 @@ final class HintSessionPhaseTests: XCTestCase {
     XCTAssertTrue(session.isActive)
     session.hints = []
     for phase: HintSession.Phase in [
-      .search(.init()), .adjusting(hint: hint("a"), point: .zero), .pointer(.init()),
+      .search(.init()), .adjusting(hint: hint("a"), point: .zero), .pointer(.init()), .bigram,
+      .confirming(.init(prompt: "Close?", command: .tabClose)),
     ] {
       session.phase = phase
       XCTAssertTrue(session.isActive)
@@ -91,5 +100,53 @@ final class HintSessionPhaseTests: XCTestCase {
 
     delegate.hintSession = HintSession()
     XCTAssertEqual(delegate.overlay.hintKeyRoute, .labels)
+  }
+
+  func testBigramCaptureCoversTheQueryAndItsLabels() {
+    var session = HintSession()
+    XCTAssertFalse(session.isBigramCapture)
+    session.phase = .bigram
+    XCTAssertTrue(session.isBigramCapture)
+    session.phase = .labels(anchor: nil)
+    session.bigramQuery = "t"
+    XCTAssertTrue(session.isBigramCapture, "the hint labels of the jump still own the keyboard")
+    session.bigramQuery = nil
+    XCTAssertFalse(session.isBigramCapture)
+  }
+
+  func testEscapeStaysInTheJumpWhileAModeChangeOrTheLeaderEndsIt() {
+    XCTAssertEqual(BigramCapture.exit(isLeader: false, chord: nil, typed: nil), .stay)
+    XCTAssertEqual(BigramCapture.exit(isLeader: true, chord: nil, typed: nil), .leader)
+    let insert = MappingCommand.flashCommand(.insertMode)
+    XCTAssertEqual(
+      BigramCapture.exit(isLeader: false, chord: insert, typed: nil), .mode(insert))
+    let scroll = MappingCommand.flashCommand(.scroll(.left))
+    XCTAssertEqual(
+      BigramCapture.exit(isLeader: false, chord: scroll, typed: insert), .stay,
+      "a chord that does not change mode is not read again as a bare key")
+    XCTAssertEqual(
+      BigramCapture.exit(isLeader: false, chord: nil, typed: insert), .mode(insert))
+    XCTAssertFalse(URLCommand.mouseBigram(.click(.leftClick, modifiers: [])).changesMode)
+    XCTAssertTrue(URLCommand.enterCommand(input: "", restoreMode: false).changesMode)
+    XCTAssertTrue(URLCommand.terminalMode(name: nil).changesMode)
+    XCTAssertTrue(URLCommand.leaveMode.changesMode)
+  }
+
+  func testBackspaceOnABigramLabelReturnsToTheQuery() {
+    var session = HintSession()
+    session.phase = .labels(anchor: nil)
+    session.bigramQuery = "t"
+    session.hints = [hint("as"), hint("ad")]
+    XCTAssertTrue(session.retreatBigram())
+    XCTAssertEqual(session.bigramQuery, "")
+    XCTAssertTrue(session.hints.isEmpty)
+    XCTAssertEqual(session.prefix, "")
+    XCTAssertEqual(session.keyRoute, .bigram)
+    XCTAssertTrue(session.isActive)
+    session.bigramQuery = ""
+    session.phase = .labels(anchor: nil)
+    XCTAssertFalse(session.retreatBigram())
+    session.phase = .bigram
+    XCTAssertFalse(session.retreatBigram(), "retreat is only from the label phase")
   }
 }

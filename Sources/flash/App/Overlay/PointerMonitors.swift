@@ -24,7 +24,7 @@ extension OverlayPanel {
       // preview. Presses on Flash's own bar and popup are local events their
       // views handle (a link click, pinning a popup).
       if event.type != .scrollWheel {
-        self?.dismissEphemeralStatusBarPopup(reason: "pointer_click")
+        self?.relinquishShownStatusPopup(reason: "pointer_click")
       }
       self?.deliverPointerIntent(for: event)
     }

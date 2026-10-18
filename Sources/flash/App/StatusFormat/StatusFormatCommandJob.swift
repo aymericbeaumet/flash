@@ -89,6 +89,11 @@ final class StatusFormatCommandJob {
       identifier: process, eventMask: .exit, queue: queue)
     source.setEventHandler { [weak self] in
       guard let self else { return }
+      // A command which backgrounds children still owns their process
+      // group; signal it while the zombie leader still holds the group id —
+      // reaped, that id can be reused by an unrelated process. The children
+      // also hold the pipe, so their end is what lets the read reach EOF.
+      kill(-self.process, SIGKILL)
       // The exit event can precede the reapable state by the kernel's last
       // exit steps; a non-blocking wait there returned nothing and the job
       // never completed. The reap waits them out.
@@ -201,8 +206,6 @@ final class StatusFormatCommandJob {
     guard !completed, reachedEOF, let exitStatus else { return }
     completed = true
     closeSources()
-    // A command which backgrounds children still owns their process group.
-    kill(-process, SIGKILL)
     onCompletion(exitStatus, String(decoding: output, as: UTF8.self))
   }
 

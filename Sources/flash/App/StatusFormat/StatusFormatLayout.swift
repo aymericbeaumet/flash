@@ -54,7 +54,7 @@ enum StatusFormatLayout {
   }
 
   private enum Section: Int, CaseIterable {
-    case left, centre, right, absoluteCentre, list, leftMarker, rightMarker, after
+    case left, centre, right, notch, list, leftMarker, rightMarker, after
   }
 
   private struct StoredRange {
@@ -70,7 +70,7 @@ enum StatusFormatLayout {
     var current = Section.left
     var alignmentMap: [StatusFormatAlignment: Section] = [
       .default: .left, .left: .left, .centre: .centre, .right: .right,
-      .absoluteCentre: .absoluteCentre,
+      .notch: .notch,
     ]
     enum ListState { case before, inside, after }
     var listState = ListState.before
@@ -246,7 +246,7 @@ enum StatusFormatLayout {
       case .default: drawWithoutList()
       case .left, .right: drawEdgeList()
       case .centre: drawCentreList()
-      case .absoluteCentre: drawAbsoluteCentreList()
+      case .notch: drawNotchList()
       }
       // Native row output advances over a wide glyph even if a later aligned
       // section overwrote its padding cell in the intermediate grid.
@@ -254,7 +254,9 @@ enum StatusFormatLayout {
       while column < output.count {
         let cell = output[column]
         if cell.isContinuation {
-          output[column] = Cell(segment: blank)
+          var padding = blank
+          padding.background = cell.segment.background
+          output[column] = Cell(segment: padding)
         }
         if cell.columns > 1, column + 1 < output.count {
           var padding = cell.segment
@@ -290,7 +292,7 @@ enum StatusFormatLayout {
       put(
         .centre, offset: left + (columns - right - left) / 2 - centre / 2,
         start: count(.centre) / 2 - centre / 2, width: centre)
-      overlayAbsoluteCentre()
+      overlayNotch()
     }
 
     mutating func drawEdgeList() {
@@ -323,7 +325,7 @@ enum StatusFormatLayout {
           start: count(.centre) / 2 - centre / 2, width: centre)
         putList(offset: columns - list - after, width: list, defaultFocus: 0)
       }
-      overlayAbsoluteCentre()
+      overlayNotch()
     }
 
     mutating func drawCentreList() {
@@ -343,31 +345,31 @@ enum StatusFormatLayout {
       put(.centre, offset: middle - list / 2 - centre, width: centre)
       put(.after, offset: middle - list / 2 + list, width: after)
       putList(offset: middle - list / 2, width: list, defaultFocus: count(.list) / 2)
-      overlayAbsoluteCentre()
+      overlayNotch()
     }
 
-    mutating func drawAbsoluteCentreList() {
+    mutating func drawNotchList() {
       let outer = trimmed([.centre, .right, .left], available: columns)
-      let inner = trimmed([.list, .after, .absoluteCentre], available: columns)
+      let inner = trimmed([.list, .after, .notch], available: columns)
       let left = outer[.left, default: 0]
       let centre = outer[.centre, default: 0]
       let right = outer[.right, default: 0]
       let list = inner[.list, default: 0]
       let after = inner[.after, default: 0]
-      let absolute = inner[.absoluteCentre, default: 0]
+      let absolute = inner[.notch, default: 0]
       put(.left, offset: 0, width: left)
       put(.right, offset: columns - right, start: count(.right) - right, width: right)
       let middle = left + (columns - right - left) / 2
       put(.centre, offset: middle - centre, width: centre)
       let offset = (columns - list - absolute) / 2
-      put(.absoluteCentre, offset: offset, width: absolute)
+      put(.notch, offset: offset, width: absolute)
       putList(offset: offset + absolute, width: list, defaultFocus: count(.list) / 2)
       put(.after, offset: offset + absolute + list, width: after)
     }
 
-    mutating func overlayAbsoluteCentre() {
-      let width = min(columns, count(.absoluteCentre))
-      put(.absoluteCentre, offset: (columns - width) / 2, width: width)
+    mutating func overlayNotch() {
+      let width = min(columns, count(.notch))
+      put(.notch, offset: (columns - width) / 2, width: width)
     }
 
     mutating func putList(offset originalOffset: Int, width originalWidth: Int, defaultFocus: Int) {

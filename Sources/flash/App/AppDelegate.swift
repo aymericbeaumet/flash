@@ -104,12 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var statusBarController: FlashStatusBarController?
   /// Desktop widget windows; the status controller evaluates their lines.
   var widgetController: WidgetController?
-  var statusTerminalEnvironmentReady = false
-  var terminalReturnApplicationPID: pid_t?
   let mainRunLoopStallObserver = MainRunLoopStallObserver()
-  /// The swallowed Escape that closed a hover preview; its routing, queued
-  /// right behind, must not also reach a mapping or the interpreter.
-  var tapEscapeClosedPopup = false
   var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
@@ -128,6 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The effective mode last handed to `MappingsCoordinator`, so a focus
   /// change only re-registers Carbon hotkeys when the chord set changed.
   var lastAppliedMappingMode: Config.Mode?
+  /// The selector cache key `lastAppliedMappingMode` was resolved for.
+  var lastAppliedMappingKey: String?
   /// The config error last shown: its message, so an unchanged error is not
   /// re-shown on every reload, and its toast, so clearing the error closes
   /// that toast and never another one.
@@ -141,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The overlay's key routing and the focus border's visibility are
   /// projections of it, pushed here on every change so neither keeps a copy
   /// that could disagree.
+  /// The focused window's text for `mouse_bigram`. Nil until the first
+  /// activation; cleared by generation, not by dropping the object, so a walk
+  /// already on `axQueue` cannot present after Escape.
+  var bigramSearch: BigramSearch?
   var hintSession = HintSession() {
     didSet {
       guard let overlay else { return }
@@ -181,12 +182,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Presses the menu items `action_bindings` name (`{"menu": [...]}`).
   var menuPathPresser: MenuPathPresser = AXMenuPathPresser()
   let finder = CandidateFinderSession()
-  /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
-  /// from the clipboard plugin on `:clipboard` and on each pasteboard change,
-  /// then surfaced through `debugStateJSON`.
+  lazy var clipboardHistoryStore = ClipboardHistoryStore(capacity: config.clipboard.historySize) {
+    [weak self] in self?.refreshClipboardDashboardCache()
+  }
+  /// First clipboard history page mirrored for the inspector's Clipboard tab.
   var clipboardEntries: [ClipboardModalEntry] = [] {
     didSet { debugStateDidChange() }
   }
+  var clipboardNextOffset: Int?
+  var clipboardTotal = 0
+  /// MIME types for image entries served to the inspector, including pages
+  /// fetched after the first one.
+  var clipboardImageMimes = ClipboardImageCache()
   let pluginStateRefresh = PollDeadline("core:plugin_state_refresh", priority: .normal, on: .main)
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
@@ -219,6 +226,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     var pid: pid_t?
   }
   var lastCommittedClick: LastCommittedClick?
+  /// `mouse_position`'s saved pointer positions.
+  var positionHistory = PositionHistory()
   var movementCurrent: MovementEntry?
   var movementBackStack: [MovementEntry] = []
   var movementForwardStack: [MovementEntry] = []
@@ -233,6 +242,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var sourceItemResolutionGeneration: UInt64 = 0
   var appCurrent: pid_t?
   var observedFocusedAppPID: pid_t?
+  /// The last app plugins heard focus move to; see `FocusEmissionGate`.
+  var focusEmissionGate = FocusEmissionGate()
   var lastFocusedApplicationPID: pid_t? {
     observedFocusedAppPID.flatMap { $0 == getpid() ? nil : $0 }
   }
@@ -261,14 +272,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     set { recaptureSuppression.pointerInsertHandoffUntil = newValue }
   }
   var pointerInsertHandoffToken: UInt64 = 0
-  /// True while a native surface (context menu / OS popup) owns the keyboard.
-  /// The sole non-base-mode input to the capture projection — set by
-  /// `suspendNormalCaptureForNativeSurface`, cleared when capture is
-  /// re-established (recapture or any mode transition). Keeps `overlay.inputMode`
-  /// and the badge's capture flag from drifting away from the mode.
-  var nativeSurfaceSuspended = false {
-    didSet { if oldValue != nativeSurfaceSuspended { refreshOverlayInputRouting() } }
+  /// Whether a native surface (context menu / OS popup) owns the keyboard.
+  /// The sole non-base-mode input to the capture projection — begun by
+  /// `suspendNormalCaptureForNativeSurface`, ended by the surface's close
+  /// notification, an explicit mode entry, another app coming forward, or a
+  /// recapture after the bounded window for a surface Flash never saw open.
+  /// Keeps `overlay.inputMode` and the badge's capture flag from drifting
+  /// away from the mode.
+  var nativeSurfaceOwnership = NativeSurfaceOwnership() {
+    didSet {
+      if oldValue.isOwned != nativeSurfaceOwnership.isOwned { refreshOverlayInputRouting() }
+    }
   }
+  var nativeSurfaceSuspended: Bool { nativeSurfaceOwnership.isOwned }
   var aboutWindowVisible = false {
     didSet { if oldValue != aboutWindowVisible { refreshOverlayInputRouting() } }
   }
@@ -295,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
   /// See `noteSecureInput`.
   var secureInputObserved = false
+  let secureInputFixer = SecureInputFixer()
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderUpdateGeneration: UInt64 = 0
   /// The authoritative front-window read queued for the next main turn.
@@ -305,6 +322,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// next main turn corrects it.
   var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
+  /// The latest `focus_input` request; an older one still queued is dropped.
+  var focusTextInputRequest: UInt64 = 0
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>() {
     didSet {
       guard oldValue.inFlight != activationLifecycle.inFlight else { return }
@@ -333,6 +352,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // screen-parameter observer reads it.
     ScreenSpace.startObserving()
     mainRunLoopStallObserver.start()
+    // Hint labels hide the pointer while another app stays frontmost.
+    let backgroundCursor = BackgroundCursor.enable()
+    FlashLog.debug("[overlay] background_cursor enabled=\(backgroundCursor)")
     signal(SIGTERM, SIG_IGN)
     let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
     termination.setEventHandler { NSApp.terminate(nil) }
@@ -343,13 +365,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // and tooling the user has in their terminal. A GUI launch from Finder/
     // launchd would otherwise hand children a bare environment. Until this
     // lands the seeded cache (process env + PATH fallback) keeps commands
-    // usable, so the spawn need not block startup.
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      FlashProcessEnvironment.shared.refresh()
+    // usable, so the spawn need not block startup. The launch reload below
+    // does not ask again: this is the one launch refresh.
+    FlashProcessEnvironment.shared.refresh { [weak self] _ in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
-        self.statusTerminalEnvironmentReady = true
         self.reloadTerminalPopupConfiguration()
+        self.overlay.statusTerminals.retryFailedLaunches()
       }
     }
     // First run: give the user a working shortcut before the first load.
@@ -367,8 +389,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
+    // A held mouse button enters HOLD:
+    // whichever path presses or releases it, the mode follows the hold, from
+    // NORMAL or from INSERT (an all-mode `enter_hold_mode` chord).
+    ActionDispatcher.heldButtonDidChange = { [weak self] held in
+      guard let self else { return }
+      if let held, self.modeStore.mode == .normal || self.modeStore.mode.isInsert {
+        self.dispatchMode(.buttonHeld(held.purpose))
+      } else if held == nil, self.modeStore.mode.buttonHold != nil {
+        self.dispatchMode(.buttonReleased)
+      }
+    }
+    // A native menu's own open and close are the evidence that decides how
+    // long it keeps the keyboard (`NativeSurfaceOwnership`), and the menus
+    // they name are what `f` walks while one is open.
+    monitor.menuDidChange = { [weak self] pid, opened, menu in
+      guard let self else { return }
+      if opened {
+        self.nativeSurfaceOwnership.menuOpened(pid: pid, menu: menu)
+      } else if self.nativeSurfaceOwnership.menuClosed(menu), self.flashMode == .normal {
+        self.scheduleNormalModeRecapture()
+      }
+    }
     // Every observed AX notification reaches plugins exactly once, here.
-    monitor.focusedElementDidChange = { [weak self] pid, notification in
+    monitor.focusedElementDidChange = { [weak self] pid, bundleID, notification in
       if notification == kAXTitleChangedNotification as String {
         self?.windowLayoutManager.observedTitleChanged(pid: pid)
       }
@@ -376,9 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         return
       }
       self.pluginManager.emit(
-        .axChanged(
-          pid: pid, notification: notification,
-          bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier))
+        .axChanged(pid: pid, notification: notification, bundleID: bundleID))
     }
     monitor.activeWindowMayHaveChanged = { [weak self] pid, notification, window in
       self?.activeWindowMayHaveChanged(
@@ -412,13 +454,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         let context = self.normalModeDispatchContext()
       else { return nil }
       let window = HintWindowSnapshot.current(
-        pid: context.processID, primaryHeight: self.monitor.primaryScreenHeight())
+        pid: context.processID, primaryHeight: ScreenSpace.primaryHeight)
       return (
         pid: context.processID, bundleID: context.bundleIdentifier, windowID: window?.number
       )
     }
     pluginManager.onNotifyRequested = { [weak self] message, durationMs in
       self?.overlay.displayBanner(message, durationMs: durationMs)
+    }
+    pluginManager.onOutputVolumeChanged = { [weak self] percent in
+      self?.overlay.displayAlert(StatusAlert.volume(percent))
     }
     pluginManager.wifiInfoProvider = wifiInfoProvider
     pluginManager.onCatalogsChanged = { [weak self] in
@@ -454,6 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.popupStyle = config.popupStyle
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.effectiveMagicModifiers)
+    overlay.keyboardNavigation = Alphabet.navigation(layoutName: config.positionLayoutName)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
     keyboardLayoutMonitor.onChange = { [weak self] state in
       self?.overlay.keyboardLayout = state.reference.table
@@ -478,8 +524,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       },
       widgetSink: { [weak self] name, lines in self?.widgetController?.show(name, lines: lines) })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
-    // Once at launch; afterwards the tap and hint activations refresh it.
+    // Once at launch; afterwards the tap, hint activations and the secure-input
+    // poll refresh it. The poll is what notices a hold that starts while the
+    // tap is blind.
     noteSecureInput(IsSecureEventInputEnabled())
+    secureInputFixer.onFlag = { [weak self] enabled in
+      DispatchQueue.main.async { self?.noteSecureInput(enabled) }
+    }
+    secureInputFixer.start()
     overlay.statusBarActionHandler = { [weak self] name in
       self?.performStatusBarClickAction(named: name)
     }
@@ -536,8 +588,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     switch cmd {
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: nil)
+    case .mouseBigram(let command):
+      activateMouseBigram(command, contextOverride: nil)
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
+    case .mouseTargetWords(let command):
+      activateWordHints(command, contextOverride: nil)
+    case .mouseScreens:
+      activateScreenHints()
+    case .mouseWarp(let request):
+      performMouseWarp(request)
+    case .mouseStep(let direction):
+      performMouseStep(direction)
+    case .mouseNudge(let direction, let distance):
+      performMouseNudge(direction, distance: distance)
+    case .mouseJump(let jump):
+      performMouseJump(jump)
+    case .trackpadGesture(let fingers, let motion):
+      performGesture(fingers: fingers, motion: motion)
+    case .selection(let action, let register):
+      performSelection(action, register: register)
+    case .mousePosition(let request):
+      performMousePosition(request)
     case .mouseGrid(let request):
       activateMouseGrid(request, contextOverride: nil)
     case .mouseRepeat:
@@ -546,6 +618,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterPointerMode()
     case .mouseButton(let request):
       performMouseButton(request)
+    case .holdMode(let button):
+      toggleHoldMode(button)
     case .focusInput:
       focusTextInputInNormalMode(index: 1)
     case .scrollTarget:
@@ -579,15 +653,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
       .quitApp, .saveAndQuit, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste,
-      .sendKey, .sendKeys:
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp,
+      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow:
       performMappedCommand(cmd)
     case .showAlert(let alert):
       shownConfigError = nil
-      overlay.displayAlert(
-        alert.message,
-        duration: alert.duration,
-        style: .from(alert.style))
+      overlay.displayAlert(alert.alert)
+    case .confirm(let request):
+      presentConfirmation(request.prompt, command: request.command)
     case .dismissAlert:
       shownConfigError = nil
       overlay.dismissAlert()
@@ -605,6 +678,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       NSApp.terminate(nil)
     case .openApp(let name):
       openSourceItem(matching: name)
+    case .clipboardHistory(let action, let id, let offset):
+      if action == "show", offset == 0 {
+        openClipboardDashboard()
+      } else {
+        let args = action == "delete" ? ["id=\(id ?? "")"] : ["offset=\(offset ?? 0)"]
+        _ = performClipboardHistoryCommand(subcommand: action, args: args) {
+          [weak self] ok, output in
+          if ok {
+            if action == "delete" { self?.refreshClipboardDashboardCache() }
+            self?.presentPluginResult(output)
+          } else {
+            self?.warnCommandFailure(cmd.diagnosticDescription)
+          }
+        }
+      }
     case .pluginCommand(let command, let subcommand, let args):
       let dispatched = pluginManager.invoke(
         command: command,
@@ -618,7 +706,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           return
         }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-        if let stdout { self?.overlay.displayBanner(stdout) }
+        self?.presentPluginResult(stdout)
+        self?.noteClipboardDelete(command: command, subcommand: subcommand, ok: true)
       }
       if !dispatched { warnUnsupportedCommand(cmd.diagnosticDescription) }
       return dispatched
@@ -637,9 +726,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       } else {
         FlashLog.warn("[window_move] no non-flash frontmost app")
       }
-    case .focusWindow(let direction):
+    case .focusWindow(let request):
       if let target = currentNonFlashRunningApplication() {
-        windowLayoutManager.focusWindow(direction, targetPID: target.processIdentifier)
+        focusWindow(request, targetPID: target.processIdentifier)
       }
     case .windowState(let action):
       if let target = currentNonFlashContext() {
@@ -664,7 +753,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           return
         }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-        if let stdout { self?.overlay.displayBanner(stdout) }
+        self?.presentPluginResult(stdout)
       }
       if !dispatched {
         warnUnsupportedCommand(cmd.diagnosticDescription)
@@ -686,9 +775,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     displayCommandWarning("Command failed or was not handled: \(command). Check :logs for details.")
   }
 
+  /// `:clipboard delete` changes history without a toast. Refresh the
+  /// inspector cache once the plugin has finished.
+  func noteClipboardDelete(command: String, subcommand: String, ok: Bool) {
+    guard ok, command.caseInsensitiveCompare("clipboard") == .orderedSame,
+      subcommand.caseInsensitiveCompare("delete") == .orderedSame
+    else { return }
+    DispatchQueue.main.async { [weak self] in
+      self?.refreshClipboardDashboardCache()
+    }
+  }
+
+  /// A caffeinate result is the same modal as the volume percent. Other
+  /// plugin output stays a banner.
+  private func presentPluginResult(_ stdout: String?) {
+    guard let stdout, !stdout.isEmpty else { return }
+    if let alert = StatusAlert.caffeinate(reported: stdout) {
+      overlay.displayAlert(alert)
+    } else {
+      overlay.displayBanner(stdout)
+    }
+  }
+
   private func displayCommandWarning(_ message: String) {
     FlashLog.warn(message, source: "core:Command")
-    overlay.displayAlert(message, duration: 8, style: .error)
+    overlay.displayAlert(.message(message, style: .error))
   }
 
   private func installDismissObservers() {
@@ -717,13 +828,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.terminalInputMappings?.flush()
-        self.overlay.hideStatusBarPopup()
+        self.overlay.relinquishShownStatusPopup(reason: "focus_changed")
         let secureUI = Self.activeWindowBorderSecureUISuspendsSession(
           bundleIdentifier: app.bundleIdentifier)
         self.setSessionSuspended(
           secureUI, source: .secureUI, reason: secureUI ? "secure_ui" : "secure_ui_exit")
         self.applyFocusedApplicationChange(app, reason: "focus_changed", emitFocusEvent: true)
-        self.cancelOverlay()
+        self.cancelOverlay(departure: .activated(app.processIdentifier))
         // Move the stroke on the activation itself rather than waiting for the
         // new app's first AX geometry notification. `app` is authoritative
         // here; the workspace's frontmost pointer is not yet. The recovery
@@ -736,7 +847,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         }
       } else {
         self.statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
-        self.cancelOverlay()
+        self.cancelOverlay(departure: .focusLost)
         if self.shouldScheduleNormalModeRecaptureAfterWorkspaceActivation() {
           self.scheduleNormalModeRecapture()
         }
@@ -749,7 +860,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     ) { [weak self] _ in
       guard let self else { return }
       self.reconcileFrontmostApplication(reason: "space_changed")
-      self.cancelOverlay()
+      // Raising a commit's target can switch Spaces: that is its handoff.
+      self.cancelOverlay(departure: .focusLost)
       self.overlay.reassertStatusBar(reason: "space_changed")
       self.scheduleActiveWindowBorderReconciliation(
         delaysMs: [0] + Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
@@ -797,12 +909,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor)
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-        self.windowLayoutManager.appDidTerminate(pid: app.processIdentifier)
-        self.forgetActiveWindowBorderFrames(for: app.processIdentifier)
-        if app.processIdentifier == self.observedFocusedAppPID {
+        let pid = app.processIdentifier
+        self.windowLayoutManager.appDidTerminate(pid: pid)
+        self.forgetActiveWindowBorderFrames(for: pid)
+        // Cmd-Q and a last window that quits the app never pass through
+        // `app_quit`. Focus the previous app before macOS picks one.
+        self.focusAppAfterQuit(of: pid)
+        if pid == self.observedFocusedAppPID || self.appNavigationTargetPID != nil {
           self.hideActiveWindowBorder(reason: "app_terminated")
           DispatchQueue.main.async {
-            self.reconcileFrontmostApplication(reason: "app_terminated")
+            if let aimed = self.appNavigationTargetPID,
+              let next = NSRunningApplication(processIdentifier: aimed), !next.isTerminated
+            {
+              self.applyFocusedApplicationChange(
+                next, reason: "app_terminated", emitFocusEvent: true)
+            } else {
+              self.reconcileFrontmostApplication(reason: "app_terminated")
+            }
             self.updateActiveWindowBorder(reason: "app_terminated")
             self.scheduleActiveWindowBorderReconciliation(
               delaysMs: Self.activeWindowBorderRecoveryDelaysMs,
@@ -910,7 +1033,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           reason: "screen_parameters")
       }
     }
-    localNotificationTokens = [screenParameters]
+    let appResigned = NotificationCenter.default.addObserver(
+      forName: NSApplication.didResignActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      // Deactivation can restore a panel that hidesOnDeactivate left visible,
+      // and on Tahoe an app switch sometimes never posts didActivateApplication.
+      // Order the popup out on the next turn, once that restoration has run,
+      // and only when another app actually holds the front.
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        guard
+          NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            != Bundle.main.bundleIdentifier
+        else { return }
+        self.overlay.relinquishShownStatusPopup(reason: "app_resigned")
+      }
+    }
+    // Flash active in INSERT sends the keys the tap passes to Flash; a
+    // surface of its own that needs them keeps it (`IdleActivation`).
+    let appActivated = NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.handBackActivationIfIdle(reason: "became_active")
+    }
+    localNotificationTokens = [screenParameters, appResigned, appActivated]
 
     resignKeyToken = NotificationCenter.default.addObserver(
       forName: NSWindow.didResignKeyNotification,
@@ -925,7 +1075,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // so terminal chords such as tmux's `cmd+shift+[` leaked to Alacritty.
       self.reconcileFrontmostApplication(reason: "resign_key")
       if !self.hintSession.hints.isEmpty {
-        self.cancelOverlay()
+        // A key-window session's commit raises its target, which resigns
+        // the panel: that is the commit's handoff, not the user leaving.
+        self.cancelOverlay(departure: .focusLost)
+        return
+      }
+      if self.overlay.inputMode == .commandLine {
+        self.overlay.recoverCommandLineFocusAfterKeyLoss()
         return
       }
       if self.flashMode == .normal {
@@ -988,10 +1144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     emitFocusEvent: Bool
   ) {
     observedFocusedAppPID = app.processIdentifier
+    // Another app coming forward ends any native surface of the previous one.
+    nativeSurfaceOwnership.end()
     refreshFocusDependentState(for: app)
     debugStateDidChange()
-    if emitFocusEvent {
-      overlay.dismissEphemeralStatusBarPopup(reason: "focus_changed")
+    if emitFocusEvent, focusEmissionGate.shouldEmit(pid: app.processIdentifier) {
+      overlay.relinquishShownStatusPopup(reason: "focus_changed")
       pluginManager.emit(
         PluginEvent(
           name: "core:focus.changed",
@@ -1003,6 +1161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           bundleID: app.bundleIdentifier))
       emitRunningApplicationsChanged(reason: reason)
       recordAppActivation(app.processIdentifier)
+      followFocusWithPointer(pid: app.processIdentifier)
     }
     if flashMode == .normal {
       normalModeTargetPID = app.processIdentifier
@@ -1015,11 +1174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     refreshEffectiveMappings(for: app.bundleIdentifier)
   }
 
-  /// Run the in-process pasteboard watcher only while a plugin subscribes to
-  /// `clipboard.changed`. macOS publishes no pasteboard notification, so this
-  /// is the one unavoidable poll on that path — and with no subscriber there
-  /// is nothing to poll for. Owning the watch here keeps plugins free of
-  /// polling; the clipboard plugin just subscribes to the event.
+  /// macOS publishes no pasteboard notification, so the core history watches
+  /// its change count through the one shared poll scheduler.
   /// Every session-suspension signal lands here: the active-window border
   /// hides, and the shared poll clock holds every registration — nothing a
   /// poll produces can be seen while the displays sleep or the session is
@@ -1050,27 +1206,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func reconcileClipboardMonitor() {
-    let wanted = pluginManager.hasListener(for: "core:clipboard.changed")
-    guard wanted != (clipboardMonitor != nil) else { return }
-    guard wanted else {
-      clipboardMonitor?.stop()
-      clipboardMonitor = nil
-      FlashLog.debug("[clipboard] watcher stopped: no subscriber")
-      return
-    }
+    guard clipboardMonitor == nil else { return }
     FlashLog.debug("[clipboard] watcher started")
-    clipboardMonitor = ClipboardMonitor { [weak self] text in
-      guard let self else { return }
-      self.pluginManager.emit(
-        PluginEvent(
-          name: "core:clipboard.changed",
-          payload: ["text": text],
-          bundleID: nil))
-      // Let the plugin fold the new entry into its history, then refresh the
-      // inspector's Clipboard tab so an open dashboard updates live.
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak self] in
-        self?.refreshClipboardDashboardCache()
-      }
+    clipboardMonitor = ClipboardMonitor { [weak self] item in
+      self?.clipboardHistoryStore.record(item)
+      DispatchQueue.main.async { [weak self] in self?.debugStateDidChange() }
     }
     clipboardMonitor?.start()
   }
@@ -1100,8 +1240,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return
     }
     let tap = KeyboardCaptureTap(
-      shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? false },
-      handle: { [weak self] event in self?.routeTapCapturedKey(event) })
+      shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? .pass },
+      handle: { [weak self] event in self?.routeTapCapturedKey(event) },
+      handleKeyUp: { [weak self] event in _ = self?.handleLeaderKeyUp(event) },
+      keyUpMatters: { [weak self] keyCode in
+        self?.config.mode.resolvedHyperMatcher?.mayMatch(keyCode: keyCode) ?? false
+      })
     guard tap.start() else { return }
     keyboardCaptureTap = tap
     overlay.keyboardCaptureActive = true
@@ -1115,9 +1259,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// key is routed. NORMAL is hermetic: `normalModeMappings` carries the same
   /// compiled set the Carbon registry does, and the session tap swallows the
   /// event before Carbon dispatch, so there's no double-fire.
-  private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
+  /// The tap's keyDown decision, with its routing: a swallowed key reaches
+  /// `routeTapCapturedKey` unless the decision already acted on it here.
+  private func keyboardTapShouldSwallow(_ event: CGEvent) -> KeyboardCaptureTap.KeyDownOutcome {
     let flags = event.flags
-    let decision = KeyboardCaptureTap.decide(
+    let decision = tapDecision(
+      isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
+        || flags.contains(.maskAlternate),
+      isBareEscape: event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
+        && flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty)
+    return keyDownOutcome(for: decision, event: event)
+  }
+
+  /// What the tap would decide for a Command chord now: `flash status`
+  /// reads it to say where such a chord goes.
+  func modifiedChordDecision() -> KeyboardCaptureTap.Decision {
+    tapDecision(isModifiedChord: true, isBareEscape: false)
+  }
+
+  /// The tap's decision from the live state, for a key of that shape.
+  private func tapDecision(isModifiedChord: Bool, isBareEscape: Bool)
+    -> KeyboardCaptureTap.Decision
+  {
+    KeyboardCaptureTap.decide(
       isTerminal: modeStore.mode.isTerminal,
       flashMode: flashMode,
       inputMode: overlay.inputMode,
@@ -1126,43 +1290,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         visible: aboutWindowVisible,
         hasTransientInput: hintSession.isActive,
         activationInFlight: activationInFlight),
-      nativeSurfaceSuspended: nativeSurfaceSuspended,
-      isModifiedChord: flags.contains(.maskCommand) || flags.contains(.maskControl)
-        || flags.contains(.maskAlternate),
-      isBareEscape: event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
-        && flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty,
+      // This callback is the tap, so a hint session over a menu takes its keys.
+      nativeSurfaceSuspended: NativeSurfaceOwnership.ownsKeyboard(
+        owned: nativeSurfaceSuspended, hintSessionActive: hintSession.isActive,
+        activationInFlight: activationInFlight, tapLive: true),
+      isModifiedChord: isModifiedChord,
+      isBareEscape: isBareEscape,
       ephemeralPopupShown: overlay.statusPopupController.presentation.ephemeralName != nil)
+  }
+
+  private func keyDownOutcome(for decision: KeyboardCaptureTap.Decision, event: CGEvent)
+    -> KeyboardCaptureTap.KeyDownOutcome
+  {
+    let flags = event.flags
     switch decision {
     case .pass:
-      return false
+      return .pass
     case .swallow:
       reconcileFrontmostApplication(
         forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
-      return !tapReadsSecureInput()
+      return tapReadsSecureInput() ? .pass : .swallow(route: true)
     case .swallowIfInsertChordIsMapped:
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       reconcileFrontmostApplication(
         forKeyTargetingPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)))
-      guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return false }
-      return !tapReadsSecureInput()
+      guard mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) else { return .pass }
+      return tapReadsSecureInput() ? .pass : .swallow(route: true)
     case .closeEphemeralPopup:
-      guard !tapReadsSecureInput() else { return false }
-      tapEscapeClosedPopup = true
+      guard !tapReadsSecureInput() else { return .pass }
       // Out of the synchronous tap callback: hiding a panel is AppKit work.
+      // The key is spent here: it must not also reach a mapping or the
+      // interpreter, so it is swallowed without being routed.
       DispatchQueue.main.async { [weak self] in
         self?.overlay.dismissEphemeralStatusBarPopup(reason: "escape")
       }
-      return true
+      return .swallow(route: false)
     case .swallowIfNativeSurfaceKeyIsMapped:
-      guard !tapReadsSecureInput() else { return false }
+      guard !tapReadsSecureInput() else { return .pass }
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       return keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
+        ? .swallow(route: true) : .pass
     }
   }
 
   /// The swallow decision's secure-input read. Every swallow yields to a
   /// focused password field; a change it sees is published on the next
-  /// turn, outside the synchronous tap callback.
+  /// turn, outside the synchronous tap callback. While the flag is on, this
+  /// tap receives no keys, so `SecureInputFixer` is what notices a hold that
+  /// starts or sticks in the background.
   private func tapReadsSecureInput() -> Bool {
     let enabled = IsSecureEventInputEnabled()
     if enabled != secureInputObserved {
@@ -1189,18 +1364,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// interpreter.
   func routeTapCapturedKey(_ event: NSEvent) {
     MainThreadActivity.note("tap_key")
-    if tapEscapeClosedPopup {
-      tapEscapeClosedPopup = false
-      return
-    }
     Trace.begin(.key, triggeredAt: event.timestamp) { routeTracedKey(event) }
   }
 
   private func routeTracedKey(_ event: NSEvent) {
     // HID timestamp → this main-thread turn: the tap-side latency budget.
-    FlashLog.debug(
-      "[latency] tap_to_route ms="
-        + String(format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
+    if FlashLog.wouldEmit(.debug) {
+      FlashLog.debug(
+        "[latency] tap_to_route ms="
+          + String(
+            format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
+    }
+    // HYPER is a hold on top of NORMAL routing. Claim the leader, and every
+    // key while it is held, before a NORMAL chord or sequence can see them.
+    if overlay.inputMode == .normal || modeStore.mode.isHyper {
+      if handleLeaderHoldKeyDown(event) { return }
+    }
     switch overlay.inputMode {
     case .passive:
       // A chord the tap swallowed in INSERT is an active mapping (see
@@ -1242,6 +1421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
+    secureInputFixer.stop()
     activationLifecycle.invalidate()
     clearHintSessionState()
     releaseHeldMouseButton(reason: "quit")

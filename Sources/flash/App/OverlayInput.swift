@@ -4,6 +4,8 @@ enum OverlayKeyAction: Equatable {
   case cancel
   case backspace
   case commit(String, ClickModifiers)
+  /// Tab / Shift-Tab: the same click on another surface.
+  case switchSurface(HintSurfaceSwitch)
   case ignore
 }
 
@@ -27,15 +29,33 @@ enum HintKeyRoute: Equatable {
   case search
   case adjustment
   case pointer
+  /// `mouse_bigram`: the letter being searched, before its hint label.
+  case bigram
+  /// `confirm`: the next key answers the question on screen.
+  case confirmation
 
   /// Pointer mode and a cursor-following grid steer the cursor, so it stays
-  /// visible; every other route hides it behind the labels.
+  /// visible; a question has no labels to hide it behind; every other route
+  /// hides it behind the labels.
   var showsCursor: Bool {
     switch self {
-    case .pointer: return true
+    case .pointer, .confirmation: return true
     case .grid(_, let cursorFollows): return cursorFollows
-    case .labels, .search, .adjustment: return false
+    case .labels, .search, .adjustment, .bigram: return false
     }
+  }
+}
+
+/// The one keystroke a confirmation reads. Only `y` on the reference layout,
+/// bare or shifted, accepts; every other key — Escape, `n`, Return, a chord —
+/// closes the question without running anything.
+enum ConfirmationInterpreter {
+  static func accepts(charactersIgnoringModifiers: String?, modifierFlags: NSEvent.ModifierFlags)
+    -> Bool
+  {
+    let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    guard flags.subtracting(.shift).isEmpty else { return false }
+    return charactersIgnoringModifiers?.lowercased() == "y"
   }
 }
 
@@ -43,7 +63,7 @@ enum HintKeyRoute: Equatable {
 enum MouseGridKeyCommand: Equatable {
   /// A cell's key, with the modifiers that ride a click it commits.
   case cell(Character, ClickModifiers)
-  /// Bisect's h/j/k/l: keep that half.
+  /// Bisect's home-row cluster: keep that half.
   case half(MouseGrid.Direction, ClickModifiers)
   /// Space: zoom into the centre pseudo-cell (or click its centre).
   case centre(ClickModifiers)
@@ -55,6 +75,8 @@ enum MouseGridKeyCommand: Equatable {
   case reset
   /// Arrows: slide the region by its own size.
   case move(MouseGrid.Direction)
+  /// Shift-arrows: put the pointer on that edge of the region.
+  case snap(MouseGrid.Direction)
   /// Tab / Shift-Tab: the next / previous display.
   case screen(Int)
   /// `` ` ``: toggle cursor-follow.
@@ -94,20 +116,20 @@ enum MouseGridInputInterpreter {
     case 36, 76: return .commitHere(click)  // return / keypad enter
     case 49: return .centre(click)  // space
     case 48: return .screen(flags.contains(.shift) ? -1 : 1)  // tab
-    case 123: return .move(.left)
-    case 124: return .move(.right)
-    case 125: return .move(.down)
-    case 126: return .move(.up)
+    case 123: return flags.contains(.shift) ? .snap(.left) : .move(.left)
+    case 124: return flags.contains(.shift) ? .snap(.right) : .move(.right)
+    case 125: return flags.contains(.shift) ? .snap(.down) : .move(.down)
+    case 126: return flags.contains(.shift) ? .snap(.up) : .move(.up)
     default: break
     }
     guard let key = typed?.lowercased().first else { return .cancel }
     if key == "`" { return .toggleFollow }
-    if shape == .bisect {
+    if case .bisect(let navigation) = shape {
       switch key {
-      case "h": return .half(.left, click)
-      case "j": return .half(.down, click)
-      case "k": return .half(.up, click)
-      case "l": return .half(.right, click)
+      case navigation.left: return .half(.left, click)
+      case navigation.down: return .half(.down, click)
+      case navigation.up: return .half(.up, click)
+      case navigation.right: return .half(.right, click)
       default: break
       }
     }
@@ -124,12 +146,74 @@ enum HintAdjustmentCommand: Equatable {
   case snapRight
   case snapTop
   case snapBottom
-  /// `1`–`9`: place the point at n/10 of the target's width.
+  /// `1`–`9`: place the point at n/10 of the target's width, or, with
+  /// `[hints] adjust_digits = "grid"`, in the numeric-keypad cell of a 3×3
+  /// tiling (`7` `8` `9` along the top, `1` `2` `3` along the bottom).
   case interpolate(Int)
   /// `0`: back to the initial point (the target centre).
   case reset
   case commit
   case cancel
+}
+
+/// One keystroke of `mouse_bigram`, before the hint label. Shift changes
+/// the letter (smart case); it does not ride the click. Command, Control
+/// and Option are swallowed. The label that follows is typed on the hint
+/// route, so this interpreter never commits.
+enum HintBigramCommand: Equatable {
+  case append(Character)
+  case backspace
+  case cancel
+}
+
+/// What an EasyMotion key does besides the query and the hint label.
+/// Escape stays with the interpreters (`cancel`). The leader and a mapping
+/// that enters another mode end the jump first, then run.
+enum BigramCaptureExit: Equatable {
+  case stay
+  case leader
+  case mode(MappingCommand)
+}
+
+enum BigramCapture {
+  static func exit(isLeader: Bool, chord: MappingCommand?, typed: MappingCommand?)
+    -> BigramCaptureExit
+  {
+    if isLeader { return .leader }
+    let action = chord ?? typed
+    if action?.command?.changesMode == true, let action {
+      return .mode(action)
+    }
+    return .stay
+  }
+}
+
+enum HintBigramInterpreter {
+  static func command(
+    keyCode: UInt16,
+    characters: String?,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> HintBigramCommand? {
+    let strict = modifierFlags.intersection([.command, .control, .option])
+    switch keyCode {
+    case 53:  // escape
+      return .cancel
+    case 51:  // delete
+      return strict.isEmpty ? .backspace : nil
+    case 36, 76, 48, 123, 124, 125, 126:
+      // Return, tab and arrows are not characters of the query.
+      return nil
+    default:
+      break
+    }
+    guard strict.isEmpty else { return nil }
+    guard let characters, let char = characters.first else { return nil }
+    if char == " " { return .append(" ") }
+    guard !char.isNewline,
+      char.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+    else { return nil }
+    return .append(char)
+  }
 }
 
 /// One keystroke of the `--search` sub-state (seek & click): type visible
@@ -222,7 +306,8 @@ enum PointerModeInterpreter {
   static func command(
     keyCode: UInt16,
     charactersIgnoringModifiers: String?,
-    modifierFlags: NSEvent.ModifierFlags
+    modifierFlags: NSEvent.ModifierFlags,
+    arrows: Alphabet.Navigation = .qwerty
   ) -> PointerModeCommand? {
     let fine = modifierFlags.contains(.shift)
     switch keyCode {
@@ -239,10 +324,10 @@ enum PointerModeInterpreter {
     }
     guard let char = charactersIgnoringModifiers?.lowercased().first else { return nil }
     switch char {
-    case "h": return .move(dx: -1, dy: 0, fine: fine)
-    case "l": return .move(dx: 1, dy: 0, fine: fine)
-    case "j": return .move(dx: 0, dy: -1, fine: fine)
-    case "k": return .move(dx: 0, dy: 1, fine: fine)
+    case arrows.left: return .move(dx: -1, dy: 0, fine: fine)
+    case arrows.right: return .move(dx: 1, dy: 0, fine: fine)
+    case arrows.down: return .move(dx: 0, dy: -1, fine: fine)
+    case arrows.up: return .move(dx: 0, dy: 1, fine: fine)
     case "m": return .clickLeft
     case ",": return .clickMiddle
     case ".": return .clickRight
@@ -253,10 +338,16 @@ enum PointerModeInterpreter {
   }
 
   /// Pixels for one movement keystroke. Sustained autorepeat accelerates from
-  /// the base step toward the cap; shift always moves by the 2px fine step.
-  static func step(streak: Int, fine: Bool) -> CGFloat {
+  /// the base step by `acceleration` per repeat toward `maximum`; shift
+  /// always moves by the 2px fine step. The defaults are `[hints]
+  /// pointer_step`, `pointer_acceleration` and `pointer_max_step`.
+  static func step(
+    streak: Int, fine: Bool, base: Int = 12, acceleration: Int = 6, maximum: Int = 90
+  ) -> CGFloat {
     if fine { return 2 }
-    return min(12 + CGFloat(max(0, streak)) * 6, 90)
+    let ceiling = CGFloat(max(1, max(base, maximum)))
+    return min(
+      CGFloat(max(1, base)) + CGFloat(max(0, streak)) * CGFloat(max(0, acceleration)), ceiling)
   }
 
   /// A movement within `windowMs` of the previous one (autorepeat cadence)
@@ -273,7 +364,8 @@ enum HintAdjustmentInterpreter {
   /// do). Pure so the whole adjustment keymap is unit-testable.
   static func command(
     keyCode: UInt16,
-    charactersIgnoringModifiers: String?
+    charactersIgnoringModifiers: String?,
+    arrows: Alphabet.Navigation = .qwerty
   ) -> HintAdjustmentCommand? {
     switch keyCode {
     case 53:  // escape
@@ -293,10 +385,10 @@ enum HintAdjustmentInterpreter {
     }
     guard let char = charactersIgnoringModifiers?.lowercased().first else { return nil }
     switch char {
-    case "h": return .snapLeft
-    case "l": return .snapRight
-    case "k": return .snapTop
-    case "j": return .snapBottom
+    case arrows.left: return .snapLeft
+    case arrows.right: return .snapRight
+    case arrows.up: return .snapTop
+    case arrows.down: return .snapBottom
     case "0": return .reset
     case "1"..."9": return .interpolate(char.wholeNumberValue ?? 5)
     default: return nil
@@ -311,7 +403,8 @@ enum HintAdjustmentInterpreter {
     _ command: HintAdjustmentCommand,
     to point: CGPoint,
     in frame: CGRect,
-    inset: CGFloat = 2
+    inset: CGFloat = 2,
+    digits: Config.AdjustDigits = .width
   ) -> CGPoint {
     let edgeInsetX = min(inset, frame.width / 2)
     let edgeInsetY = min(inset, frame.height / 2)
@@ -321,8 +414,18 @@ enum HintAdjustmentInterpreter {
     case .snapRight: p.x = frame.maxX - edgeInsetX
     case .snapTop: p.y = frame.maxY - edgeInsetY
     case .snapBottom: p.y = frame.minY + edgeInsetY
-    case .interpolate(let tenths):
-      p.x = frame.minX + frame.width * CGFloat(min(max(tenths, 1), 9)) / 10
+    case .interpolate(let digit):
+      let digit = min(max(digit, 1), 9)
+      switch digits {
+      case .width:
+        p.x = frame.minX + frame.width * CGFloat(digit) / 10
+      case .grid:
+        // Keypad geometry: `1` is bottom-left, `9` top-right, `5` the centre.
+        let column = (digit - 1) % 3
+        let row = (digit - 1) / 3
+        p.x = frame.minX + frame.width * (CGFloat(column) + 0.5) / 3
+        p.y = frame.minY + frame.height * (CGFloat(row) + 0.5) / 3
+      }
     case .reset:
       p = CGPoint(x: frame.midX, y: frame.midY)
     case .commit, .cancel:
@@ -365,6 +468,12 @@ enum OverlayInputInterpreter {
       }
       return .backspace
     }
+    // Tab moves the same click to the grid; Shift-Tab widens it to the screen
+    // and back. A chord on Tab is nothing the labels know.
+    if keyCode == 48 {
+      guard strictModifiers.isEmpty else { return .cancel }
+      return .switchSurface(independentModifiers.contains(.shift) ? .scope : .grid)
+    }
 
     // Click-pass-through: always allow shift to ride the click, even when
     // `Config.effectiveMagicModifiers` dropped it because a literal
@@ -389,6 +498,11 @@ enum OverlayInputInterpreter {
 /// through `processNormalModeKey`; configured modified mappings are handled by
 /// the Carbon registry outside the panel.
 extension OverlayPanel {
+  override func keyUp(with event: NSEvent) {
+    if !keyboardCaptureActive, coordinator?.handleLeaderKeyUp(event) == true { return }
+    super.keyUp(with: event)
+  }
+
   override func keyDown(with event: NSEvent) {
     if inputMode == .commandLine {
       super.keyDown(with: event)
@@ -426,6 +540,9 @@ extension OverlayPanel {
   /// resulting action while the overlay panel owns keyboard input.
   func processNormalModeKey(_ event: NSEvent) {
     guard let coordinator = coordinator else { return }
+    // The tap path claims the leader hold before it gets here. The key-window
+    // fallback is the only other reader of NORMAL keys.
+    if !keyboardCaptureActive, coordinator.handleLeaderHoldKeyDown(event) { return }
     let now = Date()
     let pendingBeforeTimeout = normalModePending
     if NormalModeInterpreter.pendingSequenceTimedOut(
@@ -506,6 +623,10 @@ extension OverlayPanel {
 
     if inputMode == .commandLine { return false }
 
+    // Escape and a mode change end an EasyMotion jump. The letter and its
+    // hint must not keep the keyboard once the user has left that jump.
+    if coordinator.overlayEndsBigramCapture(for: event) { return true }
+
     // Labels, the grid, pointer and adjustment read keys by position on the
     // reference layout; search matches visible text, so it keeps what was
     // actually typed.
@@ -548,7 +669,8 @@ extension OverlayPanel {
       if let command = PointerModeInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: keys.ignoringModifiers,
-        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+        arrows: keyboardNavigation)
       {
         coordinator.overlayDidPointer(command)
       }
@@ -556,7 +678,8 @@ extension OverlayPanel {
     case .adjustment:
       if let command = HintAdjustmentInterpreter.command(
         keyCode: event.keyCode,
-        charactersIgnoringModifiers: keys.ignoringModifiers)
+        charactersIgnoringModifiers: keys.ignoringModifiers,
+        arrows: keyboardNavigation)
       {
         let clickAllowed = magicModifiers.union(.shift)
         let clickModifiers = ClickModifiers(
@@ -564,6 +687,23 @@ extension OverlayPanel {
           allowed: clickAllowed)
         coordinator.overlayDidAdjust(command, clickModifiers: clickModifiers)
       }
+      return true
+    case .bigram:
+      if let command = HintBigramInterpreter.command(
+        keyCode: event.keyCode,
+        characters: keys.characters,
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+      {
+        coordinator.overlayDidBigram(command)
+      }
+      return true
+    case .confirmation:
+      // The question owns every key, mapped chords included: nothing else may
+      // fire while the user is deciding.
+      coordinator.overlayDidConfirm(
+        accepted: ConfirmationInterpreter.accepts(
+          charactersIgnoringModifiers: keys.ignoringModifiers,
+          modifierFlags: event.modifierFlags))
       return true
     }
 
@@ -591,6 +731,9 @@ extension OverlayPanel {
       return true
     case .commit(let chars, let clickModifiers):
       coordinator.overlayDidCommit(prefix: chars, clickModifiers: clickModifiers)
+      return true
+    case .switchSurface(let kind):
+      (coordinator as? OverlaySurfaceSwitching)?.overlayDidSwitchSurface(kind)
       return true
     case .ignore:
       return swallowIgnored

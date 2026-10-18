@@ -251,20 +251,24 @@ extension OverlayPanel {
   /// screens (pruning bars for removed displays and adding them for new ones),
   /// and re-orders the panel back into view.
   func statusBarDidChangeScreenParameters() {
+    // Lay the bar out first so an open popup can hang from the label's new
+    // rect on the new visible frame. Hiding it left a pinned terminal on the
+    // coordinates of the display that just changed size.
+    renderModeSurface()
     if statusPopupController.presentation.isStandalone {
       let snapshot = Self.currentScreenSnapshot()
+      let centre = CGPoint(
+        x: statusPopupController.frame.midX, y: statusPopupController.frame.midY)
       let screen =
-        snapshot.screens.first { $0.frame.intersects(statusPopupController.frame) }
+        snapshot.screens.first { $0.frame.contains(centre) }
+        ?? snapshot.screens.first { $0.frame.intersects(statusPopupController.frame) }
         ?? snapshot.screens.first { $0.frame == snapshot.mainFrame } ?? snapshot.screens.first
       if let screen {
         statusPopupController.repositionStandalone(visibleFrame: screen.visibleFrame)
       }
-    } else {
-      hideStatusBarPopup()
     }
     // Hidden popups sized in percentages refit to the new geometry.
     statusTerminals.refitHidden(except: statusPopupController.presentation.name)
-    renderModeSurface()
   }
 
   func orderOutIfNoPersistentContent() {

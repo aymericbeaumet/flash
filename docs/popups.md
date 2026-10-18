@@ -1,7 +1,7 @@
 # Popups
 
 A popup is a small window Flash shows over your apps: under a status-bar label
-while you hover it, pinned by a click, or standalone in the middle of the
+while you hover it, pinned by a right-click, or standalone in the middle of the
 screen through `enter_terminal_mode`. Every popup runs in a real PTY terminal.
 There is one namespace, `[popup.<name>]`, and each popup is one of two kinds:
 
@@ -13,7 +13,7 @@ There is one namespace, `[popup.<name>]`, and each popup is one of two kinds:
 
 ```toml
 [popup]                      # the chrome every popup shares
-bg = "#242933F2"
+bg = "#242933"
 padding = 10
 
 [popup.date]                 # a text popup
@@ -46,7 +46,7 @@ closest style key.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `fg` | `#D8DEE9` | Default text colour; `#[fg=…]` in a text popup overrides it |
-| `bg` | `#2E3440F2` | Surface and terminal background |
+| `bg` | `#2E3440` | Surface and terminal background |
 | `border` | `#4C566A` | Border colour |
 | `border_size` | `1` | Border width, 0–12 points |
 | `corner_radius` | `8` | 0–64 points |
@@ -55,7 +55,8 @@ closest style key.
 | `max_width` | `750` | Widest a text popup grows, 80–2000 points |
 | `offset` | `8` | Gap between the status bar and a hover popup, 0–64 points |
 
-Colours are `#RRGGBB` or `#RRGGBBAA`. Terminal text is opaque, so a translucent
+Colours are `#RRGGBB` or `#RRGGBBAA`. The default background is opaque; an alpha
+byte on `bg` still shows through. Terminal text is opaque, so a translucent
 `fg` is mixed over `bg`. At the 13-point font with 10-point padding and a
 one-point border, the 480-point `min_width` fits 50 content columns and the
 750-point `max_width` 80, enough for the three-month [calendar](calendar.md).
@@ -91,7 +92,11 @@ Commands use the shared [environment and path resolution](configuration.md#execu
 the login-shell environment, `$VAR` and a leading `~` expanded on every argument
 and `cwd`, and only the executable and `cwd` resolved against the defining
 file. Set `cwd = "."` for arguments relative to that file. Shell syntax needs
-an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. Every session
+an explicit shell, for example `["/bin/sh", "-c", "exec btm"]`. A fresh popup
+whose command contains `$FLASH_STATUS_LINK` is not prewarmed. When a hover
+starts it, that variable is the `#[link]` on the hovered span, and `$FLASH_STATUS_LINK`
+in an argument expands to it. A persistent popup starts before any hover, so it
+does not receive the hovered link. Every session
 exports `TERM=xterm-256color` and `COLORTERM=truecolor`; the inherited
 `NO_COLOR` is removed, and an explicit `env = { NO_COLOR = "1" }` opts that
 popup out. The configured colours apply before the process starts, so its
@@ -101,11 +106,14 @@ and resize notifications.
 
 Each side of `size` is a cell count from 1 to 1000 or a percentage from 1% to
 100% of the visible frame of the screen the popup shows on, for example
-`"120x36"`, `"90%x85%"` or `"120x80%"`. A percentage sizes the whole popup,
+`"120x36"`, `"90%x85%"` or `"120x80%"`. A percentage may be fractional, such
+as `"78.615%"`; a cell count stays a whole number. A percentage sizes the whole popup,
 padding and border included. Every grid is clamped to the screen. A popup sized
 in percentages resizes its PTY when it shows on another screen and when its
 screen's visible frame changes (a display change, the menu bar, the Dock);
-hidden ones refit to the main screen. Changing `size`, colours or fonts keeps
+hidden ones refit to the main screen. A popup that is already showing is
+placed again on that new geometry: one hanging from a label follows the
+label, and a standalone one recentres on the screen that still contains it. Changing `size`, colours or fonts keeps
 the process; changing `command`, `cwd`, `env` or `persistent` replaces it.
 Removing a declaration stops it.
 
@@ -209,11 +217,19 @@ empty box; it waits 150 ms at most. A persistent popup kept parsing its output
 while hidden, and showing it draws that current screen at once rather than the
 one it had when it was hidden.
 
-**Click** a popup label, left or right, to pin it and focus its terminal;
-repeated clicks keep it open, and clicking another label switches popups.
-Labels with a click action or link keep their left-click action; right-click
-or Option-click pins their popup. Pinning leaves a preview where it is, and a
-pinned popup stays hung from its label while the pointer moves.
+**Right-click** a popup label to pin it and focus its terminal;
+repeated clicks keep it open, and right-clicking another label switches popups.
+Left-click follows a link or configured click action when present; otherwise it
+leaves the hover preview unchanged. Pinning leaves a preview where it is, and a
+pinned popup stays hung from its label while the pointer moves. When that
+popup loses focus — another app comes forward, a click lands outside Flash,
+or the panel loses key, as when newsboat opens an article in the browser —
+it leaves the screen instead of floating above the new window. A focused
+popup makes Flash the active app, so bringing any app forward counts, the
+one the popup covers included (clicking back into the browser behind it, or
+`open` raising it). A persistent popup is hidden and keeps its process; a
+fresh one is closed and its process stops. A popup is otherwise only up while
+the pointer hovers its label.
 
 **`enter_terminal_mode --name=<name>`** shows a popup standalone, centred on
 the focused application's screen and focused. Without a name it opens

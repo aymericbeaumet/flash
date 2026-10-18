@@ -98,6 +98,9 @@
     "clipboard_paste": {
       "": "cmd+v"
     },
+    "look_up": {
+      "": "ctrl+cmd+d"
+    },
     "tab_reopen": {
       "com.todesktop.230313mzl4w4u92": "cmd+shift+t",
       "com.microsoft.VSCodeInsiders": "cmd+shift+t",

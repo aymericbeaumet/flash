@@ -86,6 +86,15 @@ struct ConfigLocation: Equatable {
   let column: Int
 }
 
+/// The layer that wrote one resolved value. Missing means the bundled default
+/// configuration, or the Swift built-in when that file leaves the key out.
+/// `layer` is `config`, `env`, `cli`, or another writer; `detail` names the
+/// file, variable, or flag.
+struct ConfigValueSource: Equatable {
+  var layer: String
+  var detail: String
+}
+
 struct ConfigDiagnostic: Equatable {
   let message: String
   let location: ConfigLocation?
@@ -161,10 +170,66 @@ struct Config {
     /// input-source ID always reads them on that layout.
     var keyboardLayout: String = "auto"
   }
+
+  /// Logical key positions. Distinct from `app.keyboardLayout`, which only
+  /// chooses the input source that reads a keypress.
+  struct Keyboard: Equatable {
+    /// `qwerty`, `colemak`, `dvorak`, or `bepo`. Hint selectors, the mouse
+    /// grid, bisect, pointer movement and HYPER arrows follow it.
+    var layout: String = "qwerty"
+  }
+
+  struct Clipboard: Equatable {
+    var historySize: Int = 1_000
+  }
+
+  /// Which target gets the easiest label (`[hints] label_order`).
+  enum LabelOrder: String, Equatable, CaseIterable {
+    /// Reading order: top to bottom, left to right.
+    case reading
+    /// The target nearest the centre of the window (or screen) first.
+    case center
+    /// The first key of every label names the keyboard-shaped zone of the
+    /// window the target sits in; the rest of the label is ergonomic.
+    case zones
+  }
+
+  /// What the digits do in `--adjust` (`[hints] adjust_digits`).
+  enum AdjustDigits: String, Equatable, CaseIterable {
+    /// `1`–`9` place the point at n/10 of the target's width.
+    case width
+    /// A numeric-keypad grid: `7` `8` `9` across the top third, `4` `5` `6`
+    /// the middle and `1` `2` `3` the bottom.
+    case grid
+  }
+
+  /// Which apps share `mouse_position`'s saved positions
+  /// (`[hints] position_history_scope`).
+  enum PositionScope: String, Equatable, CaseIterable {
+    /// One list for every app.
+    case global
+    /// A list per app: a position saved in one never shows in another.
+    case app
+  }
+
   struct Hints: Equatable {
     var keys: String = Alphabet.defaultKeys
     var minLength: Int = 1
     var magicModifiers: [String] = ["cmd", "ctrl", "alt", "shift"]
+    /// Keys that outrank the layout's ease, best first (`key_priority`).
+    var keyPriority: String = ""
+    var labelOrder: LabelOrder = .reading
+    var adjustDigits: AdjustDigits = .width
+    /// How many positions `mouse_position` keeps (per app when scoped).
+    var positionHistorySize: Int = 16
+    var positionHistoryScope: PositionScope = .global
+    /// A newly focused app brings the pointer to the centre of its window.
+    var pointerFollowsFocus = false
+    /// `mouse_pointer` movement: points per keystroke at rest, added per
+    /// autorepeat, and the ceiling.
+    var pointerStep: Int = 12
+    var pointerAcceleration: Int = 6
+    var pointerMaxStep: Int = 90
     /// Number of selection steps for the `mouse_grid` verb. Larger values
     /// give finer precision but require more keystrokes per click.
     var mouseGridSteps: Int = 3
@@ -173,6 +238,9 @@ struct Config {
     var mouseGridKeys: [String] = []
     /// Move the pointer to the grid region's centre after every step.
     var mouseGridCursorFollow = false
+    /// Draw each cell's next step faintly inside it, labelled with the two
+    /// keys that reach each of its cells, so the next key can be read ahead.
+    var mouseGridPreview = true
     /// Put the pointer back where it was after a committed hint or grid
     /// click, drag or selection, and after `mouse_repeat` (`--move` and
     /// `mouse_pointer` still move it).
@@ -215,7 +283,7 @@ struct Config {
     var windowBorderColor: String = ""
     /// Seconds an `alert_show` toast stays up when the call passes no
     /// explicit --duration.
-    var alertDuration: Double = 2.0
+    var alertDuration: Double = 3.0
     /// Milliseconds a transient banner (command output, "Copied: …")
     /// stays up.
     var bannerDurationMs: Int = 700
@@ -308,14 +376,15 @@ struct Config {
     /// "@ft" = "@firefox.tabs"
     /// ```
     var aliases: [String: String] = [:]
-    /// Source precedence override weights applied as the tiebreaker once
-    /// match score ties. Keys are source labels (or parent prefixes —
-    /// `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …). Higher
-    /// weight wins. Entries not listed use the source descriptor kind declared
-    /// by the native source or plugin manifest: location sources > default.
-    /// Weights cannot cross the location band's category ladder (tmux windows
-    /// > running apps > installed apps > browser tabs > the rest) — that
-    /// ordering is strict and compared before match score.
+    /// Source precedence override weights. Keys are source labels (or parent
+    /// prefixes — `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …).
+    /// Higher weight wins. Entries not listed derive their weight from the
+    /// source descriptor the native source or plugin manifest declares:
+    /// location sources start at 50, standard sources at 0, plus the
+    /// `sources[].priority` salience (`low` -20 … `important` +100).
+    /// Precedence orders rows inside one match tier only: a row whose own
+    /// name is what the user typed (exact, prefix, word, substring) always
+    /// leads rows the query merely touches, whatever their sources weigh.
     ///
     /// Example:
     /// ```toml
@@ -326,8 +395,9 @@ struct Config {
     var precedence: [String: Int] = [:]
     /// Bonus added to any candidate whose `pid != nil` so running
     /// processes outrank installed-but-not-running rows under the
-    /// same source. With the `locations` source kind this gives active
-    /// locations an effective rank of 60 vs. inactive 50.
+    /// same source and match tier. With the `locations` source kind this
+    /// gives active locations an effective weight of 60 vs. inactive 50
+    /// before the source's own priority.
     var precedenceAliveBonus: Int = 10
     /// Apps, by name, bundle id or path, left out of the installed-app
     /// catalog and the `app_open` verb.
@@ -408,7 +478,7 @@ struct Config {
     /// Default text colour. Inline `#[fg=…]` markers override it exactly as
     /// they do in the status bar.
     var foreground: String = "#D8DEE9"
-    var background: String = "#2E3440F2"
+    var background: String = "#2E3440"
     var borderColor: String = "#4C566A"
     var borderWidth: Double = 1
     var cornerRadius: Double = 8
@@ -428,7 +498,9 @@ struct Config {
   struct PopupSize: Equatable, CustomStringConvertible {
     enum Side: Equatable {
       case cells(Int)
-      case percent(Int)
+      /// A percentage of the screen, from 1 through 100. Fractions are kept,
+      /// so `78.615%` is not truncated to 78%.
+      case percent(Double)
     }
 
     var columns: Side
@@ -442,7 +514,8 @@ struct Config {
       self.rows = rows
     }
 
-    /// `"120x36"`, `"90%x85%"` or a mix; cells run 1–1000, percentages 1–100.
+    /// `"120x36"`, `"90%x85%"` or a mix. Cells are whole counts from 1 to
+    /// 1000. A percentage is 1% to 100% and may be fractional (`78.615%`).
     init?(_ raw: String) {
       let parts = raw.split(separator: "x", omittingEmptySubsequences: false)
       guard parts.count == 2, let columns = Self.side(parts[0]), let rows = Self.side(parts[1])
@@ -451,23 +524,51 @@ struct Config {
     }
 
     private static func side(_ raw: Substring) -> Side? {
-      let percent = raw.hasSuffix("%")
-      let digits = percent ? raw.dropLast() : raw
-      guard !digits.isEmpty, digits.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
-        digits.count <= 4, let value = Int(digits)
+      if raw.hasSuffix("%") {
+        guard let value = percentValue(raw.dropLast()) else { return nil }
+        return (1...100).contains(value) ? .percent(value) : nil
+      }
+      guard !raw.isEmpty, raw.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
+        raw.count <= 4, let value = Int(raw), (1...1_000).contains(value)
       else { return nil }
-      if percent { return (1...100).contains(value) ? .percent(value) : nil }
-      return (1...1_000).contains(value) ? .cells(value) : nil
+      return .cells(value)
+    }
+
+    /// A percentage written with digits and at most one decimal point.
+    /// `78.615` is in range; `10.5` without a `%` stays a cell count and is
+    /// rejected by `side` because cells are whole.
+    private static func percentValue(_ raw: Substring) -> Double? {
+      guard !raw.isEmpty, raw.count <= 8, raw.first != ".", raw.last != "." else { return nil }
+      var dots = 0
+      for scalar in raw.unicodeScalars {
+        if scalar == "." {
+          dots += 1
+          continue
+        }
+        guard (0x30...0x39).contains(scalar.value) else { return nil }
+      }
+      guard dots <= 1, let value = Double(raw), value.isFinite else { return nil }
+      return value
     }
 
     var description: String {
       func text(_ side: Side) -> String {
         switch side {
         case .cells(let value): return String(value)
-        case .percent(let value): return "\(value)%"
+        case .percent(let value): return Self.percentText(value) + "%"
         }
       }
       return text(columns) + "x" + text(rows)
+    }
+
+    /// Whole percentages stay `90%`. A fraction keeps up to four decimal
+    /// places, so `78.615%` round-trips and `90.0` does not appear.
+    private static func percentText(_ value: Double) -> String {
+      if value == value.rounded() { return String(Int(value)) }
+      var text = String(format: "%.4f", value)
+      while text.last == "0" { text.removeLast() }
+      if text.last == "." { text.removeLast() }
+      return text
     }
 
     /// The grid before the popup has a screen: cells as written, and a
@@ -533,6 +634,15 @@ struct Config {
     var environment: [String: String] = [:]
     var size: PopupSize = .default
     var lifecycle: PopupLifecycle = .fresh
+
+    /// The command reads the hovered span's `#[link]` (`$FLASH_STATUS_LINK`).
+    /// A prewarmed process would start before any hover, so it is left to
+    /// start when shown.
+    var readsHoveredLink: Bool {
+      command.contains { argument in
+        argument.contains("$FLASH_STATUS_LINK") || argument.contains("${FLASH_STATUS_LINK}")
+      }
+    }
   }
 
   /// A `[popup.<name>]` table: exactly one of `text` or `command`.
@@ -564,16 +674,16 @@ struct Config {
     /// Timeout for one named Flash source run;
     /// SIGTERM then SIGKILL past it, keeping the previous value.
     var commandTimeoutSeconds: Double = 6
-    /// Points kept clear on each side of a notch (camera housing).
-    var notchMargin: Double = 6
+    /// Points kept clear on each side of a notch (camera housing). 4pt: a 6pt
+    /// margin overlaps the next cell by under a point on the 16-inch housing
+    /// and the bar drops that whole glyph.
+    var notchMargin: Double = 4
     /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
     /// One native tmux format, with Flash presentation styles and values.
     static let defaultTemplateString =
       "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}"
     var template: FlashStatusBarTemplate = Self.defaultTemplate
-    /// The defining layer, retained for diagnostics and source identity.
-    var templateSourceURL: URL?
     var sources: [String: FlashStatusBarSourceDefinition] = [:]
     var sourcesUsingDefaultInterval: Set<String> = []
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
@@ -688,6 +798,8 @@ struct Config {
       var insert: [ModeMapping] = []
       var terminal: [ModeMapping] = []
       var command: [ModeMapping] = []
+      var hyper: [ModeMapping] = []
+      var hold: [ModeMapping] = []
       var unmapped: [ModeScope: Set<String>] = [:]
 
       func mappings(for scope: ModeScope) -> [ModeMapping] {
@@ -697,6 +809,8 @@ struct Config {
         case .insert: return insert
         case .terminal: return terminal
         case .command: return command
+        case .hyper: return hyper
+        case .hold: return hold
         }
       }
 
@@ -729,6 +843,12 @@ struct Config {
         case .command:
           command.removeAll(where: sameKey)
           command.insert(mapping, at: 0)
+        case .hyper:
+          hyper.removeAll(where: sameKey)
+          hyper.insert(mapping, at: 0)
+        case .hold:
+          hold.removeAll(where: sameKey)
+          hold.insert(mapping, at: 0)
         }
       }
 
@@ -744,6 +864,8 @@ struct Config {
         case .insert: insert.removeAll(where: matches)
         case .terminal: terminal.removeAll(where: matches)
         case .command: command.removeAll(where: matches)
+        case .hyper: hyper.removeAll(where: matches)
+        case .hold: hold.removeAll(where: matches)
         }
       }
     }
@@ -753,17 +875,28 @@ struct Config {
       var insert: String = "INSERT"
       var command: String = "COMMAND"
       var terminal: String = "TERMINAL"
+      var hyper: String = "HYPER"
+      var hold: String = "HOLD"
 
       var longestCount: Int {
-        max(normal.count, insert.count, command.count, terminal.count)
+        max(
+          normal.count, insert.count, command.count, terminal.count, hyper.count, hold.count)
       }
     }
 
-    var all: [ModeMapping] = []
+    var all: [ModeMapping] = [
+      ModeMapping(key: "cmd+ctrl+h", action: .flashCommand(.holdMode(.primary)))
+    ]
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
     var terminal: [ModeMapping] = Self.defaultTerminalMappings
     var command: [ModeMapping] = []
+    /// Keys read while the NORMAL leader is held. Not merged with `[mode.all]`:
+    /// a hyper binding replaces NORMAL for that key for the duration of the hold.
+    var hyper: [ModeMapping] = Self.defaultHyperMappings
+    /// Keys read before NORMAL in HOLD (a held button dragging). A key with
+    /// no entry here is NORMAL's.
+    var hold: [ModeMapping] = Self.defaultHoldMappings
     /// Exact focused-app bundle identifier to per-scope additions/removals.
     var appMappings: [String: AppMappings] = [:]
     /// Keys a `"<key>" = false` entry removed, per table, after every layer.
@@ -785,9 +918,9 @@ struct Config {
       var layouts: [WindowLayout] = []
       let appEntries = appMappings.sorted { $0.key < $1.key }.flatMap { entry in
         let app = entry.value
-        return app.all + app.normal + app.insert + app.terminal + app.command
+        return app.all + app.normal + app.insert + app.terminal + app.command + app.hyper
       }
-      for mapping in all + normal + insert + terminal + command + appEntries {
+      for mapping in all + normal + insert + terminal + command + hyper + appEntries {
         guard case .flashCommand(.moveWindow(let params)) = mapping.action,
           case .proportional? = params.layout, let layout = params.layout,
           !layouts.contains(layout)
@@ -825,8 +958,99 @@ struct Config {
     /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
     /// Use `\` bare or `<backslash>` — both resolve to the same key.
     static let defaultNormalLeader = "\\"
+    /// `mode.normal.hyper`, in mapping-key syntax. `"<leader>"` follows
+    /// `normalLeader` and resolves to nothing when the leader is unset.
+    static let defaultHyperKey = "<leader>"
+    var hyperKey: String = Self.defaultHyperKey
+    /// The physical key that enters HYPER, after `<leader>` substitution.
+    /// Nil when `hyperKey` is `"<leader>"` and no leader is set.
+    private(set) var resolvedHyperKey: String?
+    /// `resolvedHyperKey` prepared for the per-key test: its chord and the
+    /// characters that may spell it, parsed once here rather than per key.
+    private(set) var resolvedHyperMatcher: HyperKeyMatcher?
+    /// `normalLeader` in mapping-atom form, translated once per load.
+    private(set) var resolvedLeaderAtom: String?
 
     static let defaultNormalMappings: [ModeMapping] = makeDefaultNormalMappings()
+
+    /// Apple function row while HYPER is held: `1`–`9`, `0`, `-`, `=`.
+    /// Shift plus the same key sends F1–F12.
+    static let defaultHyperMappings: [ModeMapping] = {
+      let bindings: [(String, URLCommand)] = [
+        ("1", .systemKey(.brightnessDown)),
+        ("2", .systemKey(.brightnessUp)),
+        ("3", .systemKey(.missionControl)),
+        ("4", .systemKey(.spotlight)),
+        ("5", .systemKey(.dictation)),
+        ("6", .systemKey(.focus)),
+        ("7", .systemKey(.mediaPrevious)),
+        ("8", .systemKey(.mediaPlay)),
+        ("9", .systemKey(.mediaNext)),
+        ("0", .systemKey(.mute)),
+        ("-", .systemKey(.volumeDown)),
+        ("=", .systemKey(.volumeUp)),
+        ("shift+1", .functionKey(1)),
+        ("shift+2", .functionKey(2)),
+        ("shift+3", .functionKey(3)),
+        ("shift+4", .functionKey(4)),
+        ("shift+5", .functionKey(5)),
+        ("shift+6", .functionKey(6)),
+        ("shift+7", .functionKey(7)),
+        ("shift+8", .functionKey(8)),
+        ("shift+9", .functionKey(9)),
+        ("shift+0", .functionKey(10)),
+        ("shift+-", .functionKey(11)),
+        ("shift+=", .functionKey(12)),
+      ]
+      return bindings.map { key, command in
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+          preconditionFailure("invalid default hyper mapping: \(key)")
+        }
+        return ModeMapping(key: canonical, action: .flashCommand(command))
+      }
+    }()
+
+    /// HOLD moves what the held button grabbed: `h` `j` `k` `l` nudge it,
+    /// `H` `J` `K` `L` further, a picked target is where it goes, Return
+    /// drops it and Escape puts it back. `cmd+ctrl+h` enters or leaves it.
+    static let defaultHoldMappings: [ModeMapping] = makeDefaultMappings(
+      "hold",
+      [
+        ("y", .selection(.copy)),
+        ("d", .selection(.cut)),
+        ("x", .selection(.cut)),
+        ("c", .selection(.change)),
+        ("p", .selection(.paste)),
+        ("w", .mouseJump(.nextWord)),
+        ("b", .mouseJump(.previousWord)),
+        ("e", .mouseJump(.wordEnd)),
+        ("0", .mouseJump(.lineStart)),
+        ("$", .mouseJump(.lineEnd)),
+        ("h", .mouseNudge(.left, distance: 16)),
+        ("j", .mouseNudge(.down, distance: 16)),
+        ("k", .mouseNudge(.up, distance: 16)),
+        ("l", .mouseNudge(.right, distance: 16)),
+        ("H", .mouseNudge(.left, distance: 96)),
+        ("J", .mouseNudge(.down, distance: 96)),
+        ("K", .mouseNudge(.up, distance: 96)),
+        ("L", .mouseNudge(.right, distance: 96)),
+        ("f", .mouseTarget(.move)),
+        ("F", .mouseGrid(.init(.move))),
+        ("s", .mouseBigram(.move)),
+        ("<return>", .mouseButton(.init(state: .release, button: .primary, hold: .hold))),
+        ("<esc>", .mouseButton(.init(state: .cancel, button: .primary, hold: .hold))),
+      ])
+
+    private static func makeDefaultMappings(
+      _ table: String, _ bindings: [(String, URLCommand)]
+    ) -> [ModeMapping] {
+      bindings.map { key, command in
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+          preconditionFailure("invalid default \(table) mapping: \(key)")
+        }
+        return ModeMapping(key: canonical, action: .flashCommand(command))
+      }
+    }
 
     static let defaultTerminalMappings: [ModeMapping] = {
       let bindings: [(String, URLCommand)] = [
@@ -875,11 +1099,13 @@ struct Config {
         ("ctrl+i", .flashCommand(.movementForward)),
         ("H", .flashCommand(.historyBack)),
         ("L", .flashCommand(.historyForward)),
-        // Lowercase `f` targets discovered elements, uppercase `F` targets a
-        // screen position through the grid. A lowercase prefix picks the click
-        // on either: none, `s`econdary, `d`ouble, `m`ove. Modifiers ride the
-        // final hint key (`hints.magic_modifiers`), so there are no separate
-        // modified bindings to remember.
+        // A mouse action is a prefix and a finisher. Prefixes are none,
+        // `m` (move), `d` (double) and `c` (context, the right-click).
+        // Finishers are `f` (a discovered target), `F` (the grid) and `s`
+        // (one visible letter, then its hint). `c` is the operator Vim and
+        // Vimium leave free; `r` is reload and `s` is already a finisher.
+        // Modifiers on the final hint key (`hints.magic_modifiers`) still
+        // ride the click.
         //
         // Every prefix letter must be free of a mapping of its own. The
         // interpreter parks a key that is both an exact mapping and the prefix
@@ -887,14 +1113,19 @@ struct Config {
         // here would make a bare `t` (new tab) wait a full second. Triple
         // click is deliberately unbound for that reason — add `"tf"` in your
         // own config if you want it, and remove `t` with `"t" = false`.
+        // `s` starts no other mapping, so the EasyMotion jump fires at once.
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
         ("F", .flashCommand(.mouseGrid(.init(.click(.leftClick, modifiers: []))))),
-        ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
-        ("sF", .flashCommand(.mouseGrid(.init(.click(.rightClick, modifiers: []))))),
-        ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
-        ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
+        ("s", .flashCommand(.mouseBigram(.click(.leftClick, modifiers: [])))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
+        ("ms", .flashCommand(.mouseBigram(.move))),
+        ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
+        ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
+        ("ds", .flashCommand(.mouseBigram(.click(.doubleClick, modifiers: [])))),
+        ("cf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
+        ("cF", .flashCommand(.mouseGrid(.init(.click(.rightClick, modifiers: []))))),
+        ("cs", .flashCommand(.mouseBigram(.click(.rightClick, modifiers: [])))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
         ("x", .flashCommand(.tabClose)),
@@ -947,6 +1178,25 @@ struct Config {
     private(set) var compiledNormal = CompiledMappings()
     private(set) var compiledInsert = CompiledMappings()
     private(set) var compiledTerminal = CompiledMappings()
+    private(set) var compiledHyper = CompiledMappings()
+    /// The table the interpreter reads in HOLD (`heldMappings`).
+    private(set) var compiledHold = CompiledMappings()
+
+    /// What a held-button mode reads: its own entries, then the NORMAL and
+    /// all-mode ones it leaves alone. An own key hides every NORMAL key it
+    /// starts (HOLD's `d` must not wait on NORMAL's `df`), and `false` in
+    /// its table removes a NORMAL key there.
+    func heldMappings(_ purpose: ButtonHold) -> [ModeMapping] {
+      assert(purpose == .hold)
+      let scope: ModeScope = .hold
+      let own = hold
+      let separator = String(NormalModeInterpreter.keyAtomSeparator)
+      let inherited = mappings(for: .normal).filter { base in
+        !removes(base, in: scope)
+          && !own.contains { base.key == $0.key || base.key.hasPrefix($0.key + separator) }
+      }
+      return Self.resolveMappings(own + inherited)
+    }
 
     var effectiveTerminalMappings: [ModeMapping] {
       var claimed = Set<String>()
@@ -968,19 +1218,41 @@ struct Config {
       compiledNormal = CompiledMappings(mappings(for: .normal))
       compiledInsert = CompiledMappings(mappings(for: .insert))
       compiledTerminal = CompiledMappings(effectiveTerminalMappings)
+      compiledHyper = CompiledMappings(Self.resolveMappings(hyper))
+      compiledHold = CompiledMappings(heldMappings(.hold))
+    }
+
+    /// One mapping-key atom, or nil. `"<leader>"` becomes the leader atom, and
+    /// stays nil when the leader itself is unset. Any other single key is
+    /// used as written (`"a"`, `"<space>"`, `"cmd+space"`).
+    static func resolveHyperKey(_ raw: String, leader: String?) -> String? {
+      guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(raw) else { return nil }
+      let atoms = NormalModeInterpreter.keyAtoms(from: canonical)
+      guard atoms.count == 1, let atom = atoms.first else { return nil }
+      if atom == "<leader>" {
+        guard let leader else { return nil }
+        return NormalModeInterpreter.translateLeader(leader)
+      }
+      return atom
     }
 
     mutating func refreshLeaderDerivedDefaults() {
-      let leaderRaw = normalLeader ?? Self.defaultNormalLeader
-      guard let leaderInternal = NormalModeInterpreter.translateLeader(leaderRaw) else { return }
-      for index in normal.indices where normal[index].key.contains("<leader>") {
-        let mapping = normal[index]
-        let resolved = mapping.key.replacingOccurrences(of: "<leader>", with: leaderInternal)
-        normal[index] = ModeMapping(
-          key: resolved,
+      resolvedHyperKey = Self.resolveHyperKey(hyperKey, leader: normalLeader)
+      resolvedHyperMatcher = resolvedHyperKey.map(HyperKeyMatcher.init(atom:))
+      resolvedLeaderAtom = normalLeader.flatMap(NormalModeInterpreter.translateLeader)
+      guard let leaderRaw = normalLeader,
+        let leaderInternal = NormalModeInterpreter.translateLeader(leaderRaw)
+      else { return }
+      func resolvingLeader(_ mapping: ModeMapping) -> ModeMapping {
+        guard mapping.key.contains("<leader>") else { return mapping }
+        return ModeMapping(
+          key: mapping.key.replacingOccurrences(of: "<leader>", with: leaderInternal),
           action: mapping.action,
-          repeatsOnFinalKey: mapping.repeatsOnFinalKey)
+          repeatsOnFinalKey: mapping.repeatsOnFinalKey,
+          origin: mapping.origin)
       }
+      normal = normal.map(resolvingLeader)
+      hold = hold.map(resolvingLeader)
     }
 
     var containsNormalModeMapping: Bool {
@@ -1001,6 +1273,8 @@ struct Config {
 
   var hints = Hints()
   var app = App()
+  var keyboard = Keyboard()
+  var clipboard = Clipboard()
   var overlay = Overlay()
   var plugins = Plugins()
   var statusBar = StatusBar()
@@ -1023,6 +1297,12 @@ struct Config {
   /// can't drift.
   var warnings: [String] { diagnostics.map(\.message) }
   var valueLocations: [String: ConfigLocation] = [:]
+  /// Winning writer for each authored path. The bundled default layer does
+  /// not record one, so a missing path is still the default configuration.
+  var valueSources: [String: ConfigValueSource] = [:]
+  /// Set for the layer currently being applied. `recordLocation` stamps it
+  /// onto `valueSources`.
+  var activeValueSource: ConfigValueSource?
   /// Prepared from `hints.keys` by `ConfigLoader` after TOML/env
   /// precedence has settled. Activation should use this stored value
   /// instead of re-parsing layout selectors.
@@ -1102,7 +1382,10 @@ struct Config {
   /// showing one attaches to a live process: the referenced ones.
   var prewarmedPopupNames: Set<String> {
     let terminals = terminalPopups
-    return referencedPopupNames.filter { terminals[$0]?.lifecycle == .fresh }
+    return referencedPopupNames.filter { name in
+      guard let terminal = terminals[name], terminal.lifecycle == .fresh else { return false }
+      return !terminal.readsHoveredLink
+    }
   }
 
   /// Plugin id → the status segments a live surface shows: the enabled bar
@@ -1130,10 +1413,9 @@ struct Config {
 
   mutating func recordLocation(path: String, location: ConfigLocation?) {
     valueLocations[path] = location
-  }
-
-  mutating func clearLocation(path: String) {
-    valueLocations.removeValue(forKey: path)
+    if let activeValueSource {
+      valueSources[path] = activeValueSource
+    }
   }
 
   mutating func addDiagnostic(
@@ -1146,13 +1428,100 @@ struct Config {
     diagnostics.removeAll { predicate($0.message) }
   }
 
+  /// The layout hint positions use: an explicit `hints.keys` selector, else
+  /// the letters of `[keyboard] layout` when `hints.keys` is still the bundled
+  /// QWERTY home-and-top default. `<colemak>` is that layout's home, top and
+  /// bottom rows, so naming the layout is enough.
+  func effectiveHintKeys() -> String {
+    let layout = Alphabet.layouts[keyboard.layout] == nil ? "qwerty" : keyboard.layout
+    guard valueSources["hints.keys"] == nil, hints.keys == Alphabet.defaultKeys, layout != "qwerty"
+    else { return hints.keys }
+    return "<\(layout)>"
+  }
+
+  /// Layout for keys that have no selector of their own. A resolved hint
+  /// alphabet that names a layout wins, so `<dvorak>` and `layout = "colemak"`
+  /// keep hint positions, the grid and arrows on Dvorak.
+  var positionLayoutName: String {
+    if let name = resolvedAlphabet.layoutName, Alphabet.layouts[name] != nil { return name }
+    if Alphabet.layouts[keyboard.layout] != nil { return keyboard.layout }
+    return "qwerty"
+  }
+
   mutating func prepareDerivedValues() {
     mode.refreshLeaderDerivedDefaults()
-    resolvedAlphabet = Alphabet.resolve(hints.keys)
+    let alphabet = Alphabet.resolve(effectiveHintKeys())
+    removeDiagnostics { $0.hasPrefix(Self.unknownKeyPriorityWarningPrefix) }
+    let unknownPriority = alphabet.unknownPriorityKeys(hints.keyPriority)
+    if !unknownPriority.isEmpty {
+      addDiagnostic(
+        Self.unknownKeyPriorityWarningPrefix
+          + " \(String(unknownPriority)) is not in hints.keys \(effectiveHintKeys()); ignored",
+        location: valueLocations["hints.key_priority"])
+    }
+    resolvedAlphabet = alphabet.prioritizing(hints.keyPriority)
     resolvedMouseGridKeys = MouseGridKeys.resolve(
       hints.mouseGridKeys, layoutName: resolvedAlphabet.layoutName)
     diagnoseAmbiguousShiftMagicModifier()
+    installLayoutArrows()
     mode.recompileMappings()
+  }
+
+  /// HYPER plus the physical QWERTY ESDF keys posts an arrow, spelled as the
+  /// letters those keys type on `[keyboard] layout`. F is the home-row
+  /// index-finger mark, and it is right. Derived, so a qwerty default and a
+  /// colemak file agree without listing the keys in `config.default.toml`.
+  /// A mapping or `false` already on the key wins. Shift uses that same
+  /// letter (`shift+s` is Colemak down). A key that types punctuation uses
+  /// the character Shift types there (`>` is Dvorak up): the key code's ANSI
+  /// name can be another arrow's letter. Idempotent: a second pass drops
+  /// only the arrows this installed.
+  private mutating func installLayoutArrows() {
+    mode.hyper.removeAll { mapping in
+      guard mapping.origin == ModeMapping.defaultOrigin else { return false }
+      if case .flashCommand(.arrow(_, _)) = mapping.action { return true }
+      return false
+    }
+    let cluster = Alphabet.navigation(layoutName: positionLayoutName).esdf
+    let directions: [(Alphabet.Key, WindowFocusDirection)] = [
+      (cluster.left, .left), (cluster.down, .down), (cluster.up, .up),
+      (cluster.right, .right),
+    ]
+    for (key, direction) in directions {
+      let shifted =
+        key.character.isLetter
+        ? "shift+\(key.character)"
+        : Self.shiftedPunctuation[key.character] ?? "shift+\(key.ansi)"
+      for (raw, shift) in [
+        (String(key.character), false), (shifted, true),
+      ] {
+        guard let mappingKey = Self.arrowMappingKey(raw) else { continue }
+        let action = MappingCommand.flashCommand(.arrow(direction: direction, shift: shift))
+        let mapping = ModeMapping(key: mappingKey, action: action)
+        if mode.hyper.contains(where: { $0.key == mappingKey }) { continue }
+        if mode.removes(mapping, in: .hyper) { continue }
+        mode.hyper.append(mapping)
+      }
+    }
+  }
+
+  /// US ANSI shift of a punctuation key, in mapping syntax. `<` and `>` are
+  /// not bare mapping characters.
+  private static let shiftedPunctuation: [Character: String] = [
+    ".": "<greater>", ",": "<less>", "/": "?", ";": ":", "'": "\"",
+    "[": "{", "]": "}", "-": "_", "=": "<plus>", "`": "~", "\\": "|",
+  ]
+
+  /// ASCII keys go through the mapping canonicalizer. A layout letter outside
+  /// ASCII (Bépo `é`, and `shift+é`) is still the character that key types.
+  private static func arrowMappingKey(_ raw: String) -> String? {
+    if let key = NormalModeInterpreter.canonicalizeMappingKey(raw) { return key }
+    let shifted = raw.hasPrefix("shift+")
+    let body = shifted ? String(raw.dropFirst("shift+".count)) : raw
+    guard let character = body.first, body.dropFirst().isEmpty, character.isLetter else {
+      return nil
+    }
+    return shifted ? "shift+\(character)" : String(character)
   }
 
   /// `hints.magic_modifiers` for target hints. Shift is dropped when the
@@ -1166,6 +1535,8 @@ struct Config {
     }
     return hints.magicModifiers.filter { $0.lowercased() != "shift" }
   }
+
+  static let unknownKeyPriorityWarningPrefix = "hints.key_priority:"
 
   private mutating func diagnoseAmbiguousShiftMagicModifier() {
     removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
@@ -1202,6 +1573,8 @@ struct Config {
           "insert": app.insert.map(Self.mappingJSONValue),
           "terminal": app.terminal.map(Self.mappingJSONValue),
           "command": app.command.map(Self.mappingJSONValue),
+          "hyper": app.hyper.map(Self.mappingJSONValue),
+          "hold": app.hold.map(Self.mappingJSONValue),
           "unmapped": app.unmapped.reduce(into: [String: [String]]()) { result, entry in
             result[entry.key.rawValue] = entry.value.sorted()
           },
@@ -1212,10 +1585,16 @@ struct Config {
       "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
       "labels": [
         "command": mode.labels.command,
+        "hyper": mode.labels.hyper,
         "insert": mode.labels.insert,
         "normal": mode.labels.normal,
         "terminal": mode.labels.terminal,
+        "hold": mode.labels.hold,
       ],
+      "hyper": mode.hyper.map(Self.mappingJSONValue),
+      "hold": mode.hold.map(Self.mappingJSONValue),
+      "hyper_key": mode.hyperKey,
+      "hyper_key_atom": mode.resolvedHyperKey ?? NSNull(),
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
       "scroll_smooth_ms": mode.scrollSmoothMs,
@@ -1230,13 +1609,24 @@ struct Config {
         "log_level": debug.logLevel.name,
         "show_hints_bounds": debug.showHintsBounds,
       ],
+      "keyboard": ["layout": keyboard.layout],
       "hints": [
-        "keys": hints.keys,
+        "adjust_digits": hints.adjustDigits.rawValue,
+        "key_priority": hints.keyPriority,
+        "keys": effectiveHintKeys(),
+        "label_order": hints.labelOrder.rawValue,
         "magic_modifiers": effectiveMagicModifiers,
         "min_length": hints.minLength,
+        "pointer_acceleration": hints.pointerAcceleration,
+        "pointer_follows_focus": hints.pointerFollowsFocus,
+        "pointer_max_step": hints.pointerMaxStep,
+        "pointer_step": hints.pointerStep,
+        "position_history_scope": hints.positionHistoryScope.rawValue,
+        "position_history_size": hints.positionHistorySize,
         "mouse_grid_cursor_follow": hints.mouseGridCursorFollow,
         "mouse_grid_keys": resolvedMouseGridKeys.map { String($0) },
         "mouse_grid_opacity": hints.mouseGridOpacity,
+        "mouse_grid_preview": hints.mouseGridPreview,
         "mouse_grid_steps": hints.mouseGridSteps,
         "restore_pointer": hints.restorePointer,
       ],
@@ -1277,6 +1667,7 @@ struct Config {
         // plugin through FLASH_PLUGIN_CONFIG.
         "configured": plugins.settings.keys.sorted(),
       ],
+      "clipboard": ["history_size": clipboard.historySize],
       // Kinds, lifecycles and sizes only: commands and environments can
       // carry credentials.
       "popup": [
@@ -1318,6 +1709,90 @@ struct Config {
       "key": mapping.key,
       "repeat": mapping.repeatsOnFinalKey,
     ]
+  }
+
+  /// Sparse tree parallel to `resolvedConfigJSON`. A node's `"$"` is
+  /// `{ "layer", "where" }` for the writer that overrode the default. Mapping
+  /// arrays are keyed by mapping key; other arrays of names are keyed by the
+  /// name. Paths the JSON renames (`mode.normal.leader`, named popups) are
+  /// translated onto the JSON shape.
+  func resolvedConfigSources() -> [String: Any] {
+    var tree: [String: Any] = [:]
+    for (path, source) in valueSources {
+      Self.insert(source, at: Self.jsonPath(for: path), into: &tree)
+    }
+    insertMappingSources(into: &tree)
+    if var mode = tree["mode"] as? [String: Any],
+      let hyper = mode["hyper_key"] as? [String: Any],
+      let mark = hyper["$"]
+    {
+      var atom = mode["hyper_key_atom"] as? [String: Any] ?? [:]
+      atom["$"] = mark
+      mode["hyper_key_atom"] = atom
+      tree["mode"] = mode
+    }
+    return tree
+  }
+
+  private static let popupStyleJSONKeys: Set<String> = [
+    "fg", "bg", "border", "border_size", "corner_radius", "padding", "min_width", "max_width",
+    "offset",
+  ]
+
+  private static func jsonPath(for tomlPath: String) -> [String] {
+    switch tomlPath {
+    case "mode.normal.leader": return ["mode", "normal_leader"]
+    case "mode.normal.hyper": return ["mode", "hyper_key"]
+    default: break
+    }
+    var parts = tomlPath.split(separator: ".").map(String.init)
+    if parts.count >= 2, parts[0] == "popup", !popupStyleJSONKeys.contains(parts[1]) {
+      parts.insert("popups", at: 1)
+    }
+    return parts
+  }
+
+  private static func insert(
+    _ source: ConfigValueSource, at path: [String], into node: inout [String: Any]
+  ) {
+    guard let head = path.first else { return }
+    var child = node[head] as? [String: Any] ?? [:]
+    if path.count == 1 {
+      child["$"] = ["layer": source.layer, "where": source.detail]
+    } else {
+      insert(source, at: Array(path.dropFirst()), into: &child)
+    }
+    node[head] = child
+  }
+
+  private static func source(forMappingOrigin origin: String) -> ConfigValueSource? {
+    if origin.isEmpty || origin == ModeMapping.defaultOrigin { return nil }
+    let parts = origin.split(separator: ":", maxSplits: 1).map(String.init)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+      return ConfigValueSource(layer: origin, detail: origin)
+    }
+    return ConfigValueSource(layer: parts[0], detail: parts[1])
+  }
+
+  private func insertMappingSources(into tree: inout [String: Any]) {
+    func add(_ mappings: [ModeMapping], at path: [String]) {
+      for mapping in mappings {
+        guard let source = Self.source(forMappingOrigin: mapping.origin) else { continue }
+        Self.insert(source, at: path + [mapping.key], into: &tree)
+      }
+    }
+    add(mode.all, at: ["mode", "all"])
+    add(mode.normal, at: ["mode", "normal"])
+    add(mode.insert, at: ["mode", "insert"])
+    add(mode.effectiveTerminalMappings, at: ["mode", "terminal"])
+    add(mode.command, at: ["mode", "command"])
+    add(mode.hyper, at: ["mode", "hyper"])
+    add(mode.hold, at: ["mode", "hold"])
+    for (bundle, app) in mode.appMappings {
+      for scope in ModeScope.allCases {
+        add(app.mappings(for: scope), at: ["mode", "apps", bundle, scope.rawValue])
+      }
+    }
   }
 
   var resolvedHintsKeysJSON: String {
@@ -1372,13 +1847,12 @@ struct Config {
 }
 
 extension URLCommand {
-  /// Human-readable form of an in-process verb: `flash <verb> [--k=v ...]`.
-  /// Matches the syntax users type into the `flash` CLI and write into
-  /// mapping arrays in `flash.toml`. Used for help text, log lines, and
-  /// the inspector — never re-parsed.
-  var diagnosticDescription: String {
-    func verb(_ name: String, _ args: [String] = []) -> String {
-      args.isEmpty ? "flash \(name)" : "flash \(name) " + args.joined(separator: " ")
+  /// Argv of an in-process verb: `["flash", "<verb>", "--k=v", ...]`.
+  /// Bool flags render only when on. Value flags use hyphenated
+  /// `--name=value`. A value that contains a space stays one element.
+  var argv: [String] {
+    func verb(_ name: String, _ args: [String] = []) -> [String] {
+      ["flash", name] + args
     }
     /// Bool-flag arg: `--name` (when on). Off bool flags don't render.
     func flag(_ name: String) -> String { "--\(name)" }
@@ -1395,13 +1869,34 @@ extension URLCommand {
     switch self {
     case .mouseTarget(let command):
       return verb("mouse_target", command.argTokens)
+    case .mouseBigram(let command):
+      return verb("mouse_bigram", command.argTokens)
     case .mouseTargetScreen(let command):
       return verb("mouse_target", ["--scope=screen"] + command.argTokens)
+    case .mouseTargetWords(let command):
+      return verb("mouse_target", ["--words"] + command.argTokens)
+    case .mouseScreens: return verb("mouse_screens")
+    case .mouseWarp(let request): return verb("mouse_warp", request.argTokens)
+    case .mouseStep(let direction): return verb("mouse_step", ["--direction=\(direction.rawValue)"])
+    case .mouseJump(let jump): return verb("mouse_step", ["--to=\(jump.rawValue)"])
+    case .selection(let action, let register):
+      return verb(
+        "selection", ["--action=\(action.rawValue)"] + (register.map { [kv("register", $0)] } ?? [])
+      )
+    case .mouseNudge(let direction, let distance):
+      return verb("mouse_nudge", ["--direction=\(direction.rawValue)", "--distance=\(distance)"])
+    case .mousePosition(let request): return verb("mouse_position", request.argTokens)
     case .mouseGrid(let command):
       return verb("mouse_grid", command.argTokens)
     case .mouseRepeat: return verb("mouse_repeat")
     case .mousePointer: return verb("mouse_pointer")
     case .mouseButton(let request): return verb("mouse_button", request.argTokens)
+    case .holdMode(let button):
+      switch button {
+      case .primary: return verb("enter_hold_mode")
+      case .secondary: return verb("enter_hold_mode", [flag("secondary")])
+      case .middle: return verb("enter_hold_mode", [flag("middle")])
+      }
     case .focusInput: return verb("focus_input")
     case .scrollTarget: return verb("scroll_target")
     case .mouseDock: return verb("mouse_dock")
@@ -1484,8 +1979,18 @@ extension URLCommand {
     case .clipboardCopy: return verb("clipboard_copy")
     case .clipboardCut: return verb("clipboard_cut")
     case .clipboardPaste: return verb("clipboard_paste")
+    case .clipboardHistory(let action, let id, let offset):
+      var parts = [kv("action", action)]
+      if let id { parts.append(kv("id", id)) }
+      if let offset { parts.append(kv("offset", offset)) }
+      return verb("clipboard_history", parts)
+    case .lookUp: return verb("look_up")
+    case .trackpadGesture(let fingers, let motion):
+      return verb("gesture", ["--fingers=\(fingers)", "--motion=\(motion.rawValue)"])
     case .showAlert(let alert): return verb("alert_show", alert.argTokens)
     case .dismissAlert: return verb("alert_dismiss")
+    case .confirm(let request):
+      return verb("confirm", [kv("prompt", request.prompt), kv("command", request.commandText)])
     case .showUsage(let topic):
       if let topic, !topic.isEmpty { return verb("help_show", [kv("topic", topic)]) }
       return verb("help_show")
@@ -1497,11 +2002,7 @@ extension URLCommand {
     case .quit: return verb("quit")
     case .openApp(let name): return verb("app_open", [kv("name", name)])
     case .pluginCommand(let command, let subcommand, let args):
-      var tokens = [kv("command", command), kv("subcommand", subcommand)]
-      if !args.isEmpty {
-        tokens.append(kv("args", args.joined(separator: " ")))
-      }
-      return verb("plugin_command", tokens)
+      return verb(command, [subcommand] + args)
     case .moveWindow(let params):
       var parts: [String] = []
       switch params.layout {
@@ -1526,8 +2027,15 @@ extension URLCommand {
           ? verb("window_fullscreen")
           : verb("window_fullscreen", [kv("state", state.rawValue)])
       }
-    case .focusWindow(let direction):
-      return verb("window_focus", [kv("direction", direction.rawValue)])
+    case .focusWindow(let request):
+      return verb("window_focus", [kv("direction", request.rawValue)])
+    case .systemKey(let key):
+      return verb("system_key", [kv("key", key.rawValue)])
+    case .functionKey(let index):
+      return verb("function_key", [kv("key", "f\(index)")])
+    case .arrow(let direction, let shift):
+      let args = [kv("direction", direction.rawValue)]
+      return shift ? verb("arrow", args + [flag("shift")]) : verb("arrow", args)
     case .sendKey(let keys, _, _):
       return verb("send_key", [kv("keys", keys)])
     case .sendKeys(let keys, _, _):
@@ -1536,6 +2044,12 @@ extension URLCommand {
       let tokens = args.keys.sorted().map { key in kv(key, args[key] ?? "") }
       return verb(name, tokens)
     }
+  }
+
+  /// Space-joined `argv` for help text, logs, and the mappings list.
+  /// Never re-parsed: splitting it breaks a value that contains a space.
+  var diagnosticDescription: String {
+    argv.joined(separator: " ")
   }
 }
 
@@ -1549,6 +2063,8 @@ extension MouseCommand {
     switch self {
     case .move:
       return ["--move"]
+    case .gesture(let gesture):
+      return ["--gesture=\(gesture.rawValue)"]
     case .drag(let modifiers):
       var tokens = ["--drag"]
       if !modifiers.isEmpty {
@@ -1562,11 +2078,14 @@ extension MouseCommand {
       }
       return tokens
     case .multi(let action, let modifiers), .adjust(let action, let modifiers),
-      .search(let action, let modifiers):
+      .search(let action, let modifiers), .path(let action, let modifiers),
+      .sticky(let action, let modifiers):
       let session: String
       switch self {
       case .multi: session = "--multi"
       case .adjust: session = "--adjust"
+      case .path: session = "--path"
+      case .sticky: session = "--sticky"
       default: session = "--search"
       }
       var tokens = [session]
@@ -1623,7 +2142,8 @@ extension Config {
 
       | Section | Controls |
       | --- | --- |
-      | `[app]` | Autostart, menu-bar icon and keyboard reference layout |
+      | `[app]` | Autostart, menu-bar icon and the input source that reads keypresses |
+      | `[keyboard]` | Logical layout for hints, the grid, bisect and HYPER arrows |
       | `[hints]` | Label alphabet, grid geometry and pointer behavior |
       | `[overlay]`, `[overlay.dark]` | Appearance and click feedback |
       | `[mode]`, `[mode.normal]` | Sequences, leader and scrolling |

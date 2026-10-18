@@ -42,12 +42,14 @@ enum FlashCLI {
   static let usage = """
     Usage:
       flash <verb> [--name=value | --flag ...]
+      flash <plugin-command> [<subcommand> [word ...]]
       flash status [--json]            the resident's state
       flash doctor [--json]            check permissions, capture, config, plugins
       flash config_check [--file=path] validate a config file without the resident
 
     Examples:
       flash mouse_target
+      flash mouse_bigram
       flash mouse_target --modifiers=cmd
       flash mouse_target --double
       flash mouse_grid --move
@@ -58,8 +60,14 @@ enum FlashCLI {
       flash app_open --name=Firefox
       flash window_move --position=lefthalf
       flash window_move --x=10% --y=10% --width=80% --height=80%
+      flash confirm --prompt='Close it?' --command=tab_close
       flash help_show
       flash mappings_show
+      flash media volumedown
+      flash media output 'USB Audio'
+      flash caffeinate toggle
+      flash clipboard show
+      flash clipboard delete <id>
     """
 
   static func run(args: [String]) -> Int32 {
@@ -73,12 +81,48 @@ enum FlashCLI {
     }
     let verb = first
     let argEntries = Array(args.dropFirst())
+    if verb == "clipboard" {
+      let options: [String: String]
+      if argEntries == ["show"] {
+        options = ["action": "show"]
+      } else if argEntries.count == 2, argEntries[0] == "show",
+        argEntries[1].hasPrefix("offset=")
+      {
+        options = ["action": "show", "offset": String(argEntries[1].dropFirst(7))]
+      } else if argEntries.count == 2, argEntries[0] == "delete" {
+        let id = argEntries[1]
+        options = ["action": "delete", "id": id.hasPrefix("id=") ? String(id.dropFirst(3)) : id]
+      } else {
+        FileHandle.standardError.write(Data("flash: invalid clipboard command\n".utf8))
+        return 2
+      }
+      guard URLEventHandler.parse(verb: "clipboard_history", args: options) != nil else {
+        FileHandle.standardError.write(Data("flash: invalid clipboard arguments\n".utf8))
+        return 2
+      }
+      return sendVerb("clipboard_history", args: options)
+    }
+    if PluginRepository.declaresCommand(verb), !URLEventHandler.isBuiltInVerb(verb),
+      FlashQuery(rawValue: verb) == nil
+    {
+      guard
+        case .pluginCommand(let command, let subcommand, let pluginArgs) =
+          PluginGitInvocation.command(argvAfterFlash: args)
+      else {
+        FileHandle.standardError.write(
+          Data("flash: invalid command or arguments for '\(verb)'\n".utf8))
+        return 2
+      }
+      var eventArgs = ["subcommand": subcommand]
+      if !pluginArgs.isEmpty { eventArgs["args"] = pluginArgs.joined(separator: " ") }
+      return sendVerb(command, args: eventArgs)
+    }
     do {
       let argDict = try CommandArguments.parse(argEntries)
       if let query = FlashQuery(rawValue: verb) {
         return runQuery(query, args: argDict)
       }
-      guard URLEventHandler.parseOrPluginVerb(verb: verb, args: argDict) != nil else {
+      guard URLEventHandler.parse(verb: verb, args: argDict) != nil else {
         FileHandle.standardError.write(
           Data("flash: invalid command or arguments for '\(verb)'\n".utf8))
         return 2

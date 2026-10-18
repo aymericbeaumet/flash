@@ -13,17 +13,25 @@ extension AppDelegate {
       version: info["CFBundleShortVersionString"] as? String ?? "unknown",
       build: info["CFBundleVersion"] as? String ?? "unknown",
       mode: FlashStatusReport.modeName(modeStore.mode),
+      mappingScope: mappings.appliedScope.rawValue,
       hintSession: FlashStatusReport.hintSessionPhase(
         route: hintSession.keyRoute, active: hintSession.isActive,
         discovering: activationInFlight),
       focusedApp: lastFocusedApplicationPID.flatMap {
         NSRunningApplication(processIdentifier: $0)?.bundleIdentifier
       },
+      frontmostApp: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+      flashActive: NSRunningApplication.current.isActive,
       accessibility: PermissionCheck.isAccessibilityTrusted,
       capture: FlashStatusReport.capture(
         tapInstalled: keyboardCaptureTap != nil, secureInputEnabled: secure,
         session: sessionRunning ? hintSession.capture : nil),
+      chordRouting: FlashStatusReport.chordRouting(
+        keyboardCaptureTap?.isEnabled == true ? modifiedChordDecision() : nil),
+      heldModifiers: FlashStatusReport.modifierNames(
+        CGEventSource.flagsState(.combinedSessionState)),
       secureInput: secure,
+      globalChords: mappings.registeredHotkeys,
       inputSource: keyboardLayoutMonitor.state.inputSourceID,
       keyboardLayout: config.app.keyboardLayout,
       referenceLayout: keyboardLayoutMonitor.state.reference.table?.sourceID,

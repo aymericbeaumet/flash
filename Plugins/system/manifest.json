@@ -19,6 +19,7 @@
   "commands": [
     {
       "command": "system",
+      "subcommand": "help",
       "description": "Show system action usage"
     },
     {

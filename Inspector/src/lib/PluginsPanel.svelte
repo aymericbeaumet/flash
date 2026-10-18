@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import { router } from "./router.svelte";
   import { paths } from "./routes";
   import type { PluginInfo } from "./types";
   import { bytes, duration } from "./format";
@@ -9,6 +10,7 @@
   let query = $state("");
   let health = $state("all");
   let selectedID = $state<string | null>(null);
+  let detailDialog: HTMLDialogElement;
 
   $effect(() => { query = filter; selectedID = filter || null; health = "all"; });
 
@@ -24,6 +26,11 @@
   const runningCount = $derived(plugins.filter(isRunning).length);
   const errorCount = $derived(plugins.filter(hasError).length);
   const selected = $derived(plugins.find((plugin) => plugin.id === selectedID) ?? null);
+  $effect(() => {
+    if (!detailDialog) return;
+    if (selected && !detailDialog.open) detailDialog.showModal();
+    else if (!selected && detailDialog.open) detailDialog.close();
+  });
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return plugins.filter((plugin) =>
@@ -36,6 +43,10 @@
     if (value == null) return "—";
     if (typeof value === "object") return JSON.stringify(value, null, 2);
     return String(value);
+  }
+  function onDetailClose() {
+    selectedID = null;
+    if (filter) router.replace(paths.plugins());
   }
 </script>
 
@@ -58,11 +69,11 @@
     {#if filtered.length}
       <div class="plugin-grid">
         {#each filtered as plugin (plugin.id)}
-          <button class="plugin-card" class:selected={plugin.id === selectedID} aria-expanded={plugin.id === selectedID} aria-controls="plugin-detail" onclick={() => selectedID = selectedID === plugin.id ? null : plugin.id}>
+          <button class="plugin-card" aria-haspopup="dialog" aria-controls="plugin-detail" onclick={() => selectedID = plugin.id}>
             <span class="card-heading"><span class="plugin-icon"><Icon name="plugins" size={19} /></span><span class="plugin-title"><strong>{plugin.name || plugin.id}</strong><code>{plugin.id}{plugin.version ? ` · ${plugin.version}` : ""}</code></span><span class="badge {stateClass(plugin)}">{label(plugin.state)}</span></span>
             <span class="card-description">{plugin.description || "No description provided."}</span>
             <span class="card-metrics"><span><span class="metric-label">CPU time</span><strong>{duration(plugin.cpu_time_ms)}</strong></span><span><span class="metric-label">Memory</span><strong>{bytes(plugin.memory_bytes)}</strong></span><span><span class="metric-label">Commands</span><strong>{plugin.command_count ?? plugin.commands?.length ?? 0}</strong></span></span>
-            <span class="card-footer"><span>{label(plugin.activation || "resident")}{plugin.origin ? ` · ${plugin.origin}` : ""}</span><span class="details-link">{plugin.id === selectedID ? "Close details" : "Inspect"}<Icon name="chevron" size={12} /></span></span>
+            <span class="card-footer"><span>{label(plugin.activation || "resident")}{plugin.origin ? ` · ${plugin.origin}` : ""}</span><span class="details-link">Inspect details<Icon name="chevron" size={12} /></span></span>
             {#if plugin.last_error}<span class="card-error">{plugin.last_error}</span>{/if}
           </button>
         {/each}
@@ -72,9 +83,12 @@
     {/if}
   </div>
 
+</div>
+
+<dialog class="surface detail-modal" id="plugin-detail" aria-labelledby="plugin-detail-title" bind:this={detailDialog} onclose={onDetailClose}>
   {#if selected}
-    <section class="surface detail" id="plugin-detail" aria-label={selected.id + " details"}>
-      <header><div><p class="eyebrow">Plugin details</p><h2>{selected.name || selected.id} <span class="badge {stateClass(selected)}">{label(selected.state)}</span></h2><p class="detail-description">{selected.description || selected.id}</p></div><button class="close" aria-label="Close plugin details" onclick={() => selectedID = null}><Icon name="close" size={17} /></button></header>
+    <section class="detail">
+      <header><div><p class="eyebrow">Plugin details</p><h2 id="plugin-detail-title">{selected.name || selected.id} <span class="badge {stateClass(selected)}">{label(selected.state)}</span></h2><p class="detail-description">{selected.description || selected.id}</p></div><button type="button" class="close" aria-label="Close plugin details" onclick={() => detailDialog.close()}><Icon name="close" size={17} /></button></header>
       {#if selected.last_error}<div class="notice error"><strong>Last reported error</strong><pre>{selected.last_error}</pre></div>{/if}
       <div class="detail-metrics">
         <div><span>CPU time</span><strong>{duration(selected.cpu_time_ms)}</strong></div><div><span>Memory</span><strong>{bytes(selected.memory_bytes)}</strong></div><div><span>Uptime</span><strong>{selected.started_at_unix_ms == null ? "—" : duration(Math.max(0, now() - selected.started_at_unix_ms))}</strong></div><div><span>Process ID</span><strong>{selected.pid ?? "—"}</strong></div><div><span>Restarts</span><strong>{selected.restart_count ?? 0}</strong></div><div><span>Sources</span><strong>{selected.source_count ?? 0}</strong></div>
@@ -87,7 +101,7 @@
       <details class="runtime-fields"><summary>All runtime fields <span>{detailEntries.length}</span></summary><dl>{#each detailEntries as [key, value]}<dt>{key}</dt><dd><pre>{formatValue(value)}</pre></dd>{/each}</dl></details>
     </section>
   {/if}
-</div>
+</dialog>
 
 <style>
   .overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(180px, 1.4fr); margin-bottom: 27px; border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
@@ -103,8 +117,7 @@
   .plugin-browser { overflow: hidden; }
   .plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; padding: 18px; background: #fbfcf9; }
   .plugin-card { display: flex; flex-direction: column; text-align: left; border: 1px solid var(--border); border-radius: 9px; padding: 19px; min-width: 0; background: #fff; }
-  .plugin-card:hover, .plugin-card.selected { border-color: #8dab7d; background: #fff; }
-  .plugin-card.selected { box-shadow: 0 0 0 2px #b7cba23b; }
+  .plugin-card:hover { border-color: #8dab7d; background: #fff; }
   .card-heading { display: flex; align-items: center; gap: 10px; width: 100%; }
   .plugin-icon { display: flex; align-items: center; justify-content: center; color: var(--accent); background: #edf2e8; border-radius: 7px; width: 33px; height: 33px; flex-shrink: 0; }
   .plugin-title { min-width: 0; flex: 1; }
@@ -119,7 +132,9 @@
   .card-footer > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .details-link { display: flex; align-items: center; gap: 3px; flex-shrink: 0; color: var(--accent); }
   .card-error { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; margin-top: 12px; padding: 8px; background: #fff0eb; color: var(--danger); border-radius: 5px; font: 10px/1.6 var(--mono); }
-  .detail { margin-top: 24px; padding: 26px; scroll-margin-top: 20px; }
+  .detail-modal { width: min(960px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow: auto; color: var(--text); font: inherit; box-shadow: 0 20px 60px #1f2a2133; }
+  .detail-modal::backdrop { background: #1f2a2166; }
+  .detail { padding: 26px; }
   .detail header { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 22px; }
   .detail header h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 7px; }
   .detail-description { color: var(--muted); font-size: 12px; margin-top: 8px; }

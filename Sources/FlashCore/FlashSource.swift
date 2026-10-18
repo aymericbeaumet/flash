@@ -220,6 +220,11 @@ public struct Candidate: @unchecked Sendable {
   public var sortKey: String
   public var scoringMask: UInt64
   public var wordStartMask: UInt64
+  /// `source` lowercased, for the precedence table's per-match lookups.
+  public var loweredSource: String
+  /// The frecency item key, or "" when the row has none; "" also while the
+  /// row is unprepared (`sortKey` empty).
+  public var frecencyKey: String
 
   public init(
     title: String,
@@ -231,7 +236,9 @@ public struct Candidate: @unchecked Sendable {
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
     sortKey: String = "",
     scoringMask: UInt64 = 0,
-    wordStartMask: UInt64 = 0
+    wordStartMask: UInt64 = 0,
+    loweredSource: String = "",
+    frecencyKey: String = ""
   ) {
     self.title = title
     self.url = url
@@ -243,6 +250,8 @@ public struct Candidate: @unchecked Sendable {
     self.sortKey = sortKey
     self.scoringMask = scoringMask
     self.wordStartMask = wordStartMask
+    self.loweredSource = loweredSource
+    self.frecencyKey = frecencyKey
   }
 }
 
@@ -330,9 +339,8 @@ public struct CandidateResolution: Sendable {
 
 /// Discrete source actions the host can dispatch through ``FlashSource``.
 /// Each case carries the parameters the action needs and knows which
-/// ``FlashSourceCapabilities`` flag gates participation, so a single
-/// dispatch method on the SPI covers what used to be 12 parallel
-/// per-action methods.
+/// ``FlashSourceCapabilities`` flag gates participation, so one dispatch
+/// method on the SPI covers every action.
 public enum SourceAction: Sendable, Equatable {
   case tabSelect(index: Int)
   case tabNext
@@ -368,6 +376,7 @@ public enum SourceAction: Sendable, Equatable {
   case clipboardCopy
   case clipboardCut
   case clipboardPaste
+  case lookUp
 
   /// Capability flag a source must advertise to be considered for this action.
   public var requiredCapability: FlashSourceCapabilities {
@@ -387,7 +396,7 @@ public enum SourceAction: Sendable, Equatable {
     case .scrollTop, .scrollBottom: return .scrollExtremes
     case .historyBack, .historyForward: return .historyNavigation
     case .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste:
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp:
       return .appCommands
     }
   }
@@ -438,6 +447,7 @@ public enum SourceAction: Sendable, Equatable {
     case .clipboardCopy: return "clipboard_copy"
     case .clipboardCut: return "clipboard_cut"
     case .clipboardPaste: return "clipboard_paste"
+    case .lookUp: return "look_up"
     }
   }
 
@@ -451,7 +461,7 @@ public enum SourceAction: Sendable, Equatable {
       .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
       .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom, .historyBack, .historyForward,
       .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste,
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp,
     ].map { ($0.wireName, $0) })
 
   /// Extra wire-protocol fields the plugin needs to dispatch this action.
@@ -504,6 +514,7 @@ public enum SourceActionName: String, CaseIterable, Sendable {
   case clipboardCopy = "clipboard_copy"
   case clipboardCut = "clipboard_cut"
   case clipboardPaste = "clipboard_paste"
+  case lookUp = "look_up"
 }
 
 public struct SourceActionResult: Sendable {
@@ -538,8 +549,6 @@ public struct SourceActionResult: Sendable {
     self.navigationURL = navigationURL
     self.failureReason = failureReason
   }
-
-  public var didPerform: Bool { disposition == .performed }
 
   /// This result, attributed to the source that produced it.
   public func attributed(to source: String) -> SourceActionResult {

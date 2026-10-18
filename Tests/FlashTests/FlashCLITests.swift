@@ -65,7 +65,7 @@ final class FlashCLITests: XCTestCase {
 
   func testStatusRendersTheDirectObjectAsTextOrJSON() throws {
     let object: [String: Any] = [
-      "schema": 2, "version": "1.2.3", "build": "4", "mode": "normal",
+      "schema": 3, "version": "1.2.3", "build": "4", "mode": "normal",
       "plugins": ["loaded": 1, "ready": 1, "error": 0],
       "hints": ["com.apple.Notes": ["count": 3, "empty": 0, "p50_ms": 1.5, "p95_ms": 2.5]],
     ]
@@ -83,7 +83,7 @@ final class FlashCLITests: XCTestCase {
     let decoded = try XCTUnwrap(
       JSONSerialization.jsonObject(with: Data((json.output ?? "").utf8)) as? [String: Any])
     XCTAssertEqual(decoded["mode"] as? String, "normal")
-    XCTAssertEqual(decoded["schema"] as? Int, 2)
+    XCTAssertEqual(decoded["schema"] as? Int, 3)
     XCTAssertEqual(
       (decoded["hints"] as? [String: [String: Any]])?["com.apple.Notes"]?["count"] as? Int, 3)
   }

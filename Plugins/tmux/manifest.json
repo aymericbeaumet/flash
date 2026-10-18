@@ -46,7 +46,7 @@
     {
       "name": "tmux.windows",
       "kind": "locations",
-      "priority": "high"
+      "priority": "important"
     }
   ],
   "actions": [
@@ -67,5 +67,9 @@
     "scroll_top",
     "scroll_bottom",
     "app_reload"
-  ]
+  ],
+  "action_confirmations": {
+    "tab_close": "Close this tmux window?",
+    "pane_close": "Close this tmux pane?"
+  }
 }

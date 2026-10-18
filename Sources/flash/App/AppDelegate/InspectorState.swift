@@ -26,11 +26,198 @@ extension AppDelegate {
   /// Start the inspector on `host:port`, replacing any running one.
   func startDebugServer(host: String, port: Int) {
     stopDebugServer()
-    let server = DebugServer(host: host, port: port) { [weak self] in
-      self?.debugStateJSON() ?? [:]
-    }
+    let server = DebugServer(
+      host: host, port: port,
+      clipboardHTTP: { [weak self] method, id, completion in
+        guard let self else {
+          completion(
+            "503 Service Unavailable", "text/plain; charset=utf-8", Data("unavailable".utf8))
+          return
+        }
+        self.serveClipboardHTTP(method: method, id: id, completion: completion)
+      },
+      clipboardHistoryHTTP: { [weak self] offset, completion in
+        guard let self else {
+          completion(
+            "503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
+          return
+        }
+        self.serveClipboardHistoryHTTP(offset: offset, completion: completion)
+      },
+      configHTTP: { [weak self] method, purge, body, completion in
+        guard let self else {
+          completion(
+            "503 Service Unavailable", "application/json; charset=utf-8",
+            Self.configJSON(["error": "unavailable"]))
+          return
+        }
+        self.serveConfigHTTP(method: method, purge: purge, body: body, completion: completion)
+      },
+      stateProvider: { [weak self] in
+        self?.debugStateJSON() ?? [:]
+      }
+    )
     attachDebugServer(server)
     server.start()
+  }
+
+  /// `GET /api/config` reads the file Flash loaded. `PUT` replaces it after
+  /// the body parses as TOML. `POST /api/config/purge` returns the editor
+  /// text with bundled defaults removed and does not write.
+  func serveConfigHTTP(
+    method: String, purge: Bool, body: Data,
+    completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) {
+    let type = "application/json; charset=utf-8"
+    DispatchQueue.main.async { [weak self] in
+      guard self != nil else {
+        completion("503 Service Unavailable", type, Self.configJSON(["error": "unavailable"]))
+        return
+      }
+      let url = ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment)
+      switch (method, purge) {
+      case ("GET", false):
+        let toml = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        completion("200 OK", type, Self.configJSON(["path": url.path, "toml": toml]))
+      case ("PUT", false):
+        guard let text = String(data: body, encoding: .utf8) else {
+          completion(
+            "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
+          return
+        }
+        if let error = ConfigPurge.tomlError(in: text) {
+          completion("400 Bad Request", type, Self.configJSON(["error": error]))
+          return
+        }
+        do {
+          try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+          try Data(text.utf8).write(to: url, options: .atomic)
+        } catch {
+          completion(
+            "500 Internal Server Error", type,
+            Self.configJSON(["error": "could not write configuration"]))
+          return
+        }
+        completion("200 OK", type, Self.configJSON(["ok": true]))
+      case ("POST", true):
+        guard let text = String(data: body, encoding: .utf8) else {
+          completion(
+            "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
+          return
+        }
+        guard let defaults = ConfigLoader.embeddedDefaultLayer()?.text else {
+          completion(
+            "503 Service Unavailable", type,
+            Self.configJSON(["error": "bundled defaults are unavailable"]))
+          return
+        }
+        let toml = ConfigPurge.purgeDefaults(in: text, defaults: defaults)
+        completion("200 OK", type, Self.configJSON(["toml": toml]))
+      default:
+        completion(
+          "405 Method Not Allowed", type, Self.configJSON(["error": "method not allowed"]))
+      }
+    }
+  }
+
+  private static func configJSON(_ object: [String: Any]) -> Data {
+    (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+      ?? Data("{}".utf8)
+  }
+
+  func serveClipboardHistoryHTTP(
+    offset: Int,
+    completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        completion("503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
+        return
+      }
+      self.clipboardHistoryStore.page(offset: offset) { [weak self] page in
+        let type = "application/json; charset=utf-8"
+        guard let page, let data = try? JSONEncoder().encode(page) else {
+          completion("503 Service Unavailable", type, Data("{}".utf8))
+          return
+        }
+        guard let self else {
+          completion("503 Service Unavailable", type, Data("{}".utf8))
+          return
+        }
+        self.clipboardImageMimes.remember(page.entries, offset: offset)
+        completion("200 OK", type, data)
+      }
+    }
+  }
+
+  /// `GET /api/clipboard/<id>` returns that entry's image. `DELETE` removes
+  /// the entry from the core history and from this cache.
+  func serveClipboardHTTP(
+    method: String, id: String,
+    completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        completion(
+          "503 Service Unavailable", "text/plain; charset=utf-8", Data("unavailable".utf8))
+        return
+      }
+      switch method {
+      case "GET":
+        self.readClipboardImage(id: id, completion: completion)
+      case "DELETE":
+        self.deleteClipboardHistoryEntry(id: id, completion: completion)
+      default:
+        completion(
+          "405 Method Not Allowed", "text/plain; charset=utf-8", Data("method not allowed".utf8))
+      }
+    }
+  }
+
+  private func readClipboardImage(
+    id: String,
+    completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) {
+    guard
+      let mime = clipboardImageMimes.mime(for: id),
+      let url = ClipboardImageStore.fileURL(dataDir: Self.clipboardDataDir(), id: id, mime: mime)
+    else {
+      completion("404 Not Found", "text/plain; charset=utf-8", Data("not found".utf8))
+      return
+    }
+    DispatchQueue.global(qos: .utility).async {
+      guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+        completion("404 Not Found", "text/plain; charset=utf-8", Data("not found".utf8))
+        return
+      }
+      completion("200 OK", mime, data)
+    }
+  }
+
+  private func deleteClipboardHistoryEntry(
+    id: String,
+    completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) {
+    clipboardHistoryStore.delete(id: id) { [weak self] ok in
+      guard let self else {
+        completion(
+          "503 Service Unavailable", "text/plain; charset=utf-8", Data("unavailable".utf8))
+        return
+      }
+      guard ok else {
+        completion("404 Not Found", "text/plain; charset=utf-8", Data("not found".utf8))
+        return
+      }
+      self.clipboardEntries.removeAll { $0.id == id }
+      self.clipboardImageMimes.remove(id)
+      self.refreshClipboardDashboardCache()
+      completion("200 OK", "application/json; charset=utf-8", Data("{\"ok\":true}".utf8))
+    }
+  }
+
+  static func clipboardDataDir() -> URL {
+    ClipboardHistoryStore.defaultDirectory()
   }
 
   /// The components whose changes the state reads report them here; wired
@@ -66,12 +253,13 @@ extension AppDelegate {
   /// | `runtime.accessibility_trusted` | The system's Accessibility trust-list notification; the grant starting the tap |
   /// | `runtime.keyboard_capture_active`, `secure_input` | The tap installing (`keyboardCaptureTap`); `noteSecureInput` |
   /// | `runtime.advanced_mode`, `mode`, `overlay` | `applyModeOverlay`; `refreshOverlayInputRouting` |
-  /// | `runtime.config_error`, `config`, `docs` | Config reload (`configureDebugServer`); plugin state for plugin topics |
+  /// | `runtime.config_error`, `config`, `config_sources`, `docs` | Config reload (`configureDebugServer`); plugin state for plugin topics |
   /// | `commands`, `plugins` | `pluginStateDidChange` (lifecycle, status publishes, logs, reloads) |
   /// | `mappings` | Config reload, focus, plugin state, `refreshEffectiveMappings` applying a new table |
   /// | `focused_app` | Workspace activation, including Flash's own; `applyFocusedApplicationChange` |
-  /// | `hints`, `hint_command`, `activation_in_flight` | `hintSession`; `activationLifecycle` |
-  /// | `clipboard` | `clipboardEntries` (the clipboard plugin's history reply) |
+  /// | `hints`, `hint_command`, `hint_session`, `activation_in_flight` | `hintSession`; `activationLifecycle` |
+  /// | `keyboard` | Config reload (layout, alphabet, grid keys); `hintSession` (what the keys do now) |
+  /// | `clipboard` | `clipboardEntries` (the core clipboard history page) |
   /// | `statusbar`, `terminals`, `widgets` | Status model publishes and menu-bar yielding; popup presentation and terminal sessions; widget placement; their windows' notifications (below) |
   /// | `windows` | Flash's windows moving, resizing, ordering in or out, changing screen or key status, or closing; the active Space |
   ///
@@ -132,6 +320,8 @@ extension AppDelegate {
         "summary": topic.summary,
         "body": topic.body,
         "aliases": topic.aliases,
+        "group": topic.group,
+        "manual": topic.manual.map { HelpDocs.manual($0) } as Any,
       ]
     }
     return [
@@ -151,8 +341,14 @@ extension AppDelegate {
         "config_error": config.loadingErrorAlertMessage as Any? ?? NSNull(),
       ] as [String: Any],
       "config": configJSON,
+      "config_sources": config.resolvedConfigSources(),
       "commands": commands,
-      "clipboard": clipboardEntries.map { ["preview": $0.preview, "value": $0.value] },
+      "clipboard": clipboardEntries.map(Self.clipboardStateObject),
+      "clipboard_registers": registers.snapshot().map { entry in
+        ["name": entry.name, "text": entry.text, "kind": entry.kind, "truncated": entry.truncated]
+      },
+      "clipboard_total": clipboardTotal,
+      "clipboard_next_offset": clipboardNextOffset as Any? ?? NSNull(),
       "docs": docs,
       "mappings": [
         "normal_leader": config.mode.normalLeader ?? "",
@@ -168,6 +364,10 @@ extension AppDelegate {
         "pid": focusedPID,
       ],
       "mode": String(describing: modeStore.mode.label),
+      "hint_session": FlashStatusReport.hintSessionPhase(
+        route: hintSession.keyRoute, active: hintSession.isActive,
+        discovering: activationInFlight),
+      "keyboard": keyboardStateJSON(),
       "hints": hintSession.hints.map { hint -> [String: Any] in
         [
           "label": hint.label,
@@ -256,7 +456,7 @@ extension HintSession {
   /// Whether the inspector's `hints` and `hint_command` read the same for
   /// both sessions. Typing a label prefix changes neither.
   func showsSameInspectorState(as other: HintSession) -> Bool {
-    command == other.command && hints.count == other.hints.count
+    command == other.command && keyRoute == other.keyRoute && hints.count == other.hints.count
       && zip(hints, other.hints).allSatisfy { new, old in
         new.label == old.label && new.target.frame == old.target.frame
           && new.target.role == old.target.role
@@ -317,5 +517,37 @@ final class InspectorChangeObservers: NSObject {
         [changed] in changed()
       }
     }
+  }
+}
+
+extension AppDelegate {
+  /// The keyboard page's model: the physical layout `[keyboard] layout`
+  /// names, the hint alphabet with each key's ease, the grid block, the zone
+  /// rows of `label_order = "zones"`, and the navigation keys. What the keys
+  /// do right now comes from `mode`, `hint_session` and `mappings`.
+  func keyboardStateJSON() -> [String: Any] {
+    let layoutName = config.positionLayoutName
+    let layout = Alphabet.layouts[layoutName]
+    let resolved = config.resolvedAlphabet
+    let navigation = Alphabet.navigation(layoutName: layoutName)
+    return [
+      "layout": layoutName,
+      "rows": (layout?.physical ?? []).map { String($0) },
+      "alphabet": String(resolved.chars),
+      "key_scores": Dictionary(
+        uniqueKeysWithValues: resolved.chars.map { (String($0), resolved.keyScores[$0] ?? 0) }),
+      "grid_keys": config.resolvedMouseGridKeys.map { String($0) },
+      "label_order": config.hints.labelOrder.rawValue,
+      "zone_rows": HintLabelOrdering.zoneRows(
+        alphabet: resolved.chars, keyRows: resolved.keyRows, keyColumns: resolved.keyColumns
+      ).map { String($0) },
+      "navigation": [
+        "left": String(navigation.left), "down": String(navigation.down),
+        "up": String(navigation.up), "right": String(navigation.right),
+        "quadrants": navigation.quadrants.map { String($0) },
+      ],
+      "adjust_digits": config.hints.adjustDigits.rawValue,
+      "held_button": ActionDispatcher.heldButton?.rawValue as Any? ?? NSNull(),
+    ]
   }
 }

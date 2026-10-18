@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "cpu",
-      "subcommand": "",
+      "subcommand": "show",
       "description": "Show the latest CPU and GPU snapshot"
     },
     {

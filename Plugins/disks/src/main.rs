@@ -248,11 +248,11 @@ impl FlashPlugin for Disks {
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
             // Unobserved, nothing samples between commands: sample first.
-            "" if !CADENCES.observed() => {
+            "show" if !CADENCES.observed() => {
                 try_refresh_disks(&ctx, true).await;
                 current_response()
             }
-            "" => current_response(),
+            "show" => current_response(),
             "refresh" => {
                 try_refresh_disks(&ctx, true).await;
                 current_response()
@@ -573,7 +573,8 @@ fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<Rendere
     }
     Some(RenderedStatus {
         visible,
-        label: bar(percent.unwrap_or_else(|| "  —".to_string())),
+        // The template owns the name and the width (`#[label]DSK #[default]#{p-3:…}`).
+        label: Markup::text(percent.unwrap_or_else(|| "—".to_string()).trim()),
         preview,
         raw: raw_metrics(state),
     })
@@ -765,7 +766,7 @@ mod tests {
 
     #[test]
     fn label_keeps_startup_usage_width_and_excludes_popup_markup() {
-        for (percent, expected) in [(0, " 0%"), (9, " 9%"), (10, "10%"), (100, "99%")] {
+        for (percent, expected) in [(0, "0%"), (9, "9%"), (10, "10%"), (100, "99%")] {
             let state = DiskState {
                 capacity: Some(CapacitySnapshot {
                     volumes: vec![
@@ -783,10 +784,8 @@ mod tests {
             };
             let [(_, summary), (_, label), ..] =
                 render_status(&state, SummaryMode::Full).unwrap().segments();
-            assert_eq!(
-                label.render().unwrap(),
-                format!("#[fg=#EBCB8B]DSK#[default] #[fg=colour245]{expected}#[default]")
-            );
+            assert_eq!(label.render().unwrap(), expected);
+            assert!(!label.render().unwrap().contains("#["));
             assert!(summary.render().unwrap().contains("popup="));
         }
         let state = DiskState {
@@ -798,7 +797,7 @@ mod tests {
                 .unwrap()
                 .label
                 .as_str(),
-            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]  —#[default]"
+            "—"
         );
     }
 
@@ -1097,10 +1096,7 @@ Free          100 KiB"
         publish_status(&ctx, &mut state);
         let frames = harness.drain_status();
         assert_eq!(frames.len(), 1);
-        assert_eq!(
-            frames[0]["label"],
-            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]"
-        );
+        assert_eq!(frames[0]["label"], "90%");
         assert!(frames[0]["summary"].starts_with("#[popup=inline:"));
         assert!(
             frames[0]["summary"]

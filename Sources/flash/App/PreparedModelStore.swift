@@ -21,6 +21,9 @@ struct PreparedModel {
   /// covered all of it, or nothing of it was on screen. Such a model is never
   /// stored (`PreparedModelStore.store`).
   let occluded: Bool
+  /// What covered the window when it was walked; a lookup must see the same.
+  /// Nil when the walk had no window list, and then never served.
+  let occlusion: WindowSnapshot.OcclusionSignature?
 
   var isEmptyReady: Bool { hints.isEmpty }
 }
@@ -65,15 +68,19 @@ struct PreparedModelStore {
     models[pid]
   }
 
+  /// `occlusion` is what covers the window now; a model walked under
+  /// another cover is a miss.
   func lookup(
     pid: pid_t,
     dirtyToken: UInt64,
     configRevision: UInt64,
-    now: DispatchTime
+    now: DispatchTime,
+    occlusion: WindowSnapshot.OcclusionSignature?
   ) -> PreparedModel? {
     guard let model = models[pid] else { return nil }
     guard model.dirtyToken == dirtyToken else { return nil }
     guard model.configRevision == configRevision else { return nil }
+    guard let walked = model.occlusion, walked == occlusion else { return nil }
     let ageNs = now.uptimeNanoseconds - model.computedAt.uptimeNanoseconds
     let ageMs = Double(ageNs) / 1_000_000
     guard ageMs <= Double(model.freshnessMs) else { return nil }

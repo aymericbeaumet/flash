@@ -63,6 +63,10 @@ export interface MappingRow {
   scope: string;
   key: string;
   action: string;
+  /** What this binding does, including its flags. The row's ? shows it, and search ranks it. */
+  explanation?: string;
+  /** `default`, `config` or `config:<file>`, or `plugin:<name>`. */
+  origin?: string;
 }
 
 /** How one action resolves in the focused app, in dispatch order. */
@@ -86,10 +90,20 @@ export interface MappingsState {
 }
 
 export interface ClipboardEntry {
-  /// One-line label.
+  /** 32 lowercase hex characters. Image bytes load from `/api/clipboard/<id>`. */
+  id: string;
+  /** `text`, `image`, `html`, or `files`. */
+  kind: string;
+  /** One-line label. */
   preview: string;
-  /// Full text — copied back to the system clipboard on click.
+  /** Plain text put back on the clipboard. Empty for an image that had none. */
   value: string;
+  /** Formatted copy, shown in a sandboxed frame. */
+  html?: string;
+  /** Present when this entry has an image to render. */
+  mime?: string;
+  /** Paths from a file copy. */
+  files?: string[];
 }
 
 export interface DocTopic {
@@ -99,6 +113,37 @@ export interface DocTopic {
   /** Raw Markdown — the Docs tab renders it client-side. */
   body: string;
   aliases?: string[];
+  /** The section Flash files the guide under; topics arrive in reading order. */
+  group?: string;
+  /** The published manual page with the long-form reference, if any. */
+  manual?: string | null;
+}
+
+export interface ClipboardRegister {
+  name: string;
+  text: string;
+  kind: "unnamed" | "yank" | "named" | "clipboard";
+  /** Snapshot contains a preview; the resident keeps the full value for paste. */
+  truncated?: boolean;
+}
+
+/** The keyboard page's model: the layout, the hint alphabet and what the keys do. */
+export interface KeyboardState {
+  /** `qwerty`, `colemak`, `dvorak` or `bepo`. */
+  layout: string;
+  /** Four rows of ten keys: number, top, home, bottom. */
+  rows: string[];
+  /** The hint alphabet, best key first. */
+  alphabet: string;
+  key_scores: Record<string, number>;
+  /** The mouse grid's keys, one string per row. */
+  grid_keys: string[];
+  label_order: string;
+  /** The zone keys of `label_order = "zones"`, one string per keyboard row. */
+  zone_rows: string[];
+  navigation: { left: string; down: string; up: string; right: string; quadrants: string[] };
+  adjust_digits: string;
+  held_button?: string | null;
 }
 
 export interface InspectorState {
@@ -118,12 +163,23 @@ export interface InspectorState {
     config_error?: string | null;
   };
   mode?: string;
+  /** `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`, `bigram` or `confirming`. */
+  hint_session?: string;
+  keyboard?: KeyboardState;
   overlay?: string | null;
   focused_app?: FocusedApp;
   config?: Record<string, unknown>;
+  /** Sparse tree parallel to `config`. A node's `$` is `{ layer, where }` when a later layer overrode the default. */
+  config_sources?: { $?: { layer?: string; where?: string }; [key: string]: unknown };
   plugins?: PluginInfo[];
   commands?: CommandInfo[];
   docs?: DocTopic[];
   clipboard?: ClipboardEntry[];
+  /** Populated Vim-style text registers from the resident process. */
+  clipboard_registers?: ClipboardRegister[];
+  /** Offset of the next clipboard page, or null when this is the full history. */
+  clipboard_next_offset?: number | null;
+  /** Number of entries retained by core clipboard history. */
+  clipboard_total?: number;
   mappings?: MappingsState;
 }

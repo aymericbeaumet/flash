@@ -11,6 +11,10 @@ struct PluginLifecycle {
   enum Event {
     case start(resident: Bool)
     case activate
+    /// The child exists only to feed status surfaces and none shows it any
+    /// more: tear it down and return to `idle`, keeping the failure budget,
+    /// so a crash-looping plugin cannot earn a fresh budget on each toggle.
+    case deactivate
     case reload(resident: Bool)
     case installed(UInt64)
     case initialized(UInt64)
@@ -27,9 +31,32 @@ struct PluginLifecycle {
     case park
   }
 
+  /// Where one `perform` goes, from the state alone.
+  enum PerformRoute: Equatable {
+    case unhandled
+    case dispatch
+    /// Queued until the child is running; the deferral deadline settles it.
+    case wait
+    /// Queued, and the on-demand child is spawned for it.
+    case waitAndActivate
+  }
+
   private(set) var state: State = .initial
   private(set) var generation: UInt64 = 0
   private(set) var failures: [TimeInterval] = []
+
+  /// A definition not yet started (`initial`) only queues: `start` spawns an
+  /// on-demand child for whatever waits by then. A replacement is published
+  /// to dispatch before its predecessor has stopped, so a request made in
+  /// that window must never spawn the replacement beside the old child.
+  static func performRoute(state: State, onDemand: Bool) -> PerformRoute {
+    switch state {
+    case .running: return .dispatch
+    case .failed, .stopped: return .unhandled
+    case .initial, .installing, .launching, .backoff: return .wait
+    case .idle: return onDemand ? .waitAndActivate : .wait
+    }
+  }
 
   var runtimeState: PluginRuntimeState {
     switch state {
@@ -53,6 +80,10 @@ struct PluginLifecycle {
     case .activate:
       guard state == .idle || state == .initial else { return [] }
       return begin()
+    case .deactivate:
+      generation &+= 1
+      state = .idle
+      return [.teardown]
     case .reload(let resident):
       generation &+= 1
       failures.removeAll()

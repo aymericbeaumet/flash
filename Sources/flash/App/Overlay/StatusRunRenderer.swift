@@ -16,6 +16,10 @@ final class StatusRunRenderer {
     var previousFont: NSFont?
     var previousForeground: CGColor?
     var previousFrame: CGRect?
+    /// The container fill last written, nil for none: an unchanged run writes
+    /// no new `CGColor` to the layer.
+    var previousBackground: FlashStatusTextColor?
+    var paintedBackground = false
 
     private(set) var existingPill: CAGradientLayer?
     private(set) var existingOutgoing: CATextLayer?
@@ -157,7 +161,10 @@ final class StatusRunRenderer {
     let runs = items.map(\.run)
     let cycling = Self.cycleTransitionIndices(previous: previousRuns, next: runs)
     previousRuns = runs
-    let cycleStartedAt = CACurrentMediaTime()
+    // One clock for the whole row. Converting absolute time per layer lets a
+    // layer that was just added disagree with one already in the window, so
+    // the title and the domain start their slide at different moments.
+    let cycleStartedAt = host.convertTime(CACurrentMediaTime(), from: nil)
     var stats = RenderStats(visible: items.count)
     for (index, item) in items.enumerated() {
       if index == runLayers.count {
@@ -176,8 +183,14 @@ final class StatusRunRenderer {
       let cellBackground = run.segment.reverse ? run.segment.foreground : run.segment.background
       let paintsBackground =
         !isPill && (run.segment.reverse || cellBackground != .defaultBackground)
-      layers.container.backgroundColor =
-        paintsBackground ? FlashStatusTextColor.nsColor(cellBackground).cgColor : nil
+      if paintsBackground != layers.paintedBackground
+        || (paintsBackground && layers.previousBackground != cellBackground)
+      {
+        layers.container.backgroundColor =
+          paintsBackground ? FlashStatusTextColor.cgColor(cellBackground) : nil
+        layers.paintedBackground = paintsBackground
+        layers.previousBackground = paintsBackground ? cellBackground : nil
+      }
       if let pill, isPill {
         let layer = layers.pill
         layer.frame = textRect
@@ -217,6 +230,7 @@ final class StatusRunRenderer {
         layers.text.removeAnimation(forKey: Self.cycleAnimationKey)
         layers.existingEffect?.removeAnimation(forKey: Self.cycleAnimationKey)
         layers.existingOutgoing?.removeAllAnimations()
+        layers.container.removeAnimation(forKey: Self.cycleAnimationKey)
       }
       let animated = segment.blink || segment.breathing
       let sameFont = layers.previousFont == font
@@ -253,7 +267,7 @@ final class StatusRunRenderer {
           stats.cycles += 1
           Self.runCycleTransition(
             layers, outgoing: outgoingString, textRect: textRect, travel: rect.height,
-            startedAt: cycleStartedAt)
+            startedAt: cycleStartedAt, host: host)
         } else if allowsTransition, !segment.cycle, samePlace, let previousText,
           previousText != segment.text, !Self.onlyCutMoved(previousText, segment.text)
         {
@@ -354,16 +368,16 @@ final class StatusRunRenderer {
   /// Carousel article change as one vertical push: the old line travels the
   /// full run height up (`travel`, the clipping container's height) and fades
   /// out while the new line rises the same distance from below and fades in,
-  /// so the strip visibly enters and leaves through the run's edges. Both
-  /// share one duration and the standard ease-in-out curve (cubic-bezier 0.4,
-  /// 0, 0.2, 1), so they read as one strip sliding. Every run of one carousel
-  /// group shares `startedAt`.
+  /// so the strip visibly enters and leaves through the run's edges. Title
+  /// and domain are one run, so both travel on that same vertical push.
+  /// Both share one duration and the standard ease-in-out curve
+  /// (cubic-bezier 0.4, 0, 0.2, 1). `startedAt` is in `host`'s time.
   private static func runCycleTransition(
     _ layers: RunLayer, outgoing: Any?, textRect: CGRect, travel: CGFloat,
-    startedAt: CFTimeInterval
+    startedAt: CFTimeInterval, host: CALayer
   ) {
     let distance = max(travel, textRect.height)
-    let beginTime = layers.text.convertTime(startedAt, from: nil)
+    let beginTime = layers.text.convertTime(startedAt, from: host)
     let curve = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
     let incoming = CAAnimationGroup()
     incoming.animations = [
@@ -376,6 +390,7 @@ final class StatusRunRenderer {
     incoming.timingFunction = curve
     layers.text.add(incoming, forKey: cycleAnimationKey)
     layers.existingEffect?.add(incoming, forKey: cycleAnimationKey)
+    layers.container.removeAnimation(forKey: cycleAnimationKey)
     guard prepareOutgoing(layers, string: outgoing, textRect: textRect) else { return }
     let leaving = CAAnimationGroup()
     leaving.animations = [
@@ -419,8 +434,8 @@ final class StatusRunRenderer {
     }
     var changed = Set<Int>()
     for (old, new) in zip(groups(previous), groups(next)) {
-      // A lane re-budget (another lane grew, the centre changed) re-truncates
-      // the elastic title and can drop the row's tail runs; that is the same
+      // A lane re-budget (the screen or the centre changed) re-truncates the
+      // elastic title and can drop the row's tail runs; that is the same
       // article and must not push the carousel.
       let sameArticle = zip(old, new).allSatisfy { before, after in
         sameCarouselArticle(previous[before].segment, next[after].segment)
@@ -438,22 +453,33 @@ final class StatusRunRenderer {
     return truncationEquivalent(lhs.text, rhs.text)
   }
 
-  /// True when a re-budget only moved where an overflow cut falls: one side
-  /// ends in the `…` marker and the texts are otherwise truncation-equivalent.
+  /// True when a re-budget only moved where an overflow cut falls. The left
+  /// and the centre mark that cut with a trailing `…`; the right marks it
+  /// with a leading `…`. Either way the texts are truncation-equivalent.
   static func onlyCutMoved(_ lhs: String, _ rhs: String) -> Bool {
-    (lhs.hasSuffix("…") || rhs.hasSuffix("…")) && truncationEquivalent(lhs, rhs)
+    let marked =
+      lhs.hasSuffix("…") || rhs.hasSuffix("…") || lhs.hasPrefix("…") || rhs.hasPrefix("…")
+    return marked && truncationEquivalent(lhs, rhs)
   }
 
   /// True when one text is the other cut short (with or without the `…`
   /// marker), i.e. they differ only by elastic contraction or lane clamping.
+  /// A trailing cut keeps a prefix; a leading cut, used by the right segment,
+  /// keeps a suffix. A leading space is real text and is not stripped.
   static func truncationEquivalent(_ lhs: String, _ rhs: String) -> Bool {
-    func core(_ text: String) -> Substring {
+    func core(_ text: String) -> (value: Substring, leadingCut: Bool) {
       var value = Substring(text)
       while let last = value.last, last == "…" || last == " " { value = value.dropLast() }
-      return value
+      let leadingCut = value.first == "…"
+      if leadingCut { value = value.dropFirst() }
+      return (value, leadingCut)
     }
     let left = core(lhs)
     let right = core(rhs)
-    return left.hasPrefix(right) || right.hasPrefix(left)
+    if left.value.hasPrefix(right.value) || right.value.hasPrefix(left.value) { return true }
+    // A leading cut keeps the tail. Only a real ellipsis opts into that;
+    // a leading space is text, not a marker.
+    guard left.leadingCut || right.leadingCut else { return false }
+    return left.value.hasSuffix(right.value) || right.value.hasSuffix(left.value)
   }
 }

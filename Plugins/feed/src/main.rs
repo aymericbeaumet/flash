@@ -14,7 +14,6 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 
 struct Settings {
     url: Url,
-    label: String,
     refresh_interval: Duration,
     cycle_interval: Duration,
 }
@@ -30,25 +29,9 @@ fn settings(ctx: &Context) -> Result<Option<Settings>, &'static str> {
     let url = feed::web_url(value).ok_or("url must be an HTTP(S) URL without credentials")?;
     Ok(Some(Settings {
         url,
-        label: label(ctx.config_json("label"))?,
         refresh_interval: interval(ctx.config_json("refresh_interval"), 300)?,
         cycle_interval: interval(ctx.config_json("cycle_interval"), 30)?,
     }))
-}
-
-fn label(value: Option<Value>) -> Result<String, &'static str> {
-    let Some(value) = value else {
-        return Ok("FEED".into());
-    };
-    value
-        .as_str()
-        .filter(|label| {
-            !label.trim().is_empty()
-                && label.chars().count() <= 32
-                && !label.chars().any(char::is_control)
-        })
-        .map(str::to_owned)
-        .ok_or("label must be a nonempty string of 1..32 characters without control characters")
 }
 
 fn interval(value: Option<Value>, default: u64) -> Result<Duration, &'static str> {
@@ -87,10 +70,7 @@ impl FlashPlugin for Feed {
                 return;
             }
         };
-        let state = Arc::new(Mutex::new(state::State::new(
-            settings.label,
-            settings.cycle_interval,
-        )));
+        let state = Arc::new(Mutex::new(state::State::new(settings.cycle_interval)));
         let failure_logged = Arc::new(Mutex::new(false));
         // Each tick fetches and, even when the fetch fails, drops the
         // articles that left the window: expiry rides the refresh cadence
@@ -254,9 +234,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn carousel_publishes_still_prefix_lines_and_cycle_seconds_on_the_wire() {
+    async fn carousel_publishes_lines_and_cycle_seconds_without_a_name() {
         let mut harness = Harness::new("feed");
-        let mut state = state::State::new("AGGR".into(), Duration::from_secs(30));
+        let mut state = state::State::new(Duration::from_secs(30));
         let article = feed::Article {
             title: "Title".into(),
             url: "https://aggr.example/a".into(),
@@ -269,20 +249,19 @@ mod tests {
         let frames = harness.drain();
         let summary = &frames[0]["params"]["segments"]["summary"];
         assert_eq!(summary["cycle_seconds"], 30.0);
-        assert!(summary["prefix"].as_str().unwrap().contains("AGGR"));
+        assert_eq!(summary["prefix"].as_str().unwrap(), "");
         let lines = summary["lines"].as_array().unwrap();
         assert_eq!(lines.len(), 1);
         let line = lines[0].as_str().unwrap();
         assert!(line.contains("#[link=https://aggr.example/a]"));
         assert!(line.contains("(source.example)"));
         assert!(line.contains("\u{2197}"));
-        assert!(!line.contains("AGGR"));
     }
 
     #[tokio::test]
     async fn label_carousel_links_the_whole_row_to_the_item_without_popup_or_arrow() {
         let mut harness = Harness::new("feed");
-        let mut state = state::State::new("AGGR".into(), Duration::from_secs(30));
+        let mut state = state::State::new(Duration::from_secs(30));
         let article = feed::Article {
             title: "Title".into(),
             url: "https://aggr.example/a".into(),
@@ -295,12 +274,13 @@ mod tests {
         let frames = harness.drain();
         let label = &frames[0]["params"]["segments"]["label"];
         assert_eq!(label["cycle_seconds"], 30.0);
-        assert!(label["prefix"].as_str().unwrap().contains("AGGR"));
+        assert_eq!(label["prefix"].as_str().unwrap(), "");
         let lines = label["lines"].as_array().unwrap();
         assert_eq!(lines.len(), 1);
         let line = lines[0].as_str().unwrap();
         // The template owns hover; title and domain share one link to the item.
         assert!(!line.contains("#[popup="));
+        assert!(!line.contains("#[fg="));
         assert!(!line.contains("\u{2197}"));
         assert!(!line.contains("#[link=https://www.source.example/x]"));
         assert_eq!(line.matches("#[link=").count(), 1);
@@ -327,37 +307,6 @@ mod tests {
         let configured = settings(&harness.context()).unwrap().unwrap();
         assert_eq!(configured.refresh_interval, Duration::from_secs(300));
         assert_eq!(configured.cycle_interval, Duration::from_secs(30));
-        assert_eq!(configured.label, "FEED");
-    }
-
-    #[test]
-    fn configuration_accepts_custom_and_unicode_labels() {
-        for label in ["AGGR".to_owned(), "🦀".repeat(32), "#[bold]NEWS".to_owned()] {
-            let harness = Harness::with_config(
-                "feed",
-                serde_json::json!({"url": "https://example.com/feed.xml", "label": label}),
-            );
-            assert_eq!(settings(&harness.context()).unwrap().unwrap().label, label);
-        }
-    }
-
-    #[test]
-    fn configuration_rejects_invalid_labels() {
-        for label in [
-            Value::from(""),
-            Value::from("   "),
-            Value::from("A".repeat(33)),
-            Value::from("🦀".repeat(33)),
-            Value::from("two\nlines"),
-            Value::from(123),
-            Value::Null,
-        ] {
-            let harness = Harness::with_config(
-                "feed",
-                serde_json::json!({"url": "https://example.com/feed.xml", "label": label}),
-            );
-            assert!(settings(&harness.context()).is_err());
-        }
     }
 
     async fn serve(response: Vec<u8>) -> (Url, tokio::task::JoinHandle<()>) {

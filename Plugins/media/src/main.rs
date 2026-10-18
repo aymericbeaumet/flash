@@ -13,7 +13,9 @@ const NX_KEYTYPE_PLAY: i32 = 16;
 const NX_KEYTYPE_NEXT: i32 = 17;
 const NX_KEYTYPE_PREVIOUS: i32 = 18;
 
-const VOLUME_STEP: i32 = 10;
+// The host moves one macOS volume-key tick (a sixteenth, shown as a percent
+// from 0 to 100). The magnitude only carries the direction.
+const VOLUME_STEP: i32 = 1;
 
 struct Player {
     name: &'static str,
@@ -60,31 +62,11 @@ impl FlashPlugin for Media {
             "toggle" => media_action(&ctx, NX_KEYTYPE_PLAY, "playpause").await,
             "next" => media_action(&ctx, NX_KEYTYPE_NEXT, "next track").await,
             "previous" => media_action(&ctx, NX_KEYTYPE_PREVIOUS, "previous track").await,
-            "volumeup" => {
-                osascript(
-                    &ctx,
-                    &format!(
-                        "set volume output volume ((output volume of (get volume settings)) + {VOLUME_STEP})"
-                    ),
-                )
-                .await
-            }
-            "volumedown" => {
-                osascript(
-                    &ctx,
-                    &format!(
-                        "set volume output volume (((output volume of (get volume settings)) - {VOLUME_STEP}) max 0)"
-                    ),
-                )
-                .await
-            }
-            "mute" => {
-                osascript(
-                    &ctx,
-                    "set volume output muted (not output muted of (get volume settings))",
-                )
-                .await
-            }
+            // `set volume` is a scripting addition the plugin sandbox cannot
+            // load, so the host changes the default output through CoreAudio.
+            "volumeup" => return output_volume(&ctx, VOLUME_STEP).await,
+            "volumedown" => return output_volume(&ctx, -VOLUME_STEP).await,
+            "mute" => return output_mute(&ctx).await,
             "get" => return get_current(&ctx).await,
             "status" => return status(&ctx).await,
             "input" | "output" => {
@@ -104,6 +86,22 @@ impl FlashPlugin for Media {
             }
         };
         result.into_perform()
+    }
+}
+
+async fn output_volume(ctx: &Context, delta: i32) -> PerformResponse {
+    if ctx.adjust_output_volume(delta).await {
+        PerformResponse::ok()
+    } else {
+        PerformResponse::fail("could not change output volume")
+    }
+}
+
+async fn output_mute(ctx: &Context) -> PerformResponse {
+    if ctx.toggle_output_mute().await {
+        PerformResponse::ok()
+    } else {
+        PerformResponse::fail("could not toggle output mute")
     }
 }
 

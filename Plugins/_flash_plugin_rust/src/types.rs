@@ -288,9 +288,13 @@ pub mod ax_notifications {
     pub const UI_ELEMENT_DESTROYED: &str = "AXUIElementDestroyed";
     pub const ROW_EXPANDED: &str = "AXRowExpanded";
     pub const ROW_COLLAPSED: &str = "AXRowCollapsed";
+    /// A context menu opened; the host reads it as a native surface owning
+    /// the keyboard until `MENU_CLOSED`.
+    pub const MENU_OPENED: &str = "AXMenuOpened";
+    pub const MENU_CLOSED: &str = "AXMenuClosed";
 
     /// In `protocol.json` order.
-    pub const ALL: [&str; 19] = [
+    pub const ALL: [&str; 21] = [
         FOCUSED_UI_ELEMENT_CHANGED,
         FOCUSED_WINDOW_CHANGED,
         MAIN_WINDOW_CHANGED,
@@ -310,6 +314,8 @@ pub mod ax_notifications {
         UI_ELEMENT_DESTROYED,
         ROW_EXPANDED,
         ROW_COLLAPSED,
+        MENU_OPENED,
+        MENU_CLOSED,
     ];
 }
 
@@ -325,7 +331,6 @@ pub mod host_events {
     pub const FOCUS_CHANGED: &str = "core:focus.changed";
     pub const WINDOW_FOCUS_CHANGED: &str = "core:window.focus.changed";
     pub const AX_CHANGED: &str = "core:ax.changed";
-    pub const CLIPBOARD_CHANGED: &str = "core:clipboard.changed";
     pub const CONFIG_CHANGED: &str = "core:config.changed";
     pub const POWER_CHANGED: &str = "core:power.changed";
     /// Network interfaces, addresses, routes or DNS changed.
@@ -337,7 +342,7 @@ pub mod host_events {
     pub const SESSION_OPENED: &str = "core:session.opened";
 
     /// In `protocol.json` order.
-    pub const ALL: [&str; 15] = [
+    pub const ALL: [&str; 14] = [
         FLASH_STARTED,
         APPS_CHANGED,
         APPS_LAUNCHED,
@@ -345,7 +350,6 @@ pub mod host_events {
         FOCUS_CHANGED,
         WINDOW_FOCUS_CHANGED,
         AX_CHANGED,
-        CLIPBOARD_CHANGED,
         CONFIG_CHANGED,
         POWER_CHANGED,
         NETWORK_CHANGED,
@@ -594,7 +598,7 @@ pub struct RunningApplication {
 
 /// A host event delivered to [`Plugin::on_event`](crate::Plugin::on_event).
 /// Match on [`name`](Event::name) (`core:focus.changed`,
-/// `core:clipboard.changed`, …); the remaining fields are the event payload,
+/// …); the remaining fields are the event payload,
 /// present when the event carries them.
 #[derive(Clone, Debug, Default)]
 pub struct Event {

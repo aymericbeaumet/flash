@@ -14,7 +14,7 @@
   "commands": [
     {
       "command": "network",
-      "subcommand": "",
+      "subcommand": "show",
       "description": "Show current network traffic and addresses"
     },
     {

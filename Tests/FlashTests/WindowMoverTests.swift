@@ -316,6 +316,38 @@ final class WindowMoverTests: XCTestCase {
       WindowMover.rectFor(layout: layout, in: resizedSecondary.usableFrame))
   }
 
+  func testUnplugScalesTheFrontWindowOntoTheRemainingDisplay() {
+    let primary = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+      usableFrame: CGRect(x: 0, y: 0, width: 1920, height: 1050))
+    let external = WindowScreenLayout(
+      id: 2,
+      frame: CGRect(x: 1920, y: 0, width: 2560, height: 1440),
+      usableFrame: CGRect(x: 1920, y: 0, width: 2560, height: 1410))
+    let filledExternal = external.usableFrame
+    XCTAssertEqual(
+      WindowMover.relocatedFrame(filledExternal, from: [primary, external], to: [primary]),
+      primary.usableFrame)
+    // Already on the remaining display.
+    XCTAssertNil(
+      WindowMover.relocatedFrame(
+        primary.usableFrame, from: [primary, external], to: [primary]))
+    // Origin moved, size still the departed display's.
+    XCTAssertEqual(
+      WindowMover.relocatedFrame(
+        CGRect(x: 0, y: 0, width: 2560, height: 1440),
+        from: [primary, external],
+        to: [primary]),
+      primary.usableFrame)
+    // Parked off every display on purpose.
+    XCTAssertNil(
+      WindowMover.relocatedFrame(
+        CGRect(x: -4000, y: -4000, width: 400, height: 300),
+        from: [primary, external],
+        to: [primary]))
+  }
+
   func testLayoutRecoveryFallsBackToRelocatedScreenAfterUnplug() {
     let primary = WindowScreenLayout(
       id: 1,

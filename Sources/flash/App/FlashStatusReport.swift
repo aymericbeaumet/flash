@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// `flash status`: the resident's state as one versioned JSON object, built
@@ -6,12 +7,14 @@ import Foundation
 /// identifiers and activation counts and timings) — and its key set is
 /// pinned by a test, so a scripted consumer can rely on `schema`.
 struct FlashStatusReport: Equatable {
-  static let schema = 2
+  static let schema = 4
 
   /// Every top-level key, in the order the text rendering lists them.
   static let keys = [
-    "schema", "version", "build", "mode", "hint_session", "focused_app", "accessibility",
-    "capture", "secure_input", "input_source", "keyboard_layout", "reference_layout",
+    "schema", "version", "build", "mode", "mapping_scope", "hint_session", "focused_app",
+    "frontmost_app", "flash_active", "accessibility", "capture", "chord_routing",
+    "held_modifiers", "secure_input", "global_chords", "input_source",
+    "keyboard_layout", "reference_layout",
     "config_path", "config_diagnostics", "plugins", "statusbar", "autostart", "hints",
   ]
 
@@ -39,16 +42,37 @@ struct FlashStatusReport: Equatable {
 
   var version: String
   var build: String
-  /// `disabled`, `insert`, `normal`, `command` or `terminal`.
+  /// `disabled`, `insert`, `normal`, `hold`, `hyper`, `command` or
+  /// `terminal`.
   var mode: String
-  /// `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting` or `pointer`.
+  /// The mapping table the mode reads and whose chords are registered:
+  /// `insert`, `normal`, `hold`, `command` or `terminal`.
+  var mappingScope: String
+  /// `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`
+  /// or `bigram`.
   var hintSession: String
   var focusedApp: String?
+  /// The app macOS has frontmost, which receives every key Flash passes.
+  /// Differs from `focusedApp` only while Flash's view of focus lags.
+  var frontmostApp: String?
+  /// Flash itself is the active app: keys Flash passes then reach Flash, not
+  /// the window that looks focused.
+  var flashActive: Bool
   var accessibility: Bool
   /// `tap` or `key_window`: how the keys of the current (or next) hint
   /// session arrive.
   var capture: KeyboardCaptureTap.SessionCapture
+  /// What the keyboard tap does with a modified chord (Command, Control or
+  /// Option) right now; see `chordRouting(_:)`.
+  var chordRouting: String
+  /// Modifiers the session's event state holds down. Empty unless a key is
+  /// physically held, so any entry while nothing is pressed is a stuck key
+  /// that rides every keystroke.
+  var heldModifiers: [String]
   var secureInput: Bool
+  /// Configured mapping keys Flash holds as system-wide hotkeys right now:
+  /// those chords never reach the focused app.
+  var globalChords: [String]
   var inputSource: String?
   /// `[app] keyboard_layout` as configured.
   var keyboardLayout: String
@@ -69,6 +93,8 @@ struct FlashStatusReport: Equatable {
     case .normal: return "normal"
     case .command: return "command"
     case .terminal: return "terminal"
+    case .hyper: return "hyper"
+    case .hold: return "hold"
     }
   }
 
@@ -82,7 +108,33 @@ struct FlashStatusReport: Equatable {
     case .search: return "search"
     case .adjustment: return "adjusting"
     case .pointer: return "pointer"
+    case .bigram: return "bigram"
+    case .confirmation: return "confirming"
     }
+  }
+
+  /// The tap's decision for a modified chord, by name. `pass`: chords reach
+  /// the app. `mapped_only`: only chords an active mapping claims are taken
+  /// (INSERT). `native_surface`: a native surface owns input and only mapped
+  /// keys are taken. `swallowed`: every chord is Flash's (NORMAL, hints).
+  /// `tap_off`: no live tap; only registered global chords are taken.
+  static func chordRouting(_ decision: KeyboardCaptureTap.Decision?) -> String {
+    switch decision {
+    case nil: return "tap_off"
+    case .pass?, .closeEphemeralPopup?: return "pass"
+    case .swallowIfInsertChordIsMapped?: return "mapped_only"
+    case .swallowIfNativeSurfaceKeyIsMapped?: return "native_surface"
+    case .swallow?: return "swallowed"
+    }
+  }
+
+  /// The modifier names `flags` holds.
+  static func modifierNames(_ flags: CGEventFlags) -> [String] {
+    let names: [(CGEventFlags, String)] = [
+      (.maskCommand, "cmd"), (.maskControl, "ctrl"), (.maskAlternate, "alt"),
+      (.maskShift, "shift"), (.maskSecondaryFn, "fn"), (.maskAlphaShift, "caps_lock"),
+    ]
+    return names.filter { flags.contains($0.0) }.map(\.1)
   }
 
   /// The running session's capture, or the one a session starting now
@@ -101,11 +153,17 @@ struct FlashStatusReport: Equatable {
       "version": version,
       "build": build,
       "mode": mode,
+      "mapping_scope": mappingScope,
       "hint_session": hintSession,
       "focused_app": focusedApp ?? NSNull(),
+      "frontmost_app": frontmostApp ?? NSNull(),
+      "flash_active": flashActive,
       "accessibility": accessibility,
       "capture": capture.rawValue,
+      "chord_routing": chordRouting,
+      "held_modifiers": heldModifiers,
       "secure_input": secureInput,
+      "global_chords": globalChords,
       "input_source": inputSource ?? NSNull(),
       "keyboard_layout": keyboardLayout,
       "reference_layout": referenceLayout ?? NSNull(),
@@ -154,11 +212,28 @@ struct FlashStatusReport: Equatable {
     let rows: [(String, String)] =
       [
         ("mode", text("mode")),
+        ("mapping scope", text("mapping_scope")),
         ("hint session", text("hint_session")),
         ("focused app", text("focused_app")),
+        ("frontmost app", text("frontmost_app")),
+        ("flash active", text("flash_active")),
         ("accessibility", text("accessibility") == "yes" ? "granted" : "not granted"),
         ("key capture", text("capture")),
+        ("chord routing", text("chord_routing")),
+        (
+          "held modifiers",
+          (object["held_modifiers"] as? [String]).map {
+            $0.isEmpty ? "none" : $0.joined(separator: " ")
+          } ?? "-"
+        ),
         ("secure input", text("secure_input") == "yes" ? "on" : "off"),
+        (
+          "global chords",
+          (object["global_chords"] as? [String]).map {
+            $0.isEmpty ? "none" : $0.joined(separator: " ")
+          }
+            ?? "-"
+        ),
         ("input source", text("input_source")),
         (
           "keyboard layout",

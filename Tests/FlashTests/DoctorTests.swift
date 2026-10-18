@@ -120,6 +120,10 @@ final class DoctorTests: XCTestCase {
     XCTAssertTrue(
       check(report, "secure_input")?.summary.contains("1Password (pid 7)") == true,
       check(report, "secure_input")?.summary ?? "")
+    XCTAssertTrue(
+      check(report, "secure_input")?.details.contains {
+        $0.contains("asks the holding app to release")
+      } == true)
     XCTAssertTrue(check(report, "signature")?.summary.contains("ad-hoc") == true)
     XCTAssertEqual(check(report, "screen_recording")?.status, .warn)
   }

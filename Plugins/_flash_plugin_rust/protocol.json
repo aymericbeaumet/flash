@@ -52,7 +52,7 @@
     }
   },
   "host_events": {
-    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen` (plus capability for core:clipboard.changed). `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each key. core:ax.changed (payload {pid, notification, bundle_id?}; both pid and a non-empty notification are required) reports one AX notification an observed app posted, one of `ax_notifications`: the value change of each keystroke is AXValueChanged, so match the notification instead of debouncing every change alike. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
+    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen`. `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each key. core:ax.changed (payload {pid, notification, bundle_id?}; both pid and a non-empty notification are required) reports one AX notification an observed app posted, one of `ax_notifications`: the value change of each keystroke is AXValueChanged, so match the notification instead of debouncing every change alike. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
     "names": [
       "core:flash.started",
       "core:apps.changed",
@@ -61,7 +61,6 @@
       "core:focus.changed",
       "core:window.focus.changed",
       "core:ax.changed",
-      "core:clipboard.changed",
       "core:config.changed",
       "core:power.changed",
       "core:network.changed",
@@ -75,7 +74,6 @@
       "core:focus.changed",
       "core:window.focus.changed",
       "core:ax.changed",
-      "core:clipboard.changed",
       "core:config.changed",
       "core:power.changed",
       "core:network.changed",
@@ -102,7 +100,9 @@
       "AXCreated",
       "AXUIElementDestroyed",
       "AXRowExpanded",
-      "AXRowCollapsed"
+      "AXRowCollapsed",
+      "AXMenuOpened",
+      "AXMenuClosed"
     ]
   },
   "poll": {

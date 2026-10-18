@@ -3,12 +3,95 @@ import ApplicationServices
 import FlashCore
 import FlashProviders
 
-/// One `:clipboard` history row: `preview` is the one-line label rendered in
-/// the modal, `value` the full text pasted on selection. Decoded from the
-/// clipboard plugin's `:clipboard` JSON response.
-struct ClipboardModalEntry: Decodable {
-  let preview: String
-  let value: String
+/// One `:clipboard show` history row. `preview` is the one-line label, `value`
+/// the plain text put back on the clipboard. `html` is a formatted copy,
+/// `mime` means an image file is served at `/api/clipboard/<id>`, and `files`
+/// are copied paths. The core store uses this for history pages.
+struct ClipboardModalEntry: Codable, Equatable {
+  var id: String
+  var kind: String
+  var preview: String
+  var value: String
+  var html: String?
+  var mime: String?
+  var files: [String]
+
+  private enum CodingKeys: String, CodingKey {
+    case id, kind, preview, value, html, mime, files
+  }
+
+  init(
+    id: String, kind: String, preview: String, value: String, html: String? = nil,
+    mime: String? = nil, files: [String] = []
+  ) {
+    self.id = id
+    self.kind = kind
+    self.preview = preview
+    self.value = value
+    self.html = html
+    self.mime = mime
+    self.files = files
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    kind = try container.decode(String.self, forKey: .kind)
+    preview = try container.decode(String.self, forKey: .preview)
+    value = try container.decode(String.self, forKey: .value)
+    html = try container.decodeIfPresent(String.self, forKey: .html)
+    mime = try container.decodeIfPresent(String.self, forKey: .mime)
+    files = try container.decodeIfPresent([String].self, forKey: .files) ?? []
+  }
+}
+
+struct ClipboardHistoryPage: Codable, Equatable {
+  var entries: [ClipboardModalEntry]
+  var total: Int
+  var nextOffset: Int?
+
+  private enum CodingKeys: String, CodingKey {
+    case entries
+    case total
+    case nextOffset = "next_offset"
+  }
+}
+
+/// Image MIME lookup for pages the browser has loaded. Rank is the entry's
+/// newest-first offset, so a rollover evicts the oldest known image first.
+struct ClipboardImageCache {
+  private struct Record {
+    var mime: String
+    var rank: Int
+    var seen: UInt64
+  }
+
+  private let limit: Int
+  private var records: [String: Record] = [:]
+  private var nextSeen: UInt64 = 0
+
+  init(limit: Int = 10_000) { self.limit = limit }
+
+  func mime(for id: String) -> String? { records[id]?.mime }
+
+  mutating func remember(_ entries: [ClipboardModalEntry], offset: Int) {
+    for (index, entry) in entries.enumerated() {
+      guard let mime = entry.mime else { continue }
+      nextSeen &+= 1
+      records[entry.id] = Record(mime: mime, rank: offset + index, seen: nextSeen)
+    }
+    while records.count > limit {
+      guard
+        let oldest = records.max(by: {
+          ($0.value.rank, UInt64.max - $0.value.seen)
+            < ($1.value.rank, UInt64.max - $1.value.seen)
+        })?.key
+      else { break }
+      records.removeValue(forKey: oldest)
+    }
+  }
+
+  mutating func remove(_ id: String) { records.removeValue(forKey: id) }
 }
 
 struct NormalModeKeyDispatchTarget {
@@ -30,7 +113,7 @@ extension AppDelegate {
         + "in_flight=\(activationInFlight)")
     returnActivationIfClosingCommandBar(reason: "enter_normal")
     overlay.dismissEphemeralStatusBarPopup(reason: "enter_normal_mode")
-    dispatchMode(.enterNormal(targetPID: terminalReturnApplicationPID))
+    dispatchMode(.enterNormal)
   }
 
   func leaveMode() {
@@ -44,10 +127,7 @@ extension AppDelegate {
     if overlay.statusPopupController.isVisible { dismissPopup() }
     returnActivationIfClosingCommandBar(reason: "leave_mode")
     overlay.resignCommandTextFieldFocus()
-    dispatchMode(
-      .leaveMode(
-        hasHints: hintSession.isActive || activationInFlight,
-        targetPID: terminalReturnApplicationPID))
+    dispatchMode(.leaveMode(hasHints: hintSession.isActive || activationInFlight))
   }
 
   /// A mode mapping that closes the open command bar is a cancel: nothing ran,
@@ -74,14 +154,29 @@ extension AppDelegate {
   /// The single mutation entry point for the mode: feed the event through the
   /// pure reducer, then perform the effects it returns.
   func dispatchMode(_ event: ModeEvent) {
+    let previous = modeStore.mode
+    let jump = hintSession.isBigramCapture
     modeStore.dispatch(event)
+    // Hyper does not clear hint state on entry. A jump that is still holding
+    // the keyboard after the mode changed would swallow the next keys.
+    guard jump, previous != modeStore.mode, hintSession.isBigramCapture else { return }
+    cancelOverlay()
   }
+
+  /// Armed only while HYPER is latched. The session tap is the release path;
+  /// this reads the HID key when that release never arrives.
+  private static let hyperHoldWatchID = "core:hyper-hold"
 
   /// Performs the effects the reducer emitted. The reducer DECIDES the
   /// transition and what to sync; this just does the AppKit work, reusing the
   /// existing routines. No decisions live here.
-  func applyModeEffects(_ effects: [ModeEffect], previous _: Mode, next: Mode) {
+  func applyModeEffects(_ effects: [ModeEffect], previous: Mode, next: Mode) {
     MainThreadActivity.note("mode_effects")
+    // The mapping scope is a projection of the mode, applied on every
+    // transition: no path can leave INSERT reading NORMAL's chords, or any
+    // mode reading another's table. Idempotent when it does not change.
+    mappings.apply(scope: next.mappingScope)
+    applyInterpreterTable(for: next.mappingScope)
     for effect in effects {
       switch effect {
       case .prepareKeyboardCapture:
@@ -91,8 +186,6 @@ extension AppDelegate {
       case .hideTerminalPopup:
         terminalInputMappings?.flush()
         overlay.statusPopupController.dismiss()
-      case .setMappingScope(let scope):
-        mappings.apply(scope: scope)
       case .clearTransientHintState:
         // Reads the still-current overlay surface to tear down a command /
         // modal we are leaving, then clears hint + input state.
@@ -100,7 +193,12 @@ extension AppDelegate {
         resetModeInputState()
         clearTransientHintState(reason: "mode_enter")
       case .renderSurface:
-        applyModeOverlay()
+        // A HYPER hold, or a held button, toggles the pill over the same app
+        // and window: the border keeps its frame instead of re-reading the
+        // window list.
+        applyModeOverlay(
+          reusesWindowFrame: previous.isHyper != next.isHyper
+            || previous.buttonHold != next.buttonHold)
       case .scheduleRecapture:
         scheduleNormalModeRecapture()
       case .activateFocusedApp(let pid):
@@ -110,13 +208,57 @@ extension AppDelegate {
       }
     }
     refreshOverlayInputRouting()
+    // The one reset point for the hold: every exit from HYPER ends it here,
+    // whichever event caused the exit.
+    overlay.hyperHold.modeChanged(from: previous, to: next)
+    // HOLD is the held button: leaving it any other way
+    // (`enter_normal_mode`, INSERT, the command line, advanced mode turning
+    // off) lets the button go.
+    if let hold = previous.buttonHold, next.buttonHold == nil {
+      releaseHeldMouseButton(reason: "\(hold.rawValue)_exit")
+    }
+    if next.isHyper != previous.isHyper {
+      setHyperHoldWatch(armed: next.isHyper)
+    }
+  }
+
+  /// Poll the hyper key's HID state. Registered only while the mode is HYPER,
+  /// and only as a backstop: a delivered key-up still leaves on the tap path.
+  private func setHyperHoldWatch(armed: Bool) {
+    overlay.hyperHoldWatch = HyperHoldWatch()
+    if armed {
+      PollScheduler.shared.register(
+        Self.hyperHoldWatchID, everyMs: PollScheduler.minimumIntervalMs, priority: .system,
+        on: .main
+      ) { [weak self] in
+        self?.sampleHyperHold()
+      }
+    } else {
+      PollScheduler.shared.unregister(Self.hyperHoldWatchID)
+    }
+  }
+
+  private func sampleHyperHold() {
+    guard modeStore.mode.isHyper else { return }
+    let down = hyperKeyPhysicallyDown() ?? true
+    guard
+      overlay.hyperHoldWatch.sample(holding: overlay.leaderHold.holding, keyIsDown: down) == .exit
+    else { return }
+    finishHyperExit(reason: "held_key_up")
+  }
+
+  /// Nil when the configured key cannot be read. Callers stay in HYPER then,
+  /// rather than dropping it because the chord did not parse.
+  private func hyperKeyPhysicallyDown() -> Bool? {
+    guard let chord = config.mode.resolvedHyperMatcher?.chord else { return nil }
+    return HyperKeyChord.isPhysicallyDown(chord)
   }
 
   /// Per-base-mode bookkeeping that must run before the surface is rendered.
   private func applyEnterBookkeeping(_ next: Mode) {
-    // Any base-mode transition ends a transient native-surface suspension; clear
+    // Any base-mode transition ends a transient native-surface suspension; end
     // it before the surface renders so capture isn't pinned off afterward.
-    nativeSurfaceSuspended = false
+    nativeSurfaceOwnership.end()
     switch next {
     case .normal:
       // Identity only: the target pid needs no WindowServer geometry.
@@ -125,7 +267,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command, .terminal:
+    case .command, .terminal, .hyper, .hold:
       break
     }
   }
@@ -164,6 +306,171 @@ extension AppDelegate {
     case .normal: return config.mode.labels.normal
     case .command: return config.mode.labels.command
     case .terminal: return config.mode.labels.terminal
+    case .hyper: return config.mode.labels.hyper
+    case .hold: return config.mode.labels.hold
+    }
+  }
+
+  /// Leader key-down from the tap or the key-window fallback.
+  ///
+  /// Returns true when the key was consumed as the hyper hold or as a key
+  /// typed during it. Other keys return false and follow the NORMAL path.
+  func handleLeaderHoldKeyDown(_ event: NSEvent) -> Bool {
+    guard let matcher = config.mode.resolvedHyperMatcher else { return false }
+    let atom = matcher.atom
+    let keys = overlay.keyCharacters(for: event)
+    let isHyperKey = NormalModeInterpreter.isHyperKey(
+      matcher: matcher,
+      keyCode: event.keyCode,
+      modifierFlags: event.modifierFlags,
+      characters: keys.characters,
+      charactersIgnoringModifiers: keys.ignoringModifiers)
+    if case .hyper = modeStore.mode {
+      if let down = hyperKeyPhysicallyDown(), overlay.leaderHold.holding {
+        if HyperHoldWatch.keyArrivedWhileUp(holding: true, keyIsDown: down) {
+          finishHyperExit(reason: "next_key")
+          return false
+        }
+        _ = overlay.hyperHoldWatch.sample(holding: true, keyIsDown: true)
+      }
+      if isHyperKey {
+        _ = overlay.leaderHold.step(.leaderDown)
+        return true
+      }
+      _ = overlay.leaderHold.step(.otherKey)
+      expireHyperSequences()
+      let result = HyperKeyRouter.route(
+        hyperPending: overlay.hyperPending,
+        leaderFallbackPending: overlay.leaderFallbackPending,
+        leaderAtom: currentLeaderAtom() == atom ? atom : nil,
+        keyCode: event.keyCode,
+        modifierFlags: event.modifierFlags,
+        characters: keys.characters,
+        charactersIgnoringModifiers: keys.ignoringModifiers,
+        hyperMappings: overlay.hyperModeMappings,
+        normalMappings: overlay.normalModeMappings)
+      overlay.hyperPending = result.hyperPending
+      if !result.hyperPending.isEmpty { overlay.hyperPendingUpdatedAt = Date() }
+      overlay.leaderFallbackPending = result.leaderFallbackPending
+      if result.leaderFallbackPending != nil { overlay.leaderFallbackUpdatedAt = Date() }
+      overlayDidHandleNormalMode(
+        result.transition.action, repeatCount: result.transition.repeatCount)
+      return true
+    }
+    guard isHyperKey, modeStore.mode == .normal, overlay.inputMode == .normal else { return false }
+    // Releasing the leader arms its prefix. That prefix must not block the
+    // next hold; only a real `<leader><leader>` mapping, or some other
+    // sequence, does.
+    guard
+      LeaderHold.canEnter(
+        pending: overlay.normalModePending,
+        leaderRepeatsAnchor: LeaderHold.leaderRepeats(
+          anchor: overlay.normalModeRepeatAnchor, leaderAtom: atom),
+        leaderAtom: atom,
+        leaderContinuesPending: leaderDownContinuesPending(overlay.normalModePending, event: event),
+        isRepeat: event.isARepeat)
+    else { return false }
+    // A hold still latched here never had its exit reset, which the mode
+    // transition makes unreachable; it must not enter HYPER as if fresh.
+    guard case .enter = overlay.leaderHold.step(.leaderDown) else {
+      FlashLog.warn("[mode] hyper_enter_skipped reason=stale_hold")
+      return true
+    }
+    // The hold supersedes whatever NORMAL had armed: the leader prefix, or a
+    // repeat the leader just dropped, with the timeout armed for either.
+    resetPendingNormalSequence(reason: "hyper_enter")
+    FlashLog.trace("[mode] hyper enter")
+    dispatchMode(.enterHyper)
+    return true
+  }
+
+  /// Leader key-up. A clean tap arms the NORMAL `<leader>` prefix; a hold
+  /// that typed anything returns to NORMAL without one.
+  func handleLeaderKeyUp(_ event: NSEvent) -> Bool {
+    guard let matcher = config.mode.resolvedHyperMatcher else { return false }
+    let keys = overlay.keyCharacters(for: event)
+    guard
+      NormalModeInterpreter.isHyperKey(
+        matcher: matcher,
+        keyCode: event.keyCode,
+        modifierFlags: event.modifierFlags,
+        characters: keys.characters,
+        charactersIgnoringModifiers: keys.ignoringModifiers)
+    else { return false }
+    return finishHyperExit(reason: "key_up")
+  }
+
+  /// Leave a latched hold. `reason` is `key_up` for a delivered release,
+  /// `held_key_up` for the HID backstop, and `next_key` when a later key found
+  /// the hyper key already up. A clean tap still arms the leader prefix.
+  @discardableResult
+  private func finishHyperExit(reason: String) -> Bool {
+    let step = overlay.leaderHold.step(.leaderUp)
+    guard case .exit(let armPrefix) = step else { return false }
+    let fallback = overlay.leaderFallbackPending
+    overlay.hyperPending = ""
+    overlay.leaderFallbackPending = nil
+    guard case .hyper = modeStore.mode else { return true }
+    FlashLog.trace("[mode] hyper exit arm_prefix=\(armPrefix) reason=\(reason)")
+    dispatchMode(.exitHyper)
+    guard modeStore.mode == .normal, let atom = config.mode.resolvedHyperKey else { return true }
+    if let fallback, !fallback.isEmpty {
+      overlay.normalModePending = fallback
+      overlay.normalModePendingUpdatedAt = Date()
+      overlayDidHandleNormalMode(nil, repeatCount: 1)
+    } else if armPrefix, currentLeaderAtom() == atom, leaderAtomArmsPrefix(atom) {
+      overlay.normalModePending = atom
+      overlay.normalModePendingUpdatedAt = Date()
+      overlayDidHandleNormalMode(nil, repeatCount: 1)
+    }
+    return true
+  }
+
+  /// True when this leader key-down extends `pending` into a mapping or a
+  /// longer one, so `<leader><leader>` stays a NORMAL sequence.
+  private func leaderDownContinuesPending(_ pending: String, event: NSEvent) -> Bool {
+    guard !pending.isEmpty else { return false }
+    let keys = overlay.keyCharacters(for: event)
+    return NormalModeInterpreter.eventKeyAtoms(
+      keyCode: event.keyCode,
+      modifierFlags: event.modifierFlags,
+      characters: keys.characters,
+      charactersIgnoringModifiers: keys.ignoringModifiers
+    ).contains { atom in
+      let sequence = NormalModeInterpreter.appendKeyAtom(pending, atom)
+      return overlay.normalModeMappings.mapping(for: sequence) != nil
+        || overlay.normalModeMappings.hasStrictPrefix(sequence)
+    }
+  }
+
+  private func currentLeaderAtom() -> String? {
+    config.mode.resolvedLeaderAtom
+  }
+
+  private func leaderAtomArmsPrefix(_ atom: String) -> Bool {
+    overlay.normalModeMappings.mapping(for: atom) != nil
+      || overlay.normalModeMappings.hasStrictPrefix(atom)
+  }
+
+  private func expireHyperSequences() {
+    let now = Date()
+    let timeout = config.mode.sequenceTimeoutMs
+    if NormalModeInterpreter.pendingSequenceTimedOut(
+      pending: overlay.hyperPending,
+      lastInputAt: overlay.hyperPendingUpdatedAt,
+      now: now,
+      timeoutMs: timeout)
+    {
+      overlay.hyperPending = ""
+    }
+    if let fallback = overlay.leaderFallbackPending,
+      NormalModeInterpreter.pendingSequenceTimedOut(
+        pending: fallback,
+        lastInputAt: overlay.leaderFallbackUpdatedAt,
+        now: now,
+        timeoutMs: timeout)
+    {
+      overlay.leaderFallbackPending = nil
     }
   }
 
@@ -223,7 +530,15 @@ extension AppDelegate {
       notification == kAXFocusedWindowChangedNotification as String
       || notification == kAXMainWindowChangedNotification as String
     if isFocusChange {
-      overlay.dismissEphemeralStatusBarPopup(reason: "window_focus_changed")
+      // A background window moving while this popup is still key is not the
+      // popup losing focus. Once another app is frontmost, the popup has to
+      // leave the screen even if its panel never resigned key.
+      let front = NSWorkspace.shared.frontmostApplication
+      if !NSApp.isActive || front?.bundleIdentifier != Bundle.main.bundleIdentifier {
+        overlay.relinquishShownStatusPopup(reason: "window_focus_changed")
+      } else {
+        overlay.dismissEphemeralStatusBarPopup(reason: "window_focus_changed")
+      }
       scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
     }
     // The stroke goes first and depends on nothing below. Window AX
@@ -283,10 +598,31 @@ extension AppDelegate {
     }
   }
 
-  private func resetModeInputState() {
-    cancelCandidateFinderSessionWork()
+  /// Drop a half-typed NORMAL sequence, its repeat anchor, the hyper and
+  /// leader-fallback sequences, and disown the timeout armed for the pending
+  /// command: they were all resolved against one mapping table, so when the
+  /// focused app or the effective mappings change, nothing of them may
+  /// complete against the next table. The physical leader hold is not a
+  /// sequence and is left alone.
+  func resetPendingNormalSequence(reason: String) {
+    if !overlay.normalModePending.isEmpty || overlay.normalModeRepeatAnchor != nil
+      || !overlay.hyperPending.isEmpty || overlay.leaderFallbackPending != nil
+    {
+      FlashLog.trace(
+        "[input] pending_reset reason=\(reason) pending=\(overlay.normalModePending) "
+          + "anchor=\(overlay.normalModeRepeatAnchor ?? "-") hyper=\(overlay.hyperPending)")
+    }
     overlay.normalModePending = ""
     overlay.normalModeRepeatAnchor = nil
+    overlay.hyperPending = ""
+    overlay.leaderFallbackPending = nil
+    normalModePendingCommandToken &+= 1
+  }
+
+  private func resetModeInputState() {
+    cancelCandidateFinderSessionWork()
+    resetPendingNormalSequence(reason: "mode_enter")
+    overlay.hyperHold = HyperHoldState()
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
     finder.candidates = []
@@ -329,9 +665,13 @@ extension AppDelegate {
   }
 
   /// Whether a native surface (a context menu, the About window) owns the
-  /// keyboard, so Flash must not capture it.
+  /// keyboard, so Flash must not capture it. A hint session over a context
+  /// menu takes it back through the tap (`NativeSurfaceOwnership.ownsKeyboard`).
   var nativeKeyboardOwnerActive: Bool {
-    nativeSurfaceSuspended
+    NativeSurfaceOwnership.ownsKeyboard(
+      owned: nativeSurfaceSuspended, hintSessionActive: hintSession.isActive,
+      activationInFlight: activationInFlight,
+      tapLive: keyboardCaptureTap != nil && !secureInputObserved)
       || Self.aboutWindowShouldOwnNativeKeyboard(
         visible: aboutWindowVisible,
         hasTransientInput: hintSession.isActive,
@@ -360,7 +700,7 @@ extension AppDelegate {
     debugStateDidChange()
   }
 
-  func applyModeOverlay(captureOverride: Bool? = nil) {
+  func applyModeOverlay(captureOverride: Bool? = nil, reusesWindowFrame: Bool = false) {
     MainThreadActivity.note("mode_overlay")
     let mode = modeStore.mode
     // A pointer-mode session behaves exactly like a hint set being up: the
@@ -394,8 +734,56 @@ extension AppDelegate {
         label: text, style: mode.badgeStyle, barVisible: statusBarVisible,
         capturesInput: capture),
       render: !entersCommand)
-    updateActiveWindowBorder(reason: "apply_mode_overlay")
+    updateActiveWindowBorder(reason: "apply_mode_overlay", reusesCachedFrame: reusesWindowFrame)
+    handBackActivationIfIdle(reason: "mode_overlay")
   }
+
+  /// INSERT with Flash still active (see `IdleActivation`): give activation
+  /// back to the app Flash tracks as focused, so the keys the tap passes
+  /// reach it. Checked on every overlay application and whenever Flash
+  /// becomes active.
+  func handBackActivationIfIdle(reason: String) {
+    guard idleActivationHandsBack() else { return }
+    // Off the key's turn: the request is a system round trip. Decided again
+    // there, since the turn in between may have changed either side.
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.idleActivationHandsBack() else { return }
+      self.handBackIdleActivation(reason: reason)
+    }
+  }
+
+  private func idleActivationHandsBack() -> Bool {
+    IdleActivation.handsBack(
+      flashActive: NSApp.isActive, mode: modeStore.mode, aboutWindowVisible: aboutWindowVisible,
+      hintSessionActive: hintSession.isActive || activationInFlight,
+      pointerClickPending: pointerInsertHandoffRecaptureSuppressedUntil.map { $0 > Date() }
+        ?? false)
+  }
+
+  private func handBackIdleActivation(reason: String) {
+    guard let pid = lastFocusedApplicationPID,
+      let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+      app != .current
+    else { return }
+    yieldActivation(to: app, reason: "insert_while_active_\(reason)")
+  }
+
+  /// Key codes for the arrow and function-key mapping commands, resolved once
+  /// rather than parsed from their names on every (repeated) press.
+  private static let arrowKeyCodes: [WindowFocusDirection: CGKeyCode] = {
+    var codes: [WindowFocusDirection: CGKeyCode] = [:]
+    for direction in WindowFocusDirection.allCases {
+      if let key = HotkeySyntax.parseKey(direction.rawValue) { codes[direction] = CGKeyCode(key) }
+    }
+    return codes
+  }()
+  private static let functionKeyCodes: [Int: CGKeyCode] = {
+    var codes: [Int: CGKeyCode] = [:]
+    for index in 1...24 {
+      if let key = HotkeySyntax.parseKey("f\(index)") { codes[index] = CGKeyCode(key) }
+    }
+    return codes
+  }()
 
   static func commandSurfaceModeLabel(labels: Config.Mode.Labels) -> String {
     labels.command
@@ -406,10 +794,15 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=about_window")
       return
     }
-    if Self.contextMenuInteractionRecaptureSuppressionIsActive(
+    // A native surface the user still holds open keeps the keyboard. The
+    // bounded window stands in for a close signal only for a surface Flash
+    // never saw open; one it saw open stays owned until it closes.
+    let contextMenuWindowActive = Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
-    {
-      FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
+    guard nativeSurfaceOwnership.recaptureRequested(windowActive: contextMenuWindowActive) else {
+      FlashLog.trace(
+        "[mode] recapture_skip reason="
+          + (nativeSurfaceSuspended ? "native_surface_owned" : "context_menu_interaction"))
       return
     }
     if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
@@ -418,10 +811,6 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
       return
     }
-    // Reaching here means no suppression is active — any native surface (context
-    // menu) has dismissed — so clear the suspend flag before re-establishing
-    // capture, otherwise the projection keeps capture pinned off.
-    nativeSurfaceSuspended = false
     normalModeRecaptureToken &+= 1
     let token = normalModeRecaptureToken
     guard shouldCaptureNormalModeInput else {
@@ -874,6 +1263,8 @@ extension AppDelegate {
       .windowState,
       .movementBack, .movementForward, .quitApp, .saveAndQuit:
       return true
+    case .systemKey:
+      return false
     case .sendKey(_, _, let flagsRawValue):
       return normalModeKeyDispatchNeedsTargetActivation(
         flags: CGEventFlags(rawValue: flagsRawValue))
@@ -890,11 +1281,15 @@ extension AppDelegate {
     flags.intersection(normalModeKeyModifierMask).isEmpty
   }
 
-  func performMappedCommand(_ command: URLCommand, repeatCount: Int = 1) {
+  /// `confirmed` marks a command the user has already answered `y` to, so a
+  /// plugin's `action_confirmations` gate does not ask again.
+  func performMappedCommand(_ command: URLCommand, repeatCount: Int = 1, confirmed: Bool = false) {
     let repeatCount = normalizedRepeatCount(repeatCount)
     FlashLog.debug(
       "[mappings] action=\(command.diagnosticDescription) repeat=\(repeatCount)")
     switch command {
+    case .confirm(let request):
+      presentConfirmation(request.prompt, command: request.command, repeatCount: repeatCount)
     case .insertMode:
       enterInsertMode(reason: .normalModeInput)
     case .normalMode:
@@ -911,6 +1306,14 @@ extension AppDelegate {
       enterTerminalMode(named: name)
     case .scroll(let kind):
       scrollNormalMode(kind, repeatCount: repeatCount)
+    case .systemKey(let key):
+      for _ in 0..<repeatCount { SystemKeyboard.perform(key) }
+    case .functionKey(let index):
+      guard let key = Self.functionKeyCodes[index] else { return }
+      sendFocusedModeKey(key, repeatCount: repeatCount)
+    case .arrow(let direction, let shift):
+      guard let key = Self.arrowKeyCodes[direction] else { return }
+      sendFocusedModeKey(key, flags: shift ? .maskShift : [], repeatCount: repeatCount)
     case .sendKey(_, let keyCode, let flagsRawValue):
       sendNormalModeKey(
         keyCode, flags: CGEventFlags(rawValue: flagsRawValue), repeatCount: repeatCount)
@@ -923,8 +1326,8 @@ extension AppDelegate {
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabMovePrev, .tabMoveNext, .paneNext, .panePrev,
       .paneSplitVertical, .paneSplitHorizontal, .paneClose, .tabReopen, .historyBack,
       .historyForward, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste:
-      performAppAction(command, repeatCount: repeatCount)
+      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp:
+      performAppAction(command, repeatCount: repeatCount, confirmed: confirmed)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .enterCommand(let input, let restoreMode):
@@ -932,11 +1335,33 @@ extension AppDelegate {
         initialText: input,
         candidateFinderScope: .all,
         restoreMode: restoreMode)
+    // A count before a mouse finisher is a finger count (`2f`, `3s`, `2dF`).
     case .mouseTarget(let command):
-      activateMouseTarget(command, contextOverride: normalModeContext())
+      activateMouseTarget(command.withFingers(repeatCount), contextOverride: normalModeContext())
+    case .mouseBigram(let command):
+      activateMouseBigram(command.withFingers(repeatCount), contextOverride: normalModeContext())
     case .mouseTargetScreen(let command):
       activateScreenScopeHints(command)
-    case .mouseGrid(let request):
+    case .mouseTargetWords(let command):
+      activateWordHints(command.withFingers(repeatCount), contextOverride: normalModeContext())
+    case .mouseScreens:
+      activateScreenHints()
+    case .mouseWarp(let request):
+      performMouseWarp(request)
+    case .mouseStep(let direction):
+      for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseStep(direction) }
+    case .mouseNudge(let direction, let distance):
+      performMouseNudge(direction, distance: distance * normalizedRepeatCount(repeatCount))
+    case .mouseJump(let jump):
+      for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseJump(jump) }
+    case .trackpadGesture(let fingers, let motion):
+      performGesture(fingers: fingers, motion: motion)
+    case .selection(let action, let register):
+      performSelection(action, register: register)
+    case .mousePosition(let request):
+      performMousePosition(request)
+    case .mouseGrid(var request):
+      request.mouse = request.mouse.withFingers(repeatCount)
       activateMouseGrid(request, contextOverride: normalModeContext())
     case .mouseRepeat:
       performMouseRepeat(repeatCount: repeatCount)
@@ -944,6 +1369,8 @@ extension AppDelegate {
       enterPointerMode()
     case .mouseButton(let request):
       performMouseButton(request)
+    case .holdMode(let button):
+      toggleHoldMode(button)
     case .focusInput:
       focusTextInputInNormalMode(index: repeatCount)
     case .scrollTarget:
@@ -990,7 +1417,8 @@ extension AppDelegate {
       openDebugDashboard(.plugins(id: nil))
     case .showAbout:
       handleURLCommand(command)
-    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
+    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .clipboardHistory,
+      .pluginCommand, .moveWindow,
       .focusWindow,
       .windowState,
       .pluginVerb:
@@ -1001,9 +1429,16 @@ extension AppDelegate {
   /// A verb that asks the focused app to perform an action: sources, then
   /// the Flash-owned primitive (`window_close`'s close button), then the
   /// app's binding. Find and a new tab hand typing to the app once they
-  /// reached it.
-  private func performAppAction(_ command: URLCommand, repeatCount: Int) {
+  /// reached it. An action a plugin declares destructive for this app
+  /// (`action_confirmations`) asks first, unless the user already said `y`.
+  private func performAppAction(_ command: URLCommand, repeatCount: Int, confirmed: Bool) {
     guard let action = command.sourceAction else { return }
+    if !confirmed, let context = normalModeDispatchContext(),
+      let prompt = sourceActionConfirmation(action, context: context)
+    {
+      presentConfirmation(prompt, command: command, repeatCount: repeatCount)
+      return
+    }
     let primitive: ((AppContext, @escaping (Bool) -> Void) -> Void)? =
       action == .windowClose
       ? { context, done in
@@ -1084,7 +1519,7 @@ extension AppDelegate {
 
   /// Open a page of the HTTP inspector's browser help in the default browser.
   /// Backs `:help`, `:mappings`, `:plugins`, `:commands`, `:logs` and
-  /// `:clipboard`. The inspector is loopback-only; it starts on demand when
+  /// `:clipboard show`. The inspector is loopback-only; it starts on demand when
   /// disabled at launch, and the page opens once the listener has a bound port.
   func openDebugDashboard(_ page: DebugServer.Page) {
     finishCommandLineInteraction(reason: "debug_dashboard")
@@ -1122,34 +1557,47 @@ extension AppDelegate {
     openDebugDashboard(.mappings)
   }
 
-  /// `:clipboard` — history lives on the browser help's Clipboard page.
-  /// Refresh the host cache from the plugin, then open the browser there. The
-  /// history travels over the plugin command RPC (keeping this surface
-  /// decoupled from the flashlight candidate pool).
+  /// `:clipboard show` — history lives on the browser help's Clipboard page.
+  /// Refresh the first history page, then open the browser there.
   func openClipboardDashboard() {
     refreshClipboardDashboardCache()
     openDebugDashboard(.clipboard)
   }
 
-  /// Pull the full clipboard history from the plugin into `clipboardEntries`
-  /// (the dashboard payload), which pushes it to an open inspector. Driven by
-  /// `:clipboard` and by each pasteboard change.
+  /// Refresh the first history page for the inspector.
   func refreshClipboardDashboardCache() {
-    _ = pluginManager.invoke(
-      command: "clipboard", subcommand: "", args: [], raw: ":clipboard",
-      in: pluginSelectorContext()
-    ) { [weak self] ok, _, stdout, _ in
-      let entries = (ok ? stdout : nil).flatMap(Self.decodeClipboardModalEntries) ?? []
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.clipboardEntries = entries
-      }
+    clipboardHistoryStore.page(offset: 0) { [weak self] page in
+      guard let self else { return }
+      self.clipboardImageMimes.remember(page?.entries ?? [], offset: 0)
+      self.clipboardTotal = page?.total ?? 0
+      self.clipboardNextOffset = page?.nextOffset
+      self.clipboardEntries = page?.entries ?? []
     }
   }
 
-  static func decodeClipboardModalEntries(_ json: String) -> [ClipboardModalEntry]? {
+  static func decodeClipboardHistoryPage(_ json: String) -> ClipboardHistoryPage? {
     guard let data = json.data(using: .utf8) else { return nil }
-    return try? JSONDecoder().decode([ClipboardModalEntry].self, from: data)
+    guard let page = try? JSONDecoder().decode(ClipboardHistoryPage.self, from: data),
+      (0...10_000).contains(page.total), page.entries.count <= 100,
+      page.entries.count <= page.total,
+      page.nextOffset.map({ $0 > 0 && $0 < page.total && !page.entries.isEmpty }) ?? true
+    else { return nil }
+    return page
+  }
+
+  /// One inspector clipboard row. Image bytes are not inlined; `mime` tells
+  /// the page to load `/api/clipboard/<id>`.
+  static func clipboardStateObject(_ entry: ClipboardModalEntry) -> [String: Any] {
+    var object: [String: Any] = [
+      "id": entry.id,
+      "kind": entry.kind,
+      "preview": entry.preview,
+      "value": entry.value,
+    ]
+    if let html = entry.html, !html.isEmpty { object["html"] = html }
+    if let mime = entry.mime, !mime.isEmpty { object["mime"] = mime }
+    if !entry.files.isEmpty { object["files"] = entry.files }
+    return object
   }
 
   func quitNormalModeTargetApp(force: Bool = false) {
@@ -1169,8 +1617,71 @@ extension AppDelegate {
     } else {
       _ = app.terminate()
     }
-    normalModeTargetPID = nil
+    // The command named this app. Focus its predecessor even when command
+    // mode's panel is the key window and the MRU cursor has not caught up.
+    focusAppAfterQuit(of: context.processID, commanded: true)
     applyModeOverlay()
+  }
+
+  /// Focus the previous app after `pid` quits. `:qa`, `:wq`, and `app_quit`
+  /// pass `commanded: true` from every mode. A terminate notification passes
+  /// false, and then only the focused app moves focus — a background app
+  /// dying does not.
+  func focusAppAfterQuit(of pid: pid_t, commanded: Bool = false) {
+    let wasFocused =
+      commanded || pid == appCurrent || pid == observedFocusedAppPID
+      || pid == normalModeTargetPID
+    guard wasFocused else {
+      appBackStack.removeAll { $0 == pid }
+      appForwardStack.removeAll { $0 == pid }
+      return
+    }
+    let flashBundleID = Bundle.main.bundleIdentifier
+    guard
+      let focus = Self.appQuitFocus(
+        quitting: pid,
+        current: appCurrent,
+        back: appBackStack,
+        forward: appForwardStack,
+        isAvailable: { candidate in
+          guard
+            let app = NSRunningApplication(processIdentifier: candidate),
+            !app.isTerminated,
+            app.bundleIdentifier != flashBundleID
+          else { return false }
+          return true
+        })
+    else {
+      if appCurrent == pid { appCurrent = nil }
+      if normalModeTargetPID == pid { normalModeTargetPID = nil }
+      appBackStack.removeAll { $0 == pid }
+      appForwardStack.removeAll { $0 == pid }
+      FlashLog.debug("[app_quit] no previous app pid=\(pid)")
+      return
+    }
+    let previous = (
+      back: appBackStack,
+      forward: appForwardStack,
+      current: appCurrent,
+      navigation: appNavigationTargetPID
+    )
+    appBackStack = focus.back
+    appForwardStack = []
+    appCurrent = focus.target
+    appNavigationTargetPID = focus.target
+    guard
+      let app = NSRunningApplication(processIdentifier: focus.target),
+      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+    else {
+      appBackStack = previous.back
+      appForwardStack = previous.forward
+      appCurrent = previous.current
+      appNavigationTargetPID = previous.navigation
+      FlashLog.warn("[app_quit] activation failed pid=\(focus.target)")
+      return
+    }
+    preparePendingApplicationActivation(app, reason: "app_quit")
+    FlashLog.debug("[app_quit] focus pid=\(focus.target) after=\(pid)")
   }
 
   /// Quick AX reads and presses for NORMAL verbs (`y`, `:q`). They are IPC
@@ -1178,6 +1689,35 @@ extension AppDelegate {
   /// keeps them from waiting behind a hint walk on `axQueue`.
   static let normalModeAXActionQueue = DispatchQueue(
     label: "flash.normal.ax_action", qos: .userInteractive)
+
+  /// Posts an arrow or F-key into the focused app's key window, `repeatCount`
+  /// times. The first stroke is immediate. Later strokes of one count wait
+  /// `[mode] send_key_interval_ms`. The app is already key, so this does not
+  /// activate it again.
+  func sendFocusedModeKey(
+    _ key: CGKeyCode,
+    flags: CGEventFlags = [],
+    repeatCount: Int = 1
+  ) {
+    let count = normalizedRepeatCount(repeatCount)
+    let interval = FlashTunables.sendKeyIntervalMs
+    for index in 0..<count {
+      let fire = { [weak self] in
+        guard let self else { return }
+        self.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
+        FlashLog.debug(
+          "[normal_mode] send_focused_key",
+          fields: ["key": "\(key)", "repeat": "\(index + 1)"])
+        NormalModeDispatcher.sendFocusedKey(virtualKey: key, flags: flags)
+      }
+      if index == 0 {
+        fire()
+      } else {
+        DispatchQueue.main.asyncAfter(
+          deadline: .now() + .milliseconds(index * interval), execute: fire)
+      }
+    }
+  }
 
   /// Posts `key` to the focused app `repeatCount` times. `completion` runs
   /// once with the outcome: after the last chord was posted, or at once when
@@ -1365,24 +1905,36 @@ extension AppDelegate {
   /// `y` — copy the focused app's current selection into `register`. Reads the
   /// selection off the AX tree when the app exposes it (no clipboard churn);
   /// otherwise synthesizes ⌘C and stores whatever lands on the pasteboard.
-  private func yankSelection(into register: String?) {
+  func yankSelection(into register: String?, clearSelection: Bool = false) {
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for yank_selection")
       applyModeOverlay()
       return
     }
     let pid = context.processID
+    if register == "_" {
+      if clearSelection { collapseCopiedSelection(in: pid) }
+      applyModeOverlay()
+      return
+    }
     Self.normalModeAXActionQueue.async { [weak self] in
       let text = NormalModeDispatcher.selectedText(pid: pid)
-      DispatchQueue.main.async { self?.finishYankSelection(axText: text, into: register) }
+      DispatchQueue.main.async {
+        self?.finishYankSelection(
+          axText: text, into: register, targetPID: pid, clearSelection: clearSelection)
+      }
     }
   }
 
-  private func finishYankSelection(axText: String?, into register: String?) {
+  private func finishYankSelection(
+    axText: String?, into register: String?, targetPID: pid_t, clearSelection: Bool
+  ) {
     if let text = axText {
       registers.write(text, register: register)
+      debugStateDidChange()
       FlashLog.debug(
         "[normal_mode] yank ax len=\(text.count) register=\(register ?? "*clipboard*")")
+      if clearSelection { collapseCopiedSelection(in: targetPID) }
       applyModeOverlay()
       return
     }
@@ -1394,21 +1946,46 @@ extension AppDelegate {
       .clipboardCopy,
       completion: { [weak self] outcome in
         guard outcome == .chordSent || outcome == .performed else { return }
-        self?.awaitYankedText(after: beforeChange, into: register)
+        self?.awaitYankedText(
+          after: beforeChange, into: register, targetPID: targetPID,
+          clearSelection: clearSelection)
       })
   }
 
-  private func awaitYankedText(after beforeChange: Int, into register: String?) {
+  private func awaitYankedText(
+    after beforeChange: Int, into register: String?, targetPID: pid_t,
+    clearSelection: Bool
+  ) {
     pollPasteboard(after: beforeChange, attempts: 20) { [weak self] text in
       guard let self else { return }
       if let text, !text.isEmpty {
         self.registers.write(text, register: register)
+        self.debugStateDidChange()
         FlashLog.debug(
           "[normal_mode] yank clipboard len=\(text.count) register=\(register ?? "*clipboard*")")
+        if clearSelection { self.collapseCopiedSelection(in: targetPID) }
       } else {
         FlashLog.debug("[normal_mode] yank clipboard_copy produced no selection")
       }
       self.scheduleNormalModeRecapture()
+    }
+  }
+
+  /// A drag yank keeps the copied bytes before changing the app's selection.
+  /// Prefer AX's selected range; a right arrow is needed for web views that
+  /// expose a selection but do not permit setting that range. Never send that
+  /// key to a terminal, where it could become input to a running program.
+  private func collapseCopiedSelection(in pid: pid_t) {
+    guard
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+      let context = normalModeDispatchContext(), context.processID == pid
+    else { return }
+    let isTerminal = TerminalEmulators.contains(context.bundleIdentifier)
+    Self.normalModeAXActionQueue.async {
+      if NormalModeDispatcher.collapseSelectedText(pid: pid) { return }
+      if !isTerminal, let rightArrow = Self.arrowKeyCodes[.right] {
+        _ = NormalModeDispatcher.sendKey(virtualKey: rightArrow, to: pid)
+      }
     }
   }
 
@@ -1586,7 +2163,7 @@ extension AppDelegate {
   /// replay tmux jumps the same as any other Flash navigation.
   func activatePluginCommandTarget(_ pid: pid_t?, navigationURL: URL? = nil) {
     if let navigationURL {
-      recordMovement(.route(navigationURL, pid: pid), source: "plugin_command")
+      recordMovement(.route(navigationURL, pid: pid), source: "plugin")
     }
     guard let pid,
       let app = NSRunningApplication(processIdentifier: pid),

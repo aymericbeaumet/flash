@@ -1,7 +1,8 @@
 ## SwiftPM
 .build/
 .swiftpm/
-Package.resolved
+.venv/
+!uv.lock
 
 ## Build artifacts
 build/

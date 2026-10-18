@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 import Foundation
 import XCTest
 
@@ -16,22 +18,24 @@ final class ModeReducerTests: XCTestCase {
     .command(restoreTo: .normal),
     .command(restoreTo: .insert),
     .command(restoreTo: .disabled),
-    .terminal(restoreTo: .normal),
-    .terminal(restoreTo: .insert),
-    .terminal(restoreTo: .disabled),
+    .terminal(restoreTo: .normal, returnPID: nil),
+    .terminal(restoreTo: .insert, returnPID: nil),
+    .terminal(restoreTo: .disabled, returnPID: nil),
+    .hyper(restoreTo: .normal),
+    .hold,
   ]
 
   // Representative events covering every case.
   private let allEvents: [ModeEvent] = [
     .enterInsert(targetPID: 7),
-    .enterNormal(targetPID: 7),
-    .leaveMode(hasHints: false, targetPID: nil),
-    .leaveMode(hasHints: true, targetPID: 7),
+    .enterNormal,
+    .leaveMode(hasHints: false),
+    .leaveMode(hasHints: true),
     .openCommand(restoreMode: false),
     .openCommand(restoreMode: true),
     .closeCommand(reason: "submit"),
-    .openTerminal,
-    .closeTerminal(targetPID: nil),
+    .openTerminal(returnPID: nil),
+    .closeTerminal(restoresApp: false),
     .clickResolved(entersInsert: true, targetPID: 7),
     .clickResolved(entersInsert: false, targetPID: 7),
     .advancedModeChanged(enabled: true),
@@ -39,7 +43,41 @@ final class ModeReducerTests: XCTestCase {
     .startup(advancedEnabled: true),
     .startup(advancedEnabled: false),
     .focusedAppChanged(pid: 7),
+    .enterHyper,
+    .exitHyper,
+    .buttonHeld(.hold),
+    .buttonReleased,
   ]
+
+  // MARK: Hyper hold
+
+  /// Every exit from HYPER ends the hold — the release, `leave_mode`, the
+  /// command line, a focus change — because the transition itself is the
+  /// reset point. A stale hold would swallow the next leader press and carry
+  /// a pending sequence into NORMAL.
+  func testEveryExitFromHyperEndsTheHold() {
+    let hyper = Mode.hyper(restoreTo: .normal)
+    for event in allEvents {
+      var hold = HyperHoldState()
+      XCTAssertEqual(hold.leaderHold.step(.leaderDown), .enter)
+      XCTAssertEqual(hold.leaderHold.step(.otherKey), .key)
+      hold.pending = "x"
+      hold.fallbackPending = "<leader>"
+      let next = ModeReducer.reduce(hyper, event).0
+      hold.modeChanged(from: hyper, to: next)
+      if next.isHyper {
+        XCTAssertTrue(hold.leaderHold.holding, "staying in HYPER keeps the hold: \(event)")
+        XCTAssertEqual(hold.pending, "x")
+      } else {
+        XCTAssertEqual(hold, HyperHoldState(), "leaving HYPER by \(event) ends the hold")
+        XCTAssertEqual(hold.leaderHold.step(.leaderDown), .enter, "the next press enters")
+      }
+    }
+    var hold = HyperHoldState()
+    hold.pending = "x"
+    hold.modeChanged(from: .normal, to: .insert)
+    XCTAssertEqual(hold.pending, "x", "a change between other modes is not an exit")
+  }
 
   // MARK: Initialization
 
@@ -110,7 +148,7 @@ final class ModeReducerTests: XCTestCase {
 
   func testOnlyKeyboardAndConfigLeaveInsert() {
     XCTAssertEqual(
-      ModeReducer.reduce(.insert, .enterNormal(targetPID: 7)).0, .normal)
+      ModeReducer.reduce(.insert, .enterNormal).0, .normal)
     XCTAssertEqual(
       ModeReducer.reduce(.insert, .advancedModeChanged(enabled: false)).0, .disabled)
   }
@@ -120,7 +158,7 @@ final class ModeReducerTests: XCTestCase {
       let (next, effects) = ModeReducer.reduce(state, .focusedAppChanged(pid: 99))
       XCTAssertEqual(next, state, "focusedAppChanged must not change \(state)")
       switch state {
-      case .normal, .command:
+      case .normal, .command, .hyper, .hold:
         XCTAssertEqual(effects, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         XCTAssertTrue(effects.isEmpty)
@@ -129,19 +167,19 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testEnteredNormalPersistsAcrossFocusHintsAndCommandSubmissions() {
-    var mode = ModeReducer.reduce(.insert, .enterNormal(targetPID: 7)).0
+    var mode = ModeReducer.reduce(.insert, .enterNormal).0
     XCTAssertEqual(mode, .normal)
 
     for event in [
       ModeEvent.focusedAppChanged(pid: 42),
       .focusedAppChanged(pid: 7),
-      .leaveMode(hasHints: true, targetPID: 42),
+      .leaveMode(hasHints: true),
       .advancedModeChanged(enabled: true),
-      .leaveMode(hasHints: false, targetPID: 42),
+      .leaveMode(hasHints: false),
     ] {
-      let (next, effects) = ModeReducer.reduce(mode, event)
+      let next = ModeReducer.reduce(mode, event).0
       XCTAssertEqual(next, .normal, "\(event) must preserve explicit NORMAL")
-      XCTAssertFalse(effects.contains(.setMappingScope(.insert)))
+      XCTAssertEqual(next.mappingScope, .normal)
       mode = next
     }
 
@@ -154,7 +192,7 @@ final class ModeReducerTests: XCTestCase {
 
     mode = ModeReducer.reduce(mode, .enterInsert(targetPID: 7)).0
     XCTAssertEqual(mode, .insert)
-    mode = ModeReducer.reduce(mode, .leaveMode(hasHints: false, targetPID: 7)).0
+    mode = ModeReducer.reduce(mode, .leaveMode(hasHints: false)).0
     XCTAssertEqual(mode, .normal)
   }
 
@@ -166,8 +204,11 @@ final class ModeReducerTests: XCTestCase {
       .insert)
     XCTAssertEqual(
       ModeReducer.reduce(.normal, .clickResolved(entersInsert: false, targetPID: 7)).0, .normal)
-    // From any non-normal state, a click cannot change the mode.
-    for state in allStates where !state.isNormal {
+    // A click while a button is held still enters INSERT on an input.
+    XCTAssertEqual(
+      ModeReducer.reduce(.hold, .clickResolved(entersInsert: true, targetPID: 7)).0, .insert)
+    // From any other state, a click cannot change the mode.
+    for state in allStates where !state.isNormal && state.buttonHold == nil {
       XCTAssertEqual(
         ModeReducer.reduce(state, .clickResolved(entersInsert: true, targetPID: 7)).0, state)
     }
@@ -176,7 +217,7 @@ final class ModeReducerTests: XCTestCase {
   // MARK: Advanced gate
 
   func testAdvancedGateRefusesNormalWhenDisabled() {
-    XCTAssertEqual(ModeReducer.reduce(.disabled, .enterNormal(targetPID: 7)).0, .disabled)
+    XCTAssertEqual(ModeReducer.reduce(.disabled, .enterNormal).0, .disabled)
     XCTAssertEqual(
       ModeReducer.reduce(.disabled, .enterInsert(targetPID: 7)).0,
       .disabled)
@@ -217,7 +258,7 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testLeaveModeReturnsInsertToNormal() {
-    let (next, effects) = ModeReducer.reduce(.insert, .leaveMode(hasHints: false, targetPID: nil))
+    let (next, effects) = ModeReducer.reduce(.insert, .leaveMode(hasHints: false))
     XCTAssertEqual(next, .normal)
     XCTAssertEqual(effects, ModeReducer.enterEffects(for: .normal, targetPID: nil))
   }
@@ -229,7 +270,7 @@ final class ModeReducerTests: XCTestCase {
           let (opened, _) = ModeReducer.reduce(
             origin, .openCommand(restoreMode: restoreMode))
           let expected = ModeReducer.reduce(opened, .closeCommand(reason: "cancel"))
-          let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false, targetPID: nil))
+          let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false))
           XCTAssertEqual(actual.0, expected.0)
           XCTAssertEqual(actual.1, expected.1)
           XCTAssertTrue(actual.1.contains(.clearTransientHintState))
@@ -240,17 +281,49 @@ final class ModeReducerTests: XCTestCase {
 
   func testLeaveModeKeepsNormalAndDisabled() {
     for state in [Mode.normal, .disabled] {
-      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: false, targetPID: nil))
+      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: false))
       XCTAssertEqual(next, state)
       XCTAssertTrue(effects.isEmpty)
     }
   }
 
+  /// The app a popup covers is part of the TERMINAL value: an explicit close
+  /// activates it, a focus loss does not, and nothing of it outlives the
+  /// mode — the next popup captures its own, and leaving INSERT with hints
+  /// up activates no app a popup once covered.
+  func testTerminalReturnAppLivesOnlyInTerminalMode() {
+    let first = ModeReducer.reduce(.normal, .openTerminal(returnPID: 42)).0
+    XCTAssertEqual(first, .terminal(restoreTo: .normal, returnPID: 42))
+    let silent = ModeReducer.reduce(first, .closeTerminal(restoresApp: false))
+    XCTAssertEqual(silent.0, .normal)
+    XCTAssertFalse(
+      silent.1.contains {
+        if case .activateFocusedApp = $0 { return true }
+        return false
+      }, "a focus loss activates nothing")
+
+    let second = ModeReducer.reduce(silent.0, .openTerminal(returnPID: 7)).0
+    XCTAssertEqual(second.terminalReturnPID, 7)
+    let left = ModeReducer.reduce(second, .leaveMode(hasHints: false))
+    XCTAssertTrue(left.1.contains(.activateFocusedApp(pid: 7)))
+    XCTAssertFalse(left.1.contains(.activateFocusedApp(pid: 42)), "the first popup's app is gone")
+    XCTAssertEqual(
+      Array(ModeReducer.reduce(second, .enterNormal).1.prefix(2)),
+      [.hideTerminalPopup, .activateFocusedApp(pid: 7)])
+    XCTAssertEqual(
+      ModeReducer.reduce(second, .openTerminal(returnPID: 99)).0, second,
+      "a popup focused from TERMINAL keeps the app captured first")
+
+    let hints = ModeReducer.reduce(.insert, .leaveMode(hasHints: true))
+    XCTAssertEqual(hints.0, .insert)
+    XCTAssertTrue(hints.1.contains(.activateFocusedApp(pid: nil)))
+  }
+
   func testLeaveModeRestoresTerminalAndPreviousApplication() {
     for origin in [Mode.normal, .insert, .disabled] {
-      let (opened, _) = ModeReducer.reduce(origin, .openTerminal)
-      let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false, targetPID: 42))
-      let expected = ModeReducer.reduce(opened, .closeTerminal(targetPID: 42))
+      let (opened, _) = ModeReducer.reduce(origin, .openTerminal(returnPID: 42))
+      let actual = ModeReducer.reduce(opened, .leaveMode(hasHints: false))
+      let expected = ModeReducer.reduce(opened, .closeTerminal(restoresApp: true))
       XCTAssertEqual(actual.0, origin)
       XCTAssertEqual(actual.1, expected.1)
       XCTAssertTrue(actual.1.contains(.hideTerminalPopup))
@@ -260,9 +333,9 @@ final class ModeReducerTests: XCTestCase {
 
   func testLeaveModeWithHintsDismissesThemAndKeepsTheBaseMode() {
     for state in [Mode.disabled, .normal, .insert] {
-      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: true, targetPID: 7))
+      let (next, effects) = ModeReducer.reduce(state, .leaveMode(hasHints: true))
       XCTAssertEqual(next, state)
-      XCTAssertEqual(effects, ModeReducer.enterEffects(for: state, targetPID: 7))
+      XCTAssertEqual(effects, ModeReducer.enterEffects(for: state, targetPID: nil))
       XCTAssertTrue(effects.contains(.clearTransientHintState))
     }
   }
@@ -280,7 +353,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertTrue(expectedEffects.contains(.clearTransientHintState))
 
     for state in commandStates {
-      let (next, effects) = ModeReducer.reduce(state, .enterNormal(targetPID: nil))
+      let (next, effects) = ModeReducer.reduce(state, .enterNormal)
       XCTAssertEqual(next, .normal)
       XCTAssertEqual(effects, expectedEffects)
     }
@@ -292,15 +365,15 @@ final class ModeReducerTests: XCTestCase {
     let surfaces: [ModeEvent] = [
       .openCommand(restoreMode: false),
       .openCommand(restoreMode: true),
-      .openTerminal,
+      .openTerminal(returnPID: nil),
     ]
     for open in surfaces {
-      for request in [ModeEvent.enterNormal(targetPID: nil), .enterInsert(targetPID: nil)] {
+      for request in [ModeEvent.enterNormal, .enterInsert(targetPID: nil)] {
         let opened = ModeReducer.reduce(.disabled, open).0
         let closed = ModeReducer.reduce(opened, request).0
         XCTAssertEqual(closed, .disabled, "\(open), \(request)")
         XCTAssertEqual(
-          ModeReducer.reduce(closed, .leaveMode(hasHints: false, targetPID: nil)).0, .disabled)
+          ModeReducer.reduce(closed, .leaveMode(hasHints: false)).0, .disabled)
       }
     }
   }
@@ -309,12 +382,12 @@ final class ModeReducerTests: XCTestCase {
     for open in [
       ModeEvent.openCommand(restoreMode: false),
       .openCommand(restoreMode: true),
-      .openTerminal,
+      .openTerminal(returnPID: nil),
     ] {
       let opened = ModeReducer.reduce(.disabled, open).0
       let enabled = ModeReducer.reduce(opened, .advancedModeChanged(enabled: true)).0
       XCTAssertEqual(
-        ModeReducer.reduce(enabled, .leaveMode(hasHints: false, targetPID: nil)).0, .normal)
+        ModeReducer.reduce(enabled, .leaveMode(hasHints: false)).0, .normal)
     }
   }
 
@@ -322,7 +395,7 @@ final class ModeReducerTests: XCTestCase {
     let states: [Mode] = [
       .insert,
       .command(restoreTo: .insert),
-      .terminal(restoreTo: .insert),
+      .terminal(restoreTo: .insert, returnPID: nil),
     ]
     for state in states {
       let (refreshed, effects) = ModeReducer.reduce(state, .advancedModeChanged(enabled: true))
@@ -330,7 +403,7 @@ final class ModeReducerTests: XCTestCase {
       XCTAssertEqual(effects, [.renderSurface])
       if !state.isInsert {
         XCTAssertEqual(
-          ModeReducer.reduce(refreshed, .leaveMode(hasHints: false, targetPID: nil)).0, .insert)
+          ModeReducer.reduce(refreshed, .leaveMode(hasHints: false)).0, .insert)
       }
     }
   }
@@ -353,7 +426,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       normal,
       [
-        .prepareModeEntry, .setMappingScope(.normal), .clearTransientHintState, .renderSurface,
+        .prepareModeEntry, .clearTransientHintState, .renderSurface,
         .scheduleRecapture,
       ])
 
@@ -361,7 +434,7 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(
       insert,
       [
-        .prepareModeEntry, .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle,
+        .prepareModeEntry, .clearTransientHintState, .hideOverlayIfIdle,
         .renderSurface,
         .activateFocusedApp(pid: 42),
       ])
@@ -370,7 +443,7 @@ final class ModeReducerTests: XCTestCase {
     let command = ModeReducer.enterEffects(
       for: .command(restoreTo: .normal), targetPID: nil)
     XCTAssertEqual(
-      command, [.prepareModeEntry, .setMappingScope(.command), .renderSurface, .scheduleRecapture])
+      command, [.prepareModeEntry, .renderSurface, .scheduleRecapture])
   }
 
   // MARK: Projection correctness — the anti-drift table
@@ -436,6 +509,381 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.normal.badgeStyle, .normal)
     XCTAssertEqual(Mode.insert.badgeStyle, .insert)
     XCTAssertEqual(Mode.disabled.badgeStyle, .insert)
+    XCTAssertEqual(Mode.hyper(restoreTo: .normal).badgeStyle, .hyper)
+    XCTAssertEqual(Mode.hyper(restoreTo: .normal).label, .hyper)
+    XCTAssertEqual(Mode.hold.badgeStyle, .hold)
+    XCTAssertEqual(Mode.hold.label, .hold)
+  }
+
+  /// HOLD is the held mouse button over NORMAL: entered only from NORMAL,
+  /// left when the button goes, NORMAL in every projection, and `leave_mode`
+  /// or an explicit base mode leaves it too.
+  /// It enters from NORMAL and returns to NORMAL when released.
+  func testAHeldButtonEntersHold() {
+    let hold = ButtonHold.hold
+    let mode = Mode.hold
+    let entered = ModeReducer.reduce(.normal, .buttonHeld(hold))
+    XCTAssertEqual(entered.0, mode)
+    XCTAssertEqual(entered.1, [.renderSurface])
+    XCTAssertEqual(mode.buttonHold, hold)
+    let left = ModeReducer.reduce(mode, .buttonReleased)
+    XCTAssertEqual(left.0, .normal)
+    XCTAssertEqual(left.1, [.renderSurface])
+    for state in allStates where state != .normal && !state.isInsert {
+      XCTAssertEqual(
+        ModeReducer.reduce(state, .buttonHeld(hold)).0, state, "\(state) ignores the hold")
+    }
+    // An all-mode chord holds the button from INSERT: the hold takes the
+    // keyboard as NORMAL entry does, and the release lands in NORMAL.
+    let fromInsert = ModeReducer.reduce(.insert, .buttonHeld(hold))
+    XCTAssertEqual(fromInsert.0, mode)
+    XCTAssertEqual(fromInsert.1, ModeReducer.enterEffects(for: .normal, targetPID: nil))
+    XCTAssertEqual(ModeReducer.reduce(fromInsert.0, .buttonReleased).0, .normal)
+    XCTAssertEqual(mode.flashMode, .normal)
+    XCTAssertEqual(mode.asReturnMode, .normal)
+    XCTAssertTrue(mode.ownsKeyboard(hasHints: false, activationInFlight: false))
+    XCTAssertEqual(mode.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
+    XCTAssertEqual(ModeReducer.reduce(mode, .leaveMode(hasHints: false)).0, .normal)
+    XCTAssertEqual(ModeReducer.reduce(mode, .enterNormal).0, .normal)
+    XCTAssertEqual(ModeReducer.reduce(mode, .enterInsert(targetPID: 7)).0, .insert)
+    XCTAssertEqual(
+      ModeReducer.reduce(mode, .clickResolved(entersInsert: false, targetPID: 7)).0, mode)
+    XCTAssertEqual(
+      ModeReducer.reduce(mode, .openCommand(restoreMode: true)).0, .command(restoreTo: .normal))
+    XCTAssertEqual(
+      ModeReducer.reduce(mode, .focusedAppChanged(pid: 7)).1, [.scheduleRecapture])
+    for state in allStates where state.buttonHold == nil {
+      XCTAssertEqual(ModeReducer.reduce(state, .buttonReleased).0, state)
+    }
+    XCTAssertEqual(FlashStatusReport.modeName(.hold), "hold")
+    XCTAssertEqual(Mode.hold.label, .hold)
+    XCTAssertEqual(Mode.hold.badgeStyle, .hold)
+    let labels = ConfigLoader.parse(
+      "[mode]\nlabels = { normal = \"N\", insert = \"I\", command = \"C\", hold = \"D\" }"
+    )
+    XCTAssertEqual(labels.mode.labels.hold, "D")
+    XCTAssertEqual(Config().mode.labels.hold, "HOLD")
+  }
+
+  func testHoldToggleNeedsANormalOrInsertBase() {
+    for state in allStates {
+      XCTAssertEqual(
+        state.canToggleHoldMode,
+        state == .normal || state == .insert || state == .hold,
+        "unexpected HOLD toggle availability in \(state)")
+    }
+  }
+
+  func testHyperIsALeaderHoldOnNormal() {
+    let (entered, enterEffects) = ModeReducer.reduce(.normal, .enterHyper)
+    XCTAssertEqual(entered, .hyper(restoreTo: .normal))
+    XCTAssertEqual(enterEffects, [.renderSurface])
+    XCTAssertEqual(entered.flashMode, .normal)
+    XCTAssertEqual(
+      entered.overlayInputMode(hasHints: false, activationInFlight: false), .normal)
+    XCTAssertTrue(entered.ownsKeyboard(hasHints: false, activationInFlight: false))
+
+    let (left, leaveEffects) = ModeReducer.reduce(entered, .exitHyper)
+    XCTAssertEqual(left, .normal)
+    XCTAssertEqual(leaveEffects, [.renderSurface])
+
+    XCTAssertEqual(ModeReducer.reduce(.insert, .enterHyper).0, .insert)
+    XCTAssertEqual(
+      ModeReducer.reduce(.command(restoreTo: .normal), .enterHyper).0, .command(restoreTo: .normal))
+    XCTAssertEqual(ModeReducer.reduce(.normal, .exitHyper).0, .normal)
+    XCTAssertEqual(
+      ModeReducer.reduce(.hyper(restoreTo: .normal), .leaveMode(hasHints: false)).0,
+      .normal)
+    let command = ModeReducer.reduce(.hyper(restoreTo: .normal), .openCommand(restoreMode: true)).0
+    XCTAssertEqual(command, .command(restoreTo: .normal))
+  }
+
+  func testLeaderHoldArmsPrefixOnlyOnACleanTap() {
+    var hold = LeaderHold()
+    XCTAssertEqual(hold.step(.leaderDown), .enter)
+    XCTAssertEqual(hold.step(.leaderDown), .ignore)
+    XCTAssertEqual(hold.step(.leaderUp), .exit(armPrefix: true))
+
+    XCTAssertEqual(hold.step(.leaderDown), .enter)
+    XCTAssertEqual(hold.step(.otherKey), .key)
+    XCTAssertEqual(hold.step(.leaderUp), .exit(armPrefix: false))
+    XCTAssertEqual(hold.step(.leaderUp), .passthrough)
+    XCTAssertEqual(hold.step(.otherKey), .passthrough)
+  }
+
+  /// The session tap can drop the hyper key's key-up after a swallowed press
+  /// and a synthetic post. Two consecutive "latched, but the key is up"
+  /// readings leave; one flicker, a key that is still down, or a hold that
+  /// already ended does not.
+  func testHyperHoldLeavesWhenTheKeyStaysUp() {
+    var watch = HyperHoldWatch()
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: true), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .exit)
+
+    // A down between two ups starts the count over. An ended hold does too,
+    // so the next single up reading does not leave.
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: true), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .exit)
+    XCTAssertEqual(watch.sample(holding: false, keyIsDown: false), .stay)
+    XCTAssertEqual(watch.sample(holding: true, keyIsDown: false), .stay)
+
+    XCTAssertTrue(HyperHoldWatch.keyArrivedWhileUp(holding: true, keyIsDown: false))
+    XCTAssertFalse(HyperHoldWatch.keyArrivedWhileUp(holding: true, keyIsDown: true))
+    XCTAssertFalse(HyperHoldWatch.keyArrivedWhileUp(holding: false, keyIsDown: false))
+  }
+
+  /// A chord is down only when every part of it is down. Shift on an
+  /// unmodified space hold does not release it.
+  func testHyperKeyChordRequiresEveryKey() {
+    let space = HyperKeyChord.parse("space")
+    XCTAssertEqual(space?.key, CGKeyCode(HotkeySyntax.parseKey("space")!))
+    XCTAssertEqual(space?.modifiers, [])
+    let spaceDown: (CGKeyCode) -> Bool = { $0 == space!.key }
+    XCTAssertTrue(HyperKeyChord.isDown(space!, keyIsDown: spaceDown, flags: []))
+    XCTAssertTrue(HyperKeyChord.isDown(space!, keyIsDown: spaceDown, flags: .maskShift))
+    XCTAssertFalse(HyperKeyChord.isDown(space!, keyIsDown: { _ in false }, flags: .maskShift))
+
+    let chord = HyperKeyChord.parse("cmd+space")
+    XCTAssertEqual(chord?.modifiers, .maskCommand)
+    XCTAssertFalse(HyperKeyChord.isDown(chord!, keyIsDown: spaceDown, flags: []))
+    XCTAssertFalse(HyperKeyChord.isDown(chord!, keyIsDown: { _ in false }, flags: .maskCommand))
+    XCTAssertTrue(HyperKeyChord.isDown(chord!, keyIsDown: spaceDown, flags: .maskCommand))
+
+    let letter = HyperKeyChord.parse("ctrl-a")
+    XCTAssertEqual(letter?.key, CGKeyCode(HotkeySyntax.parseKey("a")!))
+    XCTAssertEqual(letter?.modifiers, .maskControl)
+    XCTAssertNil(HyperKeyChord.parse("ctrl-"))
+    XCTAssertNil(HyperKeyChord.parse("cmd+nope"))
+  }
+
+  /// The prepared matcher settles every key that cannot be the hyper key
+  /// from its key code or typed character, and agrees with the full test on
+  /// every key that can.
+  func testHyperKeyMatcherAgreesWithTheFullTestAndFiltersReleases() {
+    let space = CGKeyCode(HotkeySyntax.parseKey("space")!)
+    let a = CGKeyCode(HotkeySyntax.parseKey("a")!)
+    let f = CGKeyCode(HotkeySyntax.parseKey("f")!)
+    struct Key {
+      var code: CGKeyCode
+      var flags: NSEvent.ModifierFlags = []
+      var characters: String?
+      var ignoring: String?
+    }
+    let keys: [Key] = [
+      Key(code: space, characters: " ", ignoring: " "),
+      Key(code: space, flags: .shift, characters: " ", ignoring: " "),
+      Key(code: space, flags: .command, characters: " ", ignoring: " "),
+      Key(code: space, characters: nil, ignoring: nil),
+      Key(code: a, characters: "a", ignoring: "a"),
+      Key(code: a, flags: .control, characters: "\u{01}", ignoring: "a"),
+      Key(code: a, flags: .shift, characters: "A", ignoring: "a"),
+      Key(code: f, characters: "f", ignoring: "f"),
+      // A remapped layout types `f` on the ANSI `a` position.
+      Key(code: a, characters: "f", ignoring: "f"),
+      Key(code: f, flags: .shift, characters: "?", ignoring: "/"),
+    ]
+    for atom in ["space", "cmd+space", "ctrl-a", "f", "?", "tab"] {
+      let matcher = HyperKeyMatcher(atom: atom)
+      for key in keys {
+        let full = NormalModeInterpreter.isHyperKey(
+          atom: atom, keyCode: key.code, modifierFlags: key.flags,
+          characters: key.characters, charactersIgnoringModifiers: key.ignoring)
+        let fast = NormalModeInterpreter.isHyperKey(
+          matcher: matcher, keyCode: key.code, modifierFlags: key.flags,
+          characters: key.characters, charactersIgnoringModifiers: key.ignoring)
+        XCTAssertEqual(fast, full, "atom=\(atom) code=\(key.code) flags=\(key.flags)")
+        if full {
+          XCTAssertTrue(matcher.mayMatch(keyCode: Int64(key.code)), "atom=\(atom)")
+        }
+      }
+    }
+    let spaceMatcher = HyperKeyMatcher(atom: "space")
+    XCTAssertTrue(spaceMatcher.mayMatch(keyCode: Int64(space)))
+    XCTAssertFalse(spaceMatcher.mayMatch(keyCode: Int64(a)), "other releases need no event")
+    let letterMatcher = HyperKeyMatcher(atom: "f")
+    XCTAssertTrue(letterMatcher.mayMatch(keyCode: Int64(a)), "a layout may type f anywhere")
+    XCTAssertEqual(letterMatcher.characters, ["f", "F"])
+  }
+
+  func testConfigPreparesTheHyperMatcherAndLeaderAtom() {
+    var mode = Config.Mode()
+    // As configured: a bare `space` would be five keys, not the space bar.
+    mode.normalLeader = "<space>"
+    mode.hyperKey = "<leader>"
+    mode.refreshLeaderDerivedDefaults()
+    XCTAssertEqual(mode.resolvedHyperKey, "space")
+    XCTAssertEqual(mode.resolvedHyperMatcher?.atom, "space")
+    XCTAssertEqual(mode.resolvedHyperMatcher?.chord, HyperKeyChord.parse("space"))
+    XCTAssertEqual(mode.resolvedLeaderAtom, NormalModeInterpreter.translateLeader("<space>"))
+    XCTAssertEqual(mode.resolvedLeaderAtom, "space")
+    mode.normalLeader = nil
+    mode.refreshLeaderDerivedDefaults()
+    XCTAssertNil(mode.resolvedHyperMatcher)
+    XCTAssertNil(mode.resolvedLeaderAtom)
+  }
+
+  func testASecondLeaderHoldEntersHyperWhileItsPrefixIsArmed() {
+    XCTAssertTrue(
+      LeaderHold.canEnter(
+        pending: "", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+    // Releasing the leader armed `<space>`. Holding it again still enters.
+    XCTAssertTrue(
+      LeaderHold.canEnter(
+        pending: " ", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+    // `<leader><leader>` is a real sequence, so the second press stays in it.
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: " ", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: true,
+        isRepeat: false))
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: "g", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: "", leaderRepeatsAnchor: false, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: true))
+  }
+
+  /// `]t` arms a repeat of `t`. Any other key drops that anchor, the leader
+  /// included, so holding it right after enters HYPER; only a mapping whose
+  /// final key is the leader keeps the press as its repeat.
+  func testALeaderHoldAfterARepeatableSequenceEntersHyper() {
+    XCTAssertFalse(LeaderHold.leaderRepeats(anchor: "]t", leaderAtom: " "))
+    XCTAssertTrue(
+      LeaderHold.canEnter(
+        pending: "", leaderRepeatsAnchor: LeaderHold.leaderRepeats(anchor: "]t", leaderAtom: " "),
+        leaderAtom: " ", leaderContinuesPending: false, isRepeat: false))
+    XCTAssertFalse(LeaderHold.leaderRepeats(anchor: nil, leaderAtom: " "))
+    XCTAssertTrue(LeaderHold.leaderRepeats(anchor: "g\u{1F} ", leaderAtom: " "))
+    XCTAssertFalse(
+      LeaderHold.canEnter(
+        pending: "", leaderRepeatsAnchor: true, leaderAtom: " ", leaderContinuesPending: false,
+        isRepeat: false))
+  }
+
+  /// `[mode.hold.mappings]` is read before NORMAL while a button is held.
+  func testDragMappingsLayerOverNormal() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.hold.mappings]
+      "ctrl+o" = ["flash", "scroll_top"]
+      "x" = false
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    let drag = config.mode.compiledHold
+    let normal = config.mode.compiledNormal
+    XCTAssertEqual(
+      drag.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("j")!)?.action,
+      .flashCommand(.mouseNudge(.down, distance: 16)))
+    XCTAssertNil(normal.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("j")!))
+    XCTAssertEqual(
+      drag.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("h")!)?.action,
+      .flashCommand(.mouseNudge(.left, distance: 16)))
+    XCTAssertEqual(
+      normal.mapping(for: NormalModeInterpreter.canonicalizeMappingKey("h")!)?.action,
+      .flashCommand(.scroll(.left)))
+    // A key HOLD leaves alone keeps NORMAL's meaning; a picked target
+    // extends the selection instead of clicking.
+    let t = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("t"))
+    XCTAssertEqual(drag.mapping(for: t)?.action, normal.mapping(for: t)?.action)
+    let f = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("f"))
+    XCTAssertEqual(drag.mapping(for: f)?.action, .flashCommand(.mouseTarget(.move)))
+    // `false` in HOLD removes NORMAL's key there only.
+    let x = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("x"))
+    XCTAssertNil(drag.mapping(for: x))
+    XCTAssertNotNil(normal.mapping(for: x))
+    // A HOLD chord wins over NORMAL's only while the button is held.
+    let chord = try XCTUnwrap(ModeMapping.parseNativeHotkey("ctrl+o"))
+    XCTAssertEqual(
+      MappingsCoordinator.activeMappingTable(in: config.mode, scope: .hold)[chord]?.action,
+      .flashCommand(.scroll(.top)))
+    XCTAssertNotEqual(
+      MappingsCoordinator.activeMappingTable(in: config.mode, scope: .normal)[chord]?.action,
+      .flashCommand(.scroll(.top)))
+    XCTAssertEqual(
+      ConfigLoader.parse("[mode.apps.\"com.example.app\".hold.mappings]\n\"q\" = false")
+        .diagnostics, [])
+  }
+
+  /// HOLD moves what the button grabbed: `h` `j` `k` `l` nudge it, Return
+  /// drops it, Escape puts it back, and `f` picks where it goes. Entering it
+  /// is `enter_hold_mode`, bound to Command-Control-H by default.
+  func testHoldMappingsMoveDropAndCancel() throws {
+    let config = ConfigLoader.parse("")
+    func key(_ raw: String) throws -> String {
+      try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey(raw))
+    }
+    let drag = config.mode.compiledHold
+    XCTAssertEqual(
+      drag.mapping(for: try key("j"))?.action, .flashCommand(.mouseNudge(.down, distance: 16)))
+    XCTAssertEqual(
+      drag.mapping(for: try key("L"))?.action, .flashCommand(.mouseNudge(.right, distance: 96)))
+    XCTAssertEqual(
+      drag.mapping(for: try key("<return>"))?.action,
+      .flashCommand(.mouseButton(.init(state: .release, button: .primary, hold: .hold))))
+    XCTAssertEqual(
+      drag.mapping(for: try key("<esc>"))?.action,
+      .flashCommand(.mouseButton(.init(state: .cancel, button: .primary, hold: .hold))))
+    XCTAssertEqual(drag.mapping(for: try key("f"))?.action, .flashCommand(.mouseTarget(.move)))
+    let normal = config.mode.compiledNormal
+    XCTAssertNil(normal.mapping(for: try key("D")))
+    XCTAssertNil(normal.mapping(for: try key("cD")))
+    XCTAssertNil(drag.mapping(for: try key("D")))
+    let defaults = [
+      config.mode.all, config.mode.normal, config.mode.insert,
+      config.mode.hold,
+    ].joined()
+    XCTAssertEqual(
+      defaults.filter { $0.action.command == .holdMode(.primary) }.map(\.key),
+      [try key("cmd+ctrl+h")])
+    XCTAssertNil(normal.mapping(for: try key("v")))
+  }
+
+  /// A held mode's own key hides every NORMAL binding it starts, so it fires
+  /// at once instead of waiting for the sequence timeout.
+  func testAHeldModeKeyHidesTheNormalSequencesItStarts() throws {
+    let config = ConfigLoader.parse(
+      """
+      [mode.hold.mappings]
+      "d" = ["flash", "scroll_top"]
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    let d = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("d"))
+    let df = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("df"))
+    XCTAssertNil(config.mode.compiledHold.mapping(for: df))
+    XCTAssertFalse(config.mode.compiledHold.hasStrictPrefix(d))
+    XCTAssertNotNil(config.mode.compiledNormal.mapping(for: df))
+  }
+
+  /// The mapping scope is a projection of the mode, applied on every
+  /// transition, so no path can leave INSERT reading NORMAL's chords (a
+  /// Command chord NORMAL maps would be swallowed in the app) or HOLD's
+  /// table outside HOLD. HYPER reads NORMAL's; advanced mode off reads
+  /// INSERT's.
+  func testEachModeReadsItsOwnMappingScope() {
+    let expected: [(Mode, MappingScope)] = [
+      (.disabled, .insert), (.insert, .insert), (.normal, .normal),
+      (.hyper(restoreTo: .normal), .normal), (.hold, .hold),
+      (.command(restoreTo: .insert), .command), (.command(restoreTo: .normal), .command),
+      (.terminal(restoreTo: .insert, returnPID: nil), .terminal),
+    ]
+    for (mode, scope) in expected {
+      XCTAssertEqual(mode.mappingScope, scope, "\(mode)")
+    }
+    for state in allStates {
+      for event in allEvents {
+        let next = ModeReducer.reduce(state, event).0
+        XCTAssertEqual(
+          next.mappingScope == .insert, next == .disabled || next.isInsert,
+          "\(state) + \(event): only INSERT and disabled read INSERT's chords")
+      }
+    }
   }
 
   // MARK: Structural purity

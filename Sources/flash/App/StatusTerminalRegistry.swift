@@ -122,10 +122,7 @@ final class StatusTerminalRegistry {
   init(
     environment: FlashProcessEnvironment = .shared,
     refreshEnvironment: @escaping (@escaping () -> Void) -> Void = { completion in
-      DispatchQueue.global(qos: .userInitiated).async {
-        FlashProcessEnvironment.shared.refresh()
-        DispatchQueue.main.async(execute: completion)
-      }
+      FlashProcessEnvironment.shared.refresh { _ in DispatchQueue.main.async(execute: completion) }
     }
   ) {
     processEnvironment = environment
@@ -140,9 +137,6 @@ final class StatusTerminalRegistry {
     if case .pager = entries[name]?.kind { return true }
     return false
   }
-
-  /// A terminal popup with no session yet: showing it forks its process.
-  func needsSpawn(_ name: String) -> Bool { definitions[name] != nil && entries[name] == nil }
 
   func apply(
     style: Config.PopupStyle, terminals: [String: Config.Terminal],
@@ -205,15 +199,18 @@ final class StatusTerminalRegistry {
   /// Attach a showing to `name`'s terminal: its running process — a
   /// persistent one, or a fresh one started ahead — or a new one. nil when
   /// `name` is not a terminal popup.
+  /// `link` is the hovered span's `#[link]`. It is exported as
+  /// `FLASH_STATUS_LINK` only when this call starts the process. A session
+  /// that is already running keeps the link it started with.
   @discardableResult
-  func open(_ name: String) -> TerminalSession? {
+  func open(_ name: String, link: String? = nil) -> TerminalSession? {
     dispatchPrecondition(condition: .onQueue(.main))
     guard let definition = definitions[name] else { return nil }
     if let entry = entries[name] {
       prewarmedNames.remove(name)
       return entry.session
     }
-    start(name, definition)
+    start(name, definition, link: link)
     didChange?()
     return entries[name]?.session
   }
@@ -350,13 +347,13 @@ final class StatusTerminalRegistry {
     }
   }
 
-  private func start(_ name: String, _ definition: Config.Terminal) {
+  private func start(_ name: String, _ definition: Config.Terminal, link: String? = nil) {
     let grid = gridResolver(definition.size)
     launch(
       name, kind: .terminal(definition),
       configuration: Self.configuration(
         for: definition, environment: processEnvironment.environment, columns: grid.columns,
-        rows: grid.rows))
+        rows: grid.rows, link: link))
   }
 
   @discardableResult
@@ -537,14 +534,20 @@ final class StatusTerminalRegistry {
   /// Restart the process explicitly: every kind, whatever its lifecycle. A
   /// pager rereads the latest collected document. A command that could not
   /// start rereads the login environment first, so a tool installed since
-  /// then is found.
+  /// then is found. The reply restarts only the session as it was asked:
+  /// `restartSession` reuses the `TerminalSession` object, so a restart that
+  /// landed meanwhile (a second request, a reload's retry) shows only in the
+  /// input generation, and a reply from before it must not restart again.
   func restart(name: String) {
     guard let entry = entries[name], case .terminal(let definition) = entry.kind,
       case .failed(let failure) = entry.session.state, failure.isPermanent
     else { return restartSession(name: name, resetBackoff: true) }
     let session = entry.session
+    let generation = inputGenerations[name]
     refreshEnvironment { [weak self] in
-      guard let self, self.entries[name]?.session === session else { return }
+      guard let self, self.entries[name]?.session === session,
+        self.inputGenerations[name] == generation
+      else { return }
       self.restartSession(
         name: name, resetBackoff: true, environment: self.launchEnvironment(for: definition))
     }
@@ -663,8 +666,11 @@ final class StatusTerminalRegistry {
   /// expand `$VAR` and a leading `~` against the resolved environment.
   static func configuration(
     for definition: Config.Terminal, environment base: [String: String],
-    columns: Int? = nil, rows: Int? = nil, scrollbackLines: Int? = nil
+    columns: Int? = nil, rows: Int? = nil, scrollbackLines: Int? = nil,
+    link: String? = nil
   ) -> TerminalConfiguration {
+    var base = base
+    if let link, !link.isEmpty { base["FLASH_STATUS_LINK"] = link }
     let resolved = CommandLaunchConfiguration(
       command: definition.command,
       workingDirectory: definition.workingDirectory, overrides: definition.environment,

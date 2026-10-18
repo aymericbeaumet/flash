@@ -211,9 +211,10 @@ assemble_app() {
   mkdir -p "$STAGING_PATH/Contents/Resources"
   cp "$bin_path/flash" "$STAGING_PATH/Contents/MacOS/flash"
   # Ship the SwiftPM resource bundle (the built Svelte inspector). It goes
-  # in Contents/Resources/ where Bundle.module resolves it via
-  # Bundle.main.resourceURL and where codesign --deep can sign the nested
-  # bundle; without it the inspector serves the missing-resource fallback.
+  # in Contents/Resources, where codesign --deep can sign the nested bundle.
+  # DebugServer reads that copy first: the generated Bundle.module path
+  # looks beside the .app and then falls back to the SwiftPM build
+  # directory, which a dev install does not refresh.
   if [[ -d "$bin_path/Flash_flash.bundle" ]]; then
     rm -rf "$STAGING_PATH/Contents/Resources/Flash_flash.bundle"
     cp -R "$bin_path/Flash_flash.bundle" "$STAGING_PATH/Contents/Resources/Flash_flash.bundle"
@@ -303,7 +304,7 @@ sign_app() {
   # prohibits Flash's Accessibility/CGEventTap/subprocess core).
   local harden=()
   if [[ "${FLASH_HARDENED_RUNTIME:-0}" == "1" ]]; then
-    harden=(--options runtime --entitlements "$PROJECT_DIR/Resources/Flash.entitlements")
+    harden=(--options runtime --timestamp --entitlements "$PROJECT_DIR/Resources/Flash.entitlements")
   fi
   local plugins_dir="$bundle/Contents/Resources/Plugins"
   if [[ -d "$plugins_dir" && ! -L "$plugins_dir" ]]; then

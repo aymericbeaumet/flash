@@ -487,10 +487,16 @@ final class SourceRegistry {
   func resolveCandidate(
     matching target: String,
     sourceID: String? = nil,
+    precedence: CandidateFinder.PrecedenceTable? = nil,
     completion: @escaping (Candidate?) -> Void
   ) {
     Self.resolutionQueue.async {
-      let item = self.resolveCandidateOffMain(matching: target, sourceID: sourceID)
+      let table =
+        precedence
+        ?? CandidateFinder.PrecedenceTable(
+          sources: self.registeredCandidateSourceDescriptors(), overrides: [:], aliveBonus: 10)
+      let item = self.resolveCandidateOffMain(
+        matching: target, sourceID: sourceID, precedence: table)
       DispatchQueue.main.async { completion(item) }
     }
   }
@@ -498,7 +504,9 @@ final class SourceRegistry {
   private static let resolutionQueue = DispatchQueue(
     label: "flash.sources.resolve_name", qos: .userInitiated)
 
-  private func resolveCandidateOffMain(matching target: String, sourceID: String?) -> Candidate? {
+  private func resolveCandidateOffMain(
+    matching target: String, sourceID: String?, precedence: CandidateFinder.PrecedenceTable
+  ) -> Candidate? {
     let env = environment
     lock.lock()
     let builtIn = Array(activeSourcesByID.values)
@@ -524,31 +532,36 @@ final class SourceRegistry {
       return CandidateFinder.prepare(item)
     }
 
-    // Plugin fallback: warm catalogs are a synchronous host-store read now,
-    // ordered by source priority.
-    let plugins = activePluginSources()
-      .filter { source in
-        source.capabilities.contains(.appActivation)
-          && Self.isLocationCandidateSource(source)
-          && (sourceID == nil || Self.source(source, owns: sourceID!))
-      }
-      .sorted { lhs, rhs in
-        if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
-        return lhs.identifier < rhs.identifier
-      }
+    // Plugin fallback: warm catalogs are a synchronous host-store read, ranked
+    // with the flashlight's own scorer so `app_open --name=<text>` lands on
+    // the row the flashlight would list first for that text (exact tab or
+    // window titles before partial hits, then source precedence), never on
+    // whichever source happened to answer first with a substring.
+    let plugins = activePluginSources().filter { source in
+      source.capabilities.contains(.appActivation)
+        && Self.isLocationCandidateSource(source)
+        && (sourceID == nil || Self.source(source, owns: sourceID!))
+    }
+    var pool: [Candidate] = []
     for source in plugins {
       let prepared = CandidateFinder.prepare(source.candidates(in: env, scope: .all))
-      if let item = prepared.first(where: { candidate in
-        candidate.isLocation
-          && candidate.effect == nil
-          && !CandidateFinder.insertsText(candidate)
-          && (candidate.title.localizedCaseInsensitiveContains(target)
-            || candidate.displayTitle.localizedCaseInsensitiveContains(target))
-      }) {
-        return item
-      }
+      pool.append(
+        contentsOf: prepared.filter { candidate in
+          candidate.isLocation
+            && candidate.effect == nil
+            && !CandidateFinder.insertsText(candidate)
+        })
     }
-    return nil
+    guard !pool.isEmpty else { return nil }
+    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(target)
+    guard !normalizedQuery.isEmpty else { return nil }
+    let matches = CandidateFinder.scoreMatches(
+      pool: pool,
+      normalizedQuery: normalizedQuery,
+      fuzzyScore: NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:),
+      allowParallel: false)
+    return CandidateFinder.sortedMatches(matches, precedence: precedence, limit: 1).first?
+      .candidate
   }
 
   func candidate(forProcessID pid: pid_t) -> Candidate? {

@@ -35,7 +35,7 @@ extension AppMonitor {
     ) { [weak self] note in
       guard let self else { return }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-        self.maybeWakeChromiumAccessibility(for: app)
+        self.wakeChromiumAccessibilityInBackground(for: app)
       }
     }
     let activeSpace = nc.addObserver(
@@ -101,9 +101,11 @@ extension AppMonitor {
 
   func onAXEvent(
     pid: pid_t,
+    bundleIdentifier: String? = nil,
     notification: String,
     observedElementIsFocusedWindow: Bool,
-    observedWindow: AXUIElement?
+    observedWindow: AXUIElement?,
+    menu: AXUIElement? = nil
   ) {
     let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
@@ -123,7 +125,10 @@ extension AppMonitor {
     if Self.notificationMayChangeFocusedElement(notification) {
       focusedElementMayHaveChanged?(pid)
     }
-    focusedElementDidChange?(pid, notification)
+    if let menu {
+      menuDidChange?(pid, notification == kAXMenuOpenedNotification as String, menu)
+    }
+    focusedElementDidChange?(pid, bundleIdentifier, notification)
   }
 
   func invalidateAfterUserAction(pid: pid_t, reason: String) {
@@ -219,10 +224,10 @@ extension AppMonitor {
     }
 
     let appEl = AXApp.make(pid: pid)
-    let ctx = ObserverContext(monitor: self, pid: pid)
+    let bundleIdentifier = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    let ctx = ObserverContext(monitor: self, pid: pid, bundleIdentifier: bundleIdentifier)
 
-    let notifications = Self.observedNotifications(
-      forBundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
+    let notifications = Self.observedNotifications(forBundleIdentifier: bundleIdentifier)
 
     AXObserverThread.shared.add(AXObserverGetRunLoopSource(observer))
 
@@ -237,12 +242,13 @@ extension AppMonitor {
     // when the app is slow to answer — and this runs on the FIRST focus
     // after the app launches, exactly when it's busiest (cold start,
     // Notes' initial iCloud sync). N registrations inline here was a
-    // multi-second main-thread stall waiting to happen; axQueue already
-    // hosts the walk's AX IPC. The entry, and with it the context the refcon
+    // multi-second main-thread stall waiting to happen; on `observerQueue`
+    // they also never hold up a walk or a commit on `observerQueue`. The entry,
+    // and with it the context the refcon
     // points at, is captured strongly so the refcon stays valid even if
     // teardown drops the entry mid-registration — stragglers then die with
     // the observer's port on release.
-    axQueue.async { [weak self, entry = observers[pid]!] in
+    observerQueue.async { [weak self, entry = observers[pid]!] in
       self?.registerApplicationNotifications(notifications, in: entry, attempt: 0)
     }
   }
@@ -257,7 +263,7 @@ extension AppMonitor {
   /// Register `notifications` on the application element, then (re)resolve the
   /// focused window, retrying the refused ones on a bounded ladder. `entry`
   /// holds the context the refcon points at, so capturing it keeps that alive.
-  /// Runs on `axQueue`.
+  /// Runs on `observerQueue`.
   private func registerApplicationNotifications(
     _ notifications: [String], in entry: ObserverEntry, attempt: Int
   ) {
@@ -283,7 +289,7 @@ extension AppMonitor {
     // no surface is waiting on the exact instant.
     pollScheduler.scheduleOnce(
       "core:ax_observer_retry:\(pid)", afterMs: Self.observerRegistrationRetryDelaysMs[attempt],
-      priority: .normal, on: axQueue
+      priority: .normal, on: observerQueue
     ) { [weak self] in
       self?.registerApplicationNotifications(refused, in: entry, attempt: attempt + 1)
     }
@@ -291,7 +297,7 @@ extension AppMonitor {
 
   private func refreshFocusedWindowObservation(for pid: pid_t) {
     guard let entry = observers[pid] else { return }
-    axQueue.async { [weak self, entry] in
+    observerQueue.async { [weak self, entry] in
       self?.replaceFocusedWindowObservation(in: entry)
     }
   }
@@ -335,10 +341,10 @@ extension AppMonitor {
     // Removing the run-loop source stops callback delivery immediately
     // (CFRunLoop is thread-safe); the per-notification deregistrations are
     // IPC — usually against an already-dead process here — so they follow
-    // on axQueue, off the input path. `entry` is captured strongly, which
+    // on observerQueue, off the input path. `entry` is captured strongly, which
     // keeps observer/element/refcon alive until the removals finish.
     AXObserverThread.shared.remove(AXObserverGetRunLoopSource(entry.observer))
-    axQueue.async {
+    observerQueue.async {
       entry.isTornDown = true
       if let window = entry.focusedWindow {
         for n in Self.focusedWindowObservedNotifications {

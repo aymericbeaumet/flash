@@ -18,28 +18,12 @@ parse_mode "$@"
 
 cd "$PROJECT_DIR/Inspector"
 
-if command -v pnpm >/dev/null 2>&1; then
-  PKG=pnpm
-elif command -v npm >/dev/null 2>&1; then
-  PKG=npm
-else
-  echo "error: need pnpm or npm to build the inspector" >&2
-  exit 1
-fi
-
-if [[ "$PKG" == "pnpm" ]]; then
-  # The committed lockfile is authoritative, as in CI; regenerate it
-  # deliberately with a plain `pnpm install` after changing package.json.
-  install_args=()
-  [[ -f pnpm-lock.yaml ]] && install_args+=(--frozen-lockfile)
-  PNPM_CONFIG_UPDATE_NOTIFIER=false "$PKG" install ${install_args[@]+"${install_args[@]}"}
-else
-  "$PKG" install
-fi
+[[ -f pnpm-lock.yaml ]] || { echo "error: missing Inspector/pnpm-lock.yaml" >&2; exit 1; }
+PNPM_CONFIG_UPDATE_NOTIFIER=false pnpm install --frozen-lockfile
 if [[ "$MODE" == "dev" ]]; then
-  "$PKG" run build:dev
+  pnpm run build:dev
 else
-  "$PKG" run build
+  pnpm run build
 fi
 
 if [[ "$MODE" == "release" ]]; then

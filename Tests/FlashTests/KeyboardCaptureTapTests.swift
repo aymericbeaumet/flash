@@ -170,4 +170,49 @@ final class KeyboardCaptureTapTests: XCTestCase {
     XCTAssertTrue(keys.isEmpty)
   }
 
+  /// A release the tap never saw (a timeout disable, secure input turning on,
+  /// the hyper key's dropped key-up) leaves a stale pairing. The next press of
+  /// that key decides afresh, and its pairing replaces the stale one: a press
+  /// the app received owes the app its release.
+  func testAPassedPressReplacesAStaleSwallowedPairing() {
+    var keys = KeyboardCaptureTap.SwallowedKeys()
+    keys.press(45, swallowed: true)
+    keys.press(45, swallowed: false)
+    XCTAssertFalse(keys.releaseIsSwallowed(45), "the app is owed this release")
+    XCTAssertTrue(keys.isEmpty)
+    keys.press(45, swallowed: false)
+    keys.press(45, swallowed: true)
+    XCTAssertTrue(keys.releaseIsSwallowed(45))
+  }
+
+  /// A held key's autorepeat follows its press, not the mode of the moment: a
+  /// press the app received keeps repeating there, and a swallowed press keeps
+  /// its repeats from the app, routed only while the mode still reads that
+  /// key — `t` opened a tab and entered INSERT, so its repeats type nothing.
+  func testAutorepeatFollowsItsPress() {
+    typealias Tap = KeyboardCaptureTap
+    let routed = Tap.KeyDownOutcome.swallow(route: true)
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { routed }, routed)
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { .pass }, .pass)
+    XCTAssertEqual(
+      Tap.keyDownOutcome(held: nil, isRepeat: true) { routed }, routed,
+      "a repeat whose press predates the tap decides like a press")
+    XCTAssertEqual(Tap.keyDownOutcome(held: false, isRepeat: true) { routed }, .pass)
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { routed }, routed)
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { .pass }, .swallow(route: false))
+    XCTAssertEqual(
+      Tap.keyDownOutcome(held: true, isRepeat: false) { .pass }, .pass,
+      "a new press of a key with a stale pairing decides afresh")
+  }
+
+  /// A decision that already acted on the key — the Escape that closes a
+  /// hover preview — swallows it without routing it, press and repeats
+  /// alike: no flag has to remember to drop the next routed key.
+  func testASpentKeyIsSwallowedWithoutBeingRouted() {
+    typealias Tap = KeyboardCaptureTap
+    let spent = Tap.KeyDownOutcome.swallow(route: false)
+    XCTAssertEqual(Tap.keyDownOutcome(held: nil, isRepeat: false) { spent }, spent)
+    XCTAssertEqual(Tap.keyDownOutcome(held: true, isRepeat: true) { spent }, spent)
+  }
+
 }

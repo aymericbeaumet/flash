@@ -16,8 +16,12 @@ extension AppMonitor {
   /// (`DiscoveryOutcome`). `isCurrent` tells a repair that is still waiting
   /// on the app whether the activation it serves is still wanted; once it is
   /// not, the repair stops and completes with what it has.
+  /// `windowEntries` is the window list the activation already read, so the
+  /// prepared-model lookup can recompute the window's visible region without
+  /// a second WindowServer round trip; nil reads one here, on main.
   func discoverAsync(
     context: AppContext,
+    windowEntries: [WindowSnapshot.Entry]? = nil,
     targetFilter: ((JumpTarget) -> Bool)? = nil,
     isCurrent: @escaping () -> Bool = { true },
     completion: @escaping (_ hints: [AssignedHint], _ outcome: DiscoveryOutcome) -> Void
@@ -66,6 +70,15 @@ extension AppMonitor {
       return
     }
 
+    // An open context menu is walked from its own frames, above every
+    // window; the window's prepared model is neither served nor replaced.
+    if context.walkRoot == .openMenus {
+      discoverOpenMenus(context: context) { hints in
+        complete(path: hints.isEmpty ? "open_menu_empty" : "open_menu", hints: hints)
+      }
+      return
+    }
+
     if observers[pid] == nil {
       installObserver(for: pid)
     }
@@ -84,7 +97,7 @@ extension AppMonitor {
       // a refresh on the same window finds about 92. Fall through and refresh.
       // A degenerate one is the same kind of miss: a Chromium or Firefox tree
       // caught mid-build once gave 1 target for a view that had 98.
-      if let model = lookupPreparedModel(for: pid),
+      if let model = lookupPreparedModel(for: pid, windowEntries: windowEntries),
         !Self.discoveryLooksDegenerate(
           targets: model.targets.count, lastHealthy: healthyTargetCounts[pid])
       {
@@ -95,7 +108,7 @@ extension AppMonitor {
           let targets = model.targets.filter(targetFilter)
           complete(
             path: "prepared_model_filter",
-            hints: assignTargets(targets, cfg: cfg),
+            hints: assignTargets(targets, cfg: cfg, region: context.frontWindowFrame),
             extra: [
               "model_targets": "\(model.targets.count)",
               "targets": "\(targets.count)",
@@ -122,7 +135,7 @@ extension AppMonitor {
             let targets = model.targets.filter(targetFilter)
             complete(
               path: "prepared_model_refresh_filter",
-              hints: self.assignTargets(targets, cfg: cfg),
+              hints: self.assignTargets(targets, cfg: cfg, region: context.frontWindowFrame),
               retried: retried,
               extra: [
                 "model_targets": "\(model.targets.count)",
@@ -136,6 +149,12 @@ extension AppMonitor {
               extra: ["targets": "\(model.targets.count)"])
           }
         } else {
+          // A nil model also reaches a waiter that a newer activation of the
+          // same app displaced; its walk would only queue ahead of that
+          // activation's own, so it ends here instead.
+          guard isCurrent() else {
+            return complete(path: "activation_superseded", hints: [], retried: retried)
+          }
           self.walkForActivation(
             context: context, providers: plan.preparedProviders, targetFilter: targetFilter,
             afterVolatileDecline: afterVolatileDecline, repaired: retried, isCurrent: isCurrent
@@ -384,10 +403,11 @@ extension AppMonitor {
   func discoverScreenAsync(
     focusedContext: AppContext,
     maxApps: Int = 6,
+    isCurrent: @escaping () -> Bool = { true },
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
-    let primaryH = primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     // Screen + per-app contexts resolve on the calling (main) thread —
     // NSScreen and NSRunningApplication are main-affine.
     let screenFrame =
@@ -448,22 +468,94 @@ extension AppMonitor {
     let visibleByPid = WindowSnapshot.buildMultiSurfaceVisibleRegions(
       entries: entries, focusedPids: Set(contexts.map(\.processID)),
       excludingIndexes: Set(auxiliary.map(\.entryIndex)))
-    axQueue.async { [weak self] in
-      guard let self else { return }
-      self.configureRuntime(for: cfg)
-      var merged: [JumpTarget] = []
-      var walked = 0
-      for context in contexts {
-        guard let regions = visibleByPid[context.processID], !regions.isEmpty else { continue }
+    // One app per `axQueue` turn, with a main-thread currency check between
+    // apps: a newer activation's walk runs between them, and a cancelled
+    // screen scope stops after the app in progress. `merged` and `walked`
+    // are touched only on `axQueue`, one step at a time.
+    let walkable = contexts.filter { !(visibleByPid[$0.processID] ?? []).isEmpty }
+    var merged: [JumpTarget] = []
+    var walked = 0
+    SteppedWalk.run(
+      count: walkable.count, on: axQueue, isCurrent: isCurrent,
+      step: { [weak self] index in
+        guard let self else { return }
+        self.configureRuntime(for: cfg)
+        let context = walkable[index]
+        guard let regions = visibleByPid[context.processID] else { return }
         let plan = self.registry.hintProviderPlan(for: context)
         let providers = plan.uncachedProviders + plan.preparedProviders
-        guard !providers.isEmpty else { continue }
+        guard !providers.isEmpty else { return }
         let collection = Self.collectFocusedTargets(context: context, providers: providers)
         let finalized = TargetFinalizer.finalizeWithStats(
           collection.targets, visibleRegions: regions)
         merged.append(contentsOf: finalized.targets)
         walked += 1
+      },
+      done: { [weak self] completed in
+        guard completed else {
+          FlashLog.debug("[discover] screen_scope superseded apps=\(walked)")
+          completion([])
+          return
+        }
+        self?.finishScreenScope(
+          merged: merged, walked: walked, contexts: contexts, auxiliaryContexts: auxiliaryContexts,
+          entries: entries, screenFrame: screenFrame, cfg: cfg, completion: completion)
+      })
+  }
+
+  /// `f` over an open context menu: the app's open menus are walked by the
+  /// Accessibility provider alone and finalized against their own frames,
+  /// on `axQueue`. Completes on main, with no hints when no menu is open
+  /// any more.
+  private func discoverOpenMenus(
+    context: AppContext, completion: @escaping ([AssignedHint]) -> Void
+  ) {
+    let cfg = snapshotConfig()
+    let primaryH = ScreenSpace.primaryHeight
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      self.configureRuntime(for: cfg)
+      let menus = GeckoAccessibility.withTree(
+        pid: context.processID, bundleIdentifier: context.bundleIdentifier
+      ) { app in
+        AccessibilityProvider.openMenus(in: app, recorded: context.menus, screenH: primaryH)
       }
+      let frames = menus.map(\.frame)
+      let region = self.union(of: frames)
+      let providers = self.registry.hintProviderPlan(for: context).activationProviders.filter {
+        $0.identifier == Self.accessibilityProviderID
+      }
+      var hints: [AssignedHint] = []
+      if !frames.isEmpty, !providers.isEmpty {
+        let menuContext = AppContext(
+          bundleIdentifier: context.bundleIdentifier, processID: context.processID,
+          runningApp: context.runningApp, frontWindowFrame: region,
+          allScreensFrame: context.allScreensFrame, walkRoot: .openMenus,
+          menus: menus.map(\.element))
+        let collection = Self.collectFocusedTargets(context: menuContext, providers: providers)
+        let finalized = TargetFinalizer.finalizeWithStats(
+          collection.targets, visibleRegions: frames)
+        hints = self.assignTargets(finalized.targets, cfg: cfg, region: region)
+      }
+      FlashLog.debug("[discover] open_menu menus=\(frames.count) hints=\(hints.count)")
+      DispatchQueue.main.async { completion(hints) }
+    }
+  }
+
+  /// The auxiliary surfaces, assignment and completion of a screen-scope
+  /// walk whose apps all walked; on `axQueue`.
+  private func finishScreenScope(
+    merged: [JumpTarget], walked: Int, contexts: [AppContext],
+    auxiliaryContexts: [(
+      surface: ScreenScopeSurfaces.Surface, keepsPID: Bool, context: AppContext
+    )],
+    entries: [WindowSnapshot.Entry], screenFrame: CGRect, cfg: Config,
+    completion: @escaping ([AssignedHint]) -> Void
+  ) {
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      self.configureRuntime(for: cfg)
+      var merged = merged
       var auxiliaryTargets = 0
       for (ordinal, entry) in auxiliaryContexts.enumerated() {
         let regions = WindowSnapshot.visibleRegions(
@@ -486,7 +578,7 @@ extension AppMonitor {
           })
         auxiliaryTargets += finalized.targets.count
       }
-      let hints = self.assignTargets(merged, cfg: cfg)
+      let hints = self.assignTargets(merged, cfg: cfg, region: screenFrame)
       FlashLog.debug(
         "[discover] screen_scope complete",
         fields: [
@@ -515,11 +607,14 @@ extension AppMonitor {
     var collectedTargets: Int = 0
     /// The focused window had no visible region, so nothing was walked.
     var occluded = false
+    /// What covered the window as it was walked; see `PreparedModel`.
+    var occlusion: WindowSnapshot.OcclusionSignature? = nil
   }
 
   private struct DiscoveryFrame {
     let providerContext: AppContext
     let visibleRegions: [CGRect]
+    let occlusion: WindowSnapshot.OcclusionSignature?
   }
 
   func buildPreparedModel(
@@ -545,7 +640,8 @@ extension AppMonitor {
       configRevision: configRevision,
       fingerprint: Self.targetsFingerprint(result.targets),
       freshnessMs: Self.modelFreshnessMs,
-      occluded: result.occluded)
+      occluded: result.occluded,
+      occlusion: result.occlusion)
   }
 
   static func targetsFingerprint(_ targets: [JumpTarget]) -> Int {
@@ -568,7 +664,7 @@ extension AppMonitor {
     completion: @escaping (DiscoveryResult) -> Void
   ) {
     let cfg = snapshotConfig()
-    let primaryH = primaryScreenHeight()
+    let primaryH = ScreenSpace.primaryHeight
     axQueue.async { [weak self] in
       guard let self else { return }
       let result = self.runAndAssign(
@@ -634,7 +730,8 @@ extension AppMonitor {
     let finalizeEndedAt = DispatchTime.now()
     let targets = targetFilter.map { finalized.targets.filter($0) } ?? finalized.targets
     let assignStartedAt = DispatchTime.now()
-    let hints = assignTargets(targets, cfg: cfg)
+    let hints = assignTargets(
+      targets, cfg: cfg, region: frame.providerContext.frontWindowFrame)
     let assignEndedAt = DispatchTime.now()
     logDiscoveryPipeline(
       reason: reason,
@@ -660,7 +757,8 @@ extension AppMonitor {
       targets: targets,
       hints: hints,
       allowsFallback: collection.allowsFallback,
-      collectedTargets: finalized.targets.count)
+      collectedTargets: finalized.targets.count,
+      occlusion: frame.occlusion)
   }
 
   private func logDiscoveryPipeline(
@@ -707,9 +805,12 @@ extension AppMonitor {
       ])
   }
 
+  /// `region` is the window or screen the targets were found in, which
+  /// `[hints] label_order` measures against.
   private func assignTargets(
     _ targets: [JumpTarget],
-    cfg: Config
+    cfg: Config,
+    region: CGRect?
   ) -> [AssignedHint] {
     let resolved = cfg.resolvedAlphabet
     return HintAssigner.assign(
@@ -717,8 +818,18 @@ extension AppMonitor {
       alphabet: resolved.chars,
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
-      minLength: cfg.hints.minLength
+      keyRows: resolved.keyRows,
+      keyColumns: resolved.keyColumns,
+      minLength: cfg.hints.minLength,
+      order: cfg.hints.labelOrder,
+      region: region
     )
+  }
+
+  /// The window rectangle hint providers measure, shared by `f` / `cf`
+  /// and by EasyMotion so a terminal cell lands on the same point for each.
+  func providerFrame(for context: AppContext, primaryH: CGFloat) -> CGRect {
+    resolveDiscoveryFrame(for: context, primaryH: primaryH).providerContext.frontWindowFrame
   }
 
   private func resolveDiscoveryFrame(for context: AppContext, primaryH: CGFloat) -> DiscoveryFrame {
@@ -726,11 +837,26 @@ extension AppMonitor {
       let frame = context.frontWindowFrame
       return DiscoveryFrame(
         providerContext: context,
-        visibleRegions: frame.isNull ? [] : [frame])
+        visibleRegions: frame.isNull ? [] : [frame],
+        occlusion: nil)
     }
     // Scope to the window the walk covers, not merely the app's frontmost one.
-    let walked = AccessibilityProvider.walkedWindowFrame(
-      pid: context.processID, bundleIdentifier: context.bundleIdentifier, screenH: primaryH)
+    // A frame-scoped walk (a system dialog, a Picture in Picture player)
+    // already named its window. The process's focused window is a different
+    // surface, and swapping to it would hint the app behind the dialog.
+    // The resolved window element rides along so the walk starts at the
+    // element whose frame was measured, without a second focused-window read.
+    let walked: CGRect?
+    var walkedWindow: AXUIElement?
+    switch context.walkRoot {
+    case .elementsInFrame, .openMenus:
+      walked = context.frontWindowFrame.isNull ? nil : context.frontWindowFrame
+    case .focusedWindow:
+      let window = AccessibilityProvider.walkedWindow(
+        pid: context.processID, bundleIdentifier: context.bundleIdentifier, screenH: primaryH)
+      walked = window?.frame
+      walkedWindow = window?.element
+    }
     let snapshot = WindowSnapshot.build(
       primaryH: primaryH,
       onlyComputingVisibleRegionsFor: context.processID,
@@ -740,8 +866,9 @@ extension AppMonitor {
       of: context.processID, in: snapshot, whenWindowListUnavailable: context.frontWindowFrame)
     let providerFrame = snapshot.activeWindowFrame ?? union(of: visible)
     return DiscoveryFrame(
-      providerContext: clip(context, to: providerFrame),
-      visibleRegions: visible)
+      providerContext: clip(context, to: providerFrame, walkedWindow: walkedWindow),
+      visibleRegions: visible,
+      occlusion: WindowSnapshot.OcclusionSignature(snapshot: snapshot, pid: context.processID))
   }
 
   /// The part of `pid`'s active window the walk may hint. Empty when it is
@@ -785,10 +912,11 @@ extension AppMonitor {
         results = []
       }
       if !results.isEmpty {
+        let priority = provider.priority(in: focused)
         let targets = results.enumerated().map { ordinal, target in
           TargetCandidate(
             target: target,
-            priority: provider.priority(in: focused),
+            priority: priority,
             providerOrder: providerOrder,
             ordinal: ordinal)
         }

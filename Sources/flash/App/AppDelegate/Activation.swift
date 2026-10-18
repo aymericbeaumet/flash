@@ -25,11 +25,14 @@ extension AppDelegate {
       statusBarReservesSpace: statusBarVisible, statusBarMonitor: config.statusBar.monitor)
     let pointer = NSEvent.mouseLocation
     let shape: MouseGrid.Shape =
-      request.bisect ? .bisect : .keyboard(config.resolvedMouseGridKeys)
+      request.bisect
+      ? .bisect(Alphabet.navigation(layoutName: config.positionLayoutName))
+      : .keyboard(config.resolvedMouseGridKeys)
     // `--zoom-to-depth` starts under the pointer, so on the pointer's display.
     guard
       let start = MouseGrid.initialRegion(
-        context: request.zoomToDepth == nil ? context : nil, layouts: layouts, pointer: pointer)
+        context: request.zoomToDepth == nil ? context : nil, layouts: layouts, pointer: pointer,
+        includeStatusBar: statusBarVisible)
     else {
       applyModeOverlay()
       return
@@ -58,7 +61,15 @@ extension AppDelegate {
       "[activation] begin command=\(command) mode=\(flashMode) "
         + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
 
-    guard let context = contextOverride ?? currentNonFlashContext() else {
+    let resolved: AppMonitor.ActivationTarget?
+    if let contextOverride {
+      resolved = AppMonitor.ActivationTarget(
+        context: monitor.coveringInteractionContext(inFrontOf: contextOverride) ?? contextOverride,
+        windowEntries: nil)
+    } else {
+      resolved = currentNonFlashActivationTarget()
+    }
+    guard let target = resolved else {
       FlashLog.debug("[activation] no target app")
       FlashLog.trace(
         "[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
@@ -66,9 +77,21 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
+    // A context menu the target app reported open is what `f` labels.
+    let walkRoot = AppContext.WalkRoot.activation(
+      openMenuPID: nativeSurfaceOwnership.openMenuPID, targetPID: target.context.processID,
+      tapLive: keyboardCaptureTap != nil && !secureInputObserved)
+    let context =
+      walkRoot == .openMenus
+      ? AppContext(
+        bundleIdentifier: target.context.bundleIdentifier, processID: target.context.processID,
+        runningApp: target.context.runningApp, frontWindowFrame: target.context.frontWindowFrame,
+        allScreensFrame: target.context.allScreensFrame, walkRoot: .openMenus,
+        menus: nativeSurfaceOwnership.openMenus)
+      : target.context
     FlashLog.debug(
       "[activation] target pid=\(context.processID) bundle=\(context.bundleIdentifier) "
-        + "source=\(contextOverride == nil ? "focused" : "override")"
+        + "source=\(contextOverride == nil ? "focused" : "override") root=\(walkRoot)"
     )
     hintSession.sourceAppPID = context.processID
     hintSession.command = command
@@ -101,7 +124,9 @@ extension AppDelegate {
     let isCurrent: () -> Bool = { [weak self] in
       self?.activationLifecycle.isCurrent(myGen) ?? false
     }
-    monitor.discoverAsync(context: context, isCurrent: isCurrent) { [weak self] hints, discovery in
+    monitor.discoverAsync(
+      context: context, windowEntries: target.windowEntries, isCurrent: isCurrent
+    ) { [weak self] hints, discovery in
       guard let self else { return }
       self.activationLifecycle.complete(token: myGen)
       FlashLog.trace(
@@ -167,7 +192,8 @@ extension AppDelegate {
       let displayHints =
         statusBarTargets.isEmpty
         ? hints
-        : self.assignHints(hints.map(\.target) + statusBarTargets)
+        : self.assignHints(
+          hints.map(\.target) + statusBarTargets, region: context.frontWindowFrame)
       self.hintSession.hints = displayHints
       self.hintSession.prefix = ""
       if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
@@ -196,8 +222,11 @@ extension AppDelegate {
   /// the same policy `AppMonitor` uses, so a re-assembled hint set (app targets
   /// + status-bar links) stays consistent with a plain discovery result.
   /// `previous` keeps the labels of targets that persist (`--multi`).
+  /// `region` is the window or screen the targets were found in, which
+  /// `[hints] label_order` measures against; nil uses their bounding box.
   func assignHints(
-    _ targets: [JumpTarget], preserving previous: [AssignedHint] = []
+    _ targets: [JumpTarget], preserving previous: [AssignedHint] = [], minLength: Int? = nil,
+    region: CGRect? = nil
   ) -> [AssignedHint] {
     let resolved = config.resolvedAlphabet
     return HintAssigner.assign(
@@ -205,22 +234,26 @@ extension AppDelegate {
       alphabet: resolved.chars,
       leftHand: resolved.leftHand,
       keyScores: resolved.keyScores,
-      minLength: config.hints.minLength,
+      keyRows: resolved.keyRows,
+      keyColumns: resolved.keyColumns,
+      minLength: minLength ?? config.hints.minLength,
+      order: config.hints.labelOrder,
+      region: region,
       preserving: previous)
   }
 
   /// Hint targets for the interactive spans of the Flash status bar on the
   /// active window's screen (`OverlayPanel.statusBarHintRegions`), each with
-  /// the popup a pointer on it opens. Click and move sessions get the same
-  /// targets — only the commit differs (`statusBarHintCommit`); other sessions
-  /// get none. Empty when the bar is hidden or the active window is on a screen
-  /// without a bar.
+  /// the popup a pointer on it opens. Every click and move session gets the
+  /// same targets — `f` and `cf` included — and only the commit differs
+  /// (`statusBarHintCommit`). Empty when the bar is hidden or the active
+  /// window is on a screen without a bar.
   static func statusBarHintTargets(
     for command: MouseCommand, screens: [StatusBarScreenInteractions],
     activeWindowFrame windowFrame: CGRect
   ) -> [(target: JumpTarget, popup: StatusBarPopupRegion?)] {
     switch command {
-    case .click(.leftClick, _), .move: break
+    case .click, .move: break
     default: return []
     }
     guard !screens.isEmpty, !windowFrame.isNull else { return [] }
@@ -275,13 +308,131 @@ extension AppDelegate {
     case follow(URL)
     /// Move the pointer onto the span's text, opening the popup it hovers.
     case hover
+    /// Right-click: pin the popup under the span. A span with no popup does
+    /// nothing, the same as a physical right-click on the bar.
+    case pin
   }
 
-  /// A primary click follows a link or range; a move, or a click on
-  /// popup-only text, hovers.
+  /// Where a status-bar hint acts. `f` uses the span's centre. `s` uses the
+  /// same point as a window letter: one point left of the glyph centre.
+  static func statusBarHintPoint(
+    _ frame: CGRect, bigram: Bool, selectingThrough: Bool = false
+  ) -> CGPoint {
+    bigram
+      ? BigramMatcher.clickPoint(in: frame, selectingThrough: selectingThrough)
+      : CGPoint(x: frame.midX, y: frame.midY)
+  }
+
+  /// A primary click follows a link or range. A right-click pins the popup.
+  /// A move, or a primary click on popup-only text, hovers.
   static func statusBarHintCommit(command: MouseCommand, url: URL?) -> StatusBarHintCommit {
+    if case .click(.rightClick, _) = command { return .pin }
     if case .click(.leftClick, _) = command, let url { return .follow(url) }
     return .hover
+  }
+
+  /// One hint per matching glyph on the status bar of the active window's
+  /// screen — the bar `f` adds to the window. A glyph inside an interactive
+  /// span carries that span's link or popup, so committing it does what `f`
+  /// does there. A glyph on plain bar text still jumps: the commit moves the
+  /// pointer onto the letter. Every click and move uses the same glyphs as
+  /// `f`'s spans, on the same midline, so the chips line up.
+  static func statusBarLetterTargets(
+    query: String, command: MouseCommand, surfaces: [StatusBarLetterSurface],
+    activeWindowFrame windowFrame: CGRect
+  ) -> [(target: JumpTarget, popup: StatusBarPopupRegion?)] {
+    switch command {
+    case .click, .move: break
+    default: return []
+    }
+    guard query.count == 1, !surfaces.isEmpty, !windowFrame.isNull else { return [] }
+    func overlapArea(_ screen: CGRect) -> CGFloat {
+      let hit = screen.intersection(windowFrame)
+      return hit.isNull ? 0 : hit.width * hit.height
+    }
+    guard
+      let surface = surfaces.max(by: {
+        overlapArea($0.screenFrame) < overlapArea($1.screenFrame)
+      }),
+      overlapArea(surface.screenFrame) > 0
+    else { return [] }
+    var located: [(frame: CGRect, region: StatusBarHintRegion?)] = []
+    for run in surface.runs {
+      let haystack = run.text as NSString
+      for occurrence in BigramMatcher.occurrences(in: run.text, query: query) {
+        let prefix = haystack.substring(to: occurrence.location)
+        let slice = haystack.substring(
+          with: NSRange(location: occurrence.location, length: occurrence.length))
+        let columns = StatusFormatCells.width(slice, styles: false)
+        guard columns > 0 else { continue }
+        let before = StatusFormatCells.width(prefix, styles: false)
+        let width = CGFloat(columns) * run.cellWidth
+        let originX: CGFloat
+        if run.centered {
+          let total = CGFloat(StatusFormatCells.width(run.text, styles: false)) * run.cellWidth
+          originX = run.frame.midX - total / 2
+        } else {
+          originX = run.frame.minX
+        }
+        // The same 2pt midline `f` uses for a span, so the chip centres on
+        // the bar instead of anchoring to the top of a taller run.
+        let frame = CGRect(
+          x: originX + CGFloat(before) * run.cellWidth, y: run.frame.midY - 1,
+          width: width, height: 2)
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        located.append((frame, statusBarRegion(containing: center, among: surface.regions)))
+      }
+    }
+    return located.enumerated().map { ordinal, item in
+      let popup = item.region?.popup
+      switch item.region?.action {
+      case .click(let url):
+        return (
+          JumpTarget(
+            id: "statusbar_letter_\(ordinal)_\(url.absoluteString)",
+            frame: item.frame,
+            role: "AXLink",
+            url: url.absoluteString,
+            entersInsertMode: false,
+            providerID: statusBarProviderID),
+          popup
+        )
+      case .hover, nil:
+        let name = popup?.name ?? "text"
+        return (
+          JumpTarget(
+            id: "statusbar_letter_\(ordinal)_\(name)",
+            frame: item.frame,
+            role: statusBarHoverHintRole,
+            url: nil,
+            entersInsertMode: false,
+            providerID: statusBarProviderID),
+          popup
+        )
+      }
+    }
+  }
+
+  /// The interactive span a letter sits in. A link inside a popup wins over
+  /// the popup's own hover span, and a smaller span wins over a larger one.
+  private static func statusBarRegion(
+    containing point: CGPoint, among regions: [StatusBarHintRegion]
+  ) -> StatusBarHintRegion? {
+    func rank(_ region: StatusBarHintRegion) -> (Int, CGFloat) {
+      let click: Int
+      if case .click = region.action {
+        click = 0
+      } else {
+        click = 1
+      }
+      return (click, region.rect.width * region.rect.height)
+    }
+    return regions.filter { $0.rect.containsInclusive(point) }.min { lhs, rhs in
+      let left = rank(lhs)
+      let right = rank(rhs)
+      if left.0 != right.0 { return left.0 < right.0 }
+      return left.1 < right.1
+    }
   }
 
   /// `mouse_target --scope=screen`: hints across the front-most surface of
@@ -307,7 +458,12 @@ extension AppDelegate {
     }
     let myGen = activationLifecycle.begin()
     applyModeOverlay()
-    monitor.discoverScreenAsync(focusedContext: context) { [weak self] hints in
+    // A walk still stepping through apps stops once this activation is gone.
+    let isCurrent: () -> Bool = { [weak self] in
+      self?.activationLifecycle.isCurrent(myGen) ?? false
+    }
+    monitor.discoverScreenAsync(focusedContext: context, isCurrent: isCurrent) {
+      [weak self] hints in
       guard let self else { return }
       self.activationLifecycle.complete(token: myGen)
       guard self.activationLifecycle.isCurrent(myGen) else { return }
@@ -341,7 +497,7 @@ extension AppDelegate {
     let token = activationLifecycle.begin()
     applyModeOverlay()
     let pid = context.processID
-    let screenH = ActionDispatcher.primaryScreenHeight()
+    let screenH = ScreenSpace.primaryHeight
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let targets = NormalModeDispatcher.scrollAreaTargets(
         pid: pid, screenH: screenH, bundleIdentifier: context.bundleIdentifier)
@@ -368,7 +524,7 @@ extension AppDelegate {
         self.hintSession.surface = .targets
         self.hintSession.prefix = ""
         self.overlay.debugConfig = self.config.debug
-        let hints = self.assignHints(targets)
+        let hints = self.assignHints(targets, region: context.frontWindowFrame)
         self.activationLifecycle.invalidate()
         self.hintSession.hints = hints
         self.applyModeOverlay()
@@ -380,19 +536,28 @@ extension AppDelegate {
     }
   }
 
-  private func isAccessibilityTrusted() -> Bool {
+  func isAccessibilityTrusted() -> Bool {
     if cachedAccessibilityTrusted { return true }
     let trusted = PermissionCheck.isAccessibilityTrusted
     if trusted { cachedAccessibilityTrusted = true }
     return trusted
   }
 
-  func cancelOverlay() {
+  /// `departure` is what a dismissal observer saw. A commit that raised its
+  /// target is waiting for exactly that app's activation, and for the focus
+  /// loss the raise causes: those are its handoff, not the user leaving, so
+  /// the gesture keeps its ownership and posts. Every other departure, and a
+  /// cancel with no departure (Escape, a config reload), cancels as before.
+  func cancelOverlay(departure: ActivationLifecycle<HintActivationRequest>.Departure? = nil) {
     FlashLog.trace(
       "[overlay] cancel hints=\(hintSession.hints.count) in_flight=\(activationInFlight) "
         + "mode=\(flashMode) gen=\(activationGen) input=\(overlay.inputMode)")
     if overlay.inputMode == .commandLine {
       finishCommandLineInteraction(reason: "cancel_overlay")
+      return
+    }
+    if let departure, activationLifecycle.isHandoff(departure) {
+      FlashLog.trace("[overlay] cancel_skipped reason=commit_handoff departure=\(departure)")
       return
     }
     // Dismissal observers fire on every app switch, including when no

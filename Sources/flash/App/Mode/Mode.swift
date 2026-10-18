@@ -34,8 +34,32 @@ enum Mode: Equatable {
 
   /// A popup's local terminal view owns keyboard input; global mappings are
   /// suspended. Entered by `enter_terminal_mode` or by focusing a popup, and
-  /// left by `leave_mode`, which closes the popup.
-  case terminal(restoreTo: ReturnMode)
+  /// left by `leave_mode`, which closes the popup. `returnPID` is the app the
+  /// popup covers, captured as the mode is entered: an explicit close
+  /// activates it, and it is forgotten with the mode, so no later popup or
+  /// INSERT exit can activate an app a popup once covered.
+  case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
+
+  /// Dragging with a mouse button held (`enter_hold_mode`, Command-Control-H
+  /// by default): pointer moves drag what was grabbed, Return drops it where
+  /// the pointer is and Escape puts it back. `[mode.hold.mappings]` is read
+  /// before NORMAL's.
+  case hold
+
+  /// Momentary layer while `mode.normal.hyper` is physically held. The default
+  /// key is `<leader>`. Mappings come from `[mode.hyper.mappings]`. Releasing
+  /// the key returns to `restoreTo` (NORMAL). A clean tap of the leader still
+  /// arms a `<leader>` sequence.
+  case hyper(restoreTo: ReturnMode)
+}
+
+/// What a held mouse button means, which is the mode it enters.
+enum ButtonHold: String, CaseIterable, Equatable {
+  case hold
+
+  var mode: Mode {
+    .hold
+  }
 }
 
 /// Where a transient surface (command / modal) returns to when it closes.
@@ -61,10 +85,19 @@ extension Mode {
     switch self {
     case .disabled: return .disabled
     case .insert: return .insert
-    case .normal: return .normal
+    case .normal, .hold: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
-    case .command(let restoreTo), .terminal(let restoreTo): return restoreTo
+    case .command(let restoreTo), .hyper(let restoreTo):
+      return restoreTo
+    case .terminal(let restoreTo, _):
+      return restoreTo
     }
+  }
+
+  /// The app the focused popup covers; nil outside TERMINAL.
+  var terminalReturnPID: pid_t? {
+    if case .terminal(_, let returnPID) = self { return returnPID }
+    return nil
   }
 
   var isInsert: Bool {
@@ -73,6 +106,28 @@ extension Mode {
   }
 
   var isNormal: Bool { self == .normal }
+
+  var isHyper: Bool {
+    if case .hyper = self { return true }
+    return false
+  }
+
+  var isHold: Bool { self == .hold }
+
+  var canToggleHoldMode: Bool {
+    switch self {
+    case .normal, .insert, .hold: return true
+    default: return false
+    }
+  }
+
+  /// The held button's purpose in HOLD; nil in every other mode.
+  var buttonHold: ButtonHold? {
+    switch self {
+    case .hold: return .hold
+    default: return nil
+    }
+  }
 
   var isTerminal: Bool {
     if case .terminal = self { return true }

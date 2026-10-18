@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "memory",
-      "subcommand": "",
+      "subcommand": "show",
       "description": "Show the latest memory snapshot"
     },
     {

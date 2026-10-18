@@ -22,22 +22,48 @@ final class CommandValidationTests: XCTestCase {
     XCTAssertNotNil(parseMappingCommand(argv: ["echo", "name=value"]))
   }
 
-  func testConfigWarningNamesTheInvalidCommandAndMapping() {
+  func testConfigAcceptsPluginCommandsAndWarnsOnAOneWordPluginName() {
+    let accepted = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "<leader>c" = ["flash", "caffeinate", "toggle"]
+      """)
+    XCTAssertTrue(accepted.loadingDiagnostics.isEmpty, "\(accepted.loadingDiagnostics)")
+    XCTAssertTrue(
+      accepted.mode.normal.contains {
+        $0.action.command
+          == .pluginCommand(command: "caffeinate", subcommand: "toggle", args: [])
+      })
+
+    let oneWord = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+shift+[" = ["flash", "caffeinate_toggle"]
+      """)
+    XCTAssertTrue(
+      oneWord.loadingDiagnostics.contains {
+        $0.message.contains("cmd+shift+[") && $0.message.contains("caffeinate_toggle")
+      })
+
     for action in [
-      "[\"flash\", \"does_not_exist\"]", "{ command = [\"flash\", \"does_not_exist\"] }",
+      "[\"flash\", \"Not-A-Verb\"]", "{ command = [\"flash\", \"Not-A-Verb\"] }",
     ] {
       let config = ConfigLoader.parse("[mode.all.mappings]\n\"cmd+shift+[\" = \(action)")
       XCTAssertTrue(
         config.loadingDiagnostics.contains {
-          $0.message.contains("cmd+shift+[") && $0.message.contains("does_not_exist")
+          $0.message.contains("cmd+shift+[") && $0.message.contains("Not-A-Verb")
         })
-      XCTAssertTrue(config.loadingErrorAlertMessage?.contains("does_not_exist") == true)
+      XCTAssertTrue(config.loadingErrorAlertMessage?.contains("Not-A-Verb") == true)
     }
   }
 
   func testCLIRejectsInvalidArgumentsWithoutSendingAnEvent() {
     XCTAssertEqual(FlashCLI.run(args: ["leave_mode", "typo"]), 2)
     XCTAssertEqual(FlashCLI.run(args: ["enter_terminal_mode", "--name="]), 2)
+    XCTAssertEqual(FlashCLI.run(args: ["media"]), 2)
+    XCTAssertEqual(FlashCLI.run(args: ["media", "not-a-subcommand"]), 2)
+    XCTAssertEqual(FlashCLI.run(args: ["caffeinate_toggle"]), 2)
+    XCTAssertEqual(FlashCLI.run(args: ["caffeinate"]), 2)
   }
 
   func testResidentRejectsMalformedBuiltinAndReturnsAnErrorReply() {

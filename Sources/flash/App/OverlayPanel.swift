@@ -7,6 +7,8 @@ enum OverlayModeBadgeStyle {
   case insert
   case normal
   case command
+  case hyper
+  case hold
 }
 
 /// What the overlay shows for the current mode, as one value. Only the mode
@@ -99,6 +101,21 @@ final class OverlayPanel: NSPanel {
   let contentLayer = CALayer()
   var hintLayers: [CAGradientLayer] = []
   var labelLayers: [CATextLayer] = []
+  /// Chip label strings by label, typed prefix and accent, for one label
+  /// style. The label space is a few hundred strings, so every display and
+  /// every keystroke reuses them instead of building attributed strings.
+  struct HintLabelStyle: Equatable {
+    var fontSize: CGFloat
+    var fg: NSColor
+    var importantFG: NSColor
+  }
+  struct HintLabelKey: Hashable {
+    var display: String
+    var typedPrefixLen: Int
+    var accent: Bool
+  }
+  var hintLabelStyle: HintLabelStyle?
+  var hintLabelCache: [HintLabelKey: NSAttributedString] = [:]
   var hintLayerPool: [CAGradientLayer] = []
   var labelLayerPool: [CATextLayer] = []
   let modeBadgeLayer = CAGradientLayer()
@@ -123,7 +140,7 @@ final class OverlayPanel: NSPanel {
   var statusBarClickWindows: [StatusBarClickPanel] = []
   /// Signature of the currently-installed band + link rects, so an unchanged
   /// render skips reordering the click windows.
-  var lastStatusBarClickSignature: String?
+  var lastStatusBarClickSignature: StatusBarClickSignature?
   /// Per-screen clickable and hover-popup rects in screen coordinates, rebuilt
   /// on every `configureModeBadge`. The `f` hint path uses the active window's
   /// screen so every meaningful status segment is hintable without duplicating
@@ -165,10 +182,13 @@ final class OverlayPanel: NSPanel {
   /// click view's `mouseEntered` and dropped the moment the pointer leaves
   /// the band, and ticked by `PollScheduler` rather than its own timer.
   var menuBarRevealProbeArmed = false
-  /// The probe's last observed reveal state. Written on the probe queue
-  /// between `resume()` and `cancel()`, reset on the main thread around
-  /// those edges — the timer lifecycle serializes the two.
-  var menuBarRevealedShadow = false
+  /// Bumped by every `startMenuBarRevealTracking`. A tick's verdict and the
+  /// stop it queues carry the generation they were armed under, and main
+  /// drops the ones from a tracking cycle it has already left. Main-owned.
+  var menuBarRevealGeneration: UInt64 = 0
+  /// The probe's last verdict, for the generation it belongs to. Written
+  /// only on `menuBarRevealProbeQueue`.
+  var menuBarRevealProbeState = MenuBarRevealProbeState()
   /// True while the bar sits below a pointer-revealed native menu bar; see
   /// `setStatusBarYieldsToNativeMenuBar`.
   var statusBarYieldsToNativeMenuBar = false
@@ -189,14 +209,14 @@ final class OverlayPanel: NSPanel {
   var statusBarActionHandler: ((String) -> Void)?
   /// The argument requests restoring the previous app; false switches popups in place.
   var statusBarPopupDismissHandler: ((Bool) -> Void)?
-  var statusBarTerminalPrepareHandler: ((String) -> Bool)?
+  var statusBarTerminalPrepareHandler: ((String, String?) -> Bool)?
   /// Whether hovering `name` would have to fork a terminal child (a declared
   /// terminal popup with no running session). Such popups dwell before they
   /// spawn; see `showStatusBarPopup`.
   var statusBarTerminalNeedsSpawnHandler: ((String) -> Bool)?
   static let statusBarHoverDwellMs = 150
-  var statusBarHoverDwellName: String?
-  var statusBarHoverDwellWork: DispatchWorkItem?
+  /// The one terminal popup waiting out its hover dwell, if any.
+  var statusBarSpawnDwell = StatusBarSpawnDwell.idle
   var statusBarHoverGate = StatusBarHoverGate.ready
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
@@ -275,6 +295,8 @@ final class OverlayPanel: NSPanel {
     didSet { statusBarLayoutRevision &+= 1 }
   }
   var magicModifiers: ClickModifiers = .defaultMagic
+  /// Home-row cluster and bisect quadrants for `[keyboard] layout`.
+  var keyboardNavigation = Alphabet.Navigation.qwerty
   /// `[app] keyboard_layout`'s reference table, or nil while keys read as
   /// typed. Set only by `KeyboardLayoutMonitor`; the key path reads it once
   /// per key (`keyCharacters(for:)`).
@@ -284,9 +306,11 @@ final class OverlayPanel: NSPanel {
   }
 
   /// Hide the mouse cursor while hint labels own the keys, so it can't obscure
-  /// a chip or distract from picking one. Pointer mode is the exception — the
-  /// cursor is its interface, and so is a cursor-following grid. A projection
-  /// of `inputMode` and `hintKeyRoute`.
+  /// a chip or distract from picking one. It comes back when the pointer
+  /// moves; ending the hints does not reshow it. Pointer mode is the
+  /// exception — the cursor is its interface, and so is a cursor-following
+  /// grid — and shows it at once. A projection of `inputMode` and
+  /// `hintKeyRoute`. Hiding from the background needs `BackgroundCursor`.
   var hintCursorShouldHide: Bool { inputMode == .hints && !hintKeyRoute.showsCursor }
 
   /// Apply `hintCursorShouldHide` once, at the end of the current turn: routing
@@ -298,21 +322,34 @@ final class OverlayPanel: NSPanel {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.cursorVisibilityUpdateScheduled = false
-      if self.hintCursorShouldHide { self.hideHintCursor() } else { self.showHintCursor() }
+      if self.hintCursorShouldHide {
+        self.hideHintCursor()
+      } else if self.inputMode == .hints, self.hintKeyRoute.showsCursor {
+        self.showHintCursor()
+      } else {
+        // The hints are gone: the pointer reappears when it moves.
+        self.hintCursorHidden = false
+      }
     }
   }
   private var cursorVisibilityUpdateScheduled = false
-  /// Guards the ref-counted `CGDisplayHideCursor`/`CGDisplayShowCursor` so the
-  /// cursor can never get stuck hidden across repeated hint renders.
+  /// Hides until the pointer moves, or shows it at once. Tests replace this so
+  /// a suite never hides the user's cursor.
+  static var hintCursorVisibility: (Bool) -> Void = { hideUntilMouseMoves in
+    NSCursor.setHiddenUntilMouseMoves(hideUntilMouseMoves)
+  }
+  /// True while this hint session has asked for the cursor to stay hidden. A
+  /// mouse move reveals it on its own; a route that steers the pointer shows
+  /// it at once. Cleared when the session ends, so the next one hides again.
   private var hintCursorHidden = false
   private func hideHintCursor() {
     guard !hintCursorHidden else { return }
-    CGDisplayHideCursor(CGMainDisplayID())
+    Self.hintCursorVisibility(true)
     hintCursorHidden = true
   }
   private func showHintCursor() {
     guard hintCursorHidden else { return }
-    CGDisplayShowCursor(CGMainDisplayID())
+    Self.hintCursorVisibility(false)
     hintCursorHidden = false
   }
   var normalModePending: String = "" {
@@ -332,6 +369,34 @@ final class OverlayPanel: NSPanel {
   }
   var normalModeRepeatAnchorUpdatedAt: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
+  var hyperModeMappings: CompiledMappings = CompiledMappings()
+  /// The HYPER hold as one value (`HyperHoldState`); the properties below
+  /// are its fields, so the mode transition resets them together.
+  var hyperHold = HyperHoldState()
+  var hyperPending: String {
+    get { hyperHold.pending }
+    set { hyperHold.pending = newValue }
+  }
+  var hyperPendingUpdatedAt: Date? {
+    get { hyperHold.pendingUpdatedAt }
+    set { hyperHold.pendingUpdatedAt = newValue }
+  }
+  var leaderFallbackPending: String? {
+    get { hyperHold.fallbackPending }
+    set { hyperHold.fallbackPending = newValue }
+  }
+  var leaderFallbackUpdatedAt: Date? {
+    get { hyperHold.fallbackUpdatedAt }
+    set { hyperHold.fallbackUpdatedAt = newValue }
+  }
+  var leaderHold: LeaderHold {
+    get { hyperHold.leaderHold }
+    set { hyperHold.leaderHold = newValue }
+  }
+  var hyperHoldWatch: HyperHoldWatch {
+    get { hyperHold.watch }
+    set { hyperHold.watch = newValue }
+  }
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
@@ -395,7 +460,7 @@ final class OverlayPanel: NSPanel {
 
   static let defaultNotchWidth: CGFloat = 185
 
-  private static var snapshotLock = os_unfair_lock_s()
+  private static let snapshotLock = OSAllocatedUnfairLock()
   private static var cachedSnapshot: ScreenSnapshot?
   /// Native menu bar heights per display. They change only with the display
   /// topology, so a Space switch or wake rebuilds the snapshot from these
@@ -403,16 +468,16 @@ final class OverlayPanel: NSPanel {
   private static var cachedNativeMenuBarHeights: [CGDirectDisplayID: CGFloat]?
 
   static func currentScreenSnapshot() -> ScreenSnapshot {
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     if let cached = cachedSnapshot {
-      os_unfair_lock_unlock(&snapshotLock)
+      snapshotLock.unlock()
       return cached
     }
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     let snapshot = buildScreenSnapshot()
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     cachedSnapshot = snapshot
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     return snapshot
   }
 
@@ -421,19 +486,19 @@ final class OverlayPanel: NSPanel {
   private(set) static var screenSnapshotRevision: UInt64 = 0
 
   static func invalidateScreenSnapshot(remeasuringNativeMenuBars: Bool = false) {
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     cachedSnapshot = nil
     if remeasuringNativeMenuBars { cachedNativeMenuBarHeights = nil }
     screenSnapshotRevision &+= 1
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
   }
 
   /// Re-read every display's native menu bar, invalidating the snapshot only
   /// when a height moved. Returns whether one did. Main thread.
   static func remeasureNativeMenuBars() -> Bool {
     let measured = measureNativeMenuBarHeights()
-    os_unfair_lock_lock(&snapshotLock)
-    defer { os_unfair_lock_unlock(&snapshotLock) }
+    snapshotLock.lock()
+    defer { snapshotLock.unlock() }
     guard measured != cachedNativeMenuBarHeights else { return false }
     cachedNativeMenuBarHeights = measured
     cachedSnapshot = nil
@@ -442,14 +507,14 @@ final class OverlayPanel: NSPanel {
   }
 
   private static func nativeMenuBarHeightsByDisplay() -> [CGDirectDisplayID: CGFloat] {
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     let cached = cachedNativeMenuBarHeights
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     if let cached { return cached }
     let measured = measureNativeMenuBarHeights()
-    os_unfair_lock_lock(&snapshotLock)
+    snapshotLock.lock()
     cachedNativeMenuBarHeights = measured
-    os_unfair_lock_unlock(&snapshotLock)
+    snapshotLock.unlock()
     return measured
   }
 
@@ -840,9 +905,8 @@ final class OverlayPanel: NSPanel {
   /// distinguish nil-cached from absent-from-cache.
   ///
   /// Cache is keyed on the *normalised* hex (whitespace trimmed,
-  /// leading `#` removed, lowercased). The previous version keyed on
-  /// the raw input, so `"#FFAA00"` and `" #ffaa00 "` got separate
-  /// entries and the per-frame parse ran on every variant.
+  /// leading `#` removed, lowercased), so `"#FFAA00"` and `" #ffaa00 "`
+  /// share one entry and one parse.
   private var colorCache: [String: NSColor] = [:]
   private static let parseFailureSentinel = NSColor.clear
 
@@ -892,11 +956,25 @@ protocol OverlayCoordinator: AnyObject {
   /// One keystroke of the `--search` sub-state. Only called while
   /// `hintKeyRoute` is `.search`.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
+  /// One keystroke of `mouse_bigram` while the search letter is being typed.
+  func overlayDidBigram(_ command: HintBigramCommand)
+  /// Escape is left to the hint interpreters. A leader press or a mapping
+  /// that enters another mode ends the EasyMotion jump and runs that mode.
+  /// False when this key still belongs to the jump.
+  func overlayEndsBigramCapture(for event: NSEvent) -> Bool
   /// One keystroke of the mouse grid. Only called while `hintKeyRoute` is
   /// `.grid`.
   func overlayDidGrid(_ command: MouseGridKeyCommand)
+  /// The answer to the question on screen. Only called while `hintKeyRoute`
+  /// is `.confirmation`; every keystroke answers, most with `false`.
+  func overlayDidConfirm(accepted: Bool)
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
+  /// Leader key-down on the key-window fallback. The tap path does not come
+  /// through the panel. True when the key was consumed as the hyper hold.
+  func handleLeaderHoldKeyDown(_ event: NSEvent) -> Bool
+  /// Leader key-up on the key-window fallback. True when it closed a hold.
+  func handleLeaderKeyUp(_ event: NSEvent) -> Bool
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
@@ -912,4 +990,8 @@ protocol OverlayCoordinator: AnyObject {
   func overlayExpandFlashlightAlias(
     _ text: String, cursorIndex: Int
   ) -> (text: String, cursorIndex: Int)?
+}
+
+extension OverlayCoordinator {
+  func overlayEndsBigramCapture(for event: NSEvent) -> Bool { false }
 }

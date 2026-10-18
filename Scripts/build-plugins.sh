@@ -7,7 +7,7 @@ set -euo pipefail
 #
 # All build artifacts land under build/plugin-target (never inside the
 # watched plugin trees, so the dev file-watcher never sees intermediate
-# files). Rust is rustup-managed for its multi-target universal builds.
+# files). The repository pins Rust through mise.
 #
 # Usage: build-plugins.sh [dev|release] [id…]
 #   dev       — native-arch `plugin-dev` build, signed with the stable dev
@@ -82,15 +82,15 @@ echo "==> Building ${#build_dirs[@]} compiled plugin(s) of ${#plugin_dirs[@]} se
 # Rust plugins are hermetic standalone crates — one cargo invocation per dir.
 # The shared CARGO_TARGET_DIR still dedupes SDK/dep artifacts across crates
 # (cargo keys compiled artifacts by package-id + metadata hash). Release
-# builds run --locked so a stale or missing committed Cargo.lock fails
-# loudly; dev builds may refresh a lock during the hot loop (commit it).
+# builds use committed Cargo.lock files. Update those locks deliberately with
+# `cargo update` when changing dependencies.
 for dir in "${build_dirs[@]}"; do
   if [[ "$MODE" == "release" ]]; then
     cargo build --manifest-path "$dir/Cargo.toml" --release --locked \
       --target x86_64-apple-darwin \
       --target aarch64-apple-darwin
   else
-    cargo build --manifest-path "$dir/Cargo.toml" --profile plugin-dev
+    cargo build --manifest-path "$dir/Cargo.toml" --profile plugin-dev --locked
   fi
 done
 

@@ -13,6 +13,29 @@ final class PreparedModelSchedulingTests: XCTestCase {
       debounceMs: 80, minimumIntervalMs: 2500, freshnessMs: 1500, maintenanceLeadMs: 250)
   }
 
+  /// A waiter is a promise: the one a newer activation displaces, and the
+  /// ones cancelled with their app's refresh work, are handed back to be
+  /// completed with nil, never dropped.
+  func testDisplacedAndCancelledWaitersCompleteOnceWithNil() {
+    var waiters = PreparedModelWaiters()
+    var completed: [String] = []
+    let waiter = { (name: String) -> PreparedModelWaiters.Waiter in
+      { model in completed.append("\(name):\(model == nil ? "nil" : "model")") }
+    }
+    XCTAssertNil(waiters.park(waiter("a"), pid: 1))
+    let displaced = waiters.park(waiter("b"), pid: 1)
+    displaced?(nil)
+    XCTAssertEqual(completed, ["a:nil"], "the displaced waiter is returned, not dropped")
+    waiters.park(waiter("c"), pid: 2)?(nil)
+    XCTAssertEqual(completed, ["a:nil"], "an empty slot displaces nothing")
+    waiters.take(pid: 1)?(nil)
+    XCTAssertEqual(completed, ["a:nil", "b:nil"])
+    XCTAssertNil(waiters.take(pid: 1), "taken once")
+    for cancelled in waiters.takeAll() { cancelled(nil) }
+    XCTAssertEqual(completed, ["a:nil", "b:nil", "c:nil"])
+    XCTAssertTrue(waiters.isEmpty)
+  }
+
   func testCancelledWakeCannotConsumeRearmedRefresh() throws {
     var clock = Clock()
     var state = scheduler()

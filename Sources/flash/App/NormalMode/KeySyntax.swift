@@ -105,7 +105,10 @@ extension NormalModeInterpreter {
   /// Map an `<name>` payload to the interpreter's internal token.
   /// `leader` stays as the `<leader>` placeholder for late
   /// substitution. Single bare-allowed characters are a literal
-  /// alias (so `<a>` is identical to bare `a`).
+  /// alias (so `<a>` is identical to bare `a`). A named key has one
+  /// atom whichever alias spelled it (`<esc>` and `<escape>` are both
+  /// `escape`): the atom the interpreter emits for the physical key
+  /// (`namedKeyAtom`), so a mapping can never miss its key by spelling.
   static func translateNamedKey(_ name: String) -> String? {
     if name == "leader" { return "<leader>" }
     if name.count == 1, let ch = name.first, isBareKeyChar(ch) {
@@ -114,8 +117,18 @@ extension NormalModeInterpreter {
     if let punct = punctuationCharacter(for: name) {
       return String(punct)
     }
-    return Self.namedKeyAliases.contains(name) ? name : nil
+    guard Self.namedKeyAliases.contains(name) else { return nil }
+    return Self.canonicalNamedKeys[name] ?? name
   }
+
+  /// Alias → the atom it stands for; names absent here are already
+  /// canonical (`HotkeySyntax.canonicalKeyName` spells them the same way).
+  private static let canonicalNamedKeys: [String: String] = [
+    "esc": "escape",
+    "enter": "return",
+    "backspace": "delete",
+    "forward_delete": "delete_forward",
+  ]
 
   /// Reverse of `translateNamedKey` for help-text formatting. Returns
   /// the user-facing fullname surrounded by `<>`, or nil for ordinary

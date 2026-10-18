@@ -343,7 +343,8 @@ private func residentClickHints(
   in state: [String: Any], surface: ResidentHintSurface
 ) throws -> [ResidentHint]? {
   guard let command = state["hint_command"] as? String, command.hasPrefix("click("),
-    let overlay = state["overlay"] as? String, overlay.hasSuffix(".hints)"),
+    // `overlay` is `String(describing:)` of the panel's `OverlayInputMode`.
+    let overlay = state["overlay"] as? String, overlay == "hints",
     state["activation_in_flight"] as? Bool == false,
     let values = state["hints"] as? [[String: Any]]
   else { return nil }

@@ -39,7 +39,10 @@ final class WindowAutomationTests: XCTestCase {
   func testDirectionalVerbRequiresValidDirection() {
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "window_focus", "--direction=left"])?.command,
-      .focusWindow(.left))
+      .focusWindow(.direction(.left)))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window_focus", "--direction=behind"])?.command,
+      .focusWindow(.cycle(.behind)))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "window_focus"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "window_focus", "--direction=diagonal"]))
   }

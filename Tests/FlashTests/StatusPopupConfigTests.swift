@@ -118,33 +118,6 @@ final class StatusPopupConfigTests: XCTestCase {
     XCTAssertEqual(toText.textPopups["system"]?.template, "A document")
   }
 
-  func testRetiredPopupTablesAndKeysPointAtPopup() {
-    let config = ConfigLoader.parse(
-      """
-      [statusbar]
-      popup_fg = "#D8DEE9"
-      popup_max_width = 480
-
-      [statusbar.popup]
-      date = "#{flash.calendar}"
-
-      [terminal.feed]
-      command = ["newsboat"]
-      """)
-    let messages = config.diagnostics.map(\.message)
-    XCTAssertEqual(
-      Set(messages),
-      [
-        "statusbar.popup_fg is not read; set fg in [popup]",
-        "statusbar.popup_max_width is not read; set max_width in [popup]",
-        "statusbar.popup.date is not read; declare it as [popup.date] with text = \"…\"",
-        "[terminal.feed] is not read; declare it as [popup.feed] with command = [...] "
-          + "(cwd, env, size = \"COLUMNSxROWS\" and persistent are its other keys)",
-      ])
-    XCTAssertTrue(config.diagnostics.allSatisfy { $0.location != nil }, "\(config.diagnostics)")
-    XCTAssertEqual(Set(config.popups.keys), ["terminal"])
-  }
-
   func testLaterGlobalDefaultsApplyToInheritedSources() {
     let config = ConfigLoader.parseLayers([
       .init(text: "[statusbar.sources.clock]\ncommand = [\"date\"]"),
@@ -215,5 +188,23 @@ final class StatusPopupConfigTests: XCTestCase {
       """)
     XCTAssertTrue(hidden.prewarmedPopupNames.isEmpty, "a hidden bar opens nothing")
     XCTAssertTrue(Config().prewarmedPopupNames.isEmpty, "nothing maps the shell by default")
+  }
+
+  func testAPopupThatReadsTheHoveredLinkIsNotPrewarmed() {
+    let config = ConfigLoader.parse(
+      """
+      [statusbar]
+      enabled = true
+      template = "#[popup=feed]aggr#[nopopup] #[popup=feed-article]headline#[nopopup]"
+      [popup.feed]
+      command = ["newsboat"]
+      persistent = true
+      [popup.feed-article]
+      command = ["newsboat-article", "$FLASH_STATUS_LINK"]
+      """)
+    XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
+    XCTAssertTrue(config.referencedPopupNames.contains("feed-article"))
+    XCTAssertEqual(config.prewarmedPopupNames, [])
+    XCTAssertTrue(config.terminalPopups["feed-article"]?.readsHoveredLink == true)
   }
 }

@@ -33,13 +33,15 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertEqual(selected.count, 1)
   }
 
-  func testPopupClicksPreserveLinksAndAllowOptionToFocus() throws {
+  func testLeftClickDoesNotPinPopupWithoutLink() throws {
     let view = StatusBarClickView(frame: CGRect(x: 0, y: 0, width: 200, height: 25))
     view.popups = [.init(rect: view.bounds, name: "article", content: "Preview")]
     var selected: [String] = []
+    var actions: [String] = []
     view.onPopupClick = { popup, _ in
       selected.append(popup.name)
     }
+    view.onStatusBarAction = { actions.append($0) }
     func click(_ modifiers: NSEvent.ModifierFlags, upX: CGFloat = 30) throws {
       let down = try XCTUnwrap(
         NSEvent.mouseEvent(
@@ -53,15 +55,17 @@ final class StatusBarHoverTests: XCTestCase {
       view.mouseUp(with: up)
     }
     try click([])
-    XCTAssertEqual(selected, ["article"])
-    view.links = [(view.bounds, URL(string: "https://example.com/article")!)]
+    XCTAssertTrue(selected.isEmpty)
+    XCTAssertTrue(actions.isEmpty)
+    view.links = [
+      (view.bounds, try XCTUnwrap(FlashStatusBarRenderer.rangeActionURL(name: "open-article")))
+    ]
     try click(.option)
-    XCTAssertEqual(selected, ["article", "article"])
+    XCTAssertTrue(selected.isEmpty)
+    XCTAssertEqual(actions, ["open-article"])
     try click(.option, upX: 50)
-    XCTAssertEqual(selected.count, 2, "Dragging must not focus a popup")
-    XCTAssertFalse(StatusBarClickView.focusesPopup(overLink: true, modifiers: []))
-    XCTAssertTrue(StatusBarClickView.focusesPopup(overLink: false, modifiers: []))
-    XCTAssertTrue(StatusBarClickView.focusesPopup(overLink: true, modifiers: .option))
+    XCTAssertTrue(selected.isEmpty, "Dragging must not focus a popup")
+    XCTAssertEqual(actions, ["open-article"], "Dragging must not activate a link")
   }
 
   func testConfiguredLeftClickActionTakesPrecedenceWhileRightClickPins() throws {
@@ -199,7 +203,7 @@ final class StatusBarHoverTests: XCTestCase {
       unionFrame: screen, mainFrame: screen, mainScale: 1, mainVisibleFrame: screen,
       nativeStatusBarFallbackHeight: 0)
     var events: [String] = []
-    panel.statusBarTerminalPrepareHandler = { name in
+    panel.statusBarTerminalPrepareHandler = { name, _ in
       events.append("prepare " + name)
       return true
     }
@@ -436,7 +440,7 @@ final class StatusBarHoverTests: XCTestCase {
       panel.hideStatusBarPopup()
     }
     let previews = PreviewRecorder()
-    panel.statusBarTerminalPrepareHandler = { name in
+    panel.statusBarTerminalPrepareHandler = { name, _ in
       previews.names.append(name)
       return false
     }
@@ -520,12 +524,52 @@ final class StatusBarHoverTests: XCTestCase {
 
     panel.statusBarTerminalNeedsSpawnHandler = { _ in true }
     try bar.hover(at: edge)
-    XCTAssertEqual(panel.statusBarHoverDwellName, "feed")
+    XCTAssertEqual(panel.statusBarSpawnDwell.pendingName, "feed")
 
     panel.nativeMenuBarRevealDidChange(true, pointer: edge)
-    XCTAssertNil(panel.statusBarHoverDwellName, "A confirmed reveal drops the spawn dwell")
-    XCTAssertNil(panel.statusBarHoverDwellWork)
+    XCTAssertNil(panel.statusBarSpawnDwell.pendingName, "A confirmed reveal drops the spawn dwell")
     XCTAssertEqual(bar.surface.hoverHighlight.opacity, 0, "and clears the wash")
+  }
+
+  /// A terminal popup with no process waits out the hover dwell before its
+  /// child is forked. Every further pointer move on the same span while that
+  /// dwell is pending keeps waiting: the second move must not fork at once,
+  /// or a sweep across the bar spawns one child per span after all.
+  func testRepeatedMovesOnTheSameSpanWaitOutTheDwell() throws {
+    let bar = try makeHoverBar()
+    let panel = bar.panel
+    panel.statusBarTerminalNeedsSpawnHandler = { _ in true }
+    let point = CGPoint(x: bar.popup.rect.midX, y: bar.popup.rect.midY)
+    try bar.hover(at: point)
+    try bar.hover(at: CGPoint(x: point.x + 1, y: point.y))
+    try bar.hover(at: point)
+    XCTAssertEqual(bar.previews(), [], "nothing is prepared before the dwell ends")
+    XCTAssertEqual(panel.statusBarSpawnDwell.pendingName, "feed")
+  }
+
+  /// A verdict or a stop that a probe tick queued belongs to the tracking
+  /// cycle it was armed under. A cycle started since drops it: a pointer that
+  /// re-entered the band keeps its probe, and a stale reveal cannot leave the
+  /// bar yielded with no probe running to fold it.
+  func testRevealProbeVerdictsBelongToTheirTrackingCycle() {
+    let panel = OverlayPanel()
+    defer { panel.stopMenuBarRevealTracking() }
+    panel.startMenuBarRevealTracking()
+    let first = panel.menuBarRevealGeneration
+    panel.stopMenuBarRevealTracking()
+    panel.startMenuBarRevealTracking()
+    let second = panel.menuBarRevealGeneration
+    XCTAssertNotEqual(second, first)
+    panel.stopMenuBarRevealTracking(ifGeneration: first)
+    XCTAssertTrue(panel.menuBarRevealProbeArmed, "a stop from the old cycle is dropped")
+    panel.nativeMenuBarRevealDidChange(true, generation: first)
+    XCTAssertFalse(
+      panel.statusBarHover.nativeMenuBarRevealed, "a verdict from the old cycle is dropped")
+    panel.nativeMenuBarRevealDidChange(true, generation: second)
+    XCTAssertTrue(panel.statusBarHover.nativeMenuBarRevealed)
+    panel.stopMenuBarRevealTracking(ifGeneration: second)
+    XCTAssertFalse(panel.menuBarRevealProbeArmed, "the current cycle's stop stops")
+    XCTAssertFalse(panel.statusBarHover.nativeMenuBarRevealed)
   }
 
   func testHoverEligibilityFollowsTheReveal() {

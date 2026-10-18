@@ -178,7 +178,7 @@ impl FlashPlugin for Memory {
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
             // Unobserved, nothing samples between commands: sample first.
-            "" if !self.cadences.observed() => {
+            "show" if !self.cadences.observed() => {
                 refresh_and_publish(
                     &ctx,
                     &self.state,
@@ -188,7 +188,7 @@ impl FlashPlugin for Memory {
                 .await;
                 details_response(current_status(&ctx, &self.state))
             }
-            "" => details_response(current_status(&ctx, &self.state)),
+            "show" => details_response(current_status(&ctx, &self.state)),
             "refresh" => {
                 refresh_and_publish(
                     &ctx,
@@ -324,10 +324,11 @@ fn render_status(
     summary_mode: SummaryMode,
 ) -> Status {
     let percent = snapshot.occupied_percent();
-    let label = Markup::colored("MEM", Color::TITLE)
+    // The template owns the name and the width (`#[label]MEM #[default]#{p-3:…}`).
+    let label = Markup::text(percent2(percent).trim());
+    let mut summary = Markup::colored("MEM", Color::TITLE)
         + " "
         + Markup::colored(percent2(percent), Color::MUTED);
-    let mut summary = label.clone();
     if summary_mode == SummaryMode::Full && !history.is_empty() {
         summary += " ";
         summary += sparkline_percent(history);
@@ -425,8 +426,8 @@ mod tests {
     #[test]
     fn label_keeps_percent_width_through_full_utilization_without_popup_markup() {
         for (occupied, expected) in [
-            (0, " 0%"),
-            (90, " 9%"),
+            (0, "0%"),
+            (90, "9%"),
             (100, "10%"),
             (999, "99%"),
             (1000, "99%"),
@@ -437,10 +438,8 @@ mod tests {
                 SummaryMode::Full,
             );
             let [(_, summary), (_, label), ..] = status.segments();
-            assert_eq!(
-                label.render().unwrap(),
-                format!("#[fg=#EBCB8B]MEM#[default] #[fg=colour245]{expected}#[default]")
-            );
+            assert_eq!(label.render().unwrap(), expected);
+            assert!(!label.render().unwrap().contains("#["));
             assert!(summary.render().unwrap().contains("popup="));
         }
     }
@@ -554,10 +553,7 @@ mod tests {
             summary.ends_with("]#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default]#[nopopup]")
         );
         assert!(!summary.contains("▅▆"));
-        assert_eq!(
-            label.render().unwrap(),
-            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default]"
-        );
+        assert_eq!(label.render().unwrap(), "75%");
         assert_eq!(
             render_status(&snapshot, &history, SummaryMode::Full)
                 .summary

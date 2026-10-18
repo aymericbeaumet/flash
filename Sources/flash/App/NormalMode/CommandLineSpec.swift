@@ -523,16 +523,14 @@ extension NormalModeDispatcher {
 
     if body.first(where: { $0.isWhitespace }) == nil {
       let query = body
-      var items = topLevelCompletions(pluginCommands: pluginCommands)
+      let top = topLevelCompletions(pluginCommands: pluginCommands)
+      var items = top.items
       if !query.isEmpty {
         let foldedQuery = query.folding(
           options: [.caseInsensitive, .diacriticInsensitive],
           locale: .current)
-        items = items.filter {
-          $0.label.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: .current
-          ).hasPrefix(foldedQuery)
+        items = zip(top.items, top.foldedLabels).compactMap { item, folded in
+          folded.hasPrefix(foldedQuery) ? item : nil
         }
       }
       return CommandLineCompletionContext(prefix: ":", query: query, items: items)
@@ -601,7 +599,34 @@ extension NormalModeDispatcher {
     return query.count >= primary.minimumLength
   }
 
-  private static func topLevelCompletions(pluginCommands: [String])
+  /// The `:` completion list with each label folded for prefix matching,
+  /// built once per plugin command inventory: the list is static for a
+  /// session, and every keystroke on the command line filters it.
+  private struct TopLevelCompletions {
+    var pluginCommands: [String]
+    var items: [CommandLineCompletion]
+    var foldedLabels: [String]
+  }
+  private static let topLevelCompletionsLock = NSLock()
+  private static var topLevelCompletionsCache: TopLevelCompletions?
+
+  private static func topLevelCompletions(pluginCommands: [String]) -> TopLevelCompletions {
+    topLevelCompletionsLock.lock()
+    defer { topLevelCompletionsLock.unlock() }
+    if let cached = topLevelCompletionsCache, cached.pluginCommands == pluginCommands {
+      return cached
+    }
+    let items = buildTopLevelCompletions(pluginCommands: pluginCommands)
+    let built = TopLevelCompletions(
+      pluginCommands: pluginCommands, items: items,
+      foldedLabels: items.map {
+        $0.label.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      })
+    topLevelCompletionsCache = built
+    return built
+  }
+
+  private static func buildTopLevelCompletions(pluginCommands: [String])
     -> [CommandLineCompletion]
   {
     var items: [CommandLineCompletion] = []

@@ -1,6 +1,6 @@
 # Status format language
 
-Flash uses the tmux **3.7c** format and style language, with values supplied by
+Flash uses the tmux **3.8** format and style language, with values supplied by
 Flash. `statusbar.template`, text [popups](popups.md) and
 [desktop widgets](widgets.md) share one compiler. There
 is no tmux runtime dependency, tmux configuration import, or implicit connection
@@ -40,6 +40,11 @@ sign in authored templates; text inserted through an ordinary value is not
 time-expanded. This also matters when authoring percent-encoded inline popup
 bodies directly in a template. Plugin-supplied inline bodies arrive as values.
 
+Time is applied to the compiled format, not its source: a template compiles
+once, and each clock tick runs `strftime` over its text nodes and the text of
+its `#()` commands, never the lexer or parser. A job is keyed by the command
+as written in the template, and its output is never time-expanded.
+
 Configuration supplies no tmux user options (`@name`): there is no
 `[statusbar.options]` or `[widgets.<name>.options]` table, and a format that
 reads `#{@name}` gets an empty value, as with any unset tmux option.
@@ -47,7 +52,7 @@ reads `#{@name}` gets an empty value, as with any unset tmux option.
 ## Native language coverage
 
 The compatibility baseline follows the `format.c`, `style.c`, `format-draw.c`,
-`colour.c`, and `utf8.c` implementations at the upstream `3.7c` tag. The matrix
+`colour.c`, and `utf8.c` implementations at the upstream `3.8` tag. The matrix
 covers the parser branches and their evaluation/drawing paths:
 
 | Family | Native syntax and behavior | Verification |
@@ -65,8 +70,8 @@ covers the parser branches and their evaluation/drawing paths:
 | Shell output | `#(command)`, expanded command arguments, prior/latest line, output re-expansion with nested jobs disabled | Evaluator tests and owned-process lifecycle tests |
 | Appearance | Native foreground/background/underline colors, ANSI/X11/RGB palette; all native attributes and compound attribute sets | Live drawing oracle and typed-run tests |
 | Style state | `default`, one saved `push-default`/`pop-default`/`set-default`, attribute negation, transactional invalid-marker rollback, `ignore` | Live drawing oracle |
-| Drawing | Left/centre/right/absolute-centre, fills, lists/focus/markers, native ranges, wide-cell clipping and combined grid characters | Live grid oracle at several widths and production surface tests |
-| Width/pad styles | Native `width=` and `pad=` parse and retain their state; tmux 3.7c status drawing does not consume these fields | Explicit inert-style oracle cases |
+| Drawing | Left/centre/right/notch, fills, lists/focus/markers, native ranges, wide-cell clipping and combined grid characters | Live grid oracle at several widths and production surface tests |
+| Width/pad styles | Native `width=` and `pad=` parse and retain their state; tmux 3.8 status drawing does not consume these fields | Explicit inert-style oracle cases |
 
 A positive `p5` pads the value on its **right**; a negative `p-5` pads on its
 left. `n:` measures UTF-8 bytes and `w:` measures native format cells, excluding
@@ -101,8 +106,9 @@ available through ordinary lookup.
 focus, so the keyboard tap sees no keys and a hint session reads keys through
 the key window) and empty otherwise:
 `#{?flash.secure_input,#[fg=red]SECURE#[default] ,}`. It is refreshed when the
-keyboard tap reads it for a key and when a hint session starts; nothing polls
-it.
+keyboard tap reads it for a key, when a hint session starts, and by the
+secure-input poll. A stuck hold is released automatically; the value stays
+`1` until macOS clears the flag.
 
 Flash has no implicit tmux session, window, pane, client, or pane-history
 inventory. Their missing values expand to empty strings, loops over absent
@@ -160,7 +166,7 @@ The bar and desktop widgets share one set of sources and jobs: a source or job
 several surfaces show runs once, a job at the fastest of their intervals. Changed/removed jobs
 are invalidated before their processes are stopped in one bounded batch.
 
-The additional style tokens are `pill/nopill`, `shrink/noshrink`,
+The additional style tokens are `label/nolabel`, `pill/nopill`, `shrink/noshrink`,
 `cyc/nocyc`, `breathing/nobreathing`, `link=URL/nolink`,
 `popup=name/nopopup` or `popup=inline:<percent-encoded-rich-text>`, and the
 numeric drawings `meter=W[/MAX]/nometer` and `spark[=MIN/MAX]/nospark`
@@ -169,19 +175,23 @@ Native `range=user|name` selects a `[statusbar.click]` action. The status render
 reserves explicit mode-pill space and notch clearance, resolves overflow (see
 [Overflow and `#[shrink]`](#overflow-and-shrink)), then draws the native cell
 layout. The feed marks only its title `#[shrink]`, so it folds with an ellipsis
-while the domain and outbound arrow stay visible. An absolute-centre component
-owns its own columns plus a small gutter, and the side lanes stop `[statusbar]
-notch_margin` short of them, the same points they clear a real housing by. That
-reservation is drawn as a recessed notch — the bar fill sunk slightly — tracing
-the hardware outline: widest flush with the top edge, flaring inward through the
-top corners rather than meeting the bezel square, straight down the sides, and
-rounded at the two bottom corners. It is never narrower than the real housing (a
-connected notched display's, else the 16-inch MacBook Pro's 185 pt, which is
-that widest measurement) and widens to hold a longer centred label. macOS
-publishes the notch rect but neither radius, so both are constants. A screen
-with a physical notch hides the centre and draws no recess, since the hardware
-already supplies the gap. A bar too narrow to hold both lanes and that
-reservation drops the reservation instead of erasing a lane. A lane re-budget
+while the domain and outbound arrow stay visible. `#[align=centre]` and
+`#[align=notch]` are the notch: one housing at the middle of the bar. The
+side lanes stop `[statusbar] notch_margin` short of it, and the label sits
+in a gutter inside it. That reservation is drawn as a recessed notch — the
+bar fill sunk slightly — tracing the hardware outline: widest flush with
+the top edge, flaring inward through the top corners rather than meeting
+the bezel square, straight down the sides, and rounded at the two bottom
+corners. It is the real housing's width (a connected notched display's,
+else the 16-inch MacBook Pro's 185 pt) and does not grow or move for a
+longer label or a wider side. macOS publishes the notch rect but neither
+radius, so both are constants. A screen with a physical notch hides the
+centred lane and draws no recess, since the hardware already supplies the
+gap. A bar too narrow to hold both lanes and the notch reservation drops
+the reservation instead of erasing a lane. A widget line still lays
+`#[align=centre]` out with tmux's rule, in the gap of that line.
+
+A lane re-budget
 that only contracts or clamps a carousel row keeps the row in place; the
 carousel pushes vertically only for a different article. These host surfaces
 do not alter format evaluation.
@@ -210,7 +220,9 @@ bounds the wash hugs, so it does what a physical click there does: a popup
 wrapping several links gets one hint per link and none on the space between
 them. Click and move hints (`f`, `mf`) label the same regions at the same
 points: a click follows a link or range, while a move, like a click on
-popup-only text, puts the pointer on the text and opens the popup it hovers. A metric or clock value changing in place crossfades over
+popup-only text, puts the pointer on the text and opens the popup it hovers.
+`cf` labels those regions and right-clicks, which pins the popup the way
+a physical right-click on the bar does. A metric or clock value changing in place crossfades over
 100 ms, short enough that a 1 Hz metric reads as a snap rather than a
 smear. A carousel article change is one vertical push over 450 ms: the old
 line moves a full line height up and fades out while the next rises the same
@@ -227,7 +239,7 @@ The bar, hit regions, and terminal document encoder consume the same typed runs.
 The status bar consumes the ordered typed format document through
 `StatusFormatLayout`. Its cells determine painted positions and native
 closed-range hit areas, including list focus/markers, fill colors, alignment
-clipping, and absolute-centre overlays. Flash resolves overflow before native
+clipping, and notch overlays. Flash resolves overflow before native
 drawing ([Overflow and `#[shrink]`](#overflow-and-shrink)), so native clipping
 applies only to what cannot give way further. The mode pill requires explicit
 `#[pill]` metadata. It keeps the
@@ -239,16 +251,18 @@ Pill backgrounds and interaction areas share the same geometry.
 Each display uses the same pooled layer renderer. Non-ASCII cells have
 independent origins, so font shaping cannot shift subsequent text or
 interaction rectangles away from native columns. Notched displays suppress
-centre content and clip other cells and hit areas around the notch margin.
+the notch lane and clip other cells and hit areas around the notch margin.
 Blink and breathing effects, carousel transitions, and in-place value
 crossfades run on Core Animation without a redraw timer.
 
 `monitor = "primary"` selects the display at desktop origin `(0, 0)`. Moving
 keyboard focus to another display does not move the bar or reserve status-bar
 space there. `monitor = "all"` draws a bar on every display. Use
-`#[align=absolute-centre]` for a label at the physical centre of the screen;
-native tmux `#[align=centre]` instead centres the space remaining between the
-left and right content, so unequal side widths shift that label.
+`#[align=centre]` or `#[align=notch]` for the notch, at the physical centre
+of the screen. tmux spells that lane `#[align=absolute-centre]`. On a
+display with no camera, the lane reserves the 16-inch housing and draws
+it as a recess. The housing stays at the middle of the bar: a wider side
+does not shift it, and a longer label is cut instead of widening it.
 
 ## Flash extensions
 
@@ -256,6 +270,15 @@ Flash adds meters, sparklines, and overflow control to the tmux language. Like
 `pill` or `popup=`, they are Flash-only style tokens, which tmux rejects as a
 malformed marker. Every other format evaluates as in tmux, which the pinned corpus
 verifies: `#{E:@name,a}` reads one option literally named `@name,a`.
+
+`#[label]` sets the foreground to the status-bar name colour (`#EBCB8B`, also
+`#[fg=label]`). `#[nolabel]` restores the current default foreground and leaves
+every other attribute alone. `#[default]` clears it with the rest of the
+appearance. A template can colour a name and leave the following value in the
+bar's ordinary foreground: `#[label]Cld#[default] #{flash.source.cld}`,
+`#[label]aggr#[default] #{flash.plugin.feed.label}`,
+`#[label]CPU#[default] #{p-3:flash.plugin.cpu.label}`. The source or plugin prints
+the value. The template owns the name, the colour, the width, the link, and the hover.
 
 ### Meters and sparklines
 
@@ -290,28 +313,31 @@ monospaced font draws every block glyph at one cell.
 
 ### Overflow and `#[shrink]`
 
-A bar wider than its screen gives way before native drawing. By default each
-section — the left lane, the centre or absolute centre, the right lane — is cut
-at its own end, with `…`. `#[shrink]` … `#[noshrink]` marks where to cut
-instead, in any section; unmarked text keeps its width until every marked span
-that could make room is down to its ellipsis:
+Each segment's width comes from the screen. `#[align=centre]` and
+`#[align=notch]` are the notch: the camera housing — the connected housing,
+otherwise the 16-inch housing (185 pt) — centred on the bar. A longer label
+does not widen it, and a wider side does not move it. The left and right
+segments then split the remaining width equally, so the two gaps beside the
+notch match. Padding sits inside those widths: the bar's edge inset at the
+outer edges, `notch_margin` on each side of the notch, and a two-column
+gutter inside the notch around the label. A physical notch hides that lane
+and the side segments stop the same margin short of the housing.
+
+Text wider than its segment is cut to fit. The left and the centre lose the
+end and finish with `…`. The right loses the start and begins with `…`.
+`#[shrink]` … `#[noshrink]` moves that cut onto the last shrink span in the
+segment, which ends with `…`, so the text after the span stays:
 
 ```text
-#[align=absolute-centre]#[shrink]#{flash.active_app_name}#[noshrink]
+#[align=centre]#[shrink]#{flash.active_app_name}#[noshrink]
 ```
 
-Both passes — the `#[shrink]` spans first, then the section tails — repeatedly
-narrow the widest span that relieves an overflow, ties in template order, each
-keeping at least one cell and ending in `…`. Mode pills and native list content
-are never cut. The constraints are the bar width, a physical notch, and the
-absolute centre's reservation: its content plus gutters, never narrower than
-the housing, centred on the bar, with each side lane ending `notch_margin` short
-of it. Narrowing the centre therefore frees a column for both side lanes, while
-narrowing a lane frees only that lane, so a centred label uses exactly the
-columns the lanes leave and needs no fixed `#{=/N/…:…}` width. A cut is always
-a prefix of the full text, so a re-budget never animates as a value change.
+Only once that span is down to the ellipsis does the segment fall back to its
+own edge. Mode pills and native list content are never cut. A cut replaces the
+tail (or, on the right, the head) of the full text, so a re-budget never
+animates as a value change.
 
-This is an extension rather than a tmux list: an absolute-centre `#[list=on]`
+This is an extension rather than a tmux list: a notch `#[list=on]`
 is trimmed against the full width and drawn over the side lanes, keeps the part
 around its focus rather than the head, and allows one list per line, so it
 cannot express "fit this label between the lanes".
@@ -354,17 +380,18 @@ drains at most 256 KiB before yielding its utility queue. Reload and quit
 terminate owned process groups with one bounded batch deadline and reap their
 leaders; every wait there ends on the kernel's exit events for each group's
 members (`ProcessExit`), so the grace period ends as soon as the groups leave
-and nothing sleeps between checks. Successful shell completion also terminates
-residual group children.
+and nothing sleeps between checks. A completed command's residual group
+children are terminated before its leader is reaped, while the leader still
+holds the group id.
 
-Unicode is pinned to **utf8proc 2.12.0 / Unicode 18.0**, with tmux 3.7c's width
+Unicode is pinned to **utf8proc 2.12.0 / Unicode 18.0**, with tmux 3.8's width
 overrides. Flash's data is modified into 482 compact non-unit width intervals,
 uses tmux's one-cell private-use rule, and applies the 162 tmux overrides first.
 This removes macOS-version-dependent `wcwidth` results. The source-data licenses
-are retained in [utf8proc-LICENSE](../Resources/utf8proc-LICENSE) and
-[tmux-LICENSE](../Resources/tmux-LICENSE), and accompany app builds.
+are retained in [utf8proc-LICENSE](https://github.com/aymericbeaumet/flash/blob/main/Resources/utf8proc-LICENSE) and
+[tmux-LICENSE](https://github.com/aymericbeaumet/flash/blob/main/Resources/tmux-LICENSE), and accompany app builds.
 
-The test-only oracle bootstrap pins tmux 3.7c and statically links utf8proc
+The test-only oracle bootstrap pins tmux 3.8 and statically links utf8proc
 2.12.0. Each oracle uses a disposable named socket with an empty tmux config;
 it does not inspect a user's live server or panes:
 
@@ -375,7 +402,7 @@ python3 Scripts/test-status-format-oracle.py
 swift test --filter 'FormatConformanceTests|FormatCommandJobTests|StatusFormatLayoutTests|NativeStatusBarSurfaceTests'
 ```
 
-`Tests/StatusFormatFixtures/tmux-3.7c.json` stores portable native expansion
+`Tests/StatusFormatFixtures/tmux-3.8.json` stores portable native expansion
 results. `Scripts/test-status-format-oracle.py --record` updates that corpus
 against the pinned binary. The drawing suite independently compares final text,
 cell positions, colors, and attributes against an isolated attached tmux client.

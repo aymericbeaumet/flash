@@ -158,7 +158,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
   private func makeProcess(
     _ fixture: PluginFixtureKit.Fixture,
     store: PluginCatalogStore? = nil,
-    statusObserved: Bool = true
+    statusObserved: Bool = true,
+    environment: FlashProcessEnvironment = .shared
   ) throws -> PluginProcess {
     let manifest = try PluginManifest.load(from: fixture.root)
     let process = PluginProcess(
@@ -167,9 +168,39 @@ final class PluginProcessLifecycleTests: XCTestCase {
       origin: .official,
       baseDataDir: fixture.baseDataDir,
       watchFiles: false,
-      statusObserved: statusObserved)
+      statusObserved: statusObserved,
+      environment: environment)
     process.catalogStore = store
     return process
+  }
+
+  /// A child inherits the environment in effect when it spawns, for its
+  /// whole life: a resident plugin started while the login shell is still
+  /// being read waits for it, then spawns once with the resolved `PATH`.
+  func testChildSpawnsOnlyOnceTheLoginEnvironmentResolved() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "envgate",
+      manifest: PluginFixtureKit.manifest(id: "envgate"),
+      script: PluginFixtureKit.script(prologue: #"printf '%s\n' "$PATH" >> "$D/path""#))
+    defer { fixture.cleanup() }
+    let release = DispatchSemaphore(value: 0)
+    let environment = FlashProcessEnvironment(seed: ["PATH": "/usr/bin:/bin"]) { _, _ in
+      release.wait()
+      return ["PATH": "/flash/resolved:/usr/bin:/bin"]
+    }
+    environment.refresh()
+    let process = try makeProcess(fixture, environment: environment)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    XCTAssertEqual(fixture.spawnCount(), 0, "no child before the environment resolved")
+    XCTAssertEqual(process.runtimeStateSnapshot(), .installing)
+    release.signal()
+    waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    let path = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("path"), encoding: .utf8)
+    XCTAssertTrue(path.hasPrefix("/flash/resolved:"), "the child got the resolved PATH: \(path)")
   }
 
   /// Shrinks the lifecycle seams for the duration of `body` and restores the
@@ -810,6 +841,41 @@ final class PluginProcessLifecycleTests: XCTestCase {
     }
   }
 
+  /// A second planned reload inside the grace window arms it again: a label
+  /// the newest replacement has not republished yet is not blanked by the
+  /// deadline the first reload armed.
+  func testASecondReloadInsideTheGraceArmsItAgain() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusrearm",
+      manifest: PluginFixtureKit.manifest(id: "statusrearm", extra: #""status": ["alpha"]"#),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let previousGrace = PluginProcess.statusReloadGraceSeconds
+    PluginProcess.statusReloadGraceSeconds = 2
+    defer { PluginProcess.statusReloadGraceSeconds = previousGrace }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait() }
+    process.start()
+    waitUntilTrue("initial startup") { process.runtimeStateSnapshot() == .running }
+    process.applyStatusSegments(["segments": ["alpha": "CPU 12%"]])
+    process.reload(reason: "plugins_reload")
+    waitUntilTrue("first reload finished") {
+      fixture.spawnCount() == 2 && process.runtimeStateSnapshot() == .running
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+    process.reload(reason: "plugins_reload")
+    waitUntilTrue("second reload finished") {
+      fixture.spawnCount() == 3 && process.runtimeStateSnapshot() == .running
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+    XCTAssertEqual(
+      process.statusBarInfo().statusSegments["alpha"], .text("CPU 12%"),
+      "the first reload's deadline has passed; the second one's has not")
+    waitUntilTrue("expires after the grace the second reload armed") {
+      process.statusBarInfo().statusSegments["alpha"] == nil
+    }
+  }
+
   func testRejectedReloadClearsRetainedStatusImmediately() throws {
     let fixture = try PluginFixtureKit.make(
       id: "statusfailed",
@@ -853,6 +919,67 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertLessThan(elapsed, 0.9, "stdin EOF alone must end a conformant plugin")
     XCTAssertEqual(process.runtimeStateSnapshot(), .stopped)
     waitUntilTrue("child reaped") { kill(pid_t(pid), 0) != 0 }
+  }
+
+  /// Where a `perform` goes is a function of the lifecycle state. A
+  /// definition not yet started only queues, even on demand: `start` spawns
+  /// the child for what waits by then, so a replacement published while its
+  /// predecessor still stops never runs beside it.
+  func testPerformRouteFollowsTheLifecycleState() {
+    typealias Lifecycle = PluginLifecycle
+    for onDemand in [false, true] {
+      XCTAssertEqual(Lifecycle.performRoute(state: .running, onDemand: onDemand), .dispatch)
+      XCTAssertEqual(Lifecycle.performRoute(state: .failed, onDemand: onDemand), .unhandled)
+      XCTAssertEqual(Lifecycle.performRoute(state: .stopped, onDemand: onDemand), .unhandled)
+      XCTAssertEqual(Lifecycle.performRoute(state: .initial, onDemand: onDemand), .wait)
+      XCTAssertEqual(Lifecycle.performRoute(state: .installing, onDemand: onDemand), .wait)
+      XCTAssertEqual(Lifecycle.performRoute(state: .launching, onDemand: onDemand), .wait)
+      XCTAssertEqual(Lifecycle.performRoute(state: .backoff, onDemand: onDemand), .wait)
+    }
+    XCTAssertEqual(Lifecycle.performRoute(state: .idle, onDemand: false), .wait)
+    XCTAssertEqual(Lifecycle.performRoute(state: .idle, onDemand: true), .waitAndActivate)
+  }
+
+  /// A status-bound plugin that stops being observed is torn down without
+  /// forgetting its failures: the toggle is not a user's reload, so a
+  /// crash-looping plugin parks on the same budget once it is shown again.
+  func testDeactivationKeepsTheFailureBudget() {
+    var lifecycle = PluginLifecycle()
+    let limit = 2
+    func step(_ event: PluginLifecycle.Event, at now: TimeInterval) -> [PluginLifecycle.Effect] {
+      lifecycle.transition(
+        event, now: now, restartLimit: limit, restartWindow: 300, restartDelay: { _ in 1 })
+    }
+    _ = step(.start(resident: false), at: 0)
+    XCTAssertEqual(step(.activate, at: 0), [.start(lifecycle.generation)])
+    for attempt in 0..<limit {
+      let token = lifecycle.generation
+      _ = step(.installed(token), at: TimeInterval(attempt))
+      _ = step(.initialized(token), at: TimeInterval(attempt))
+      XCTAssertEqual(
+        step(.interrupted(token), at: TimeInterval(attempt)),
+        [.teardown, .retry(token, 1)], "attempt \(attempt) still retries")
+      _ = step(.retry(token), at: TimeInterval(attempt))
+    }
+    XCTAssertEqual(step(.deactivate, at: 10), [.teardown])
+    XCTAssertEqual(lifecycle.state, .idle)
+    XCTAssertEqual(step(.activate, at: 11), [.start(lifecycle.generation)])
+    let token = lifecycle.generation
+    _ = step(.installed(token), at: 11)
+    _ = step(.initialized(token), at: 11)
+    XCTAssertEqual(
+      step(.interrupted(token), at: 12), [.teardown, .park],
+      "the budget survived the toggle, so the next failure parks")
+    XCTAssertEqual(lifecycle.state, .failed)
+
+    var reloaded = PluginLifecycle()
+    _ = reloaded.transition(
+      .start(resident: false), now: 0, restartLimit: limit, restartWindow: 300,
+      restartDelay: { _ in 1 })
+    XCTAssertEqual(
+      reloaded.transition(
+        .reload(resident: false), now: 0, restartLimit: limit, restartWindow: 300,
+        restartDelay: { _ in 1 }), [.teardown], "a reload still tears down to idle")
   }
 
   func testLingeringPluginIsKilledByEscalationWithinTwoSeconds() throws {

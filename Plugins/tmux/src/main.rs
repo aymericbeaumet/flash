@@ -2452,6 +2452,8 @@ struct Pane {
     top: i64,
     cols: i64,
     rows: i64,
+    border: String,
+    title: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2492,14 +2494,19 @@ impl HintContext {
 }
 
 fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
-    let (geometry, raw_context) = line.split_once(TMUX_FIELD_SEP)?;
+    let mut parts = line.splitn(3, TMUX_FIELD_SEP);
+    let geometry = parts.next()?;
+    let raw_context = parts.next()?;
+    let title = parts.next().unwrap_or("");
     if HintContext::parse(raw_context).as_ref() != Some(context) {
         return None;
     }
     let fields: Vec<_> = geometry.split_whitespace().collect();
-    if fields.len() != 5 {
-        return None;
-    }
+    let border = match fields.len() {
+        5 => "off",
+        6 => fields[5],
+        _ => return None,
+    };
     fields[0].strip_prefix('%')?.parse::<u64>().ok()?;
     Some(Pane {
         id: fields[0].to_string(),
@@ -2507,6 +2514,8 @@ fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
         top: fields[2].parse::<i64>().ok().filter(|value| *value >= 0)?,
         cols: fields[3].parse::<i64>().ok().filter(|value| *value > 0)?,
         rows: fields[4].parse::<i64>().ok().filter(|value| *value > 0)?,
+        border: border.to_string(),
+        title: title.to_string(),
     })
 }
 
@@ -2514,8 +2523,9 @@ fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
 // shape — collapsing this into a `BuildTargetArgs` struct would just rename
 // the same data without making the call sites clearer.
 //
-// Every tmux target is terminal content, so a primary click on any of them
-// hands the keyboard to the terminal and the host enters INSERT.
+// A pane, window or title is terminal content: a primary click hands the
+// keyboard to the terminal and the host enters INSERT. A link is navigation,
+// so that click stays in NORMAL.
 #[allow(clippy::too_many_arguments)]
 fn build_target(
     target_id: &str,
@@ -2531,7 +2541,7 @@ fn build_target(
     let target = JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
         .label(label)
-        .enters_insert_mode(true)
+        .enters_insert_mode(role != TERMINAL_LINK_ROLE)
         .pid(pid)
         .priority(priority);
     if role == TERMINAL_LINK_ROLE && is_url(label) {
@@ -2572,7 +2582,7 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}} #{{mouse}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{W:#{{window_index}} #{{window_id}};}}{TMUX_FIELD_SEP}#{{T:status-format[0]}}"
     );
     let pane_format = format!(
-        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}"
+        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}} #{{pane-border-status}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{T:pane-border-format}}"
     );
     let display_args = [
         "display-message",
@@ -2650,8 +2660,8 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     }
     let mut raw_links: Vec<RawLink> = Vec::new();
 
-    // Capture every pane concurrently: this used to be one awaited tmux
-    // subprocess per pane, strictly sequential, on the `f` hot path.
+    // Capture every pane concurrently: one subprocess per pane on the `f`
+    // hot path would otherwise run strictly in sequence.
     let capture_runner = if client.remote {
         PaneCaptureRunner::Remote(plugin.remote_config(&client.backend_id))
     } else {
@@ -2697,6 +2707,27 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
             )
             .context_id(&context_id),
         );
+
+        if let Some(row) =
+            status_hints::pane_title_row(&pane.border, top_offset, pane.top, pane.rows)
+            && (0..client_rows).contains(&row)
+            && let Some(placed) = status_hints::place_format_line(&pane.title, pane.cols as usize)
+        {
+            pane_targets.push(
+                build_target(
+                    &format!("tmux-{pid}-t{i}"),
+                    min_x + pad_x + (pane.left + placed.column as i64) as f64 * cell_w,
+                    min_y + win_h - pad_y - (row + 1) as f64 * cell_h,
+                    placed.width as f64 * cell_w,
+                    cell_h,
+                    "tmux-pane-title",
+                    &placed.text,
+                    pid,
+                    Priority::High,
+                )
+                .context_id(&context_id),
+            );
+        }
 
         let Some(raw) = captures[i].take() else {
             continue;
@@ -4381,29 +4412,16 @@ async fn tab_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
         .await,
     );
     let target = window_id.clone().unwrap_or_else(|| client.session.clone());
-    // Destructive kills always go through `confirm-before` on the client the
-    // user is looking at — matching the user's own prefix bindings (`bind &
-    // confirm-before … kill-window`), so a Flash-initiated close is never
-    // more dangerous than a tmux-native one. The command returns once the
-    // prompt is posted; the kill itself only runs on `y`.
-    // `-t` targets the client the user is looking at (`-c` is tmux's
-    // CONFIRM-KEY flag, not target-client); `-b` posts the prompt without
-    // blocking this invocation until the user answers.
-    let ok = run_tmux_for_client(
-        plugin,
-        client,
-        &[
-            "confirm-before",
-            "-b",
-            "-t",
-            &client.tty,
-            "-p",
-            "kill window \"#W\"? (y/n)",
-            &format!("kill-window -t {target}"),
-        ],
-    )
-    .await
-    .is_some();
+    // The kill runs straight away: the host already asked. A destructive
+    // action is gated by the manifest's `action_confirmations`, shown as
+    // Flash's own confirmation before the action reaches this plugin, so a
+    // Flash-initiated close is never more dangerous than the user's own
+    // `bind & confirm-before … kill-window`. A tmux-side `confirm-before`
+    // would ask a second time, on a prompt NORMAL mode's capture swallows
+    // the `y` for.
+    let args = kill_window_args(&target);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    let ok = run_tmux_for_client(plugin, client, &args).await.is_some();
     ctx.log_fields(
         "debug",
         "[tmux] tab close",
@@ -4430,24 +4448,11 @@ async fn pane_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
         ctx.log("warn", "[tmux] pane close could not resolve current pane");
         return false;
     };
-    // Same confirmation contract as tab_close: destructive, so prompt on
-    // the user's client first (their own `bind x` does exactly this).
-    // `-b` = non-blocking post, `-t` = target-client.
-    let ok = run_tmux_for_client(
-        plugin,
-        client,
-        &[
-            "confirm-before",
-            "-b",
-            "-t",
-            &client.tty,
-            "-p",
-            "kill pane #P \"#{pane_current_command}\"? (y/n)",
-            &format!("kill-pane -t {pane_id}"),
-        ],
-    )
-    .await
-    .is_some();
+    // Same contract as tab_close: the host confirmed before dispatching
+    // (`action_confirmations`), so the pane is killed without a tmux prompt.
+    let args = kill_pane_args(&pane_id);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    let ok = run_tmux_for_client(plugin, client, &args).await.is_some();
     ctx.log_fields(
         "debug",
         "[tmux] pane close",
@@ -4602,6 +4607,25 @@ async fn tab_move(plugin: &Tmux, client: &TmuxClient, direction: &str) -> bool {
     let args = tab_move_args(&client.session, direction);
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     run_tmux_for_client(plugin, client, &args).await.is_some()
+}
+
+/// `kill-window` pinned to the client's own window id (or its session when
+/// the id lookup failed). No `confirm-before`: the host asked already.
+fn kill_window_args(target: &str) -> Vec<String> {
+    vec![
+        "kill-window".to_string(),
+        "-t".to_string(),
+        target.to_string(),
+    ]
+}
+
+/// `kill-pane` pinned to the client's current pane id, host-confirmed.
+fn kill_pane_args(pane_id: &str) -> Vec<String> {
+    vec![
+        "kill-pane".to_string(),
+        "-t".to_string(),
+        pane_id.to_string(),
+    ]
 }
 
 fn tab_move_args(session: &str, direction: &str) -> Vec<String> {
@@ -4964,7 +4988,7 @@ fn resolve_response(
 /// requested target and return the terminal pid hosting it so Flash can
 /// raise that window. The target argument is taken verbatim from the
 /// first command arg, so a mapping like
-/// `["flash", "plugin_command", "command=tmux", "subcommand=window", "args=main:1"]`
+/// `["flash", "tmux", "window", "main:1"]`
 /// jumps straight to `main:1`.
 async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> PerformResponse {
     let tmux_path = plugin.resolved_tmux_path().await;
@@ -5511,12 +5535,12 @@ esac"#,
             Priority::Normal,
         );
 
-        // Every tmux target is terminal content: a primary click on it hands
-        // the keyboard to the terminal, so the host enters INSERT.
+        // A pane hands the keyboard to the terminal. A link is navigation and
+        // stays in NORMAL.
         assert_eq!(pane.role.as_deref(), Some("tmux-pane"));
         assert_eq!(pane.enters_insert_mode, Some(true));
         assert_eq!(link.role.as_deref(), Some("FlashTerminalLink"));
-        assert_eq!(link.enters_insert_mode, Some(true));
+        assert_eq!(link.enters_insert_mode, Some(false));
     }
 
     #[test]
@@ -5647,6 +5671,15 @@ esac"#,
         for action in ["tab_select", "tab_new", "tab_close", "pane_close"] {
             assert!(!source_action_prefers_warm_client(action), "{action}");
         }
+    }
+
+    #[test]
+    fn destructive_kills_run_without_a_tmux_prompt() {
+        // Flash asks through the manifest's `action_confirmations`; a tmux
+        // `confirm-before` would ask again on a prompt NORMAL mode swallows.
+        assert_eq!(kill_window_args("@17"), ["kill-window", "-t", "@17"]);
+        assert_eq!(kill_window_args("work"), ["kill-window", "-t", "work"]);
+        assert_eq!(kill_pane_args("%3"), ["kill-pane", "-t", "%3"]);
     }
 
     #[test]

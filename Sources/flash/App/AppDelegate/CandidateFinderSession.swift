@@ -56,6 +56,10 @@ final class CandidateFinderSession {
   /// do that lookup once per session instead of rebuilding the table on every
   /// keystroke.
   var precedenceTable: CandidateFinder.PrecedenceTable = .default
+  /// The plugin selector context frozen with the session: the focused app
+  /// cannot change under an open command line, and resolving it per
+  /// keystroke was a workspace lookup each.
+  var selectorContext: PluginSelectorContext?
   /// Session-local candidate normalization is CPU-only but can take tens of
   /// milliseconds for installed apps or the full emoji catalog. Keep that work
   /// off AppKit's main thread; generation checks still publish only the active
@@ -173,6 +177,8 @@ final class CandidateFinderSession {
   /// that first snapshot instead of being overwritten or causing an extra
   /// intermediate render.
   var deferredNonLocationSnapshots: [String: [Candidate]] = [:]
+  /// Which reply may stand for each source; see `CandidateSnapshotOrdering`.
+  var snapshotOrdering = CandidateSnapshotOrdering()
   /// Non-location sources remain lazy and may reply in a burst after the user
   /// explicitly selects one. Coalesce those opt-in updates within a runloop
   /// turn; the initial location snapshot never uses this incremental path.

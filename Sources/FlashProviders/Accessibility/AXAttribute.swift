@@ -1,4 +1,5 @@
 import ApplicationServices
+import FlashCore
 import Foundation
 
 /// Typed AX attribute accessors shared across the codebase.
@@ -127,8 +128,58 @@ public enum AXAttribute {
     var rect = CGRect.zero
     guard AXValueGetValue(axValue, .cgRect, &rect), rect.width > 0, rect.height > 0
     else { return nil }
-    return CGRect(
-      x: rect.minX, y: screenH - rect.minY - rect.height,
-      width: rect.width, height: rect.height)
+    return ScreenSpace.flip(rect, height: screenH)
+  }
+
+  /// The on-screen character range, when the element publishes one. A range
+  /// that covers the whole value is the document, not the window.
+  public static func visibleCharacterRange(_ element: AXUIElement) -> CFRange? {
+    storedRange(element, kAXVisibleCharacterRangeAttribute as String)
+  }
+
+  /// The UTF-16 range of visual line `line`. Nil when the element has no
+  /// line layout, or `line` is past the last line.
+  public static func rangeForLine(_ element: AXUIElement, line: Int) -> CFRange? {
+    guard line >= 0 else { return nil }
+    let parameter = NSNumber(value: line)
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyParameterizedAttributeValue(
+        element, kAXRangeForLineParameterizedAttribute as CFString, parameter, &raw) == .success,
+      let raw
+    else { return nil }
+    return range(from: raw)
+  }
+
+  /// The visual line that contains UTF-16 index `index`.
+  public static func lineForIndex(_ element: AXUIElement, index: Int) -> Int? {
+    guard index >= 0 else { return nil }
+    let parameter = NSNumber(value: index)
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyParameterizedAttributeValue(
+        element, kAXLineForIndexParameterizedAttribute as CFString, parameter, &raw) == .success,
+      let raw
+    else { return nil }
+    if let number = raw as? NSNumber { return number.intValue }
+    guard CFGetTypeID(raw) == CFNumberGetTypeID() else { return nil }
+    return (raw as! NSNumber).intValue
+  }
+
+  private static func storedRange(_ element: AXUIElement, _ name: String) -> CFRange? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success, let raw
+    else { return nil }
+    return range(from: raw)
+  }
+
+  private static func range(from raw: CFTypeRef) -> CFRange? {
+    guard CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    let value = raw as! AXValue
+    guard AXValueGetType(value) == .cfRange else { return nil }
+    var range = CFRange()
+    guard AXValueGetValue(value, .cfRange, &range), range.location >= 0, range.length > 0
+    else { return nil }
+    return range
   }
 }

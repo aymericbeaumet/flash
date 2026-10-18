@@ -15,7 +15,7 @@
   "commands": [
     {
       "command": "disks",
-      "subcommand": "",
+      "subcommand": "show",
       "description": "Show current disk capacity and activity"
     },
     {

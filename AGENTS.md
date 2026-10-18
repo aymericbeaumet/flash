@@ -17,6 +17,14 @@ contracts before changing a subsystem:
 - [Privacy and permissions](docs/privacy.md).
 - [Window navigation and placement](docs/windows.md), [audio devices](docs/audio.md).
 - [Performance and latency benchmarks](docs/performance.md).
+- [Releases, signing and notarization](docs/release.md); user-facing
+  [getting started](docs/getting-started.md), [comparison and FAQ](docs/comparison.md),
+  [alternatives](docs/alternatives/README.md) (one page per tool, with a
+  migration section), [troubleshooting](docs/troubleshooting.md).
+- `docs/` is published by `mkdocs.yml` and `.github/workflows/pages.yml` to
+  <https://aymericbeaumet.github.io/flash/>; the browser help links there
+  through `HelpDocs.manual`. New pages join the `nav` in `mkdocs.yml`; the
+  strict build fails on a broken link.
 
 ## Assemble great tools
 
@@ -75,10 +83,12 @@ tool, remove it rather than maintain both.
    `only_bundle_ids` and fed only by the host AX broker). Browser content
    comes through AX web areas; do not add DOM bridges or AppleScript-based
    hint discovery.
+   Held-button press, drag and release events clear inherited keyboard flags;
+   a modified shortcut must not turn a primary press into a Control-click.
 9. NORMAL is persistent. INSERT entry is explicit: `enter_insert_mode`, physical
    app clicks, primary hint and mouse-grid clicks on input targets (every
-   target in a declared `terminal_emulators` app is one, tmux pane, window and
-   link hints included), and the typing intents `app_find` and `tab_new` once they reached the app (not after
+   target in a declared `terminal_emulators` app is one, tmux pane and window
+   hints included; `f` on a terminal link hint stays in NORMAL), and the typing intents `app_find` and `tab_new` once they reached the app (not after
    a failed source, an app without the action or a refused chord). Other
    commands, including tab switching and `focus_input`, preserve NORMAL; never add
    editable-focus follow-up or mode changes on app activation. Hint input intent
@@ -159,7 +169,18 @@ Surface requests that would violate these constraints before implementing them.
   `system` (core input-adjacent probes only), `high`, `normal`, `low` — matching
   how visible lateness is: slack is what lets wake-ups coalesce. Scope every
   registration to when it can observe anything (a subscriber present, the
-  pointer in the band, a browser listening), saying so where it is armed.
+  pointer in the band, a browser listening, the hyper key while HYPER is
+  latched), saying so where it is armed. The hyper hold watch
+  (`core:hyper-hold`, priority `system`) is the backstop for a key-up the
+  session tap dropped: two ticks of `CGEventSource.keyState(.hidSystemState)`
+  reporting the chord up, and only while HYPER is latched. Combined session
+  state can report a swallowed key as up; do not read it for this.
+  Secure input (`core:secure-input`, priority `low`, every 2 s for the life of
+  the resident) stays armed for the same reason: while the flag is on the
+  session tap gets no keys, so only this poll can see a hold that outlived the
+  password field. `SecureInputRelease` leaves a focused secure field, and a
+  text field in the holding app, alone. One release attempt per episode; no
+  dialog and no lock screen.
   Polls pause while displays sleep or the session is locked; the scheduler
   owns that gate and resumes with one catch-up tick, so clients never check it.
   Use `CLOCK_MONOTONIC_RAW` for sleep-inclusive deadlines; compare readings
@@ -178,6 +199,11 @@ Surface requests that would violate these constraints before implementing them.
   catalog sources. Sources return global NSScreen coordinates and canonical
   openable URLs when available. `.failed` owns a failed action and prevents a
   duplicate fallback; `.unhandled` permits the next source or host fallback.
+- A plugin command is `flash <command> <subcommand>` with both words required
+  (`flash caffeinate toggle`). Manifest `commands[]` rejects an empty
+  subcommand, and manifest `verbs` (a one-word `flash <name>`) is rejected, so
+  neither can register. `*` is the wildcard subcommand. A command name that
+  matches a Flash verb, a reserved query, or another plugin fails the load.
 - Validate plugin wire changes across Swift and Rust. The wire contract lives in
   `Plugins/_flash_plugin_rust`: `protocol.json` pins the constants, the
   `wire`/`runtime` suites and the `probe` workspace member pin the behaviour. A
@@ -187,6 +213,9 @@ Surface requests that would violate these constraints before implementing them.
   requests and shutdown. Third-party GitHub refs require a full pinned commit.
   Capabilities default-deny sensitive surfaces; explicit plugin settings carry
   credentials, never inherited ambient secrets or inspector-visible values.
+- Clipboard history belongs to core `ClipboardHistoryStore`; text registers
+  belong to `RegisterStore`. Keep their command, help and privacy surfaces in
+  sync, and migrate stored history when changing its path.
 - Seatbelt denies cannot be reopened by later allows. Carve permitted children
   out of the deny, canonicalize symlinked paths, and retain secret-read denies.
   Local socket connections require network capability. Do not widen the sandbox
@@ -198,6 +227,17 @@ Surface requests that would violate these constraints before implementing them.
 - Config validation is shared by all layers; preserve authored values and derive
   only after overrides. Only executable/working-directory fields receive path
   resolution; argv tails stay opaque. Update whole-section default parity tests.
+- `[app] keyboard_layout` is the input source that reads a keypress (`auto` or
+  `com.apple.keylayout.*`). `[keyboard] layout` is the logical layout (default
+  `qwerty`; `colemak`, `dvorak`, `bepo`) for hint positions, the mouse grid,
+  bisect, pointer movement and derived HYPER arrows. With `hints.keys` still
+  the bundled default, a non-QWERTY layout's hint alphabet is that layout's
+  letters (`<colemak>`), so the file does not also set `hints.keys`. HYPER arrows are the
+  physical QWERTY ESDF positions (up, left, down, right). F is the home-row
+  index-finger mark. They are spelled as the letters that layout types
+  (Colemak `f` `r` `s` `t`). A shifted letter arrow is `shift+` that letter.
+  A non-letter uses the character Shift types (Dvorak's period on E is `>`).
+  Do not merge the two layouts.
 - NORMAL defaults and bundled plugin mappings bind keys to high-level actions,
   never to raw chords: none uses `send_key`, which stays a user escape hatch
   (a test enforces it). An action resolves in the focused app's context: a
@@ -208,6 +248,12 @@ Surface requests that would violate these constraints before implementing them.
   (`defaults` carries the macOS ones), never host chords or conditionals; a
   guardrail rejects `kVK_` chord synthesis outside the binding dispatcher. Vertical scroll bindings send configurable line-based wheel
   events system-wide, without AX fallback. Keep guides in sync.
+- Every centred alert is one `StatusAlert` drawn by `displayAlert`: a message,
+  a title over a value, or a confirmation. A destructive command asks through
+  it — `confirm` wraps a verb line, and a source action a plugin performs
+  destructively declares manifest `action_confirmations` — as a hint-session
+  phase that owns the keyboard in every mode. Plugins never post their own
+  prompt: NORMAL capture would swallow the answer.
 - Log diagnostics through the serial log writer. XCTest disk logging uses only
   temporary destinations. Never capture a handle that rotation can invalidate.
 - Test windows never cover the user's screen: `TestWindowHygiene` makes every
@@ -247,10 +293,6 @@ before replacing these implementations.
 Run inside the current bonsai worktree. Prefix shell commands with `rtk`.
 Fresh checkouts need `mise install` and `Scripts/build-ghostty.sh --dev` before
 standalone SwiftPM commands; build/install/integration scripts bootstrap Ghostty.
-For universal releases, build Swift separately for arm64 and x86_64, then
-`lipo` the executable. SwiftPM's multi-arch plan loses the Ghostty XCFramework
-library path while linking CFlashTerminal; `Scripts/build.sh --release` owns
-the working sequence.
 
 Required checks for relevant changes:
 

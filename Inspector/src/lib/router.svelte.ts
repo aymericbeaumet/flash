@@ -64,6 +64,18 @@ class Router {
     this.settle(url.hash ? "anchor" : { top: 0 });
   }
 
+  /**
+   * Rewrites the current entry, for a query that changes as you type: the
+   * URL stays shareable and reloadable without a history entry per key.
+   */
+  replace(href: string) {
+    const url = new URL(href, location.href);
+    history.replaceState({ key: this.key }, "", url);
+    this.url = location.href;
+    const next = parseRoute(url);
+    if (next.page !== this.route.page || next.param !== this.route.param) this.route = next;
+  }
+
   /** Scrolls to the URL's anchor once its element exists. */
   revealAnchor() {
     const target = this.anchor ? document.getElementById(this.anchor) : null;
@@ -105,6 +117,9 @@ class Router {
       if (typeof scroll === "object" && this.main) {
         this.main.scrollTop = scroll.top;
         this.positions.set(key, this.main.scrollTop);
+        // The link that was clicked may be gone; keyboard users continue
+        // from the top of the new page rather than from the document body.
+        if (scroll.top === 0 && !(document.activeElement instanceof HTMLInputElement)) this.main.focus({ preventScroll: true });
       } else if (scroll === "anchor") this.revealAnchor();
     });
   }

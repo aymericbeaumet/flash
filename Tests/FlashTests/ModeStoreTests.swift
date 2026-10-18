@@ -9,14 +9,14 @@ final class ModeStoreTests: XCTestCase {
     store.perform = { _, _, next in
       observed.append(next)
       if next == .insert {
-        store.dispatch(.openTerminal)
+        store.dispatch(.openTerminal(returnPID: nil))
         XCTAssertEqual(store.mode, .insert)
         observed.append(store.mode)
       }
     }
     store.dispatch(.enterInsert(targetPID: nil))
-    XCTAssertEqual(observed, [.insert, .insert, .terminal(restoreTo: .insert)])
-    XCTAssertEqual(store.mode, .terminal(restoreTo: .insert))
+    XCTAssertEqual(observed, [.insert, .insert, .terminal(restoreTo: .insert, returnPID: nil)])
+    XCTAssertEqual(store.mode, .terminal(restoreTo: .insert, returnPID: nil))
   }
 
   func testConfigReconciliationDoesNotPerformModeEntry() {
@@ -30,7 +30,7 @@ final class ModeStoreTests: XCTestCase {
     store.dispatch(.advancedModeChanged(enabled: true))
     XCTAssertEqual(entries, 0, "Refreshing labels must preserve native input ownership")
     XCTAssertEqual(renders, 1)
-    store.dispatch(.enterNormal(targetPID: nil))
+    store.dispatch(.enterNormal)
     XCTAssertEqual(entries, 1, "An explicit entry resets transient capture context")
   }
 }
