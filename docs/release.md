@@ -9,7 +9,7 @@ plugin gate all pass.
 
 | Condition | Release | Cask |
 | --- | --- | --- |
-| `Resources/Info.plist` carries a version with no tag yet | That version: a release and tag `1.0.0` at this commit, with generated notes | `flash` |
+| `Resources/Info.plist` carries a version with no tag yet | That version: a release and tag `1.1.0` at this commit, with generated notes | `flash` |
 | The version is already tagged | A `nightly-YYYYMMDD-SHA` pre-release for that commit | Rolling `flash@nightly` |
 | A `*.*.*` tag pushed by hand | That version | `flash` |
 
@@ -106,8 +106,8 @@ Developer ID Application: …" and "==> Notarizing" should appear, then
 "==> Stapling the notarization ticket". On a Mac that never saw this build:
 
 ```sh
-curl -LO https://github.com/aymericbeaumet/flash/releases/latest/download/Flash-1.0.0.zip
-ditto -x -k Flash-1.0.0.zip .
+curl -LO https://github.com/aymericbeaumet/flash/releases/latest/download/Flash-1.1.0.zip
+ditto -x -k Flash-1.1.0.zip .
 spctl -a -vv -t exec Flash.app          # source=Notarized Developer ID
 xcrun stapler validate Flash.app        # The validate action worked!
 codesign -dvv Flash.app 2>&1 | grep -E 'Authority|Timestamp|flags'
