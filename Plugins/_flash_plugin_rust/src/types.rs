@@ -331,7 +331,6 @@ pub mod host_events {
     pub const FOCUS_CHANGED: &str = "core:focus.changed";
     pub const WINDOW_FOCUS_CHANGED: &str = "core:window.focus.changed";
     pub const AX_CHANGED: &str = "core:ax.changed";
-    pub const CLIPBOARD_CHANGED: &str = "core:clipboard.changed";
     pub const CONFIG_CHANGED: &str = "core:config.changed";
     pub const POWER_CHANGED: &str = "core:power.changed";
     /// Network interfaces, addresses, routes or DNS changed.
@@ -343,7 +342,7 @@ pub mod host_events {
     pub const SESSION_OPENED: &str = "core:session.opened";
 
     /// In `protocol.json` order.
-    pub const ALL: [&str; 15] = [
+    pub const ALL: [&str; 14] = [
         FLASH_STARTED,
         APPS_CHANGED,
         APPS_LAUNCHED,
@@ -351,7 +350,6 @@ pub mod host_events {
         FOCUS_CHANGED,
         WINDOW_FOCUS_CHANGED,
         AX_CHANGED,
-        CLIPBOARD_CHANGED,
         CONFIG_CHANGED,
         POWER_CHANGED,
         NETWORK_CHANGED,
@@ -600,7 +598,7 @@ pub struct RunningApplication {
 
 /// A host event delivered to [`Plugin::on_event`](crate::Plugin::on_event).
 /// Match on [`name`](Event::name) (`core:focus.changed`,
-/// `core:clipboard.changed`, …); the remaining fields are the event payload,
+/// …); the remaining fields are the event payload,
 /// present when the event carries them.
 #[derive(Clone, Debug, Default)]
 pub struct Event {
@@ -621,21 +619,6 @@ pub struct Event {
     /// and possibly empty — empty means nothing is observed. Order carries
     /// no meaning.
     pub segments: Option<Vec<String>>,
-    /// `core:clipboard.changed`: 32 lowercase hex characters. The host has
-    /// already stored an image, when there is one, at
-    /// `share/images/<id>.<ext>` in this plugin's data directory.
-    pub id: Option<String>,
-    /// `text`, `image`, `html`, or `files`.
-    pub kind: Option<String>,
-    /// Formatted copy, present when `kind` is `html`.
-    pub html: Option<String>,
-    /// `image/png`, `image/jpeg`, `image/gif`, or `image/webp` when the
-    /// matching file exists.
-    pub mime: Option<String>,
-    /// Copied file paths when `kind` is `files`.
-    pub files: Vec<String>,
-    /// Lowercase hex SHA-256 of the image file.
-    pub sha256: Option<String>,
 }
 
 impl Event {

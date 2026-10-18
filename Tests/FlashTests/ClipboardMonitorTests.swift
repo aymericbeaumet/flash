@@ -150,7 +150,7 @@ final class ClipboardMonitorTests: XCTestCase {
     let item = ClipboardCapture.Item(
       kind: .image, text: "", html: nil, image: png, mime: "image/png", files: [], sha256: nil)
     let payload = try XCTUnwrap(
-      ClipboardImageStore.changedPayload(for: item, dataDir: root, id: id))
+      ClipboardImageStore.storedPayload(for: item, dataDir: root, id: id))
     XCTAssertEqual(payload["id"] as? String, id)
     XCTAssertEqual(payload["kind"] as? String, "image")
     XCTAssertEqual(payload["mime"] as? String, "image/png")
@@ -164,13 +164,13 @@ final class ClipboardMonitorTests: XCTestCase {
       FileManager.default.attributesOfItem(atPath: url.deletingLastPathComponent().path)[
         .posixPermissions] as? NSNumber)
     XCTAssertEqual(dirMode.intValue & 0o777, 0o700)
-    XCTAssertNil(ClipboardImageStore.changedPayload(for: item, dataDir: root, id: "../etc/passwd"))
+    XCTAssertNil(ClipboardImageStore.storedPayload(for: item, dataDir: root, id: "../etc/passwd"))
     XCTAssertNil(ClipboardImageStore.fileURL(dataDir: root, id: "../etc/passwd", mime: "image/png"))
 
     let text = ClipboardCapture.Item(
       kind: .text, text: "hi", html: nil, image: nil, mime: nil, files: [], sha256: nil)
     let textPayload = try XCTUnwrap(
-      ClipboardImageStore.changedPayload(for: text, dataDir: root, id: id))
+      ClipboardImageStore.storedPayload(for: text, dataDir: root, id: id))
     XCTAssertEqual(textPayload["text"] as? String, "hi")
     XCTAssertNil(textPayload["mime"])
   }

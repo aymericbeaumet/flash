@@ -8,7 +8,7 @@ import Foundation
 //  - Insert stickiness: only explicit keyboard requests and disabling
 //    advanced mode leave `.insert`.
 //  - Mouse enters only: `.clickResolved` acts only from `.normal` or
-//    a held-button mode (`.visual`, `.drag`); it can move NORMAL→insert but can
+//    a held-button mode (`.drag`); it can move NORMAL→insert but can
 //    never move insert→anything.
 //  - Global/sticky: `.focusedAppChanged` never flips insert↔normal.
 //  - Advanced gate: `.enterNormal` is refused while `.disabled`.
@@ -41,7 +41,7 @@ enum ModeReducer {
         return reduce(state, .enterNormal)
       case .hyper:
         return reduce(state, .exitHyper)
-      case .visual, .drag:
+      case .drag:
         return reduce(state, .buttonReleased)
       case .insert, .normal, .disabled:
         // Active hints are dismissed in place; without hints there is no
@@ -119,7 +119,7 @@ enum ModeReducer {
       // Sticky/global: never flips the mode. Only the command surfaces need to
       // reclaim key focus after an app switch.
       switch state {
-      case .normal, .command, .hyper, .visual, .drag:
+      case .normal, .command, .hyper, .drag:
         return (state, [.scheduleRecapture])
       case .insert, .disabled, .terminal:
         return (state, [])
@@ -139,7 +139,7 @@ enum ModeReducer {
       return (restoreTo.mode, [.renderSurface])
 
     case .buttonHeld(let hold):
-      // VISUAL and DRAG are NORMAL with a button held: the pill and the
+      // DRAG is NORMAL with a button held: the pill and the
       // mapping table (`Mode.mappingScope`) change, nothing else — a pointer
       // or grid session that pressed the button keeps its keys. From INSERT
       // (an all-mode `enter_drag_mode` chord) the hold takes the keyboard as
@@ -188,7 +188,7 @@ enum ModeReducer {
         .prepareModeEntry, .clearTransientHintState,
         .hideOverlayIfIdle, .renderSurface,
       ]
-    case .hyper, .visual, .drag:
+    case .hyper, .drag:
       // Keep the NORMAL mapping scope and the hint session. The pill is the
       // only thing that changes; Carbon registrations stay put so a hold does
       // not churn hotkey registrations.
@@ -215,7 +215,7 @@ enum ModeReducer {
     case .command: return reduce(state, .closeCommand(reason: "advanced_disabled"))
     case .hyper: return (.disabled, enterEffects(for: .disabled, targetPID: targetPID))
     case .disabled: return (state, [])
-    case .normal, .insert, .visual, .drag:
+    case .normal, .insert, .drag:
       preconditionFailure("Enabled mode has disabled eligibility")
     }
   }

@@ -1183,7 +1183,6 @@ mod tests {
         assert!(watch.touches(&changed, relaunched, ours));
 
         assert!(watch.touches(&app_event("core:session.opened", ""), none, ours));
-        assert!(!watch.touches(&app_event("core:clipboard.changed", ""), none, ours));
     }
 
     #[tokio::test]

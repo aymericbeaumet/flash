@@ -186,6 +186,33 @@ extension NormalModeDispatcher {
     return text
   }
 
+  /// Collapse a selection at its trailing edge. Some apps expose the text but
+  /// do not permit setting its AX range; the caller can then use a navigation
+  /// key after the copy is complete.
+  static func collapseSelectedText(pid: pid_t) -> Bool {
+    let app = AXApp.make(pid: pid)
+    guard let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
+      return false
+    }
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(
+        focused, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
+      let raw, CFGetTypeID(raw) == AXValueGetTypeID()
+    else { return false }
+    let value = raw as! AXValue
+    guard AXValueGetType(value) == .cfRange else { return false }
+    var range = CFRange(location: 0, length: 0)
+    guard AXValueGetValue(value, .cfRange, &range), range.location >= 0, range.length >= 0,
+      range.location <= Int.max - range.length
+    else { return false }
+    if range.length == 0 { return true }
+    var collapsed = CFRange(location: range.location + range.length, length: 0)
+    guard let collapsedValue = AXValueCreate(.cfRange, &collapsed) else { return false }
+    return AXUIElementSetAttributeValue(
+      focused, kAXSelectedTextRangeAttribute as CFString, collapsedValue) == .success
+  }
+
   /// Forward argv to `/usr/bin/open` verbatim. Deliberately dumb: whatever
   /// the user typed after `:open` is handed straight to the system opener
   /// (URLs, files, `-a App`, …). All app-finding smartness lives in

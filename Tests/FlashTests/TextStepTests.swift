@@ -119,16 +119,28 @@ final class TextStepTests: XCTestCase {
     XCTAssertNil(parse("mouse_step", [:]))
     XCTAssertNil(parse("mouse_step", ["to": "paragraph"]))
     XCTAssertEqual(parse("selection", ["action": "change"]), .selection(.change))
+    XCTAssertEqual(
+      parse("selection", ["action": "copy", "register": "a"]),
+      .selection(.copy, register: "a"))
+    XCTAssertNil(parse("selection", ["action": "copy", "register": "ab"]))
+    XCTAssertNil(parse("selection", ["action": "copy", "register": "é"]))
+    XCTAssertNil(parse("selection", ["action": "copy", "register": ""]))
+    XCTAssertNil(parse("yank_selection", ["register": "ab"]))
+    XCTAssertNil(parse("paste", ["register": "é"]))
+    XCTAssertEqual(parse("yank_selection", ["register": "_"]), .yankSelection(register: "_"))
     XCTAssertNil(parse("selection", ["action": "delete"]))
     XCTAssertEqual(
       URLCommand.mouseJump(.lineEnd).diagnosticDescription, "flash mouse_step --to=line_end")
     XCTAssertEqual(
       URLCommand.selection(.copy).diagnosticDescription, "flash selection --action=copy")
-    let visual = ConfigLoader.parse("").mode.compiledVisual
-    XCTAssertEqual(visual.mapping(for: "w")?.action, .flashCommand(.mouseJump(.nextWord)))
-    XCTAssertEqual(visual.mapping(for: "$")?.action, .flashCommand(.mouseJump(.lineEnd)))
-    XCTAssertEqual(visual.mapping(for: "y")?.action, .flashCommand(.selection(.copy)))
-    XCTAssertEqual(visual.mapping(for: "d")?.action, .flashCommand(.selection(.cut)))
-    XCTAssertFalse(visual.hasStrictPrefix("d"), "VISUAL's d does not wait on NORMAL's df")
+    XCTAssertEqual(
+      URLCommand.selection(.copy, register: "a").diagnosticDescription,
+      "flash selection --action=copy --register=a")
+    let drag = ConfigLoader.parse("").mode.compiledDrag
+    XCTAssertEqual(drag.mapping(for: "w")?.action, .flashCommand(.mouseJump(.nextWord)))
+    XCTAssertEqual(drag.mapping(for: "$")?.action, .flashCommand(.mouseJump(.lineEnd)))
+    XCTAssertEqual(drag.mapping(for: "y")?.action, .flashCommand(.selection(.copy)))
+    XCTAssertEqual(drag.mapping(for: "d")?.action, .flashCommand(.selection(.cut)))
+    XCTAssertFalse(drag.hasStrictPrefix("d"), "DRAG's d does not wait on NORMAL's df")
   }
 }

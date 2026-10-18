@@ -2006,8 +2006,6 @@ final class ConfigLoaderTests: XCTestCase {
     builtinMode.normal.sort { $0.key < $1.key }
     loadedMode.hyper.sort { $0.key < $1.key }
     builtinMode.hyper.sort { $0.key < $1.key }
-    loadedMode.visual.sort { $0.key < $1.key }
-    builtinMode.visual.sort { $0.key < $1.key }
     loadedMode.drag.sort { $0.key < $1.key }
     builtinMode.drag.sort { $0.key < $1.key }
     loadedMode.recompileMappings()
@@ -2212,6 +2210,22 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(
       c.loadingDiagnostics.contains { $0.message.contains("plugin ids must be lowercase") })
     XCTAssertNotNil(c.plugins.settings["tmux"]?["socket"])
+  }
+
+  func testCoreClipboardHistorySizeAndRetiredPluginSetting() {
+    let configured = ConfigLoader.parse("[clipboard]\nhistory_size = 42\n")
+    XCTAssertEqual(configured.clipboard.historySize, 42)
+    XCTAssertTrue(configured.loadingDiagnostics.isEmpty)
+
+    let invalid = ConfigLoader.parse("[clipboard]\nhistory_size = 0\n")
+    XCTAssertEqual(invalid.clipboard.historySize, 1_000)
+    XCTAssertTrue(
+      invalid.loadingDiagnostics.contains { $0.message.contains("clipboard.history_size") })
+
+    let retired = ConfigLoader.parse("[plugin.clipboard]\nhistory_size = 42\n")
+    XCTAssertNil(retired.plugins.settings["clipboard"])
+    XCTAssertTrue(
+      retired.loadingDiagnostics.contains { $0.message.contains("[plugin.clipboard] was removed") })
   }
 
   func testLayeredParseLaterLayerOverridesEarlier() {

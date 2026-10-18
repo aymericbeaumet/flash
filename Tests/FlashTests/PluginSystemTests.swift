@@ -1182,7 +1182,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains(
-          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, visual, or drag"
+          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, or drag"
         ))
     }
   }
@@ -1206,7 +1206,7 @@ final class PluginSystemTests: XCTestCase {
             { "key": "cmd+x", "mode": "terminal", "command": ["true"] },
             { "key": "cmd+x", "mode": "command", "command": ["true"] },
             { "key": "x", "mode": "hyper", "command": ["true"] },
-            { "key": "x", "mode": "visual", "command": ["true"] }
+            { "key": "x", "mode": "drag", "command": ["true"] }
           ]
         }
         """)
@@ -1214,7 +1214,7 @@ final class PluginSystemTests: XCTestCase {
     let manifest = try PluginManifest.load(from: root)
     XCTAssertEqual(
       manifest.mappings.map(\.scope),
-      [.all, .normal, .insert, .terminal, .command, .hyper, .visual])
+      [.all, .normal, .insert, .terminal, .command, .hyper, .drag])
 
     let bare = try temporaryPluginRoot(
       manifest: """
@@ -1684,7 +1684,7 @@ final class PluginSystemTests: XCTestCase {
   // MARK: - Clipboard dashboard decode
 
   func testDecodeClipboardHistoryPageRoundTripsPluginJSON() throws {
-    // The shape the Rust clipboard plugin emits for `:clipboard`.
+    // The shape the core clipboard history returns for `:clipboard`.
     let json = """
       {"entries":[{"id":"0123456789abcdef0123456789abcdef","kind":"text","preview":"hello","value":"hello"},{"id":"fedcba9876543210fedcba9876543210","kind":"html","preview":"two…","value":"two lines\\nof text","html":"<p>two</p>"}],"total":3,"next_offset":2}
       """

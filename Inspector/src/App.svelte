@@ -171,7 +171,7 @@
       {:else if route.page === "plugins"}<PluginsPanel {plugins} filter={route.param} sampledAt={store.state.snapshot_at_unix_ms} onresample={() => store.refresh()} />
       {:else if route.page === "state"}<RuntimePanel state={store.state} connected={store.connected} onrefresh={() => store.refresh()} />
       {:else if route.page === "logs"}<div class="page log-page"><div class="page-heading"><p class="eyebrow">Inspect</p><h1>Live logs</h1><p>Follow what Flash is doing. Select a record to inspect its full details.</p></div><div class="surface log-surface"><LogList logs={store.logs} /></div></div>
-      {:else if route.page === "clipboard"}<ClipboardPanel entries={store.state.clipboard ?? []} nextOffset={store.state.clipboard_next_offset ?? null} total={store.state.clipboard_total ?? 0} />
+      {:else if route.page === "clipboard"}<ClipboardPanel entries={store.state.clipboard ?? []} registers={store.state.clipboard_registers ?? []} nextOffset={store.state.clipboard_next_offset ?? null} total={store.state.clipboard_total ?? 0} />
       {:else}<div class="page"><div class="page-heading"><p class="eyebrow">Flash Help</p><h1>Page not found</h1><p>This address is not part of Flash Help. Start from the homepage, browse the guides, or search above.</p></div><p class="not-found-links"><a href="/">Help homepage →</a><a href={paths.docs()}>All guides →</a></p></div>{/if}
     </main>
   </div>

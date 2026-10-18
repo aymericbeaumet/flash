@@ -119,6 +119,14 @@ export interface DocTopic {
   manual?: string | null;
 }
 
+export interface ClipboardRegister {
+  name: string;
+  text: string;
+  kind: "unnamed" | "yank" | "named" | "clipboard";
+  /** Snapshot contains a preview; the resident keeps the full value for paste. */
+  truncated?: boolean;
+}
+
 /** The keyboard page's model: the layout, the hint alphabet and what the keys do. */
 export interface KeyboardState {
   /** `qwerty`, `colemak`, `dvorak` or `bepo`. */
@@ -167,9 +175,11 @@ export interface InspectorState {
   commands?: CommandInfo[];
   docs?: DocTopic[];
   clipboard?: ClipboardEntry[];
+  /** Populated Vim-style text registers from the resident process. */
+  clipboard_registers?: ClipboardRegister[];
   /** Offset of the next clipboard page, or null when this is the full history. */
   clipboard_next_offset?: number | null;
-  /** Number of entries retained by the clipboard plugin. */
+  /** Number of entries retained by core clipboard history. */
   clipboard_total?: number;
   mappings?: MappingsState;
 }

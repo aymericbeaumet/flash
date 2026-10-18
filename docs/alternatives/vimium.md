@@ -12,7 +12,7 @@ Vimium's where they fit.
 | License, price | MIT, free | MIT, free |
 | Where it works | Inside web pages of the browser it is installed in | Every macOS app, including browsers, through Accessibility |
 | Hints from | The DOM | The Accessibility tree |
-| Modes | Vim-like keys per page, insert mode, visual mode | Persistent NORMAL, INSERT, COMMAND and TERMINAL across apps |
+| Modes | Vim-like keys per page, insert mode, visual mode | Persistent NORMAL, INSERT, COMMAND, DRAG and TERMINAL across apps |
 | Search | Vomnibar over URLs, bookmarks, history and tabs | flashlight over apps, tabs, windows, tmux, emoji, plugin data, history and bookmarks by source |
 | Configuration | Options page with `map` syntax | One TOML file |
 | Permissions | Extension permissions (all URLs, tabs, history) | Accessibility; Automation per browser for tab lists |

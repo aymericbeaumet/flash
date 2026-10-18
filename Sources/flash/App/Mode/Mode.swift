@@ -40,13 +40,6 @@ enum Mode: Equatable {
   /// INSERT exit can activate an app a popup once covered.
   case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
 
-  /// Visual selection (`v`): text is selected from where VISUAL began to
-  /// where the cursor is, and motions extend it as in Vim. Flash draws the
-  /// selection with a held primary button at the pointer; leaving VISUAL ends
-  /// the selection and leaves it selected. `[mode.visual.mappings]` is read
-  /// before NORMAL's.
-  case visual
-
   /// Dragging with a mouse button held (`enter_drag_mode`, unmapped by
   /// default): pointer moves drag what was grabbed, Return drops it where
   /// the pointer is and Escape puts it back. `[mode.drag.mappings]` is read
@@ -60,17 +53,12 @@ enum Mode: Equatable {
   case hyper(restoreTo: ReturnMode)
 }
 
-/// What a held mouse button means, which is the mode it enters: a visual
-/// selection, or a drag. The button is the mechanism for both.
+/// What a held mouse button means, which is the mode it enters.
 enum ButtonHold: String, CaseIterable, Equatable {
-  case visual
   case drag
 
   var mode: Mode {
-    switch self {
-    case .visual: return .visual
-    case .drag: return .drag
-    }
+    .drag
   }
 }
 
@@ -97,7 +85,7 @@ extension Mode {
     switch self {
     case .disabled: return .disabled
     case .insert: return .insert
-    case .normal, .visual, .drag: return .normal
+    case .normal, .drag: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(let restoreTo), .hyper(let restoreTo):
       return restoreTo
@@ -124,14 +112,11 @@ extension Mode {
     return false
   }
 
-  var isVisual: Bool { self == .visual }
-
   var isDrag: Bool { self == .drag }
 
-  /// The held button's purpose in VISUAL and DRAG; nil in every other mode.
+  /// The held button's purpose in DRAG; nil in every other mode.
   var buttonHold: ButtonHold? {
     switch self {
-    case .visual: return .visual
     case .drag: return .drag
     default: return nil
     }

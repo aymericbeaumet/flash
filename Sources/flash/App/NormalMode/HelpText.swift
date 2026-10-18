@@ -92,14 +92,11 @@ extension NormalModeDispatcher {
         - `mouse_dock`, `mouse_menubar` (the app's menu titles and the status
           items) and `mouse_notifications` hint surfaces outside the window;
           bind them to use them.
-        - `v` starts a visual selection (VISUAL): `j` `k` `h` `l`, `w` `b`
-          `e`, `0` `$`, `f`, `F`, `s` and the scrolls extend it as in Vim; `y`
-          copies it, `d` cuts it, `c` changes it, `p` pastes over it; `v` again
-          or Escape ends it, leaving the text selected.
         - `enter_drag_mode` (unmapped by default; `--secondary` for the right
           button) grabs what is under the pointer (DRAG): `h` `j` `k` `l`
-          nudge it, `f`, `F`, `s` pick where it goes, Return drops it and
-          Escape puts it back.
+          nudge it; `w` `b` `e` `0` `$` jump by text, `f` `F` `s` pick where
+          it goes. `y` copies text and clears the selection; `d` / `x` cut,
+          `c` changes, and `p` pastes over it. Return drops; Escape puts it back.
 
         ## Mouse Grid
 
@@ -250,7 +247,6 @@ extension NormalModeDispatcher {
   static func mappingsJSON(mode: Config.Mode) -> [[String: String]] {
     (mappingRows(scope: "all", mappings: Config.Mode.resolveMappings(mode.all))
       + mappingRows(scope: "normal", mappings: Config.Mode.resolveMappings(mode.normal))
-      + mappingRows(scope: "visual", mappings: Config.Mode.resolveMappings(mode.visual))
       + mappingRows(scope: "drag", mappings: Config.Mode.resolveMappings(mode.drag))
       + mappingRows(scope: "hyper", mappings: Config.Mode.resolveMappings(mode.hyper))
       + mappingRows(scope: "insert", mappings: Config.Mode.resolveMappings(mode.insert))

@@ -260,7 +260,7 @@ work whose source has no change notification, and all of it rides the one
 | Status time and carousel rotations | A visible surface shows time or a carousel | The next boundary of the finest unit shown: second, minute or day; each rotation | high |
 | Status jobs and named sources | A visible surface reads them | Their configured `interval` | normal (high when a clock tick falls inside its slack) |
 | Plugin cadences and deadlines (`poll`) | A plugin registered one | The plugin's period or deadline | The plugin's: high, normal or low ([table](status-plugins.md#scheduling)) |
-| Clipboard watcher | A plugin subscribes to `core:clipboard.changed` | 0.5 s (no pasteboard notification exists) | normal |
+| Clipboard watcher | Flash's core history is active | 0.5 s (no pasteboard notification exists) | normal |
 | Menu-bar reveal probe | The pointer is in the top band | 80 ms (no reveal notification exists) | system |
 | Plugin liveness sweep | A plugin runs | 30 s; pings only a plugin silent for 60 s | low |
 | Prepared-model maintenance | The frontmost app has a model | Before its 1.5–30 s freshness ceiling; skipped after 60 s without input | normal |

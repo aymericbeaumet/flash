@@ -309,11 +309,10 @@ key is the leader, a key with no hyper mapping can still complete a NORMAL
 `<leader>` sequence. A tap that presses nothing else arms that prefix on
 release, so `<leader>` sequences keep working. `+` is written `<plus>`.
 
-VISUAL (`v`, a visual selection) and DRAG (`enter_drag_mode`, unmapped by
-default, a drag with a mouse button held) read `[mode.visual.mappings]` and `[mode.drag.mappings]` before
-NORMAL's; their labels are `mode.labels.visual` and `mode.labels.drag`. The
-[mode guide](normal-mode.md#visual-selection-visual) describes their keys and
-[dragging](normal-mode.md#dragging-drag).
+DRAG (`enter_drag_mode`, unmapped by default) holds a mouse button for dragging
+or text selection. It reads `[mode.drag.mappings]` before NORMAL's and shows
+`mode.labels.drag`. The [mode guide](normal-mode.md#dragging-drag) describes
+its keys.
 
 ```toml
 [mode.normal]
@@ -362,8 +361,8 @@ while that app is focused:
 App-specific entries take precedence over plugin and global mappings in the
 same scope. `false` suppresses an inherited mapping for that app; other apps
 keep their existing bindings. Bundle IDs match exactly and are case-sensitive.
-The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, `hyper`,
-`visual`, and `drag`;
+The available scopes are `all`, `normal`, `insert`, `command`, `terminal`, `hyper`
+and `drag`;
 COMMAND mappings still require a single modified key. Flash updates the active
 mapping table when focus changes, so no config reload is needed.
 

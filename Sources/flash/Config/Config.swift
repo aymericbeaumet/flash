@@ -179,6 +179,10 @@ struct Config {
     var layout: String = "qwerty"
   }
 
+  struct Clipboard: Equatable {
+    var historySize: Int = 1_000
+  }
+
   /// Which target gets the easiest label (`[hints] label_order`).
   enum LabelOrder: String, Equatable, CaseIterable {
     /// Reading order: top to bottom, left to right.
@@ -795,7 +799,6 @@ struct Config {
       var terminal: [ModeMapping] = []
       var command: [ModeMapping] = []
       var hyper: [ModeMapping] = []
-      var visual: [ModeMapping] = []
       var drag: [ModeMapping] = []
       var unmapped: [ModeScope: Set<String>] = [:]
 
@@ -807,7 +810,6 @@ struct Config {
         case .terminal: return terminal
         case .command: return command
         case .hyper: return hyper
-        case .visual: return visual
         case .drag: return drag
         }
       }
@@ -844,9 +846,6 @@ struct Config {
         case .hyper:
           hyper.removeAll(where: sameKey)
           hyper.insert(mapping, at: 0)
-        case .visual:
-          visual.removeAll(where: sameKey)
-          visual.insert(mapping, at: 0)
         case .drag:
           drag.removeAll(where: sameKey)
           drag.insert(mapping, at: 0)
@@ -866,7 +865,6 @@ struct Config {
         case .terminal: terminal.removeAll(where: matches)
         case .command: command.removeAll(where: matches)
         case .hyper: hyper.removeAll(where: matches)
-        case .visual: visual.removeAll(where: matches)
         case .drag: drag.removeAll(where: matches)
         }
       }
@@ -878,13 +876,11 @@ struct Config {
       var command: String = "COMMAND"
       var terminal: String = "TERMINAL"
       var hyper: String = "HYPER"
-      var visual: String = "VISUAL"
       var drag: String = "DRAG"
 
       var longestCount: Int {
         max(
-          normal.count, insert.count, command.count, terminal.count, hyper.count, visual.count,
-          drag.count)
+          normal.count, insert.count, command.count, terminal.count, hyper.count, drag.count)
       }
     }
 
@@ -896,9 +892,6 @@ struct Config {
     /// Keys read while the NORMAL leader is held. Not merged with `[mode.all]`:
     /// a hyper binding replaces NORMAL for that key for the duration of the hold.
     var hyper: [ModeMapping] = Self.defaultHyperMappings
-    /// Keys read before NORMAL in VISUAL (a visual selection). A key with no
-    /// entry here is NORMAL's.
-    var visual: [ModeMapping] = Self.defaultVisualMappings
     /// Keys read before NORMAL in DRAG (a held button dragging). A key with
     /// no entry here is NORMAL's.
     var drag: [ModeMapping] = Self.defaultDragMappings
@@ -1015,34 +1008,6 @@ struct Config {
       }
     }()
 
-    /// Vim's visual motions while a button is held: `j` `k` `h` `l` move the
-    /// pointer one text line or character, so the held button's drag extends
-    /// the selection. Every other key is NORMAL's.
-    static let defaultVisualMappings: [ModeMapping] = makeDefaultMappings(
-      "visual",
-      [
-        ("j", .mouseStep(.down)),
-        ("k", .mouseStep(.up)),
-        ("h", .mouseStep(.left)),
-        ("l", .mouseStep(.right)),
-        ("w", .mouseJump(.nextWord)),
-        ("b", .mouseJump(.previousWord)),
-        ("e", .mouseJump(.wordEnd)),
-        ("0", .mouseJump(.lineStart)),
-        ("$", .mouseJump(.lineEnd)),
-        // Operators act on the selection and end it.
-        ("y", .selection(.copy)),
-        ("d", .selection(.cut)),
-        ("x", .selection(.cut)),
-        ("c", .selection(.change)),
-        ("p", .selection(.paste)),
-        // Picking a target extends the selection to it instead of clicking.
-        ("f", .mouseTarget(.move)),
-        ("F", .mouseGrid(.init(.move))),
-        ("s", .mouseBigram(.move)),
-        ("<esc>", .mouseButton(.init(state: .release, button: .primary, hold: .visual))),
-      ])
-
     /// DRAG moves what the held button grabbed: `h` `j` `k` `l` nudge it,
     /// `H` `J` `K` `L` further, a picked target is where it goes, Return
     /// drops it and Escape puts it back. Entering it (`enter_drag_mode`)
@@ -1050,6 +1015,16 @@ struct Config {
     static let defaultDragMappings: [ModeMapping] = makeDefaultMappings(
       "drag",
       [
+        ("y", .selection(.copy)),
+        ("d", .selection(.cut)),
+        ("x", .selection(.cut)),
+        ("c", .selection(.change)),
+        ("p", .selection(.paste)),
+        ("w", .mouseJump(.nextWord)),
+        ("b", .mouseJump(.previousWord)),
+        ("e", .mouseJump(.wordEnd)),
+        ("0", .mouseJump(.lineStart)),
+        ("$", .mouseJump(.lineEnd)),
         ("h", .mouseNudge(.left, distance: 16)),
         ("j", .mouseNudge(.down, distance: 16)),
         ("k", .mouseNudge(.up, distance: 16)),
@@ -1144,7 +1119,6 @@ struct Config {
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("mF", .flashCommand(.mouseGrid(.init(.move)))),
         ("ms", .flashCommand(.mouseBigram(.move))),
-        ("v", .flashCommand(.mouseButton(.init(state: .toggle, button: .primary, hold: .visual)))),
         ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
         ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
         ("ds", .flashCommand(.mouseBigram(.click(.doubleClick, modifiers: [])))),
@@ -1204,17 +1178,16 @@ struct Config {
     private(set) var compiledInsert = CompiledMappings()
     private(set) var compiledTerminal = CompiledMappings()
     private(set) var compiledHyper = CompiledMappings()
-    /// The tables the interpreter reads in VISUAL and DRAG (`heldMappings`).
-    private(set) var compiledVisual = CompiledMappings()
+    /// The table the interpreter reads in DRAG (`heldMappings`).
     private(set) var compiledDrag = CompiledMappings()
 
     /// What a held-button mode reads: its own entries, then the NORMAL and
     /// all-mode ones it leaves alone. An own key hides every NORMAL key it
-    /// starts (VISUAL's `d` must not wait on NORMAL's `df`), and `false` in
+    /// starts (DRAG's `d` must not wait on NORMAL's `df`), and `false` in
     /// its table removes a NORMAL key there.
     func heldMappings(_ hold: ButtonHold) -> [ModeMapping] {
-      let scope: ModeScope = hold == .visual ? .visual : .drag
-      let own = hold == .visual ? visual : drag
+      let scope: ModeScope = .drag
+      let own = drag
       let separator = String(NormalModeInterpreter.keyAtomSeparator)
       let inherited = mappings(for: .normal).filter { base in
         !removes(base, in: scope)
@@ -1244,7 +1217,6 @@ struct Config {
       compiledInsert = CompiledMappings(mappings(for: .insert))
       compiledTerminal = CompiledMappings(effectiveTerminalMappings)
       compiledHyper = CompiledMappings(Self.resolveMappings(hyper))
-      compiledVisual = CompiledMappings(heldMappings(.visual))
       compiledDrag = CompiledMappings(heldMappings(.drag))
     }
 
@@ -1278,7 +1250,6 @@ struct Config {
           origin: mapping.origin)
       }
       normal = normal.map(resolvingLeader)
-      visual = visual.map(resolvingLeader)
       drag = drag.map(resolvingLeader)
     }
 
@@ -1301,6 +1272,7 @@ struct Config {
   var hints = Hints()
   var app = App()
   var keyboard = Keyboard()
+  var clipboard = Clipboard()
   var overlay = Overlay()
   var plugins = Plugins()
   var statusBar = StatusBar()
@@ -1614,7 +1586,6 @@ struct Config {
         "insert": mode.labels.insert,
         "normal": mode.labels.normal,
         "terminal": mode.labels.terminal,
-        "visual": mode.labels.visual,
         "drag": mode.labels.drag,
       ],
       "hyper": mode.hyper.map(Self.mappingJSONValue),
@@ -1692,6 +1663,7 @@ struct Config {
         // plugin through FLASH_PLUGIN_CONFIG.
         "configured": plugins.settings.keys.sorted(),
       ],
+      "clipboard": ["history_size": clipboard.historySize],
       // Kinds, lifecycles and sizes only: commands and environments can
       // carry credentials.
       "popup": [
@@ -1811,7 +1783,6 @@ struct Config {
     add(mode.effectiveTerminalMappings, at: ["mode", "terminal"])
     add(mode.command, at: ["mode", "command"])
     add(mode.hyper, at: ["mode", "hyper"])
-    add(mode.visual, at: ["mode", "visual"])
     add(mode.drag, at: ["mode", "drag"])
     for (bundle, app) in mode.appMappings {
       for scope in ModeScope.allCases {
@@ -1904,7 +1875,10 @@ extension URLCommand {
     case .mouseWarp(let request): return verb("mouse_warp", request.argTokens)
     case .mouseStep(let direction): return verb("mouse_step", ["--direction=\(direction.rawValue)"])
     case .mouseJump(let jump): return verb("mouse_step", ["--to=\(jump.rawValue)"])
-    case .selection(let action): return verb("selection", ["--action=\(action.rawValue)"])
+    case .selection(let action, let register):
+      return verb(
+        "selection", ["--action=\(action.rawValue)"] + (register.map { [kv("register", $0)] } ?? [])
+      )
     case .mouseNudge(let direction, let distance):
       return verb("mouse_nudge", ["--direction=\(direction.rawValue)", "--distance=\(distance)"])
     case .mousePosition(let request): return verb("mouse_position", request.argTokens)
@@ -2001,6 +1975,11 @@ extension URLCommand {
     case .clipboardCopy: return verb("clipboard_copy")
     case .clipboardCut: return verb("clipboard_cut")
     case .clipboardPaste: return verb("clipboard_paste")
+    case .clipboardHistory(let action, let id, let offset):
+      var parts = [kv("action", action)]
+      if let id { parts.append(kv("id", id)) }
+      if let offset { parts.append(kv("offset", offset)) }
+      return verb("clipboard_history", parts)
     case .lookUp: return verb("look_up")
     case .trackpadGesture(let fingers, let motion):
       return verb("gesture", ["--fingers=\(fingers)", "--motion=\(motion.rawValue)"])

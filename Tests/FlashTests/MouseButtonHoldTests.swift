@@ -51,13 +51,13 @@ final class MouseButtonHoldTests: XCTestCase {
     XCTAssertNil(hold.held)
   }
 
-  /// The hold remembers what it is for (VISUAL selects, DRAG drags) and
+  /// The hold remembers its purpose and
   /// where it went down, so a cancelled drag can be put back.
   func testTheHoldRecordsItsPurposeAndWhereItWentDown() {
     var hold = MouseButtonHold()
     let origin = CGPoint(x: 120, y: 340)
-    XCTAssertEqual(hold.apply(.down, .primary, for: .visual, at: origin), [.press(.primary)])
-    XCTAssertEqual(hold.held, .init(button: .primary, purpose: .visual, origin: origin))
+    XCTAssertEqual(hold.apply(.down, .primary, for: .drag, at: origin), [.press(.primary)])
+    XCTAssertEqual(hold.held, .init(button: .primary, purpose: .drag, origin: origin))
     XCTAssertEqual(
       hold.apply(.toggle, .secondary, for: .drag, at: .zero),
       [.release(.primary), .press(.secondary)])
@@ -72,9 +72,7 @@ final class MouseButtonHoldTests: XCTestCase {
     func parse(_ args: [String: String]) -> URLCommand? {
       URLEventHandler.parse(verb: "mouse_button", args: args)
     }
-    XCTAssertEqual(
-      parse(["state": "toggle", "mode": "visual"]),
-      .mouseButton(.init(state: .toggle, button: .primary, hold: .visual)))
+    XCTAssertNil(parse(["state": "toggle", "mode": "visual"]))
     XCTAssertEqual(
       parse(["state": "toggle", "secondary": "1", "mode": "drag"]),
       .mouseButton(.init(state: .toggle, button: .secondary, hold: .drag)))
@@ -93,9 +91,9 @@ final class MouseButtonHoldTests: XCTestCase {
     XCTAssertEqual(
       URLCommand.dragMode(.middle).diagnosticDescription, "flash enter_drag_mode --middle")
     XCTAssertEqual(
-      URLCommand.mouseButton(.init(state: .toggle, button: .primary, hold: .visual))
+      URLCommand.mouseButton(.init(state: .toggle, button: .primary, hold: .drag))
         .diagnosticDescription,
-      "flash mouse_button --state=toggle --mode=visual")
+      "flash mouse_button --state=toggle --mode=drag")
   }
 
   func testEachButtonPostsItsOwnEventTypes() {

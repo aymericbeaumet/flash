@@ -16,6 +16,14 @@ mappings.
 - `gg` / `G` go to the top/bottom.
 - `u` undoes and `ctrl+r` redoes. Bare `d`, `j` and `k` are unbound.
 - `y` copies immediately and `p` pastes.
+  Prefix either key with `"` and a register name to use a named buffer, for
+  example `"ay` and `"ap`. Names `a`–`z` and `0`–`9` hold text in the running
+  Flash process; uppercase names append when yanking. A bare yank also saves
+  its text in `"0`, while a named yank leaves `"0` alone. Yanks update the
+  unnamed register, which Flash shares with the system clipboard; `"+` and
+  `"*` select that clipboard explicitly. `"_y` discards text without changing
+  any register. The prefix also works for DRAG copy and paste. The command
+  equivalents accept `--register=<name>`.
 - `/` opens Find (`app_find`, Cmd-F) and enters INSERT, so typing goes to the
   find field.
 - `x` closes the current tab (`tab_close`); `X` reopens the last closed one
@@ -88,7 +96,7 @@ mappings.
   does what `f` does there; a letter on plain bar text moves the pointer onto
   it. The click and the move land one point left of the glyph's centre, still
   on the letter, so a later selection can start on that glyph's leading side;
-  in VISUAL they land one point right of it, so the selection a held button
+  in DRAG they land one point right of it, so the selection a held button
   draws ends on that letter.
   Hint labels are uppercase and accept either case. Backspace
   edits the letter, Escape cancels, and no match stays silent. Holding the
@@ -238,32 +246,6 @@ on both sides, or on `return`; the other grid keys work as above.
 pointer, on the pointer's display, stopping while one selection remains;
 Backspace walks back out.
 
-## Visual selection: VISUAL
-
-VISUAL selects text the way Vim's visual mode does. `v` starts a selection
-where the pointer is; from then on the text from that point to the cursor is
-selected, and every motion extends it:
-
-- `j` / `k` move one text line down / up, keeping the column, and `h` / `l`
-  one character left / right, measured from the glyph under the pointer.
-- `w` / `b` move to the next word's start or back to a word's start, `e` to
-  a word's end, and `0` / `$` to the start / end of the line.
-- `f`, `F` and `s` pick a target, a grid cell or a letter and extend the
-  selection to it instead of clicking. `s` lands just past its letter, so the
-  selection takes it.
-- `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` scroll the page, and the
-  selection follows the text that scrolled under the cursor. This differs
-  from Vim, where `ctrl+e` scrolls without moving the cursor: in Flash the
-  cursor stays put on screen. `gg` / `G` extend to the first / last line.
-
-Operators act on the selection and end it, as in Vim: `y` copies it, `d`
-and `x` cut it, `c` cuts it and enters INSERT to type its replacement, and
-`p` pastes over it (`selection --action=copy|cut|change|paste`). `v` again or
-Escape ends VISUAL and leaves the text selected. The badge is orange and shows `mode.labels.visual` (default
-`VISUAL`). `[mode.visual.mappings]` holds these keys; any key it leaves alone
-keeps its NORMAL meaning, and a key it binds hides the NORMAL sequences it
-starts, so it fires at once.
-
 ## Dragging: DRAG
 
 DRAG drags something with a mouse button held down. `enter_drag_mode` grabs
@@ -271,32 +253,38 @@ what is under the pointer with the left button (`--secondary` or `--middle`
 for another); it ships unmapped, so bind it where you like. Then:
 
 - `h` `j` `k` `l` nudge it 16 points, `H` `J` `K` `L` 96 points.
+- `w` / `b` jump to the next or previous word; `e` reaches a word's end;
+  `0` / `$` reach a line's start or end. With text under the pointer, each
+  extends a selection while the button stays held.
 - `f`, `F` and `s` pick where it goes: a target, a grid cell or a letter.
+  `s` lands just past the letter, so a text selection takes it.
+- `ctrl+e` / `ctrl+y` and `ctrl+d` / `ctrl+u` scroll the page; a text selection
+  follows the text that moves under the pointer. `gg` / `G` reach the first /
+  last line.
+- `y` releases the button, copies selected text and clears the highlight after
+  the copy succeeds. `d` / `x` cut, `c` cuts and enters INSERT, and `p` pastes
+  over the selected text. These operators end DRAG.
 - Return, or the key that entered DRAG, drops it where the pointer is;
   Escape puts it back where it was grabbed and lets go.
 
 The badge is yellow and shows `mode.labels.drag` (default `DRAG`). The keys
-live in `[mode.drag.mappings]`, read before NORMAL's like VISUAL's. An
+live in `[mode.drag.mappings]`, read before NORMAL's. An
 all-mode chord enters DRAG from INSERT as well, and the drop returns to
 NORMAL.
 
 ```toml
-[mode.normal.mappings]
-"v" = ["flash", "mouse_button", "--state=toggle", "--mode=visual"]
-
 [mode.all.mappings]
 "cmd+ctrl+d" = ["flash", "enter_drag_mode"]
 ```
 
 ### How Flash does it
 
-Both modes are a mouse button Flash holds down (`mouse_button`;
-`enter_drag_mode` is its DRAG toggle): VISUAL holds the primary button where
-the selection starts, and every pointer move Flash makes while a button is
-held is a drag of it. The press, drag and release do not inherit modifiers
+DRAG is a mouse button Flash holds down (`mouse_button`;
+`enter_drag_mode` is its toggle). Every pointer move Flash makes while a
+button is held is a drag of it. The press, drag and release do not inherit modifiers
 from the shortcut that started the hold, so a Control shortcut does not turn
 the press into a context click. The mode follows the hold exactly: whichever
-path presses the button from NORMAL or INSERT enters the mode named by `--mode`,
+path presses the button from NORMAL or INSERT enters DRAG,
 whichever releases it leaves, and leaving the mode any other way
 (`enter_normal_mode`, INSERT, the command line, `leave_mode`, quitting
 Flash, a committed click) releases the button. `mouse_pointer`'s `v` holds a

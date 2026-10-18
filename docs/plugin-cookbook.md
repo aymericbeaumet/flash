@@ -14,8 +14,9 @@ plugins.
    first use, not at startup.
 2. **Commands + host RPCs + persistence — `Plugins/marks` (~200 LOC).**
    Vim-style marks: `flash marks set` / `flash marks jump`, `host.normal_mode_target` and
-   `host.activate` host RPCs (the `app_control` capability), JSON state
-   persisted under `share_dir()`, and `listen` events keeping it fresh.
+   `host.activate` and `host.open` host RPCs (the `app_control` and `open`
+   capabilities), JSON state persisted under `share_dir()`, and the SDK's
+   running-app snapshot to verify a saved process ID before activation.
 3. **Push catalog via native APIs — `Plugins/processes` (~300 LOC).** A
    `sources` plugin building its complete row set and pushing it with
    `publish` from `on_start`, refreshed by events alone (app launch/quit,

@@ -1077,7 +1077,6 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .insert: modeText = labels.insert
     case .command: modeText = labels.command
     case .hyper: modeText = labels.hyper
-    case .visual: modeText = labels.visual
     case .drag: modeText = labels.drag
     }
     redraw(
@@ -1101,7 +1100,6 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .insert: palette = OverlayPanel.insertPalette
     case .command: palette = OverlayPanel.commandPaletteValue
     case .hyper: palette = OverlayPanel.hyperPalette
-    case .visual: palette = OverlayPanel.visualPalette
     case .drag: palette = OverlayPanel.dragPalette
     }
     surface.render(

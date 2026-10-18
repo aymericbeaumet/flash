@@ -2755,6 +2755,22 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(yanked.pending, "")
   }
 
+  func testRegisterPrefixRoutesDragCopyAndPasteToNamedRegisters() {
+    let mappings = Config.default.mode.drag
+    XCTAssertEqual(
+      command(pending: "\"a", chars: "y", mappings: mappings),
+      .selection(.copy, register: "a"))
+    XCTAssertEqual(
+      command(pending: "\"a", chars: "p", mappings: mappings),
+      .selection(.paste, register: "a"))
+  }
+
+  func testRegisterPrefixRoutesDragCopyToNamedRegister() {
+    XCTAssertEqual(
+      command(pending: "\"a", chars: "y", mappings: Config.default.mode.drag),
+      .selection(.copy, register: "a"))
+  }
+
   func testRegisterNameDigitIsNotMistakenForACount() {
     // `"1p` is register 1, not a one-times paste — the leading `"` disambiguates.
     let named = transition(pending: "\"", chars: "1")
@@ -2779,7 +2795,9 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testRegisterStoreNamedBufferRoundTrips() {
-    let store = RegisterStore()
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let store = RegisterStore(pasteboard: pasteboard)
     store.write("hello", register: "a")
     XCTAssertEqual(store.read(register: "a"), "hello")
     // A different register is independent.
@@ -2787,7 +2805,9 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testRegisterStoreUppercaseNameAppends() {
-    let store = RegisterStore()
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let store = RegisterStore(pasteboard: pasteboard)
     store.write("foo", register: "a")
     store.write("bar", register: "A")
     XCTAssertEqual(store.read(register: "a"), "foobar")
@@ -2801,6 +2821,53 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(RegisterStore.isSystemClipboard("*"))
     XCTAssertTrue(RegisterStore.isSystemClipboard("\""))
     XCTAssertFalse(RegisterStore.isSystemClipboard("a"))
+  }
+
+  func testYankRegistersFollowVimNumberedAndUnnamedRules() {
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let store = RegisterStore(pasteboard: pasteboard)
+
+    store.write("first", register: nil)
+    XCTAssertEqual(store.read(register: "0"), "first")
+    XCTAssertEqual(store.read(register: nil), "first")
+
+    store.write("second", register: "a")
+    XCTAssertEqual(store.read(register: "0"), "first")
+    XCTAssertEqual(store.read(register: "a"), "second")
+    XCTAssertEqual(store.read(register: nil), "second")
+
+    store.write(" more", register: "A")
+    XCTAssertEqual(store.read(register: "a"), "second more")
+    XCTAssertEqual(store.read(register: nil), "second more")
+    XCTAssertEqual(store.read(register: "0"), "first")
+
+    store.write("discarded", register: "_")
+    XCTAssertEqual(store.read(register: nil), "second more")
+    XCTAssertNil(store.read(register: "_"))
+    XCTAssertEqual(store.snapshot().first?.name, "\"")
+    XCTAssertTrue(
+      store.snapshot().contains(.init(name: "0", text: "first", kind: "yank", truncated: false)))
+  }
+
+  func testBlackHoleRegisterPrefixIsCaptured() {
+    let named = transition(pending: "\"", chars: "_")
+    XCTAssertEqual(named.pending, "\"_")
+    XCTAssertEqual(
+      transition(pending: named.pending, chars: "y").command,
+      .yankSelection(register: "_"))
+  }
+
+  func testRegisterSnapshotBoundsInspectorPayloadWithoutTruncatingPaste() {
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let store = RegisterStore(pasteboard: pasteboard)
+    let text = String(repeating: "a", count: 16 * 1024 + 10)
+    store.write(text, register: "b")
+    XCTAssertEqual(store.read(register: "b"), text)
+    let entry = store.snapshot().first { $0.name == "b" }
+    XCTAssertEqual(entry?.text.utf8.count, 16 * 1024)
+    XCTAssertEqual(entry?.truncated, true)
   }
 
   func testCommandModifiedMappingsDispatchConfiguredActionsInNormalMode() {

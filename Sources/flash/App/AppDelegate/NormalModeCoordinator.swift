@@ -6,8 +6,8 @@ import FlashProviders
 /// One `:clipboard show` history row. `preview` is the one-line label, `value`
 /// the plain text put back on the clipboard. `html` is a formatted copy,
 /// `mime` means an image file is served at `/api/clipboard/<id>`, and `files`
-/// are copied paths. Decoded from the clipboard plugin's JSON response.
-struct ClipboardModalEntry: Decodable, Equatable {
+/// are copied paths. The core store uses this for history pages.
+struct ClipboardModalEntry: Codable, Equatable {
   var id: String
   var kind: String
   var preview: String
@@ -45,7 +45,7 @@ struct ClipboardModalEntry: Decodable, Equatable {
   }
 }
 
-struct ClipboardHistoryPage: Decodable, Equatable {
+struct ClipboardHistoryPage: Codable, Equatable {
   var entries: [ClipboardModalEntry]
   var total: Int
   var nextOffset: Int?
@@ -211,7 +211,7 @@ extension AppDelegate {
     // The one reset point for the hold: every exit from HYPER ends it here,
     // whichever event caused the exit.
     overlay.hyperHold.modeChanged(from: previous, to: next)
-    // VISUAL and DRAG are the held button: leaving them any other way
+    // DRAG is the held button: leaving it any other way
     // (`enter_normal_mode`, INSERT, the command line, advanced mode turning
     // off) lets the button go.
     if let hold = previous.buttonHold, next.buttonHold == nil {
@@ -267,7 +267,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command, .terminal, .hyper, .visual, .drag:
+    case .command, .terminal, .hyper, .drag:
       break
     }
   }
@@ -307,7 +307,6 @@ extension AppDelegate {
     case .command: return config.mode.labels.command
     case .terminal: return config.mode.labels.terminal
     case .hyper: return config.mode.labels.hyper
-    case .visual: return config.mode.labels.visual
     case .drag: return config.mode.labels.drag
     }
   }
@@ -1357,8 +1356,8 @@ extension AppDelegate {
       for _ in 0..<normalizedRepeatCount(repeatCount) { performMouseJump(jump) }
     case .trackpadGesture(let fingers, let motion):
       performGesture(fingers: fingers, motion: motion)
-    case .selection(let action):
-      performSelection(action)
+    case .selection(let action, let register):
+      performSelection(action, register: register)
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(var request):
@@ -1418,7 +1417,8 @@ extension AppDelegate {
       openDebugDashboard(.plugins(id: nil))
     case .showAbout:
       handleURLCommand(command)
-    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
+    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .clipboardHistory,
+      .pluginCommand, .moveWindow,
       .focusWindow,
       .windowState,
       .pluginVerb:
@@ -1558,30 +1558,20 @@ extension AppDelegate {
   }
 
   /// `:clipboard show` — history lives on the browser help's Clipboard page.
-  /// Refresh the host cache from the plugin, then open the browser there. The
-  /// history travels over the plugin command RPC (keeping this surface
-  /// decoupled from the flashlight candidate pool).
+  /// Refresh the first history page, then open the browser there.
   func openClipboardDashboard() {
     refreshClipboardDashboardCache()
     openDebugDashboard(.clipboard)
   }
 
-  /// Pull the full clipboard history from the plugin into `clipboardEntries`
-  /// (the dashboard payload), which pushes it to an open inspector. Driven by
-  /// `:clipboard show` and by each pasteboard change.
+  /// Refresh the first history page for the inspector.
   func refreshClipboardDashboardCache() {
-    _ = pluginManager.invoke(
-      command: "clipboard", subcommand: "show", args: [], raw: ":clipboard show",
-      in: pluginSelectorContext()
-    ) { [weak self] ok, _, stdout, _ in
-      let page = (ok ? stdout : nil).flatMap(Self.decodeClipboardHistoryPage)
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.clipboardImageMimes.remember(page?.entries ?? [], offset: 0)
-        self.clipboardTotal = page?.total ?? 0
-        self.clipboardNextOffset = page?.nextOffset
-        self.clipboardEntries = page?.entries ?? []
-      }
+    clipboardHistoryStore.page(offset: 0) { [weak self] page in
+      guard let self else { return }
+      self.clipboardImageMimes.remember(page?.entries ?? [], offset: 0)
+      self.clipboardTotal = page?.total ?? 0
+      self.clipboardNextOffset = page?.nextOffset
+      self.clipboardEntries = page?.entries ?? []
     }
   }
 
@@ -1915,24 +1905,36 @@ extension AppDelegate {
   /// `y` — copy the focused app's current selection into `register`. Reads the
   /// selection off the AX tree when the app exposes it (no clipboard churn);
   /// otherwise synthesizes ⌘C and stores whatever lands on the pasteboard.
-  private func yankSelection(into register: String?) {
+  func yankSelection(into register: String?, clearSelection: Bool = false) {
     guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for yank_selection")
       applyModeOverlay()
       return
     }
     let pid = context.processID
+    if register == "_" {
+      if clearSelection { collapseCopiedSelection(in: pid) }
+      applyModeOverlay()
+      return
+    }
     Self.normalModeAXActionQueue.async { [weak self] in
       let text = NormalModeDispatcher.selectedText(pid: pid)
-      DispatchQueue.main.async { self?.finishYankSelection(axText: text, into: register) }
+      DispatchQueue.main.async {
+        self?.finishYankSelection(
+          axText: text, into: register, targetPID: pid, clearSelection: clearSelection)
+      }
     }
   }
 
-  private func finishYankSelection(axText: String?, into register: String?) {
+  private func finishYankSelection(
+    axText: String?, into register: String?, targetPID: pid_t, clearSelection: Bool
+  ) {
     if let text = axText {
       registers.write(text, register: register)
+      debugStateDidChange()
       FlashLog.debug(
         "[normal_mode] yank ax len=\(text.count) register=\(register ?? "*clipboard*")")
+      if clearSelection { collapseCopiedSelection(in: targetPID) }
       applyModeOverlay()
       return
     }
@@ -1944,21 +1946,46 @@ extension AppDelegate {
       .clipboardCopy,
       completion: { [weak self] outcome in
         guard outcome == .chordSent || outcome == .performed else { return }
-        self?.awaitYankedText(after: beforeChange, into: register)
+        self?.awaitYankedText(
+          after: beforeChange, into: register, targetPID: targetPID,
+          clearSelection: clearSelection)
       })
   }
 
-  private func awaitYankedText(after beforeChange: Int, into register: String?) {
+  private func awaitYankedText(
+    after beforeChange: Int, into register: String?, targetPID: pid_t,
+    clearSelection: Bool
+  ) {
     pollPasteboard(after: beforeChange, attempts: 20) { [weak self] text in
       guard let self else { return }
       if let text, !text.isEmpty {
         self.registers.write(text, register: register)
+        self.debugStateDidChange()
         FlashLog.debug(
           "[normal_mode] yank clipboard len=\(text.count) register=\(register ?? "*clipboard*")")
+        if clearSelection { self.collapseCopiedSelection(in: targetPID) }
       } else {
         FlashLog.debug("[normal_mode] yank clipboard_copy produced no selection")
       }
       self.scheduleNormalModeRecapture()
+    }
+  }
+
+  /// A drag yank keeps the copied bytes before changing the app's selection.
+  /// Prefer AX's selected range; a right arrow is needed for web views that
+  /// expose a selection but do not permit setting that range. Never send that
+  /// key to a terminal, where it could become input to a running program.
+  private func collapseCopiedSelection(in pid: pid_t) {
+    guard
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+      let context = normalModeDispatchContext(), context.processID == pid
+    else { return }
+    let isTerminal = TerminalEmulators.contains(context.bundleIdentifier)
+    Self.normalModeAXActionQueue.async {
+      if NormalModeDispatcher.collapseSelectedText(pid: pid) { return }
+      if !isTerminal, let rightArrow = Self.arrowKeyCodes[.right] {
+        _ = NormalModeDispatcher.sendKey(virtualKey: rightArrow, to: pid)
+      }
     }
   }
 

@@ -1,11 +1,12 @@
 <script lang="ts">
   import { flushSync, onDestroy, onMount } from "svelte";
   import { fetchHistory, type ClipboardPage } from "./clipboard-history";
+  import ClipboardRegisters from "./ClipboardRegisters.svelte";
   import Icon from "./Icon.svelte";
   import { linkSegments } from "./linkify";
-  import type { ClipboardEntry } from "./types";
+  import type { ClipboardEntry, ClipboardRegister } from "./types";
 
-  let { entries, nextOffset, total }: { entries: ClipboardEntry[]; nextOffset: number | null; total: number } = $props();
+  let { entries, registers, nextOffset, total }: { entries: ClipboardEntry[]; registers: ClipboardRegister[]; nextOffset: number | null; total: number } = $props();
   let history = $state<ClipboardEntry[]>([]);
   let retained = $state(0);
   let loading = $state(false);
@@ -176,8 +177,10 @@
 {#snippet linked(text: string)}{#each linkSegments(text) as segment}{#if segment.href}<a href={segment.href} target="_blank" rel="noopener noreferrer">{segment.text}</a>{:else}{segment.text}{/if}{/each}{/snippet}
 
 <div class="page">
-  <div class="page-heading"><p class="eyebrow">Inspect</p><h1>Clipboard</h1><p>Find something you copied earlier and put it back on your clipboard, or delete it from this history. Images, formatted text, and files are kept along with plain text.</p></div>
+  <div class="page-heading"><p class="eyebrow">Inspect</p><h1>Clipboard</h1><p>Inspect text registers and find earlier clipboard entries. History keeps images, formatted text, files, and plain text.</p></div>
   <div class="privacy-note"><Icon name="shield" size={16} /><span>History is provided by your local Flash instance.</span><a href="/docs/privacy">About clipboard privacy</a></div>
+  <ClipboardRegisters {registers} />
+  <div class="history-heading"><h2>Clipboard history</h2><p>Search retained copies, restore one to the clipboard, or delete it from history.</p></div>
   {#if notice}<div class="notice error" role="alert">{notice}</div>{/if}
   <div class="sr-status" role="status" aria-live="polite">{copied !== null ? "Entry copied to your clipboard." : ""}</div>
   <div class="surface clipboard">
@@ -216,6 +219,8 @@
 {/if}
 
 <style>
+  .history-heading { margin-bottom: 14px; }
+  .history-heading p { margin-top: 5px; color: var(--muted); font-size: 13px; }
   .privacy-note { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 11px; margin-bottom: 22px; }
   .privacy-note :global(svg) { flex-shrink: 0; margin-top: 1px; }
   .privacy-note a { margin-left: auto; white-space: nowrap; }

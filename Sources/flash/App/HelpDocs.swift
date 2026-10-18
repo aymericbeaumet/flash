@@ -71,7 +71,7 @@ enum HelpDocs {
   static let groups: [(title: String, names: [String])] = [
     ("Start here", ["overview", "getting-started", "hints", "normal-mode", "mappings"]),
     ("Move and discover", ["mouse-grid", "flashlight", "verbs"]),
-    ("Make it yours", ["config", "statusbar", "status-format", "widgets", "popups"]),
+    ("Make it yours", ["config", "clipboard", "statusbar", "status-format", "widgets", "popups"]),
     ("Extend and understand", ["plugins", "privacy", "troubleshooting", "development", "manual"]),
   ]
 
@@ -86,6 +86,7 @@ enum HelpDocs {
     "flashlight": "flashlight",
     "verbs": "commands",
     "config": "configuration",
+    "clipboard": "privacy",
     "statusbar": "status-format",
     "status-format": "status-format",
     "widgets": "widgets",
@@ -113,6 +114,7 @@ enum HelpDocs {
       NormalModeDispatcher.helpTopic(config: config, showModes: showModes),
       URLEventHandler.helpTopic,
       Config.helpTopic,
+      clipboardTopic,
       statusbarTopic,
       statusFormatTopic,
       widgetsTopic,
@@ -164,7 +166,7 @@ enum HelpDocs {
       the command list. The page focuses its search when it opens. Press `?`
       in NORMAL or run `:mappings` to open it. Above the list, your layout is
       drawn with what each key does in the mode picked under it: NORMAL,
-      VISUAL, DRAG, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
+      DRAG, HYPER, INSERT, COMMAND, TERMINAL or all of them, with free keys
       dashed. Modifier buttons show the chord layers, a prefix key opens what
       can follow it, and picking a key keeps its bindings in the list, each
       with the TOML that rebinds or removes it. The keyboard can show the hint
@@ -481,11 +483,11 @@ enum HelpDocs {
 
       ## Select, drag or steer the pointer
 
-      `v` starts a visual selection (VISUAL): motions such as `j`, `k`, `f`
-      and `s` extend it, and `v` or Escape ends it with the text selected.
       `enter_drag_mode` (unmapped by default; `--secondary` for the right
       button) grabs what is under the pointer (DRAG): `h` `j` `k` `l` nudge
-      it, `f` picks where it goes, Return drops it and Escape puts it back.
+      it, `w` / `b` jump by word and `f` picks where it goes. On selected text,
+      `y` copies and clears the highlight; `d` cuts. Return drops and Escape
+      puts it back.
       `mouse_pointer` opens keyboard pointer control.
 
       See [commands](/commands) for exact flags and [mappings](/mappings)
@@ -907,6 +909,21 @@ enum HelpDocs {
       [runtime](/state) shows the resident's current permission and input status.
       """,
     aliases: ["permissions"])
+
+  private static let clipboardTopic = HelpTopic(
+    name: "clipboard",
+    title: "Clipboard history",
+    summary: "Review and delete copies Flash retained on this Mac.",
+    body: """
+      # Clipboard history
+
+      Flash records eligible copies while it runs. Open the Clipboard page with
+      `flash clipboard show` or `:clipboard show`. Delete a row there, or run
+      `flash clipboard delete <id>`. The history keeps up to 1000 entries by
+      default; set `[clipboard] history_size` to 1–10000 to change that limit.
+      Concealed, transient and automatically generated pasteboard items are
+      excluded. See [Privacy](\(HelpDocs.manual("privacy"))) for storage details.
+      """)
 
   private static let troubleshootingTopic = HelpTopic(
     name: "troubleshooting",

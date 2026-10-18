@@ -9,9 +9,7 @@ import Foundation
 /// it. The registry is frozen: additions are allowed, renames never
 /// (parity-tested against `protocol.json`).
 enum PluginCapability: String, Codable, CaseIterable, Equatable {
-  /// Subscribe to `core:clipboard.changed` (text, image, HTML, and file
-  /// metadata; image bytes are a file in this plugin's data directory) and
-  /// call `host.clipboard_write`.
+  /// Call `host.clipboard_write`.
   case clipboard
   /// Call the host's Accessibility broker (`host.ax_snapshot`,
   /// `host.ax_perform`, `host.ax_set`, `host.ax_select_child`) and the
@@ -59,12 +57,7 @@ extension PluginCapability {
   /// Sensitive event names that require an explicit capability declaration
   /// before the host delivers them to a plugin's `event` stream.
   static func required(for eventName: String) -> PluginCapability? {
-    switch eventName {
-    case "core:clipboard.changed":
-      return .clipboard
-    default:
-      return nil
-    }
+    nil
   }
 }
 
@@ -1102,7 +1095,7 @@ struct PluginManifest: Decodable, Equatable {
       guard let scope = ModeScope(rawValue: mapping.mode) else {
         throw PluginError.failure(
           "plugin mapping mode \(mapping.mode) must be all, normal, insert, terminal, command, "
-            + "hyper, visual, or drag")
+            + "hyper, or drag")
       }
       // The config's rule: the command line reads only native chords.
       if scope == .command, ModeMapping.parseNativeHotkey(mapping.key) == nil {

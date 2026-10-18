@@ -8,7 +8,6 @@ enum OverlayModeBadgeStyle {
   case normal
   case command
   case hyper
-  case visual
   case drag
 }
 

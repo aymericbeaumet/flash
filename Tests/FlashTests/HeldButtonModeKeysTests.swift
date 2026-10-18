@@ -3,7 +3,7 @@ import XCTest
 
 @testable import flash
 
-/// The keys the DRAG and VISUAL tables bind by name must resolve through the
+/// The keys the DRAG table binds by name must resolve through the
 /// interpreter from the physical key: Return drops a drag, Escape cancels or
 /// ends one, as `config.default.toml` promises. A named key has one atom,
 /// whichever alias the mapping spelled and whatever character the event
@@ -30,10 +30,10 @@ final class HeldButtonModeKeysTests: XCTestCase {
       .mouseButton(.init(state: .cancel, button: .primary, hold: .drag)))
   }
 
-  func testEscapeEndsAVisualSelection() {
+  func testYankEndsHeldSelectionInDragMode() {
     XCTAssertEqual(
-      command(keyCode: kVK_Escape, characters: "\u{1B}", mappings: Config.default.mode.visual),
-      .mouseButton(.init(state: .release, button: .primary, hold: .visual)))
+      command(keyCode: kVK_ANSI_Y, characters: "y", mappings: Config.default.mode.drag),
+      .selection(.copy))
   }
 
   func testNamedKeyAliasesShareOneAtom() throws {

@@ -137,6 +137,7 @@ extension AppDelegate {
       cfg.flashlight.frecencyHalfLifeDays != config.flashlight.frecencyHalfLifeDays
       || cfg.flashlight.frecencyMaxBoost != config.flashlight.frecencyMaxBoost
     config = cfg
+    clipboardHistoryStore.setCapacity(cfg.clipboard.historySize)
     FlashTunables.apply(cfg)
     if frecencyTuningChanged {
       frecencyStore = FrecencyStore(

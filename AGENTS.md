@@ -213,6 +213,9 @@ Surface requests that would violate these constraints before implementing them.
   requests and shutdown. Third-party GitHub refs require a full pinned commit.
   Capabilities default-deny sensitive surfaces; explicit plugin settings carry
   credentials, never inherited ambient secrets or inspector-visible values.
+- Clipboard history belongs to core `ClipboardHistoryStore`; text registers
+  belong to `RegisterStore`. Keep their command, help and privacy surfaces in
+  sync, and migrate stored history when changing its path.
 - Seatbelt denies cannot be reopened by later allows. Carve permitted children
   out of the deny, canonicalize symlinked paths, and retain secret-read denies.
   Local socket connections require network capability. Do not widen the sandbox

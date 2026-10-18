@@ -49,7 +49,7 @@ clipboard history.
   `@windows`, `@menus`, and DuckDuckGo-style bangs for browser history
   ([flashlight](../flashlight.md)).
 - `window_move --position=` and placement rules by app and title.
-- The clipboard plugin's history, visible on the `/clipboard` help page.
+- Clipboard history, visible on the `/clipboard` help page.
 - Terminal popups: a bar segment that opens btop or newsboat under it.
 
 ## Moving from Raycast
@@ -60,7 +60,7 @@ clipboard history.
 | Calculator, unit conversion | Type the expression in flashlight |
 | Emoji picker | `:flashlight @emojis.glyphs ` |
 | Window management commands | `window_move --position=<name>` mappings |
-| Clipboard history | The bundled clipboard plugin |
+| Clipboard history | Flash's built-in Clipboard page |
 | Switch windows | `:flashlight @windows`, `window_focus --direction=` |
 | Extensions | Bundled plugins, or write one ([cookbook](../plugin-cookbook.md)) |
 | AI, notes, snippets | Keep Raycast, or another tool |

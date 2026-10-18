@@ -23,18 +23,18 @@ final class EffectiveMappingsTests: XCTestCase {
     XCTAssertEqual(other.compiledNormal.mapping(for: "u")?.action.command, .undo)
   }
 
-  /// Plugin mappings reach every table a config can fill: HYPER, VISUAL and
+  /// Plugin mappings reach every table a config can fill: HYPER, DRAG and
   /// COMMAND included.
-  func testPluginMappingsMergeIntoHyperVisualAndCommand() throws {
+  func testPluginMappingsMergeIntoHyperDragAndCommand() throws {
     let chord = try XCTUnwrap(ModeMapping.parseNativeHotkey("cmd+k"))
     let plugin: [(priority: Int, scope: ModeScope, mapping: ModeMapping)] = [
       (25, .hyper, ModeMapping(key: "q", action: .flashCommand(.tabNext))),
-      (25, .visual, ModeMapping(key: "q", action: .flashCommand(.redo))),
+      (25, .drag, ModeMapping(key: "q", action: .flashCommand(.redo))),
       (25, .command, ModeMapping(key: "cmd+k", action: .flashCommand(.undo))),
     ]
     let merged = EffectiveMappings.merge(base: mode(), plugin: plugin)
     XCTAssertEqual(merged.compiledHyper.mapping(for: "q")?.action.command, .tabNext)
-    XCTAssertEqual(merged.compiledVisual.mapping(for: "q")?.action.command, .redo)
+    XCTAssertEqual(merged.compiledDrag.mapping(for: "q")?.action.command, .redo)
     XCTAssertNil(merged.compiledNormal.mapping(for: "q"))
     XCTAssertEqual(
       MappingsCoordinator.activeMappingTable(in: merged, scope: .command)[chord]?.action.command,

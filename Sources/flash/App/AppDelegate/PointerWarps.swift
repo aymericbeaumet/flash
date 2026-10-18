@@ -77,13 +77,13 @@ extension AppDelegate {
 
   /// `mouse_step`: one text line or character from the glyph under the
   /// pointer, read from Accessibility on the geometry queue, never on main.
-  /// In VISUAL a horizontal step lands one point past the character's centre
+  /// In DRAG a horizontal step lands one point past the character's centre
   /// (as `s` does), so the held button's selection takes that character.
   func performMouseStep(_ direction: TextStep.Direction) {
     let primaryH = ScreenSpace.primaryHeight
     let pointer = NSEvent.mouseLocation
     let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
-    let selectingThrough = modeStore.mode.isVisual
+    let selectingThrough = modeStore.mode.isDrag
     monitor.geometryQueue.async {
       let target = TextStep.target(
         pointer: topLeft, direction: direction,
@@ -98,13 +98,13 @@ extension AppDelegate {
   }
 
   /// `mouse_step --to`: a word or line jump from the glyph under the pointer,
-  /// read on the geometry queue. In VISUAL it lands just past the glyph's
+  /// read on the geometry queue. In DRAG it lands just past the glyph's
   /// centre, so the selection takes that character.
   func performMouseJump(_ jump: TextStep.Jump) {
     let primaryH = ScreenSpace.primaryHeight
     let pointer = NSEvent.mouseLocation
     let topLeft = CGPoint(x: pointer.x, y: primaryH - pointer.y)
-    let selectingThrough = modeStore.mode.isVisual
+    let selectingThrough = modeStore.mode.isDrag
     monitor.geometryQueue.async {
       let target = TextStep.target(
         pointer: topLeft, jump: jump,
@@ -140,17 +140,17 @@ extension AppDelegate {
   /// the app sees the button go up first.
   static let selectionSettleMs = 60
 
-  /// `selection`: end a visual selection (the held button lets go, leaving
+  /// `selection`: end a text selection (the held button lets go, leaving
   /// the text selected), then copy, cut, change or paste over it.
-  func performSelection(_ action: SelectionAction) {
+  func performSelection(_ action: SelectionAction, register: String? = nil) {
     let held = ActionDispatcher.heldButton != nil
     if held { releaseHeldMouseButton(reason: "selection_\(action.rawValue)") }
     let act = { [weak self] in
       guard let self else { return }
       switch action {
-      case .copy: self.performMappedCommand(.yankSelection(register: nil))
+      case .copy: self.yankSelection(into: register, clearSelection: held)
       case .cut: self.performMappedCommand(.clipboardCut)
-      case .paste: self.performMappedCommand(.paste(register: nil))
+      case .paste: self.performMappedCommand(.paste(register: register))
       case .change:
         self.performMappedCommand(.clipboardCut)
         self.enterInsertMode(reason: .explicitCommand)

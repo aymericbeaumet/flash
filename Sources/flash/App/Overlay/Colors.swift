@@ -29,8 +29,7 @@ extension OverlayPanel {
   /// pill reads as purple on its own.
   static let hyperPurple = NSColor(calibratedRed: 0.62, green: 0.42, blue: 0.89, alpha: 1)
   static let nordAuroraRed = NSColor(calibratedRed: 0.75, green: 0.38, blue: 0.42, alpha: 1)
-  /// Nord's aurora orange: VISUAL, a held button over NORMAL, reads as warm
-  /// against NORMAL's green and HYPER's violet.
+  /// Nord's aurora orange accents the DRAG badge against NORMAL's green.
   static let nordAuroraOrange = NSColor(calibratedRed: 0.82, green: 0.53, blue: 0.44, alpha: 1)
   static let tmuxGrey245 = NSColor(calibratedWhite: 0.54, alpha: 1)
 
@@ -88,11 +87,6 @@ extension OverlayPanel {
     bottomCG: hyperPurpleCG,
     foregroundCG: nordPolarNight0CG,
     borderCG: nordAuroraYellowCG)
-  static let visualPalette = ModeBadgePalette(
-    topCG: lifted(nordAuroraOrange, by: 0.14).cgColor,
-    bottomCG: nordAuroraOrangeCG,
-    foregroundCG: nordPolarNight0CG,
-    borderCG: nordAuroraYellowCG)
   static let dragPalette = ModeBadgePalette(
     topCG: lifted(nordAuroraYellow, by: 0.12).cgColor,
     bottomCG: nordAuroraYellowCG,
@@ -110,7 +104,6 @@ extension OverlayPanel {
     case .normal: return Self.normalPalette
     case .command: return Self.commandPaletteValue
     case .hyper: return Self.hyperPalette
-    case .visual: return Self.visualPalette
     case .drag: return Self.dragPalette
     }
   }

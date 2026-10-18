@@ -40,12 +40,12 @@ extension URLCommand {
       case .lineStart: return "Moves the cursor to the start of its line."
       case .lineEnd: return "Moves the cursor to the end of its line."
       }
-    case .selection(let action):
+    case .selection(let action, _):
       switch action {
-      case .copy: return "Copies the selected text, ending a visual selection."
-      case .cut: return "Cuts the selected text, ending a visual selection."
+      case .copy: return "Copies the selected text, ending a drag."
+      case .cut: return "Cuts the selected text, ending a drag."
       case .change: return "Cuts the selected text and enters INSERT to type its replacement."
-      case .paste: return "Pastes over the selected text, ending a visual selection."
+      case .paste: return "Pastes over the selected text, ending a drag."
       }
     case .mouseNudge(let direction, let distance):
       return "Moves the pointer \(distance) points \(direction.rawValue)."
@@ -195,6 +195,8 @@ extension URLCommand {
       return "Cuts with the focused app's cut command."
     case .clipboardPaste:
       return "Pastes with the focused app's paste command."
+    case .clipboardHistory(let action, _, _):
+      return action == "show" ? "Opens clipboard history." : "Deletes a clipboard history entry."
     case .lookUp:
       return "Looks up the word under the pointer with the focused app's Look Up."
     case .trackpadGesture(let fingers, let motion):
@@ -335,25 +337,17 @@ private func buttonExplanation(_ request: MouseButtonRequest) -> String {
   case .secondary: button = "right"
   case .middle: button = "middle"
   }
-  switch (request.hold, request.state) {
-  case (.visual, .down):
-    return "Starts a visual selection at the pointer."
-  case (.visual, .up):
-    return "Ends the visual selection, leaving the text selected."
-  case (.visual, .toggle):
-    return "Starts a visual selection at the pointer, or ends the one in progress."
-  case (.drag, .down):
+  switch request.state {
+  case .down:
     return "Grabs what is under the pointer with the \(button) mouse button."
-  case (.drag, .up):
+  case .up:
     return "Drops what the \(button) mouse button is dragging, where the pointer is."
-  case (.drag, .toggle):
+  case .toggle:
     return
       "Grabs what is under the pointer with the \(button) mouse button, or drops what it drags."
-  case (.visual, .release):
-    return "Ends the visual selection, leaving the text selected."
-  case (.drag, .release):
+  case .release:
     return "Drops what is being dragged, where the pointer is."
-  case (_, .cancel):
+  case .cancel:
     return "Puts a drag back where it started and lets go."
   }
 }

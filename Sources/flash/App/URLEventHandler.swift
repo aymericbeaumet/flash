@@ -47,13 +47,13 @@ indirect enum URLCommand: Hashable {
   /// window or its screen.
   case mouseWarp(MouseWarpRequest)
   /// `mouse_step`: the pointer moves one text line or one character from the
-  /// text under it; in VISUAL that extends the selection.
+  /// text under it; in DRAG that extends a text selection.
   case mouseStep(TextStep.Direction)
   /// `mouse_step --to`: Vim's word and line jumps on the text under the
   /// pointer (`w`, `b`, `e`, `0`, `$`).
   case mouseJump(TextStep.Jump)
-  /// `selection`: act on the selected text, ending a visual selection first.
-  case selection(SelectionAction)
+  /// `selection`: act on the selected text, ending a drag first.
+  case selection(SelectionAction, register: String? = nil)
   /// `mouse_nudge`: the pointer moves a fixed distance; in DRAG the held
   /// button drags what it grabbed.
   case mouseNudge(TextStep.Direction, distance: Int)
@@ -170,6 +170,7 @@ indirect enum URLCommand: Hashable {
   case clipboardCopy
   case clipboardCut
   case clipboardPaste
+  case clipboardHistory(action: String, id: String?, offset: Int?)
   /// `gesture`: a trackpad gesture by finger count and motion, emulated at
   /// the pointer (`TrackpadGesture`).
   case trackpadGesture(fingers: Int, motion: TrackpadGesture.Motion)
@@ -871,9 +872,12 @@ final class URLEventHandler: NSObject {
         }
       }),
     "selection": .init(
-      [.text("action", "copy|cut|change|paste", required: true)],
+      [.text("action", "copy|cut|change|paste", required: true), .text("register", "name")],
       parse: { a in
-        a.value("action").flatMap(SelectionAction.init(rawValue:)).map { .selection($0) }
+        guard validRegisterArg(a),
+          let action = a.value("action").flatMap(SelectionAction.init(rawValue:))
+        else { return nil }
+        return .selection(action, register: registerArg(a))
       }),
     "mouse_nudge": .init(
       [.text("direction", "up|down|left|right", required: true), .text("distance", "points")],
@@ -947,7 +951,7 @@ final class URLEventHandler: NSObject {
     "mouse_button": .init(
       [
         .text("state", "down|up|toggle|release|cancel", required: true), .flag("secondary"),
-        .flag("middle"), .text("mode", "visual|drag"),
+        .flag("middle"), .text("mode", "drag"),
       ],
       parse: { a in
         guard let state = a.value("state").flatMap(MouseButtonState.init(rawValue:)) else {
@@ -1066,9 +1070,18 @@ final class URLEventHandler: NSObject {
     "url_copy": .init(parse: { _ in .copyURL }),
 
     "yank_selection": .init(
-      [.text("register", "name")], parse: { a in .yankSelection(register: registerArg(a)) }),
+      [.text("register", "name")],
+      parse: { a in
+        guard validRegisterArg(a) else { return nil }
+        return .yankSelection(register: registerArg(a))
+      }),
 
-    "paste": .init([.text("register", "name")], parse: { a in .paste(register: registerArg(a)) }),
+    "paste": .init(
+      [.text("register", "name")],
+      parse: { a in
+        guard validRegisterArg(a) else { return nil }
+        return .paste(register: registerArg(a))
+      }),
 
     "tab_next": .init(parse: { _ in .tabNext }),
 
@@ -1130,6 +1143,28 @@ final class URLEventHandler: NSObject {
     "clipboard_cut": .init(parse: { _ in .clipboardCut }),
 
     "clipboard_paste": .init(parse: { _ in .clipboardPaste }),
+    "clipboard_history": .init(
+      [
+        .text("action", "show|delete", required: true), .text("id", "entry-id"),
+        .text("offset", "0..10000"),
+      ],
+      parse: { args in
+        guard let action = args.value("action"), ["show", "delete"].contains(action) else {
+          return nil
+        }
+        if action == "delete" {
+          guard let id = args.value("id"), ClipboardCapture.isEntryID(id),
+            args.value("offset") == nil
+          else { return nil }
+          return .clipboardHistory(action: action, id: id, offset: nil)
+        }
+        guard args.value("id") == nil else { return nil }
+        let raw = args.value("offset") ?? "0"
+        guard !raw.isEmpty, raw.utf8.allSatisfy({ (48...57).contains($0) }),
+          let offset = Int(raw), (0...10_000).contains(offset)
+        else { return nil }
+        return .clipboardHistory(action: action, id: nil, offset: offset)
+      }),
     "look_up": .init(parse: { a in a.args.isEmpty ? .lookUp : nil }),
     "gesture": .init(
       [
@@ -1290,8 +1325,8 @@ extension URLEventHandler {
       - `mouse_dock`, `mouse_menubar`, and `mouse_notifications` reach surfaces
         outside the focused window. `mouse_screens`, `mouse_warp`,
         `mouse_step`, and `mouse_position` move or save the pointer.
-      - `mouse_button --state=toggle --mode=visual|drag` starts a selection or
-        drag. `--state=release` ends it; `--state=cancel` returns a drag to its
+      - `mouse_button --state=toggle --mode=drag` starts a drag or text
+        selection. `--state=release` ends it; `--state=cancel` returns a drag to its
         starting point.
 
       Read [Hints & mouse actions](/docs/hints) and
@@ -1372,12 +1407,14 @@ private func confirmCommand(_ a: VerbArgs) -> URLCommand? {
   return .confirm(ConfirmCommand(prompt: prompt, command: command))
 }
 
-/// Read the optional `--register=<name>` arg shared by `yank_selection` and
-/// `paste`. An empty/absent value resolves to nil (the system clipboard);
-/// otherwise the raw name is preserved and interpreted by ``RegisterStore``.
+/// Read the optional register shared by yank, paste and selection commands.
 private func registerArg(_ a: VerbArgs) -> String? {
-  guard let raw = a.value("register"), !raw.isEmpty else { return nil }
-  return raw
+  a.value("register")
+}
+
+private func validRegisterArg(_ a: VerbArgs) -> Bool {
+  guard let raw = registerArg(a) else { return true }
+  return raw.count == 1 && raw.first.map(NormalModeInterpreter.isRegisterNameChar) == true
 }
 
 private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseCommand? {

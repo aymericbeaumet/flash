@@ -59,7 +59,6 @@
   const freeRule: Record<string, string> = {
     all: "Pick a mode to see which keys are free in it.",
     normal: "A free key is swallowed in NORMAL, so it is yours to map.",
-    visual: "A free key falls through to NORMAL's binding, or is swallowed.",
     drag: "A free key falls through to NORMAL's binding, or is swallowed.",
     hyper: "A free key is swallowed while the hyper key is held.",
     insert: "A free key types into the app.",
@@ -159,7 +158,7 @@
       return { id, label: categories.find((category) => category.id === id)?.label ?? id, rows: sorted };
     });
   });
-  const countsHere = $derived((mode === "normal" || mode === "visual" || mode === "drag") && !path.length && !layer.length);
+  const countsHere = $derived((mode === "normal" || mode === "drag") && !path.length && !layer.length);
   const pickedFree = $derived(picked !== null && !searching && !caps.get(picked.cap) && !(countsHere && /^[1-9]$/.test(picked.cap)));
   const freeSnippet = $derived(picked ? `[mode.${mode === "all" ? "normal" : mode}.mappings]\n${JSON.stringify(stepsToKey([...path, picked]))} = ["flash", "…"]` : "");
   const actions = $derived.by(() => {
@@ -209,7 +208,7 @@
 
   <div class="surface mapping-list">
     <div class="list-head"><strong>{searching ? `Matches in ${modeInfo.label}` : picked ? `Bindings on ${[...path, picked].map(stepText).join(" ")}` : path.length ? `After ${path.map(stepText).join(" ")}` : `${modeInfo.label} bindings`}</strong>{#if picked || path.length}<button type="button" class="clear" onclick={() => back(0)}>Show every key</button>{/if}<span class="count">{listed.length} of {modeRows.length}</span></div>
-    {#each groups as group (group.id)}<section class="mapping-group"><div class="group-label"><i data-category={group.id}></i><strong>{group.label}</strong><span>{group.rows.length}</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th class="key-column">Key</th><th>What it does</th><th class="from-column">Source</th><th class="help-column"><span class="sr">Copy configuration</span></th></tr></thead><tbody>{#each group.rows as row (rowId(row))}<tr><td><kbd>{row.key}</kbd>{#if mode === "all" || mode === "visual" || mode === "drag"}<span class="scope">{row.scope}</span>{/if}</td><td><span class="does">{explainMapping(row, commands)}</span><code>{row.action}</code></td><td class="from"><SourceBadge {...sourceFromOrigin(row.origin)} /></td><td class="help"><button type="button" class="change" aria-label="Copy the TOML that changes this binding" onmouseenter={(event) => showTip(event, `Copy the flash.toml lines that rebind or remove ${row.key}:\n${mappingSnippet(row)}`, rowId(row))} onmouseleave={hideTip} onfocus={(event) => showTip(event, mappingSnippet(row), rowId(row))} onblur={hideTip} onclick={() => copy(mappingSnippet(row), rowId(row))}><Icon name={copied === rowId(row) ? "check" : "copy"} size={15} /></button></td></tr>{/each}</tbody></table></div></section>{/each}
+    {#each groups as group (group.id)}<section class="mapping-group"><div class="group-label"><i data-category={group.id}></i><strong>{group.label}</strong><span>{group.rows.length}</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th class="key-column">Key</th><th>What it does</th><th class="from-column">Source</th><th class="help-column"><span class="sr">Copy configuration</span></th></tr></thead><tbody>{#each group.rows as row (rowId(row))}<tr><td><kbd>{row.key}</kbd>{#if mode === "all" || mode === "drag"}<span class="scope">{row.scope}</span>{/if}</td><td><span class="does">{explainMapping(row, commands)}</span><code>{row.action}</code></td><td class="from"><SourceBadge {...sourceFromOrigin(row.origin)} /></td><td class="help"><button type="button" class="change" aria-label="Copy the TOML that changes this binding" onmouseenter={(event) => showTip(event, `Copy the flash.toml lines that rebind or remove ${row.key}:\n${mappingSnippet(row)}`, rowId(row))} onmouseleave={hideTip} onfocus={(event) => showTip(event, mappingSnippet(row), rowId(row))} onblur={hideTip} onclick={() => copy(mappingSnippet(row), rowId(row))}><Icon name={copied === rowId(row) ? "check" : "copy"} size={15} /></button></td></tr>{/each}</tbody></table></div></section>{/each}
     {#if !listed.length}<div class="empty"><strong>No mappings match</strong>{searching ? "Try what it does, a key, or a command. A close spelling still counts." : "Nothing in this mode starts here; pick another key or mode."}</div>{/if}
   </div>
   {#if tip}<div id="mapping-explanation" class="why-pop" role="tooltip" style:top="{tip.top}px" style:left="{tip.left}px">{tip.text}</div>{/if}
@@ -237,7 +236,6 @@
   .mode { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; background: #fff; }
   .mode span { font-weight: 500; color: var(--muted); letter-spacing: 0; }
   .mode.active { border-color: #6c875c; background: #eef4e8; color: #244f38; }
-  .mode-visual.active { border-color: #c98a4f; background: #f8eadb; color: #6a3d12; }
   .mode-drag.active { border-color: #c9a33f; background: #fbf1d6; color: #5e4710; }
   .mode-hyper.active { border-color: #9a78b8; background: #efe5f6; color: #4e2d6e; }
   .mode-insert.active { border-color: #7e9fc2; background: #e3edf7; color: #1f4a73; }

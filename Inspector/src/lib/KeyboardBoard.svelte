@@ -22,7 +22,7 @@
     leader: string;
     view: BoardView;
     selected: string | null;
-    /** Unbound digits 1–9 are repeat counts here (NORMAL, VISUAL), not free keys. */
+    /** Unbound digits 1–9 are repeat counts here (NORMAL, DRAG), not free keys. */
     counts: boolean;
     /** The modifiers the chord layer holds; their keys are drawn pressed. */
     layer: string[];

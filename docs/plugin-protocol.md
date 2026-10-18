@@ -198,7 +198,6 @@ Notifications have no deadlines.
   posted, among `protocol.json` `host_events.ax_notifications`; every
   keystroke posts `AXValueChanged`, so match the notification rather than
   debouncing every change alike),
-  `core:clipboard.changed` (requires the `clipboard` capability),
   `core:config.changed`, `core:power.changed`, `core:network.changed`
   (interfaces, addresses, routes or DNS changed), `core:volumes.changed` (a
   volume mounted, unmounted or was renamed), `core:space.changed`,
@@ -212,20 +211,6 @@ Notifications have no deadlines.
   of polling for it. The host observes the network (System Configuration's
   dynamic store) and volume mounts (workspace notifications) only while at
   least one plugin's `listen` matches the event.
-  `core:clipboard.changed` requires the `clipboard` capability. Its payload
-  is `{id, kind, text, html?, mime?, files?, sha256?}`. `id` is 32 lowercase
-  hex characters. `kind` is `text`, `image`, `html`, or `files`. `text` is
-  the plain fallback and may be empty for an image. `html` is a formatted
-  copy, capped at 64 KiB. `files` lists up to 20 copied paths. Image bytes
-  are not in the payload: before the event the host writes
-  `share/images/<id>.<ext>` under the clipboard plugin's data directory,
-  where `ext` is `png`, `jpg`, `gif`, or `webp` for `mime`. `sha256` is the
-  lowercase hex digest of that file. A TIFF pasteboard image is stored as
-  PNG. Concealed, transient, and auto-generated pasteboard types are never
-  emitted. `:clipboard show` returns `{id, kind, preview, value, html?,
-  mime?, files?}` for each entry, without the image bytes or the digest.
-  `:clipboard delete` takes `id=<id>` (or the bare id) and removes that
-  entry and its image file.
 - `evaluate` — `{query, scope, surface}` → `{"ok": true, "answers": [...]}`.
   The per-input evaluator: synchronous, CPU-only over state prepared earlier
   — no I/O. Unclaimed input answers `{"ok": true, "answers": []}` —
@@ -671,7 +656,7 @@ Section semantics:
   set that drives mode, border and focus. The bundled `defaults` plugin
   declares Notes.
 - **`mappings`** — key bindings in any mode a config can map: `all | normal |
-  insert | terminal | command | hyper | visual | drag` (default `normal`), under the
+  insert | terminal | command | hyper | drag` (default `normal`), under the
   config's key rules (a `command` key is one modified chord); `command` is an
   argv array with config-mapping syntax; entries
   may scope with `only_bundle_ids`, and `repeat: true` repeats the sequence

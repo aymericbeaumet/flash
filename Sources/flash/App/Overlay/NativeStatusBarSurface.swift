@@ -78,12 +78,11 @@ final class NativeStatusBarSurface {
     // base-mode pill. Holding the leader should not resize the bar.
     sizingLabels.terminal = ""
     sizingLabels.hyper = ""
-    sizingLabels.visual = ""
     sizingLabels.drag = ""
     let longestPill =
       document.runs.filter {
         $0.pill && !$0.isStyleBoundary && $0.text != labels.terminal && $0.text != labels.hyper
-          && $0.text != labels.visual && $0.text != labels.drag
+          && $0.text != labels.drag
       }
       .map { $0.text.count }.max() ?? 0
     let pillWidth = max(

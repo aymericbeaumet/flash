@@ -156,18 +156,6 @@ struct EventPayload {
     running_applications: Vec<RunningApplication>,
     #[serde(default)]
     segments: Option<Vec<String>>,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
-    html: Option<String>,
-    #[serde(default)]
-    mime: Option<String>,
-    #[serde(default)]
-    files: Vec<String>,
-    #[serde(default)]
-    sha256: Option<String>,
 }
 
 /// The host's report of which of this plugin's status segments a surface
@@ -204,12 +192,6 @@ pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
                 text: wire.payload.text,
                 notification: wire.payload.notification,
                 segments: wire.payload.segments,
-                id: wire.payload.id,
-                kind: wire.payload.kind,
-                html: wire.payload.html,
-                mime: wire.payload.mime,
-                files: wire.payload.files,
-                sha256: wire.payload.sha256,
             },
             running_applications: wire.payload.running_applications,
         }),
@@ -1391,41 +1373,6 @@ mod tests {
             observed.event.segments,
             Some(vec!["top_cpu".to_string(), "top_mem".to_string()])
         );
-    }
-
-    #[test]
-    fn clipboard_event_decodes_format_metadata_and_ignores_unknown_fields() {
-        let sha = "ab".repeat(32);
-        let event = decode_event(json!({
-            "name": "core:clipboard.changed",
-            "payload": {
-                "id": "0123456789abcdef0123456789abcdef",
-                "kind": "image",
-                "text": "",
-                "mime": "image/png",
-                "sha256": sha,
-                "files": ["/tmp/shot.png"],
-                "future": 1
-            }
-        }))
-        .unwrap();
-        assert_eq!(
-            event.event.id.as_deref(),
-            Some("0123456789abcdef0123456789abcdef")
-        );
-        assert_eq!(event.event.kind.as_deref(), Some("image"));
-        assert_eq!(event.event.mime.as_deref(), Some("image/png"));
-        assert_eq!(event.event.sha256.as_deref(), Some(sha.as_str()));
-        assert_eq!(event.event.files, vec!["/tmp/shot.png".to_string()]);
-
-        let plain = decode_event(json!({
-            "name": "core:clipboard.changed",
-            "payload": { "text": "hello" }
-        }))
-        .unwrap();
-        assert_eq!(plain.event.text.as_deref(), Some("hello"));
-        assert!(plain.event.id.is_none());
-        assert!(plain.event.files.is_empty());
     }
 
     /// Each delivered event's name and segment set.

@@ -4,8 +4,6 @@ import Foundation
 /// global registration so only the popup's local mappings can intercept keys.
 enum MappingScope: String, Hashable {
   case normal
-  /// Visual selection: `[mode.visual.mappings]` over NORMAL.
-  case visual
   /// Dragging: `[mode.drag.mappings]` over NORMAL.
   case drag
   case insert

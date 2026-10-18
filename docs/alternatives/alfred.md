@@ -45,7 +45,7 @@ hint tool.
 
 - `:flashlight` for apps, tabs and windows, with inline math and currency.
 - `@menus` runs any menu item of the frontmost app by name.
-- The snippets and clipboard plugins cover the everyday part of the
+- Clipboard history and the snippets plugin cover the everyday part of the
   Powerpack.
 - `app_open --name=` as a hotkey, without a workflow.
 
@@ -55,7 +55,7 @@ hint tool.
 | --- | --- |
 | Launcher hotkey | `["flash", "enter_command_mode", "--input=:flashlight "]` |
 | Calculator | Type the expression in flashlight |
-| Clipboard history | The clipboard plugin |
+| Clipboard history | Flash's built-in Clipboard page |
 | Snippets | The snippets plugin |
 | Hotkey to launch an app | `["flash", "app_open", "--name=<App>"]` |
 | File search, web search | Keep Alfred's free core |

@@ -81,6 +81,27 @@ enum FlashCLI {
     }
     let verb = first
     let argEntries = Array(args.dropFirst())
+    if verb == "clipboard" {
+      let options: [String: String]
+      if argEntries == ["show"] {
+        options = ["action": "show"]
+      } else if argEntries.count == 2, argEntries[0] == "show",
+        argEntries[1].hasPrefix("offset=")
+      {
+        options = ["action": "show", "offset": String(argEntries[1].dropFirst(7))]
+      } else if argEntries.count == 2, argEntries[0] == "delete" {
+        let id = argEntries[1]
+        options = ["action": "delete", "id": id.hasPrefix("id=") ? String(id.dropFirst(3)) : id]
+      } else {
+        FileHandle.standardError.write(Data("flash: invalid clipboard command\n".utf8))
+        return 2
+      }
+      guard URLEventHandler.parse(verb: "clipboard_history", args: options) != nil else {
+        FileHandle.standardError.write(Data("flash: invalid clipboard arguments\n".utf8))
+        return 2
+      }
+      return sendVerb("clipboard_history", args: options)
+    }
     if PluginRepository.declaresCommand(verb), !URLEventHandler.isBuiltInVerb(verb),
       FlashQuery(rawValue: verb) == nil
     {

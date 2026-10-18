@@ -135,32 +135,24 @@ extension AppDelegate {
         completion("503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
         return
       }
-      let invoked = self.pluginManager.invoke(
-        command: "clipboard", subcommand: "show", args: ["offset=\(offset)"],
-        raw: ":clipboard show offset=\(offset)", in: self.pluginSelectorContext()
-      ) { [weak self] ok, _, stdout, _ in
+      self.clipboardHistoryStore.page(offset: offset) { [weak self] page in
         let type = "application/json; charset=utf-8"
-        guard ok, let stdout, let page = Self.decodeClipboardHistoryPage(stdout) else {
+        guard let page, let data = try? JSONEncoder().encode(page) else {
           completion("503 Service Unavailable", type, Data("{}".utf8))
           return
         }
-        DispatchQueue.main.async {
-          guard let self else {
-            completion("503 Service Unavailable", type, Data("{}".utf8))
-            return
-          }
-          self.clipboardImageMimes.remember(page.entries, offset: offset)
-          completion("200 OK", type, Data(stdout.utf8))
+        guard let self else {
+          completion("503 Service Unavailable", type, Data("{}".utf8))
+          return
         }
-      }
-      if !invoked {
-        completion("503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
+        self.clipboardImageMimes.remember(page.entries, offset: offset)
+        completion("200 OK", type, data)
       }
     }
   }
 
   /// `GET /api/clipboard/<id>` returns that entry's image. `DELETE` removes
-  /// the entry from the clipboard plugin and from this cache.
+  /// the entry from the core history and from this cache.
   func serveClipboardHTTP(
     method: String, id: String,
     completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
@@ -207,36 +199,25 @@ extension AppDelegate {
     id: String,
     completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
   ) {
-    let invoked = pluginManager.invoke(
-      command: "clipboard", subcommand: "delete", args: ["id=\(id)"],
-      raw: ":clipboard delete id=\(id)",
-      in: pluginSelectorContext()
-    ) { [weak self] ok, _, _, _ in
-      DispatchQueue.main.async {
-        guard let self else {
-          completion(
-            "503 Service Unavailable", "text/plain; charset=utf-8", Data("unavailable".utf8))
-          return
-        }
-        guard ok else {
-          completion("404 Not Found", "text/plain; charset=utf-8", Data("not found".utf8))
-          return
-        }
-        self.clipboardEntries.removeAll { $0.id == id }
-        self.clipboardImageMimes.remove(id)
-        self.refreshClipboardDashboardCache()
+    clipboardHistoryStore.delete(id: id) { [weak self] ok in
+      guard let self else {
         completion(
-          "200 OK", "application/json; charset=utf-8", Data("{\"ok\":true}".utf8))
+          "503 Service Unavailable", "text/plain; charset=utf-8", Data("unavailable".utf8))
+        return
       }
-    }
-    if !invoked {
-      completion(
-        "503 Service Unavailable", "text/plain; charset=utf-8", Data("unavailable".utf8))
+      guard ok else {
+        completion("404 Not Found", "text/plain; charset=utf-8", Data("not found".utf8))
+        return
+      }
+      self.clipboardEntries.removeAll { $0.id == id }
+      self.clipboardImageMimes.remove(id)
+      self.refreshClipboardDashboardCache()
+      completion("200 OK", "application/json; charset=utf-8", Data("{\"ok\":true}".utf8))
     }
   }
 
   static func clipboardDataDir() -> URL {
-    PluginRepository.defaultDataDir().appendingPathComponent("clipboard", isDirectory: true)
+    ClipboardHistoryStore.defaultDirectory()
   }
 
   /// The components whose changes the state reads report them here; wired
@@ -278,7 +259,7 @@ extension AppDelegate {
   /// | `focused_app` | Workspace activation, including Flash's own; `applyFocusedApplicationChange` |
   /// | `hints`, `hint_command`, `hint_session`, `activation_in_flight` | `hintSession`; `activationLifecycle` |
   /// | `keyboard` | Config reload (layout, alphabet, grid keys); `hintSession` (what the keys do now) |
-  /// | `clipboard` | `clipboardEntries` (the clipboard plugin's history reply) |
+  /// | `clipboard` | `clipboardEntries` (the core clipboard history page) |
   /// | `statusbar`, `terminals`, `widgets` | Status model publishes and menu-bar yielding; popup presentation and terminal sessions; widget placement; their windows' notifications (below) |
   /// | `windows` | Flash's windows moving, resizing, ordering in or out, changing screen or key status, or closing; the active Space |
   ///
@@ -363,6 +344,9 @@ extension AppDelegate {
       "config_sources": config.resolvedConfigSources(),
       "commands": commands,
       "clipboard": clipboardEntries.map(Self.clipboardStateObject),
+      "clipboard_registers": registers.snapshot().map { entry in
+        ["name": entry.name, "text": entry.text, "kind": entry.kind, "truncated": entry.truncated]
+      },
       "clipboard_total": clipboardTotal,
       "clipboard_next_offset": clipboardNextOffset as Any? ?? NSNull(),
       "docs": docs,

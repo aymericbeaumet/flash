@@ -16,12 +16,11 @@ pub(crate) const REPLACEMENT_SLOTS: usize = 256;
 
 /// State signals whose latest value supersedes every earlier one
 /// (`protocol.json` `host_events.replacement`).
-pub(crate) const REPLACEMENT_EVENTS: [&str; 11] = [
+pub(crate) const REPLACEMENT_EVENTS: [&str; 10] = [
     host_events::APPS_CHANGED,
     host_events::FOCUS_CHANGED,
     host_events::WINDOW_FOCUS_CHANGED,
     host_events::AX_CHANGED,
-    host_events::CLIPBOARD_CHANGED,
     host_events::CONFIG_CHANGED,
     host_events::POWER_CHANGED,
     host_events::NETWORK_CHANGED,

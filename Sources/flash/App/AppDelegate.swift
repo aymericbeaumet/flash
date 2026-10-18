@@ -182,9 +182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Presses the menu items `action_bindings` name (`{"menu": [...]}`).
   var menuPathPresser: MenuPathPresser = AXMenuPathPresser()
   let finder = CandidateFinderSession()
-  /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
-  /// from the clipboard plugin on `:clipboard show`, `:clipboard delete`, and
-  /// each pasteboard change, then surfaced through `debugStateJSON`.
+  lazy var clipboardHistoryStore = ClipboardHistoryStore(capacity: config.clipboard.historySize) {
+    [weak self] in self?.refreshClipboardDashboardCache()
+  }
+  /// First clipboard history page mirrored for the inspector's Clipboard tab.
   var clipboardEntries: [ClipboardModalEntry] = [] {
     didSet { debugStateDidChange() }
   }
@@ -388,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
-    // A held mouse button is VISUAL or DRAG, by what it was pressed for:
+    // A held mouse button enters DRAG:
     // whichever path presses or releases it, the mode follows the hold, from
     // NORMAL or from INSERT (an all-mode `enter_drag_mode` chord).
     ActionDispatcher.heldButtonDidChange = { [weak self] held in
@@ -605,8 +606,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMouseJump(jump)
     case .trackpadGesture(let fingers, let motion):
       performGesture(fingers: fingers, motion: motion)
-    case .selection(let action):
-      performSelection(action)
+    case .selection(let action, let register):
+      performSelection(action, register: register)
     case .mousePosition(let request):
       performMousePosition(request)
     case .mouseGrid(let request):
@@ -677,16 +678,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       NSApp.terminate(nil)
     case .openApp(let name):
       openSourceItem(matching: name)
-    case .pluginCommand(let command, let subcommand, let args):
-      // Same as `:clipboard show`: the history is the inspector page, not a
-      // banner of the plugin's JSON.
-      if command.caseInsensitiveCompare("clipboard") == .orderedSame,
-        subcommand.caseInsensitiveCompare("show") == .orderedSame,
-        args.isEmpty
-      {
+    case .clipboardHistory(let action, let id, let offset):
+      if action == "show", offset == 0 {
         openClipboardDashboard()
-        return true
+      } else {
+        let args = action == "delete" ? ["id=\(id ?? "")"] : ["offset=\(offset ?? 0)"]
+        _ = performClipboardHistoryCommand(subcommand: action, args: args) {
+          [weak self] ok, output in
+          if ok {
+            if action == "delete" { self?.refreshClipboardDashboardCache() }
+            self?.presentPluginResult(output)
+          } else {
+            self?.warnCommandFailure(cmd.diagnosticDescription)
+          }
+        }
       }
+    case .pluginCommand(let command, let subcommand, let args):
       let dispatched = pluginManager.invoke(
         command: command,
         subcommand: subcommand,
@@ -1167,11 +1174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     refreshEffectiveMappings(for: app.bundleIdentifier)
   }
 
-  /// Run the in-process pasteboard watcher only while a plugin subscribes to
-  /// `clipboard.changed`. macOS publishes no pasteboard notification, so this
-  /// is the one unavoidable poll on that path — and with no subscriber there
-  /// is nothing to poll for. Owning the watch here keeps plugins free of
-  /// polling; the clipboard plugin just subscribes to the event.
+  /// macOS publishes no pasteboard notification, so the core history watches
+  /// its change count through the one shared poll scheduler.
   /// Every session-suspension signal lands here: the active-window border
   /// hides, and the shared poll clock holds every registration — nothing a
   /// poll produces can be seen while the displays sleep or the session is
@@ -1202,33 +1206,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func reconcileClipboardMonitor() {
-    let wanted = pluginManager.hasListener(for: "core:clipboard.changed")
-    guard wanted != (clipboardMonitor != nil) else { return }
-    guard wanted else {
-      clipboardMonitor?.stop()
-      clipboardMonitor = nil
-      FlashLog.debug("[clipboard] watcher stopped: no subscriber")
-      return
-    }
+    guard clipboardMonitor == nil else { return }
     FlashLog.debug("[clipboard] watcher started")
     clipboardMonitor = ClipboardMonitor { [weak self] item in
-      guard let self, self.pluginManager.hasListener(for: "core:clipboard.changed") else { return }
-      guard
-        let payload = ClipboardImageStore.changedPayload(
-          for: item,
-          dataDir: Self.clipboardDataDir(),
-          id: ClipboardCapture.makeID())
-      else { return }
-      self.pluginManager.emit(
-        PluginEvent(
-          name: "core:clipboard.changed",
-          payload: payload,
-          bundleID: nil))
-      // Let the plugin fold the new entry into its history, then refresh the
-      // inspector's Clipboard tab so an open dashboard updates live.
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak self] in
-        self?.refreshClipboardDashboardCache()
-      }
+      self?.clipboardHistoryStore.record(item)
+      DispatchQueue.main.async { [weak self] in self?.debugStateDidChange() }
     }
     clipboardMonitor?.start()
   }

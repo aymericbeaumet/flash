@@ -8,7 +8,7 @@ import Foundation
 /// representation is kept. Password-manager markers still exclude the whole
 /// payload. A copied file wins over the small TIFF icon Finder puts beside
 /// it. Image bytes stay out of the plugin event: the host writes them under
-/// the clipboard plugin's data directory and the event only names the file.
+/// the core clipboard history directory.
 enum ClipboardCapture {
   static let maxTextBytes = 128 * 1024
   static let maxHTMLBytes = 64 * 1024
@@ -217,9 +217,9 @@ enum ClipboardCapture {
   }
 }
 
-/// Image files for clipboard history. The host writes one file before it
-/// emits `core:clipboard.changed`; the plugin deletes it when the entry goes
-/// away. Names are `<id>.<ext>` and nothing else.
+/// Image files for clipboard history. The store writes one file before it
+/// records an entry and deletes the file when the entry goes away. Names are
+/// `<id>.<ext>` and nothing else.
 enum ClipboardImageStore {
   static func ext(for mime: String) -> String? {
     switch mime {
@@ -233,13 +233,13 @@ enum ClipboardImageStore {
 
   static func fileURL(dataDir: URL, id: String, mime: String) -> URL? {
     guard ClipboardCapture.isEntryID(id), let ext = ext(for: mime) else { return nil }
-    return dataDir.appendingPathComponent("share/images/\(id).\(ext)")
+    return dataDir.appendingPathComponent("images/\(id).\(ext)")
   }
 
-  /// Payload for `core:clipboard.changed`. Image bytes are written beside
-  /// the plugin's history and are not part of the dictionary. Nil when an
+  /// Metadata for one stored copy. Image bytes are written beside
+  /// history and are not part of the dictionary. Nil when an
   /// image entry could not be stored, or `id` is not a history id.
-  static func changedPayload(for item: ClipboardCapture.Item, dataDir: URL, id: String)
+  static func storedPayload(for item: ClipboardCapture.Item, dataDir: URL, id: String)
     -> [String: Any]?
   {
     guard ClipboardCapture.isEntryID(id) else { return nil }
@@ -264,11 +264,9 @@ enum ClipboardImageStore {
       bytes.count <= ClipboardCapture.maxImageBytes
     else { return false }
     let images = url.deletingLastPathComponent()
-    let share = images.deletingLastPathComponent()
     do {
       try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
       try setOwnerOnly(dataDir, isDirectory: true)
-      try setOwnerOnly(share, isDirectory: true)
       try setOwnerOnly(images, isDirectory: true)
       try bytes.write(to: url, options: .atomic)
       try setOwnerOnly(url, isDirectory: false)

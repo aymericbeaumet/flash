@@ -35,7 +35,7 @@ Plugin manifests add their own topics.
 | Plugins | Loaded manifests, process health, errors and capabilities. Selecting Inspect details opens a dialog; Escape or its close button dismisses it |
 | Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. Config provenance links jump to the editor on the same page; Purge defaults removes bundled values in the editor and Save writes the file |
 | Logs | Recent structured diagnostics and interaction traces |
-| Clipboard | Recent text, images, formatted copies, and files from the clipboard plugin. The page requests history directly on opening, loads the full configured history in pages, can refresh it, and can copy back or delete each entry |
+| Clipboard | Live text registers (unnamed, latest yank and named buffers) above recent text, images, formatted copies, and files from core history. The page requests history directly on opening, loads it in pages, and can copy back or delete each entry |
 
 The browser follows the resident's event stream: Flash pushes a snapshot when
 something it shows changes, never on a timer, and the page derives uptimes
@@ -57,7 +57,7 @@ the browser commands needs it, or at launch with
 | --- | --- |
 | `/` | Help homepage: a live onboarding checklist |
 | `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
-| `/mappings`, `/commands` | Key mappings: your keyboard with what each key does in the mode picked under it (NORMAL, VISUAL, DRAG, HYPER, INSERT, COMMAND, TERMINAL or all), tinted by purpose, with free keys dashed and NORMAL's counts marked. Modifier buttons show the Shift, Control, Option and Command layers; a key that starts longer bindings opens what can follow it; picking a key lists its bindings, and a free key offers the TOML to map it. The list below follows the mode and key, groups bindings by purpose, leads with what each does, and copies the TOML that rebinds or removes it. A search ranks the whole mode and lights the keys it matches. The page also shows how each action resolves in the focused app, and never follows the live mode. Command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
+| `/mappings`, `/commands` | Key mappings: your keyboard with what each key does in the mode picked under it (NORMAL, DRAG, HYPER, INSERT, COMMAND, TERMINAL or all), tinted by purpose, with free keys dashed and NORMAL's counts marked. Modifier buttons show the Shift, Control, Option and Command layers; a key that starts longer bindings opens what can follow it; picking a key lists its bindings, and a free key offers the TOML to map it. The list below follows the mode and key, groups bindings by purpose, leads with what each does, and copies the TOML that rebinds or removes it. A search ranks the whole mode and lights the keys it matches. The page also shows how each action resolves in the focused app, and never follows the live mode. Command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
 | `/plugins`, `/plugins/<id>` | Plugin list; a direct plugin link opens that plugin's details in a dialog |
 | `/state`, `/clipboard` | Runtime and clipboard pages |
 | `/logs` | Live logs. The record list fills the page height, and its search field is focused when the page opens |

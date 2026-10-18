@@ -49,7 +49,7 @@ table above supports.
 | `KeyboardLayoutMonitor` | `[app] keyboard_layout`'s reference table, rebuilt on input-source changes and config loads |
 | `CandidateFinderSession` | Catalog, query, source context and selection for one finder session |
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
-| `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture; the one held mouse button behind VISUAL and DRAG (`mouse_button`, pointer mode's `v`) and smooth-scroll steps |
+| `ActionDispatcher` | Host mouse synthesis and completion of every owned gesture; the one held mouse button behind DRAG (`mouse_button`, pointer mode's `v`) and smooth-scroll steps |
 | `PluginManager` / `PluginProcess` | Manifest reconciliation, owned child generations, transport and RPC |
 | `FlashStatusBarController` | Evaluation of the bar and every desktop widget, each memoized on the inputs it read; reconciled source/job records for their union and the next necessary wakeup |
 | `WidgetController` / `WidgetWindow` | One click-through desktop-level window per enabled widget per display, placed in the Flash-usable frame; occlusion reported back so a covered widget stops refreshing |
@@ -170,7 +170,7 @@ spacing, sequence and hover-dwell timeouts, recapture and caret re-arm turns,
 toast and click-feedback expiry, a popup's first frame, terminal frame pacing)
 and a bounded fan-out of settle passes after one event (screen-change
 recovery, window-border reconciliation, the Accessibility-grant re-check,
-the held button's catch-up after a scroll in VISUAL and DRAG).
+the held button's catch-up after a scroll in DRAG).
 `Scripts/check-guardrails.sh` rejects any other timer source, and blocking
 sleeps outside the three single operations it names.
 

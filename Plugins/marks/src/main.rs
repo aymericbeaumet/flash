@@ -1,14 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
-
-use flash_plugin::{CommandRequest, Context, Event, PerformResponse, run};
+use flash_plugin::{CommandRequest, Context, PerformResponse, RunningApplication, run};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use tokio::sync::Mutex;
 
 const STATE_FILE: &str = "marks.json";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct MarksState {
-    /// Letter (single lowercase char or digit) → saved app context. The
+    /// ASCII letter or digit → saved app context. The
     /// pid is the fast-path activation handle; the bundle id is the durable
     /// fallback when the original process is gone.
     entries: BTreeMap<String, MarkEntry>,
@@ -22,34 +21,14 @@ struct MarkEntry {
 
 struct Marks {
     state: Mutex<MarksState>,
-    /// In-memory `bundle_id → pid` mirror, kept fresh from
-    /// `core:apps.changed` / `core:apps.launched` / `core:apps.terminated`.
-    /// Used by `jump_to_mark` when the saved pid is dead but the same bundle
-    /// is still running under a fresh pid.
-    apps: Mutex<HashMap<String, i64>>,
 }
 
 flash_plugin::plugin!(Marks);
 
 impl FlashPlugin for Marks {
     async fn on_start(&self, ctx: Context) {
-        if let Some(loaded) = read_state::<MarksState>(&ctx, STATE_FILE).await
-            && let Ok(mut state) = self.state.lock()
-        {
-            *state = loaded;
-        }
-        replace_running_apps(self, &ctx);
-    }
-
-    async fn on_event(&self, ctx: Context, event: Event) {
-        if matches!(
-            event.name.as_str(),
-            "core:flash.started"
-                | "core:apps.changed"
-                | "core:apps.launched"
-                | "core:apps.terminated"
-        ) {
-            replace_running_apps(self, &ctx);
+        if let Some(loaded) = read_state::<MarksState>(&ctx, STATE_FILE).await {
+            *self.state.lock().await = loaded;
         }
     }
 
@@ -62,18 +41,7 @@ impl FlashPlugin for Marks {
     }
 }
 
-fn replace_running_apps(plugin: &Marks, ctx: &Context) {
-    if let Ok(mut apps) = plugin.apps.lock() {
-        apps.clear();
-        for app in ctx.running_applications() {
-            if !app.bundle_id.is_empty() && app.pid > 0 {
-                apps.insert(app.bundle_id, app.pid);
-            }
-        }
-    }
-}
-
-/// A letter is one alphanumeric character: `flash marks set a`, or
+/// A slot is one ASCII letter or digit: `flash marks set a`, or
 /// `--letter=a`. Anything else is rejected so a typo does not create a slot.
 fn parse_letter(command: &CommandRequest) -> Option<String> {
     fn one_letter(value: &str) -> Option<String> {
@@ -82,10 +50,10 @@ fn parse_letter(command: &CommandRequest) -> Option<String> {
             return None;
         }
         let ch = trimmed.chars().next()?;
-        if !ch.is_alphanumeric() {
+        if !ch.is_ascii_alphanumeric() {
             return None;
         }
-        Some(ch.to_lowercase().to_string())
+        Some(ch.to_ascii_lowercase().to_string())
     }
     for arg in &command.args {
         let body = arg.strip_prefix("--").unwrap_or(arg.as_str());
@@ -114,14 +82,13 @@ async fn set_mark_command(
         pid: target.pid,
         bundle_id: target.bundle_id.clone(),
     };
-    let snapshot = {
-        let Ok(mut state) = plugin.state.lock() else {
-            return PerformResponse::fail("marks state lock poisoned");
-        };
-        state.entries.insert(letter.clone(), entry);
-        state.clone()
-    };
-    write_state(ctx, STATE_FILE, &snapshot).await;
+    let mut state = plugin.state.lock().await;
+    let mut next = state.clone();
+    next.entries.insert(letter.clone(), entry);
+    if !write_state(ctx, STATE_FILE, &next).await {
+        return PerformResponse::fail("could not save mark");
+    }
+    *state = next;
     ctx.log(
         "debug",
         &format!(
@@ -140,45 +107,44 @@ async fn jump_to_mark_command(
     let Some(letter) = parse_letter(command) else {
         return PerformResponse::fail("usage: marks jump <a-z|0-9>");
     };
-    let mark = plugin
-        .state
-        .lock()
-        .ok()
-        .and_then(|state| state.entries.get(&letter).cloned());
+    let mark = plugin.state.lock().await.entries.get(&letter).cloned();
     let Some(mark) = mark else {
         return PerformResponse::fail(format!("no mark for letter={letter}"));
     };
-    // Pid is the fast path: if the original process is still alive, app
-    // activation brings its windows to the front. If the pid is dead, fall
-    // back to the durable bundle id via the running-apps mirror updated from
-    // `core:apps.*` events.
-    if ctx.activate(mark.pid).await {
-        return PerformResponse::ok().target_pid(mark.pid);
-    }
-    let fallback_pid = plugin
-        .apps
-        .lock()
-        .ok()
-        .and_then(|apps| apps.get(&mark.bundle_id).copied());
-    if let Some(pid) = fallback_pid
+    if let Some(pid) = running_pid_for_mark(&mark, &ctx.running_applications())
         && ctx.activate(pid).await
     {
-        let snapshot = {
-            let Ok(mut state) = plugin.state.lock() else {
-                return PerformResponse::ok().target_pid(pid);
-            };
-            if let Some(entry) = state.entries.get_mut(&letter) {
-                entry.pid = pid;
+        let mut state = plugin.state.lock().await;
+        if let Some(entry) = state.entries.get(&letter)
+            && entry.pid == mark.pid
+            && entry.bundle_id == mark.bundle_id
+            && pid != mark.pid
+        {
+            let mut next = state.clone();
+            next.entries.get_mut(&letter).expect("checked above").pid = pid;
+            if write_state(ctx, STATE_FILE, &next).await {
+                *state = next;
             }
-            state.clone()
-        };
-        write_state(ctx, STATE_FILE, &snapshot).await;
+        }
         return PerformResponse::ok().target_pid(pid);
+    }
+    if ctx.open_app(&mark.bundle_id).await {
+        return PerformResponse::ok();
     }
     PerformResponse::fail(format!(
         "mark letter={letter} bundle={} unreachable",
         mark.bundle_id
     ))
+}
+
+fn running_pid_for_mark(mark: &MarkEntry, apps: &[RunningApplication]) -> Option<i64> {
+    apps.iter()
+        .find(|app| app.pid == mark.pid && app.bundle_id == mark.bundle_id)
+        .or_else(|| {
+            apps.iter()
+                .find(|app| app.pid > 0 && app.bundle_id == mark.bundle_id)
+        })
+        .map(|app| app.pid)
 }
 
 async fn read_state<T: serde::de::DeserializeOwned>(ctx: &Context, name: &str) -> Option<T> {
@@ -200,6 +166,110 @@ async fn write_state<T: serde::Serialize>(ctx: &Context, name: &str, value: &T) 
 fn main() {
     run(Marks {
         state: Mutex::new(MarksState::default()),
-        apps: Mutex::new(HashMap::new()),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flash_plugin::testing::Harness;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn command(args: &[&str]) -> CommandRequest {
+        CommandRequest {
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            ..CommandRequest::default()
+        }
+    }
+
+    #[test]
+    fn slots_are_ascii_letters_and_digits_only() {
+        assert_eq!(parse_letter(&command(&["A"])), Some("a".to_string()));
+        assert_eq!(parse_letter(&command(&["7"])), Some("7".to_string()));
+        assert_eq!(
+            parse_letter(&command(&["--letter=z"])),
+            Some("z".to_string())
+        );
+        assert_eq!(parse_letter(&command(&["é"])), None);
+        assert_eq!(parse_letter(&command(&["٢"])), None);
+    }
+
+    #[test]
+    fn saved_pid_must_still_belong_to_the_marked_bundle() {
+        let mark = MarkEntry {
+            pid: 17,
+            bundle_id: "com.example.editor".to_string(),
+        };
+        let apps = vec![
+            RunningApplication {
+                pid: 17,
+                bundle_id: "com.example.other".to_string(),
+                ..RunningApplication::default()
+            },
+            RunningApplication {
+                pid: 29,
+                bundle_id: "com.example.editor".to_string(),
+                ..RunningApplication::default()
+            },
+        ];
+        assert_eq!(running_pid_for_mark(&mark, &apps), Some(29));
+    }
+
+    #[tokio::test]
+    async fn jump_launches_the_saved_bundle_when_it_is_not_running() {
+        let plugin = Marks {
+            state: Mutex::new(MarksState {
+                entries: BTreeMap::from([(
+                    "a".to_string(),
+                    MarkEntry {
+                        pid: 17,
+                        bundle_id: "com.example.editor".to_string(),
+                    },
+                )]),
+            }),
+        };
+        let mut host = Harness::new("marks");
+        let ctx = host.context();
+        let request =
+            tokio::spawn(
+                async move { jump_to_mark_command(&plugin, &ctx, &command(&["a"])).await },
+            );
+
+        let (id, method, params) = host.next_host_request().await.expect("host request");
+        assert_eq!(method, "host.open");
+        assert_eq!(params, json!({ "bundle_id": "com.example.editor" }));
+        assert!(host.reply_host(id, json!({ "ok": true })));
+        assert_eq!(
+            serde_json::to_value(request.await.expect("command task")).expect("response"),
+            json!({ "ok": true })
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_save_does_not_claim_or_keep_a_mark() {
+        let plugin = Arc::new(Marks {
+            state: Mutex::new(MarksState::default()),
+        });
+        let mut host = Harness::new("marks");
+        let ctx = host.context();
+        let request = tokio::spawn({
+            let plugin = Arc::clone(&plugin);
+            async move { set_mark_command(&plugin, &ctx, &command(&["a"])).await }
+        });
+
+        let (id, method, _) = host.next_host_request().await.expect("host request");
+        assert_eq!(method, "host.normal_mode_target");
+        assert!(host.reply_host(
+            id,
+            json!({ "present": true, "pid": 17, "bundle_id": "com.example.editor" })
+        ));
+        let response =
+            serde_json::to_value(request.await.expect("command task")).expect("response");
+        assert_eq!(
+            response,
+            json!({ "ok": false, "error": "could not save mark" })
+        );
+        assert!(plugin.state.lock().await.entries.is_empty());
+    }
 }

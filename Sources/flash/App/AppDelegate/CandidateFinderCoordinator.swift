@@ -624,6 +624,10 @@ extension AppDelegate {
         subcommands[key]?.append(registration.subcommand)
       }
     }
+    if subcommands["clipboard"] == nil {
+      commandsOrdered.append("clipboard")
+    }
+    subcommands["clipboard"] = ["show", "delete"]
     let topics = HelpDocs.allTopics(
       config: config,
       showModes: true,
@@ -1301,15 +1305,39 @@ extension AppDelegate {
       performCommandLineCommand(command)
       return
     }
-    // `:clipboard show` opens the dashboard's Clipboard tab rather than firing
-    // a fire-and-forget plugin command; the host caches the history and the web
-    // UI renders it. `:clipboard show <arg>` falls through below.
+    // `:clipboard show` opens the dashboard's Clipboard tab. Core provides
+    // history directly to the web UI; `:clipboard show <arg>` falls through.
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
       plugin.command.lowercased() == "clipboard", plugin.subcommand.lowercased() == "show",
       plugin.args.isEmpty
     {
       finishCommandLineInteraction(reason: "clipboard_submit")
       openClipboardDashboard()
+      return
+    }
+    if let clipboard = NormalModeDispatcher.pluginCommandLineInvocation(raw),
+      clipboard.command.lowercased() == "clipboard"
+    {
+      finishCommandLineInteraction(reason: "clipboard_submit")
+      if !performClipboardHistoryCommand(
+        subcommand: clipboard.subcommand, args: clipboard.args,
+        completion: { [weak self] ok, output in
+          guard let self else { return }
+          if ok {
+            if clipboard.subcommand.lowercased() == "delete" {
+              self.refreshClipboardDashboardCache()
+            }
+            if let output, !output.isEmpty {
+              if captureOutput { NormalModeDispatcher.copy(output) }
+              self.overlay.displayBanner(output)
+            }
+          } else {
+            self.warnCommandFailure(raw)
+          }
+        })
+      {
+        warnUnsupportedCommand(raw)
+      }
       return
     }
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),

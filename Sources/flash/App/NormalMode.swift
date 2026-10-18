@@ -303,15 +303,22 @@ enum NormalModeInterpreter {
       return .flashCommand(.yankSelection(register: register))
     case .paste:
       return .flashCommand(.paste(register: register))
+    case .selection(let selection, _):
+      switch selection {
+      case .copy, .paste:
+        return .flashCommand(.selection(selection, register: register))
+      case .cut, .change:
+        return action
+      }
     default:
       return action
     }
   }
 
   /// Characters accepted as a `"<name>` register: letters (uppercase appends),
-  /// digits, and the system-clipboard synonyms `+` / `*` / `"`.
+  /// digits, clipboard aliases `+` / `*` / `"`, and black hole `_`.
   static func isRegisterNameChar(_ ch: Character) -> Bool {
-    if ch == "+" || ch == "*" || ch == "\"" { return true }
+    if ch == "+" || ch == "*" || ch == "\"" || ch == "_" { return true }
     guard ch.isASCII else { return false }
     return ch.isLetter || ch.isNumber
   }

@@ -525,17 +525,14 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(output, "output")
     XCTAssertEqual(deviceArgs, ["USB", "Audio"])
 
-    let clipboard = parseMappingCommand(argv: ["flash", "clipboard", "show"])
-    guard
-      case .flashCommand(
-        .pluginCommand(let clipboardCommand, let clipboardSub, let clipboardArgs)) = clipboard
-    else {
-      return XCTFail("expected clipboard show, got \(String(describing: clipboard))")
+    let clipboard = parseMappingCommand(argv: ["flash", "clipboard_history", "--action=show"])
+    guard case .flashCommand(.clipboardHistory(let action, let id, let offset)) = clipboard else {
+      return XCTFail("expected core clipboard history, got \(String(describing: clipboard))")
     }
-    XCTAssertEqual(clipboardCommand, "clipboard")
-    XCTAssertEqual(clipboardSub, "show")
-    XCTAssertEqual(clipboardArgs, [])
-
+    XCTAssertEqual(action, "show")
+    XCTAssertNil(id)
+    XCTAssertEqual(offset, 0)
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "clipboard", "show"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "clipboard"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "media"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "media", "not-a-subcommand"]))

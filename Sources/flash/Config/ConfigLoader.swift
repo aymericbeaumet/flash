@@ -428,6 +428,7 @@ enum ConfigLoader {
     }
     applyApp(section("app"), locations: locations, into: &config)
     applyKeyboard(section("keyboard"), locations: locations, into: &config)
+    applyClipboard(section("clipboard"), locations: locations, into: &config)
     applyHints(section("hints"), locations: locations, into: &config)
     applyPlugins(section("plugins"), locations: locations, sourceURL: sourceURL, into: &config)
     applyPluginSettings(section("plugin"), locations: locations, into: &config)
@@ -482,6 +483,7 @@ enum ConfigLoader {
     let sectionKeys: [String: Set<String>] = [
       "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
       "keyboard": ["layout"],
+      "clipboard": ["history_size"],
       "hints": [
         "keys", "min_length", "magic_modifiers", "key_priority", "label_order", "adjust_digits",
         "position_history_size", "position_history_scope", "pointer_follows_focus",
@@ -503,7 +505,7 @@ enum ConfigLoader {
       ],
       "mode": [
         "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "hyper",
-        "visual", "drag",
+        "drag",
         "apps",
         "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
         "click_hold_ms", "send_key_interval_ms",
@@ -788,6 +790,17 @@ enum ConfigLoader {
     }
   }
 
+  private static func applyClipboard(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    guard let table else { return }
+    applyInt(
+      table["history_size"], path: ["clipboard", "history_size"],
+      message: "clipboard.history_size must be an integer between 1 and 10000",
+      locations: locations, into: &config, validate: { (1...10_000).contains($0) },
+      assign: { value, config in config.clipboard.historySize = value })
+  }
+
   private static func applyPlugins(
     _ table: TOMLTable?,
     locations: ConfigSourceLocationIndex,
@@ -885,6 +898,12 @@ enum ConfigLoader {
     guard let table else { return }
     let allowedIDChars = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
     for (pluginID, value) in table {
+      if pluginID == "clipboard" {
+        config.addDiagnostic(
+          "[plugin.clipboard] was removed; use [clipboard] history_size",
+          location: locations.location(for: ["plugin", pluginID]))
+        continue
+      }
       guard
         !pluginID.isEmpty,
         pluginID.unicodeScalars.allSatisfy({ allowedIDChars.contains($0) })
@@ -1601,14 +1620,12 @@ enum ConfigLoader {
         (1...32).contains(command.count),
         (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count),
         (1...32).contains((parsed["hyper"] ?? config.mode.labels.hyper).count),
-        (1...32).contains((parsed["visual"] ?? config.mode.labels.visual).count),
         (1...32).contains((parsed["drag"] ?? config.mode.labels.drag).count)
       {
         for key in parsed.keys
-        where !["normal", "insert", "command", "terminal", "hyper", "visual", "drag"].contains(key)
-        {
+        where !["normal", "insert", "command", "terminal", "hyper", "drag"].contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, visual, drag)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, drag)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
@@ -1617,7 +1634,6 @@ enum ConfigLoader {
           command: command,
           terminal: parsed["terminal"] ?? config.mode.labels.terminal,
           hyper: parsed["hyper"] ?? config.mode.labels.hyper,
-          visual: parsed["visual"] ?? config.mode.labels.visual,
           drag: parsed["drag"] ?? config.mode.labels.drag)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
@@ -1751,7 +1767,7 @@ enum ConfigLoader {
       }
     }
 
-    for scope in [ModeScope.insert, .terminal, .hyper, .visual, .drag] {
+    for scope in [ModeScope.insert, .terminal, .hyper, .drag] {
       let name = scope.rawValue
       guard
         let scoped = sectionTable(
@@ -1812,7 +1828,7 @@ enum ConfigLoader {
           let scopePath = appPath + [scopeName]
           guard let scope = ModeScope(rawValue: scopeName) else {
             config.addDiagnostic(
-              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, visual, drag",
+              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, drag",
               location: locations.location(for: scopePath))
             continue
           }
@@ -2412,9 +2428,6 @@ enum ConfigLoader {
     case .hyper:
       config.mode.hyper.removeAll { $0.key == key }
       config.mode.hyper.append(mapping)
-    case .visual:
-      config.mode.visual.removeAll { $0.key == key }
-      config.mode.visual.append(mapping)
     case .drag:
       config.mode.drag.removeAll { $0.key == key }
       config.mode.drag.append(mapping)
@@ -2436,7 +2449,6 @@ enum ConfigLoader {
     case .terminal: config.mode.terminal.removeAll(where: removed)
     case .command: config.mode.command.removeAll(where: removed)
     case .hyper: config.mode.hyper.removeAll(where: removed)
-    case .visual: config.mode.visual.removeAll(where: removed)
     case .drag: config.mode.drag.removeAll(where: removed)
     }
   }

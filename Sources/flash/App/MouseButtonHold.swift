@@ -38,16 +38,15 @@ enum MouseButtonState: String, CaseIterable, Hashable {
   case up
   case toggle
   /// Let go of whichever button is held, where the pointer is: a drag drops
-  /// there, a visual selection ends and stays selected.
+  /// there, a text selection ends and stays selected.
   case release
   /// Put a drag back: the pointer drags to where the button went down, then
   /// lets go there.
   case cancel
 }
 
-/// `mouse_button --state=<state> [--secondary|--middle] [--mode=visual|drag]`.
-/// `hold` is what the held button means: a visual selection or a drag (the
-/// default), which is the mode it enters.
+/// `mouse_button --state=<state> [--secondary|--middle] [--mode=drag]`.
+/// The held button enters DRAG.
 struct MouseButtonRequest: Hashable {
   var state: MouseButtonState
   var button: MouseButtonKind
