@@ -42,6 +42,7 @@ extension OverlayPanel {
   static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
   static let hyperPurpleCG = hyperPurple.cgColor
   static let nordAuroraOrangeCG = nordAuroraOrange.cgColor
+  static let nordAuroraRedCG = nordAuroraRed.cgColor
   /// Hairline drawn along the bottom edge of the status bar so it separates
   /// from the window beneath without a shadow.
   static let statusBarHairlineCG = NSColor(calibratedWhite: 1, alpha: 0.07).cgColor
@@ -92,6 +93,16 @@ extension OverlayPanel {
     bottomCG: nordAuroraYellowCG,
     foregroundCG: nordPolarNight0CG,
     borderCG: nordAuroraOrangeCG)
+  static let visualPalette = ModeBadgePalette(
+    topCG: lifted(nordAuroraRed, by: 0.12).cgColor,
+    bottomCG: nordAuroraRedCG,
+    foregroundCG: nordPolarNight0CG,
+    borderCG: nordAuroraYellowCG)
+  static let layerPalette = ModeBadgePalette(
+    topCG: lifted(nordAuroraOrange, by: 0.12).cgColor,
+    bottomCG: nordAuroraOrangeCG,
+    foregroundCG: nordPolarNight0CG,
+    borderCG: nordAuroraYellowCG)
   static let commandInputPaletteValue = ModeBadgePalette(
     topCG: nordPolarNight0CG,
     bottomCG: nordPolarNight0CG,
@@ -105,6 +116,8 @@ extension OverlayPanel {
     case .command: return Self.commandPaletteValue
     case .hyper: return Self.hyperPalette
     case .hold: return Self.holdPalette
+    case .visual: return Self.visualPalette
+    case .layer: return Self.layerPalette
     }
   }
 

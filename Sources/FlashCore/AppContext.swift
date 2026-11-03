@@ -12,7 +12,7 @@ public struct AppContext: @unchecked Sendable {
     /// The app's top-level elements that meet `frontWindowFrame`: a surface
     /// that is not the app's focused window, such as a system dialog in front
     /// of another app, a Picture in Picture player, or the Stage Manager strip
-    /// (`mouse_target --scope=screen`).
+    /// (`mouse target --scope=screen`).
     case elementsInFrame
     /// The app's open menus (a context menu and its open submenus), which
     /// are children of the application, not of any window: `f` while a

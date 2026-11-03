@@ -3,11 +3,15 @@ import type { KeyboardState, MappingRow } from "./types";
 /** The modifier names a chord may carry, as `flash.toml` spells them. */
 const modifierNames = new Set(["cmd", "ctrl", "alt", "shift", "hyper", "fn"]);
 
+/** The function keys, `<f1>` to `<f20>`; the board draws F1–F12 beside Escape. */
+const functionKeys = Array.from({ length: 20 }, (_, index) => `f${index + 1}`);
+
 /** Named keys inside angle brackets and in chords, mapped to the key cap they sit on. */
 const namedKeys: Record<string, string> = {
   space: "space", return: "return", enter: "return", tab: "tab", escape: "esc", esc: "esc",
   backspace: "backspace", delete: "backspace", plus: "+", minus: "-", lt: "<", gt: ">",
   bar: "|", bslash: "\\", left: "←", right: "→", up: "↑", down: "↓",
+  ...Object.fromEntries(functionKeys.map((name) => [name, name])),
 };
 
 export interface ParsedKey {
@@ -106,7 +110,7 @@ export function ansiRows(keyboard: KeyboardState): KeySlot[][] {
   const block = (row: number) => [...(keyboard.rows[row] ?? "")].map((cap) => key(cap));
   const modifier = (name: KeySlot["modifier"] & string, label: string, units: number): KeySlot => ({ cap: name, label, units, modifier: name });
   return [
-    [key("esc")],
+    [key("esc"), ...functionKeys.slice(0, 12).map((cap) => ({ cap, label: cap.toUpperCase(), units: 1 }))],
     [key("`"), ...block(0), key(extras.number[0]), key(extras.number[1]), { cap: "backspace", label: "⌫", units: 2 }],
     [{ cap: "tab", label: "tab", units: 1.5 }, ...block(1), key(extras.top[0]), key(extras.top[1]), key(extras.top[2], 1.5)],
     [{ cap: "caps", label: "caps", units: 1.75, inert: true }, ...block(2), key(extras.home), { cap: "return", label: "return", units: 2.25 }],
@@ -126,25 +130,41 @@ export type BoardView = "bindings" | "alphabet" | "grid" | "zones";
 export const mappingModes: { id: string; label: string; summary: string }[] = [
   { id: "all", label: "All", summary: "Every mapping, in every mode." },
   { id: "normal", label: "Normal", summary: "Navigate and act; unmapped keys are swallowed." },
-  { id: "hold", label: "Hold", summary: "A held mouse button for dragging or text selection: nudge, jump, copy, cut, drop or put it back." },
+  { id: "text", label: "Text", summary: "NORMAL in a field you engaged (left INSERT there, clicked it, gi, v): Vim's motions over NORMAL's keys; Escape hands them back." },
+  { id: "visual", label: "Visual", summary: "A selection in the focused text: the motions grow it, these keys copy it or paste over it." },
+  { id: "hold", label: "Hold", summary: "A held mouse button for dragging or text selection: nudge, jump, copy, paste over, drop or put it back." },
   { id: "hyper", label: "Hyper", summary: "While the hyper key is held." },
   { id: "insert", label: "Insert", summary: "Typing in an app; only these keys are Flash's." },
   { id: "command", label: "Command", summary: "The command line is open." },
   { id: "terminal", label: "Terminal", summary: "A terminal popup has the keyboard." },
 ];
 
-/** The mapping scopes a mode reads: its own and `all`. HOLD reads
- * its own table first, then NORMAL's. */
+/** The mapping scopes a mode reads: its own and `all`. HOLD, and NORMAL in
+ * editable text (`text`), read their own table first, then NORMAL's; a layer
+ * (`layers.<name>`) its own. */
 export function scopesForMode(mode: string | undefined): string[] {
   switch (mode) {
     case "normal": return ["normal", "all"];
     case "hold": return ["hold", "normal", "all"];
+    case "text": return ["text", "normal", "all"];
+    case "visual": return ["visual", "all"];
     case "hyper": return ["hyper"];
     case "insert": return ["insert", "all"];
     case "command": return ["command", "all"];
     case "terminal": return ["terminal", "all"];
-    default: return ["all"];
+    default: return mode?.startsWith("layers.") ? [mode, "all"] : ["all"];
   }
+}
+
+/** The layers (`[mode.layers.<name>]`) among the rows, each a mode of its
+ * own after the built-in ones, by name. */
+export function layerModes(rows: MappingRow[]): { id: string; label: string; summary: string }[] {
+  const names = [...new Set(rows.filter((row) => row.scope.startsWith("layers.")).map((row) => row.scope.slice("layers.".length)))];
+  return names.sort().map((name) => ({
+    id: `layers.${name}`,
+    label: name,
+    summary: "A layer of yours, entered by mode layer: its keys, Escape and the all-mode chords act.",
+  }));
 }
 
 export interface KeyBinding {
@@ -219,6 +239,8 @@ export function stepsToKey(steps: KeyStep[]): string {
       const letter = /^[a-z]$/.test(step.cap);
       if (letter && step.modifiers.length === 1 && step.modifiers[0] === "shift") return step.cap.toUpperCase();
       if (step.modifiers.length) return [...step.modifiers, step.cap].join("+");
+      // Bare, `f12` is the keys f, 1, 2: a function key is always bracketed.
+      if (functionKeys.includes(step.cap)) return `<${step.cap}>`;
       return bracketed[step.cap] ?? step.cap;
     })
     .join("");
@@ -262,7 +284,7 @@ export function rowsUnder(rows: MappingRow[], path: KeyStep[], picked: KeyStep |
 /** What an action is for, so bindings group by purpose. */
 export const categories: { id: string; label: string }[] = [
   { id: "pointer", label: "Click and point" },
-  { id: "scroll", label: "Scroll" },
+  { id: "scroll", label: "Move and scroll" },
   { id: "tabs", label: "Tabs, pages and apps" },
   { id: "windows", label: "Windows" },
   { id: "modes", label: "Modes and the command line" },
@@ -272,21 +294,87 @@ export const categories: { id: string; label: string }[] = [
   { id: "other", label: "Everything else" },
 ];
 
+/**
+ * Every Flash topic (`flash <topic> <action>`), with the category its
+ * commands fall in. Any other topic is a plugin command: a plugin cannot take
+ * one of these names. `CommandGrammarTests` keeps this table equal to the
+ * resident's topics.
+ */
+export const topicCategories: Record<string, string> = {
+  mouse: "pointer",
+  hints: "pointer",
+  selection: "pointer",
+  scroll: "scroll",
+  move: "scroll",
+  cursor: "scroll",
+  tab: "tabs",
+  app: "tabs",
+  mark: "tabs",
+  history: "tabs",
+  movement: "tabs",
+  pane: "tabs",
+  resource: "tabs",
+  document: "tabs",
+  url: "tabs",
+  window: "windows",
+  tile: "windows",
+  workspace: "windows",
+  desktop: "windows",
+  missioncontrol: "windows",
+  appwindows: "windows",
+  mode: "modes",
+  macro: "modes",
+  popup: "modes",
+  help: "modes",
+  mappings: "modes",
+  plugins: "modes",
+  monitors: "modes",
+  telemetry: "modes",
+  logs: "modes",
+  commands: "modes",
+  input: "modes",
+  key: "system",
+  volume: "system",
+  audio: "system",
+  media: "system",
+  system: "system",
+  display: "system",
+  screen: "system",
+  screensaver: "system",
+  appearance: "system",
+  caffeinate: "system",
+  launchpad: "system",
+  notificationcenter: "system",
+  controlcenter: "system",
+  updates: "other",
+  status: "other",
+  menu: "other",
+  trash: "system",
+  process: "system",
+  about: "other",
+  alert: "other",
+  notify: "other",
+  metrics: "other",
+  clipboard: "other",
+  register: "other",
+  notes: "other",
+  reminders: "other",
+  contacts: "other",
+  calendar: "other",
+  resident: "other",
+  config: "other",
+  startup: "other",
+  cli: "other",
+  events: "other",
+};
+
 export function categoryOf(action: string): string {
   const words = action.trim().split(/\s+/);
-  if (words[0] !== "flash" || words.length < 2) return "programs";
-  const verb = words[1];
-  if (words.length >= 3 && !words[2].startsWith("--") && !verb.includes("_")) return "plugins";
-  if (/^(mouse_|hints_)/.test(verb)) return "pointer";
-  if (verb.startsWith("scroll_")) return "scroll";
-  if (/^(tab_|app_|history_|pane_|resource_|page_)/.test(verb) || ["reload", "find", "undo", "redo"].includes(verb)) return "tabs";
-  if (verb.startsWith("window_")) return "windows";
-  if (/^(enter_|leave_|popup_|terminal_|command|candidate_finder|help)/.test(verb)) return "modes";
-  if (/^(system_key|function_key|arrow|send_key|volume|brightness|media)/.test(verb)) return "system";
-  return "other";
+  if (words[0] !== "flash" || words.length < 3) return "programs";
+  return topicCategories[words[1]] ?? "plugins";
 }
 
-/** A keycap's few words: the verb, then the values of its flags. */
+/** A keycap's few words: the topic and action, then the values of its flags. */
 export function keycapLabel(action: string): string {
   const words = action.trim().split(/\s+/);
   if (words[0] !== "flash" || words.length < 2) return action;
@@ -383,6 +471,15 @@ export function phaseKeys(phase: string | undefined, keyboard: KeyboardState | u
     case "confirming": {
       keys.set("y", "yes");
       specials.set("esc", "no");
+      break;
+    }
+    case "window_switcher": {
+      for (const [cap, value] of alphabetHeat(keyboard)) heat.set(cap, value);
+      for (const cap of keyboard.alphabet) keys.set(cap, "switch to that window");
+      specials.set("tab", "next window; with Shift, the previous one");
+      specials.set("return", "switch to the selected window");
+      specials.set("backspace", "undo a label key");
+      specials.set("esc", "close the list");
       break;
     }
     default:

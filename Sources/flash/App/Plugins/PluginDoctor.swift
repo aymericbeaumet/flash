@@ -1,6 +1,6 @@
 import Foundation
 
-/// The plugin half of `flash doctor` / `:doctor` — turns "a plugin doesn't
+/// The plugin half of `flash resident doctor` / `:doctor` — turns "a plugin doesn't
 /// work" into a self-service diagnosis instead of a support thread. Pure
 /// over the runtime statuses plus on-disk state; every check reports a
 /// line, problems are prefixed `!!` and counted. Runs off-main (profile
@@ -80,29 +80,22 @@ enum PluginDoctor {
     if executable.contains("/") {
       let path = root.appendingPathComponent(executable).standardizedFileURL.path
       return FileManager.default.isExecutableFile(atPath: path)
-        ? nil : "exec: \(executable) missing — run Scripts/build-plugins.sh"
+        ? nil : "exec: \(executable) missing — run `mise run build:plugins`"
     }
     return PluginSandbox.resolveExecutable(named: executable, from: root) == nil
       ? "exec: runtime \(executable) not found via mise or the login PATH" : nil
   }
 
   private static func profileIssue(_ profile: String) -> String? {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
-    process.arguments = ["-p", profile + trueAllowance, "/usr/bin/true"]
-    process.standardOutput = FileHandle.nullDevice
-    let stderr = Pipe()
-    process.standardError = stderr
-    do {
-      try process.run()
-    } catch {
-      return "sandbox: cannot run sandbox-exec (\(error))"
+    let result = BoundedCommand.run(
+      [PluginSandbox.sandboxExecPath, "-p", profile + trueAllowance, "/usr/bin/true"],
+      environment: ProcessInfo.processInfo.environment, timeout: 10, capture: .stderr)
+    if let failure = result.launchFailure {
+      return "sandbox: cannot run sandbox-exec (\(failure))"
     }
-    process.waitUntilExit()
-    if process.terminationStatus == 0 { return nil }
-    let diagnostics =
-      String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    return "sandbox: profile check failed (exit \(process.terminationStatus)) "
-      + diagnostics.trimmed.prefix(160)
+    if result.succeeded { return nil }
+    if result.timedOut { return "sandbox: profile check timed out" }
+    return "sandbox: profile check failed (exit \(result.status ?? -1)) "
+      + result.errorText.trimmed.prefix(160)
   }
 }

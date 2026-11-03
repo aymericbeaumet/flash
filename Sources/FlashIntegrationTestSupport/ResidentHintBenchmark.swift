@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import FlashCore
 import Foundation
 
 /// `--bench=N` for the integration oracles: drive the installed resident
@@ -13,7 +14,7 @@ public struct ResidentHintBenchmark {
   public enum Trigger: String {
     /// `f` posted at the HID level in NORMAL (origin=key).
     case key
-    /// `flash mouse_target` (origin=cli).
+    /// `flash mouse target` (origin=cli).
     case cli
   }
 
@@ -28,8 +29,8 @@ public struct ResidentHintBenchmark {
       switch self {
       case .invalidArgument(let argument): return "invalid benchmark argument \(argument)"
       case .notNormal(let mode):
-        return "Flash is in \(mode) after enter_normal_mode; bind an all-mode leave_mode or "
-          + "enter_normal_mode mapping to enable NORMAL, or pass --trigger=cli"
+        return "Flash is in \(mode) after mode normal; bind an all-mode mode leave or "
+          + "mode normal mapping to enable NORMAL, or pass --trigger=cli"
       case .command(let message): return "flash command failed: \(message)"
       case .state(let message): return "Flash debug state unavailable: \(message)"
       case .timedOut(let what): return "timed out waiting for \(what)"
@@ -90,7 +91,7 @@ public struct ResidentHintBenchmark {
   @discardableResult
   public func run(activate: () -> Void, log: (String) -> Void) throws -> Int {
     if trigger == .key {
-      try flash("enter_normal_mode")
+      try flash("mode", "normal")
       let mode = try fetchState()["mode"] as? String ?? "unknown"
       guard mode == "normal" else { throw Failure.notNormal(mode) }
     }
@@ -107,7 +108,7 @@ public struct ResidentHintBenchmark {
       let state = try waitForState(
         "hints", timeout: 8, firstPollAfter: 0.3, until: Self.hintsVisible)
       let count = (state["hints"] as? [Any])?.count ?? 0
-      try flash("hints_dismiss")
+      try flash("hints", "dismiss")
       _ = try waitForState("dismissal", timeout: 4, until: Self.hintsDismissed)
       if index >= warmup {
         measured += 1
@@ -123,7 +124,7 @@ public struct ResidentHintBenchmark {
   private func fire() throws {
     switch trigger {
     case .cli:
-      try flash("mouse_target")
+      try flash("mouse", "target")
     case .key:
       let source = CGEventSource(stateID: .hidSystemState)
       CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_F), keyDown: true)?
@@ -134,13 +135,14 @@ public struct ResidentHintBenchmark {
     }
   }
 
-  private func flash(_ verb: String) throws {
+  /// Run `flash <topic> <action>` and wait for it.
+  private func flash(_ topic: String, _ action: String) throws {
     guard FileManager.default.isExecutableFile(atPath: flashCLIPath) else {
       throw Failure.command("\(flashCLIPath) is not executable")
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: flashCLIPath)
-    process.arguments = [verb]
+    process.arguments = [topic, action]
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = pipe
@@ -150,7 +152,8 @@ public struct ResidentHintBenchmark {
       let output =
         String(
           data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-      throw Failure.command("\(verb) exited \(process.terminationStatus): \(output)")
+      throw Failure.command(
+        "flash \(topic) \(action) exited \(process.terminationStatus): \(output)")
     }
   }
 
@@ -171,7 +174,10 @@ public struct ResidentHintBenchmark {
   private func fetchState() throws -> [String: Any] {
     let semaphore = DispatchSemaphore(value: 0)
     var result: Result<[String: Any], Failure> = .failure(.state("no response"))
-    URLSession.shared.dataTask(with: stateURL) { data, _, error in
+    var request = URLRequest(url: stateURL)
+    // The inspector answers its data only with your access token.
+    if let token = HelpAccess.load() { HelpAccess.authorize(&request, token: token) }
+    URLSession.shared.dataTask(with: request) { data, _, error in
       if let error {
         result = .failure(.state(String(describing: error)))
       } else if let data,

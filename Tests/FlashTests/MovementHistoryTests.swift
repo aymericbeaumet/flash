@@ -20,6 +20,11 @@ final class MovementHistoryTests: XCTestCase {
       isLocation: true, isCurrentLocation: true)
   }
 
+  /// The route a performed switch names, as the plugin replies with it.
+  private func route(_ name: String, pid: pid_t = 10) -> AppDelegate.MovementEntry {
+    .route(URL(string: "test-navigation://tab/\(name)")!, pid: pid)
+  }
+
   private func application(pid: pid_t) -> Candidate {
     Candidate(
       kind: .app, sourceID: "core.apps", source: "apps", pid: pid, title: "App \(pid)",
@@ -177,6 +182,66 @@ final class MovementHistoryTests: XCTestCase {
     XCTAssertEqual(target?.candidate?.title, "two")
     XCTAssertEqual(app.movementBackStack.compactMap { $0.candidate?.title }, ["one"])
     XCTAssertEqual(app.movementForwardStack.compactMap { $0.candidate?.title }, ["three"])
+  }
+
+  /// A tab switch the source performs names the route it landed on, and
+  /// that is a stop at once: three fast steps leave three stops before the
+  /// catalog, which saw only the last, coalesces with it.
+  func testEveryPerformedStepIsAStopBeforeTheCatalogSettles() {
+    let app = delegate()
+    XCTAssertTrue(app.recordPublishedLocations([location("one")], processID: 10))
+    for name in ["two", "three", "four"] {
+      app.recordPerformedNavigation(route(name), source: "source_command")
+    }
+    XCTAssertTrue(app.recordPublishedLocations([location("four")], processID: 10))
+
+    XCTAssertEqual(app.movementCurrent?.candidate?.title, "four")
+    XCTAssertEqual(
+      app.movementBackStack.compactMap { $0.navigationURL?.lastPathComponent },
+      ["one", "two", "three"])
+    XCTAssertTrue(app.movementForwardStack.isEmpty)
+    let back = app.takeMovementHistoryTarget(direction: .back, current: app.movementCurrent)
+    XCTAssertEqual(back?.navigationURL?.absoluteString, "test-navigation://tab/three")
+  }
+
+  /// The app's catalog settles after its burst, so the observation in
+  /// flight while a run of steps is under way names the location the first
+  /// step left. It must not become a stop: that pushed the step just
+  /// recorded back onto the stack and replayed the run out of order.
+  func testAStaleCatalogObservationCannotReorderAFastRunOfSteps() {
+    let app = delegate()
+    for name in ["one", "two"] {
+      app.recordPerformedNavigation(route(name), source: "source_command")
+    }
+    app.recordAmbientLocation(location("one"), processID: 10, source: "location_catalog")
+    for name in ["three", "four"] {
+      app.recordPerformedNavigation(route(name), source: "source_command")
+    }
+
+    XCTAssertEqual(
+      app.movementBackStack.compactMap { $0.navigationURL?.lastPathComponent },
+      ["one", "two", "three"])
+    XCTAssertEqual(app.movementCurrent?.navigationURL?.lastPathComponent, "four")
+    // Walking back replays the run in the order it was made.
+    for expected in ["three", "two", "one"] {
+      XCTAssertEqual(
+        app.takeMovementHistoryTarget(direction: .back, current: app.movementCurrent)?
+          .navigationURL?.lastPathComponent,
+        expected)
+    }
+  }
+
+  /// The guard lasts only until an observation names the recorded stop: the
+  /// catalog that caught up coalesces, and the next one records again.
+  func testTheCatalogTakesOverOnceItNamesThePerformedStop() {
+    let app = delegate()
+    app.recordPerformedNavigation(route("one"), source: "source_command")
+    app.recordAmbientLocation(location("one"), processID: 10, source: "location_catalog")
+    app.recordAmbientLocation(location("two"), processID: 10, source: "location_catalog")
+
+    XCTAssertEqual(app.movementCurrent?.candidate?.title, "two")
+    XCTAssertEqual(
+      app.movementBackStack.compactMap { $0.navigationURL?.lastPathComponent }, ["one"])
   }
 
   func testHistoryRemainsBounded() {

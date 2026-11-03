@@ -111,6 +111,47 @@ final class StatusPopupControllerTests: XCTestCase {
     controller.dismiss()
   }
 
+  /// An open popup stays where it opened while its label only changes width:
+  /// a carousel line or a metric growing or shrinking must not slide it
+  /// sideways. A label that moved hangs it afresh, even a short move still
+  /// under the popup, and every new showing is centred.
+  func testAnOpenPopupStaysPutWhileItsLabelChangesWidthUnderIt() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    let screen = CGRect(x: 0, y: 0, width: 1600, height: 900)
+    var label = region(text: String(repeating: "x", count: 60))
+    label.rect = CGRect(x: 400, y: 874, width: 600, height: 26)
+    preview(controller, region: label, screen: screen)
+    let opened = controller.frame
+    XCTAssertEqual(opened.midX, label.rect.midX, accuracy: 0.5)
+
+    var shorter = label
+    shorter.rect.size.width = 260
+    controller.refresh([shorter])
+    XCTAssertEqual(controller.frame.minX, opened.minX, "the label's centre is still over it")
+    preview(controller, region: shorter, screen: screen)
+    XCTAssertEqual(controller.frame.minX, opened.minX, "a hover re-test keeps it too")
+
+    var nudged = shorter
+    nudged.rect.origin.x += 40
+    controller.refresh([nudged])
+    XCTAssertEqual(controller.frame.midX, nudged.rect.midX, accuracy: 0.5, "the label moved")
+
+    var moved = label
+    moved.rect.origin.x = 1300
+    moved.rect.size.width = 200
+    controller.refresh([moved])
+    XCTAssertEqual(
+      controller.frame.midX, min(moved.rect.midX, screen.maxX - opened.width / 2), accuracy: 0.5)
+
+    controller.dismiss()
+    preview(controller, region: shorter, screen: screen)
+    XCTAssertEqual(
+      controller.frame.midX, shorter.rect.midX, accuracy: 0.5, "a new showing is centred")
+    controller.dismiss()
+  }
+
   func testTextPopupGrowsFromMinWidthToItsWidestLineAndWrapsPastMaxWidth() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }

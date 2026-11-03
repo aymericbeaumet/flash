@@ -8,8 +8,16 @@
      CGEventTap, and plugin child processes — Flash's entire core. Developer
      ID + notarization is the sanctioned distribution ceiling. -->
 <dict>
-    <!-- osascript-driven plugins and the app_open verb send AppleEvents. -->
+    <!-- AppleScript, in the resident and in plugins, and the app open command
+         send AppleEvents. -->
     <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <!-- @contacts.cards reads Contacts, @reminders.tasks Reminders and
+         #{flash.calendar.next} and `calendar join` Calendar through EventKit,
+         once the user allows it. -->
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+    <key>com.apple.security.personal-information.calendars</key>
     <true/>
 </dict>
 </plist>

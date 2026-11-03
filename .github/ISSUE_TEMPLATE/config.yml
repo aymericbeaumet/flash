@@ -1,5 +1,11 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Troubleshooting and known limitations
+    url: https://github.com/aymericbeaumet/flash/blob/main/docs/troubleshooting.md
+    about: Start with `flash resident doctor`; the page covers the common first-week problems and what is a limitation rather than a bug.
+  - name: Comparison and FAQ
+    url: https://github.com/aymericbeaumet/flash/blob/main/docs/comparison.md
+    about: Privacy, performance, Intel, plugins, Hammerspoon and Karabiner, and how Flash compares with other tools.
   - name: Security report
     url: https://github.com/aymericbeaumet/flash/security/advisories/new
     about: Report keystroke, sandbox or input-synthesis issues privately.

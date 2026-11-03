@@ -9,7 +9,7 @@ name = "flash-plugin-answers"
 path = "src/main.rs"
 
 [dependencies]
-fend-core = "=1.5.8"
+fend-core = "=1.5.9"
 flash_plugin = { path = "../_flash_plugin_rust" }
 jiff = { version = "0.2", default-features = false, features = [
   "std",

@@ -45,7 +45,7 @@ the last release (1.6.82) and commit date from December 2023.
 
 | Übersicht | Flash |
 | --- | --- |
-| `command: "top -l 1"` + `render` | `#{flash.plugin.cpu.percent}`, `#{flash.plugin.processes.top_cpu}` |
+| `command: "top -l 1"` + `render` | `#{flash.plugin.sysinfo.cpu_percent}`, `#{flash.top_cpu}` |
 | `refreshFrequency` | The plugin's cadence; `[statusbar.sources.<name>]` for your own command |
 | CSS position | `anchor` and offsets in `[widgets.<name>]` |
 | Click handlers | Not available; use a popup or a mapping |
@@ -55,8 +55,8 @@ the last release (1.6.82) and commit date from December 2023.
 [widgets.system]
 anchor = "top_right"
 template = """
-CPU #[meter=20]#{flash.plugin.cpu.percent}#[nometer] #[spark]#{flash.plugin.cpu.history}#[nospark]
-MEM #[meter=20]#{flash.plugin.memory.percent}#[nometer]
+CPU #[meter=20]#{flash.plugin.sysinfo.cpu_percent}#[nometer] #[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]
+MEM #[meter=20]#{flash.plugin.sysinfo.memory_percent}#[nometer]
 """
 ```
 

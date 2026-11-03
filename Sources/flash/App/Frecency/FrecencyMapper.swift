@@ -22,7 +22,7 @@ enum FrecencyMapper {
   }
 
   static func canonicalizeURL(_ raw: String) -> String {
-    guard let url = URL(string: raw) else { return raw }
+    guard let url = URLParsing.url(raw) else { return raw }
     var host = url.host?.lowercased() ?? ""
     if host.hasPrefix("www.") { host = String(host.dropFirst(4)) }
     let scheme = url.scheme?.lowercased() ?? ""

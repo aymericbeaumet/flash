@@ -8,6 +8,8 @@ struct CandidateSubmissionDeferral {
     let submit: Bool
     let allowFinisher: Bool
     let submitFinalDestinations: Bool
+    /// The modified Return that pressed it, if any.
+    var variant: CommandLineSubmitVariant? = nil
   }
 
   enum Resolution: Equatable {

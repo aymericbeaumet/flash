@@ -93,6 +93,14 @@ extension AppDelegate {
   /// event re-arms one deadline on the shared clock. `.normal`: the user just
   /// saved and will look for the change, but a tenth of a second is
   /// invisible beside the 150 ms settle.
+  /// `config reload`: the file read now, whatever its bytes; the watchers
+  /// are left as they are.
+  func forceConfigReload() {
+    lastAppliedConfigFileContents = try? Data(
+      contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
+    reloadConfig(refreshesEnvironment: true)
+  }
+
   private func scheduleConfigReload() {
     configReload.arm(afterMs: 150) { [weak self] in self?.watchConfigFile() }
   }
@@ -171,12 +179,15 @@ extension AppDelegate {
       AutoLaunch.reconcile(enabled: cfg.app.autostart)
     }
     overlay.overlayConfig = cfg.overlay
+    applyCaptureSharing(hidden: cfg.app.hideFromCapture)
     overlay.debugConfig = cfg.debug
     overlay.popupStyle = cfg.popupStyle
+    overlay.statusLinkOpener.schemes = Set(cfg.statusBar.linkSchemes)
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
     overlay.keyboardNavigation = Alphabet.navigation(layoutName: cfg.positionLayoutName)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
+    applyTextScopePolicy(cfg.mode)
     // Rebuilt on every load: the setting may have changed, and so may the
     // installed layouts an explicit input-source ID names.
     keyboardLayoutMonitor.apply(setting: KeyboardLayout.Setting(cfg.app.keyboardLayout) ?? .auto)
@@ -187,15 +198,19 @@ extension AppDelegate {
       terminalPopupNames: cfg.terminalPopupNames,
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     statusBarController?.setBar(enabled: cfg.statusBar.enabled)
+    processStatusSampler.setTopCount(cfg.statusBar.topCount)
+    calendarEvents.configure(cfg.calendar)
     statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))
+    statusBarController?.updateMonitors(cfg.monitorSpecs)
     registry.updateFlashlightConfig(cfg.flashlight)
     pluginManager.updateConfig(cfg)
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:config.changed",
-        payload: [:],
-        bundleID: nil))
+    eventMonitors = cfg.eventMonitorSpecs
+    // A run whose monitor is gone or changed stops with its children.
+    monitorRunner.reconcile(cfg.enabledMonitors.mapValues(\.run))
+    reconcileHostEventSources()
+    emitHostEvent(PluginEvent(.configChanged))
     configureDebugServer(for: cfg)
+    configureTelemetry(for: cfg)
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
     registry.scheduleRunningApplicationsRefresh()
@@ -206,21 +221,29 @@ extension AppDelegate {
     statusBarVisible = cfg.statusBar.enabled
     overlay.statusBarMonitor = cfg.statusBar.monitor
     NativeMenuBarAutoHide.reconcile(hidden: statusBarVisible)
+    reconcileUpdates(cfg.app.updates)
     windowLayoutManager.setDeclaredLayouts(cfg.mode.declaredWindowLayouts)
     windowLayoutManager.screenParametersDidChange(
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: cfg.statusBar.monitor,
       forceRecovery: false)
     windowLayoutManager.setPlacementRules(cfg.windowRules)
-    // The status controller runs for the bar and for desktop widgets alike.
-    if statusBarVisible || !cfg.enabledWidgets.isEmpty {
+    windowLayoutManager.configureTiling(
+      cfg.tiling, statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: cfg.statusBar.monitor)
+    // The status controller runs for the bar, desktop widgets and monitors
+    // alike.
+    if statusBarVisible || !cfg.enabledWidgets.isEmpty || !cfg.enabledMonitors.isEmpty {
       statusBarController?.start()
     } else {
       statusBarController?.stop()
     }
     widgetController?.apply(
       widgets: cfg.enabledWidgets, statusBarReservesSpace: statusBarVisible,
-      statusBarMonitor: cfg.statusBar.monitor, screenCapture: cfg.overlay.screenCapture)
+      statusBarMonitor: cfg.statusBar.monitor, hideFromCapture: cfg.app.hideFromCapture)
+    // The active layer takes its new `sticky`, or ends if the file no longer
+    // declares it; the re-render below paints a changed label.
+    dispatchMode(.layersChanged(cfg.mode.layers.mapValues(\.sticky)))
     // Advanced mode is on iff an all-mode exit or normal-entry binding exists. Turning it
     // off disables capture; the reducer re-renders either way.
     dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))

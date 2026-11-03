@@ -11,8 +11,8 @@ to three months.
 | | Superkey | Flash |
 | --- | --- | --- |
 | License, price | Closed; one-time licence, 20-day trial | MIT, free |
-| Platforms | macOS 12+ | macOS 14+ |
-| Permissions | Screen Recording for Seek (it takes a screenshot), Accessibility for keystrokes and clicks | Accessibility; Automation per browser for tab lists; Screen Recording only for `:screenshot` |
+| Platforms | macOS 12+ | macOS 13+ |
+| Permissions | Screen Recording for Seek (it takes a screenshot), Accessibility for keystrokes and clicks | Accessibility; Automation per browser for tab lists; Screen Recording only for `:screenshot screen` |
 | Targets | OCR of the whole screen, plus optional Accessibility parsing | Accessibility tree only |
 | Actions | Seek and click, cycle matches with `;` | Labels, search, grid, bisect, drag, select, words, path, sticky, multi |
 | Beyond pointing | Hyper key, trackpad gesture for hyper, remap presets | NORMAL mode, flashlight, status bar, widgets, popups, window placement, plugins |
@@ -37,9 +37,9 @@ to three months.
 
 ## Flash features you might like
 
-- `mouse_target --search` is Seek over Accessibility text: type visible
+- `mouse target --search` is Seek over Accessibility text: type visible
   text, matches cycle, Return clicks.
-- `mouse_bigram` types one visible character (`v`/`V` and `3`/`#` match),
+- `mouse bigram` types one visible character (`v`/`V` and `3`/`#` match),
   then a short label, for terminals and status bars.
 - `--words` puts a label on every visible word.
 
@@ -47,8 +47,8 @@ to three months.
 
 | Superkey | Flash |
 | --- | --- |
-| Seek | `["flash", "mouse_target", "--search"]`; `--scope=screen` for every app |
-| Seek on screen text without Accessibility | Not available; use `mouse_grid` |
+| Seek | `["flash", "mouse", "target", "--search"]`; `--scope=screen` for every app |
+| Seek on screen text without Accessibility | Not available; use `mouse grid` |
 | Hyper key | Keep Superkey or Karabiner-Elements for it; Flash mappings accept hyper chords |
 | Remap presets | Keep Superkey or Karabiner-Elements |
 
@@ -57,7 +57,7 @@ other modifier combination.
 
 ```toml
 [mode.all.mappings]
-"cmd+shift+space" = ["flash", "mouse_target", "--search"]
+"cmd+shift+space" = ["flash", "mouse", "target", "--search"]
 ```
 
 *Checked 2026-10-14 against

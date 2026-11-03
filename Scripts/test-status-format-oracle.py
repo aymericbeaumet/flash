@@ -24,9 +24,9 @@ def main():
     executable = os.environ.get("TMUX_ORACLE", str(pinned) if pinned.exists() else "tmux")
     if os.environ.get("FLASH_REQUIRE_TMUX_ORACLE") == "1":
         stamp = Path(executable).resolve().parent.parent / ".flash-build"
-        expected = f"3.8-2.12.0-{platform.machine()}"
+        expected = f"3.8-2.12.0-2.1.13-stable-{platform.machine()}"
         if not stamp.exists() or stamp.read_text().strip() != expected:
-            raise SystemExit(f"Expected pinned tmux/Unicode oracle {expected}; run Scripts/build-tmux-oracle.sh")
+            raise SystemExit(f"Expected pinned tmux/Unicode oracle {expected}; run mise run build:tmux-oracle")
     version = subprocess.check_output([executable, "-V"], env=env, text=True).strip()
     if version != "tmux 3.8":
         raise SystemExit(f"Expected tmux 3.8, found {version}")

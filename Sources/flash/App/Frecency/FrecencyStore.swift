@@ -92,7 +92,7 @@ final class FrecencyStore {
     self.entries = FrecencyStore.loadEntries(from: self.fileURL)
     self.boostSnapshot = FrecencyStore.deriveBoosts(
       entries: self.entries, configuration: configuration, now: Date().timeIntervalSince1970)
-    FlashLog.info(
+    FlashLog.debug(
       "[frecency] loaded",
       fields: ["path": self.fileURL.path, "rows": "\(self.entries.count)"])
   }
@@ -204,14 +204,10 @@ final class FrecencyStore {
       let encoder = JSONEncoder()
       encoder.outputFormatting = [.sortedKeys]
       let data = try encoder.encode(snapshot)
-      // Atomic write so a crash mid-write can't leave us with a
-      // half-flushed dict — readers either see the prior state or
-      // the new one.
-      let tmp = fileURL.appendingPathExtension("tmp")
-      try data.write(to: tmp, options: [.atomic])
-      _ = try? FileManager.default.replaceItemAt(fileURL, withItemAt: tmp)
+      // Readers see the prior state or the new one, never half of it.
+      try PrivateFile.write(data, to: fileURL)
     } catch {
-      FlashLog.warn(
+      FlashLog.error(
         "[frecency] persist failed: \(error)",
         fields: ["path": fileURL.path])
     }

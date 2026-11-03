@@ -69,7 +69,7 @@ public enum TargetFinalizer {
       if lhs.area != rhs.area { return lhs.area < rhs.area }
       // Over the same area a typing surface beats the control laid over it:
       // WhatsApp covers its search field with a same-size button.
-      if lhs.entersInsertMode != rhs.entersInsertMode { return lhs.entersInsertMode }
+      if lhs.isTextInput != rhs.isTextInput { return lhs.isTextInput }
       if !lhs.area.isFinite, lhs.logArea != rhs.logArea { return lhs.logArea < rhs.logArea }
       if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
       if lhs.providerOrder != rhs.providerOrder { return lhs.providerOrder < rhs.providerOrder }
@@ -96,7 +96,7 @@ public enum TargetFinalizer {
     let generic: Bool
     let area: CGFloat
     let logArea: CGFloat
-    let entersInsertMode: Bool
+    let isTextInput: Bool
     let priority: Int
     let providerOrder: Int
     let ordinal: Int
@@ -106,7 +106,7 @@ public enum TargetFinalizer {
       generic = candidate.target.isGenericContainer
       area = TargetFinalizer.area(candidate.target.frame)
       logArea = area.isFinite ? 0 : TargetFinalizer.logArea(candidate.target.frame)
-      entersInsertMode = candidate.target.entersInsertMode
+      isTextInput = candidate.target.isTextInput
       priority = candidate.priority
       providerOrder = candidate.providerOrder
       ordinal = candidate.ordinal

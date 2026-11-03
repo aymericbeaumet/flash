@@ -7,6 +7,30 @@ is no tmux runtime dependency, tmux configuration import, or implicit connection
 to a tmux server. Terminal popup commands have a separate lifetime; see
 [popups](popups.md#lifecycles).
 
+## Quick reference
+
+| Syntax | Use |
+| --- | --- |
+| `#{flash.mode}` | Current mode's label (`NORMAL`, `INSERT`, `VISUAL`, `V-LINE`, …), a layer's `label` included |
+| `#{flash.focused_app_name}` | Focused app |
+| `#{flash.plugin.sysinfo.cpu_percent}` | A plugin's declared status value |
+| `%H:%M` | Local time |
+| `#[fg=green,bold]OK#[default]` | Style a span |
+| `#[label]Cld#[default]` | Colour a name, then the ordinary foreground |
+| `#[align=right]text` | Place a section |
+| `#{?flash.secure_input,SECURE,}` | Conditional content |
+| `#[meter=12]42#[nometer]` | Numeric bar |
+| `#[spark]1 4 2 7 3#[nospark]` | Numeric history |
+| `#[shrink]#{flash.focused_app_name}#[noshrink]` | Cut here first on overflow |
+
+Missing values expand to empty text. A plugin's numeric value is empty when
+unknown; do not assume that means zero. Time is never polled: `%H:%M`
+refreshes on the minute and `%S` every second, whatever `interval` says.
+Native `#(command)` runs an asynchronous shell job; for explicit argv, a
+separate refresh cadence or numeric history, declare a named
+[source](#jobs-sources-and-flash-styles). The live [runtime](/state) page
+shows the effective settings and [plugins](/plugins) the status publishers.
+
 ## Authoring
 
 Write the whole format inline in `template`. A long bar can span a multi-line
@@ -16,14 +40,14 @@ TOML string, one lane per line:
 [statusbar]
 enabled = true
 template = """
-#[align=left]#[pill]#{flash.mode}#[nopill] · #{flash.active_app_name}
-#[align=right]#{flash.plugin.cpu.summary} · %H:%M
+#[align=left]#[pill]#{flash.mode}#[nopill] · #{flash.focused_app_name}
+#[align=right]#{flash.plugin.sysinfo.cpu_summary} · %H:%M
 """
 ```
 
 The bar is one line: a newline the template writes is dropped from the drawn
 text, as is one inside a value it shows, so the TOML string above draws as the
-single format `#[align=left]…#{flash.active_app_name}#[align=right]…%H:%M`.
+single format `#[align=left]…#{flash.focused_app_name}#[align=right]…%H:%M`.
 Write the separating space yourself where two lines meet; indentation is text.
 Inside a style marker a newline separates tokens, as a space does. Text popups
 preserve their interior newlines. A desktop widget draws each line as its own
@@ -92,12 +116,23 @@ native case to the corpus and inspect the corresponding pinned parser branch.
 
 ## Context supplied by Flash
 
-Flash supplies `flash.mode`, `flash.date`, `flash.active_app_name`,
-`flash.active_bundle_identifier`, `flash.secure_input`,
+Flash supplies `flash.mode`, `flash.date`, `flash.focused_app_name`,
+`flash.focused_app_bundle_id`, `flash.secure_input`, `flash.caffeinate`,
+the [tiling](tiling.md#the-bar-and-plugins) `flash.workspace` and
+`flash.workspaces`, the
+[process values](#process-values) `flash.top_cpu`, `flash.top_mem` and
+`flash.focused_app_details`, `flash.memory_pressure`, the three-month
+`flash.calendar` and the [next meeting](calendar.md#next-meeting)
+`flash.calendar.next` with its parts `next_title`, `next_in`, `next_minutes`,
+`next_start`, `next_end`, `next_ongoing` and `next_link`
+(`flash.calendar.next_minutes`, …),
 `flash.plugin.<id>.<segment>`, `flash.plugin.loaded_count`,
 `flash.plugin.ready_count`, `flash.plugin.error_count`,
-`flash.source.<name>`, and `flash.history.<name>` for a source that keeps a
-`history`. Inside a desktop widget, `flash.widget.name` and
+`flash.plugin.errors`, `flash.plugin.spawn_ms`, `flash.plugin.spawn_id`,
+`flash.source.<name>`, `flash.history.<name>` for
+a source that keeps a `history`, and `flash.otel[.<field>]:<metric>[…]` for
+a metric the [OpenTelemetry receiver](telemetry.md#reading-metrics-in-a-status-format)
+holds. Inside a desktop widget, `flash.widget.name` and
 `flash.widget.columns` name the widget and its width; elsewhere they are
 unknown values. Host/user/process values and the process environment are
 available through ordinary lookup.
@@ -109,6 +144,60 @@ the key window) and empty otherwise:
 keyboard tap reads it for a key, when a hint session starts, and by the
 secure-input poll. A stuck hold is released automatically; the value stays
 `1` until macOS clears the flag.
+
+`flash.memory_pressure` is the share of memory the kernel does not count as
+available, an integer 0–100 (`100 − kern.memorystatus_level`). It is read
+with one `sysctl` only while a surface or a [monitor](monitors.md) shows it,
+on that surface's interval (`[statusbar] interval`, a widget's or a
+monitor's `interval`). `flash.plugin.spawn_ms` is how long the most recent
+plugin launch took to spawn its process, in whole milliseconds, and
+`flash.plugin.spawn_id` the plugin it started; both are empty until a plugin
+has started. `flash.plugin.errors` names the plugins `flash.plugin.error_count`
+counts, sorted and comma-separated.
+
+`flash.caffeinate` is `on` while `caffeinate on` (or `caffeinate toggle`)
+keeps the Mac awake and empty otherwise:
+`#{?flash.caffeinate,#[label]AWAKE#[default] ,}`. A bounded hold clears it
+when its `--minutes` run out.
+
+`flash.calendar.next` reads `Standup in 12m`, then `Standup now`, and every
+`flash.calendar.next…` value is empty while no event is next:
+`#{?flash.calendar.next,#{flash.calendar.next} · ,}`. Flash reads your
+calendars only while a surface or a monitor reads one of these values, and
+macOS asks for Calendars access the first time; see
+[calendar](calendar.md#next-meeting).
+
+### Process values
+
+`flash.top_cpu` and `flash.top_mem` are conky's `${top}` tables, one row per
+process, busiest first:
+
+| Value | Rows ranked by | Value column |
+| --- | --- | --- |
+| `#{flash.top_cpu}` | CPU, as a share of one core averaged over the last sample period | `12.5%` |
+| `#{flash.top_mem}` | Resident memory | `1.2 GiB` |
+
+Each row is a name column 15 cells wide (longer names end in `…`) and a
+right-aligned value; ties rank by name, then pid, so equal figures never
+shuffle rows. The value is a multi-line table, so it reads best in a desktop
+widget or a text popup; the bar joins its lines. `[statusbar] top_count`
+sets the rows of each table, an integer from 1 to 20 (default 5); any other
+value is a configuration error.
+
+`flash.focused_app_details` describes the focused app's process tree, one
+labelled row each: Bundle, PID, Process, CPU, Memory, Sockets, Processes,
+Threads, Uptime and Disk I/O. Browser and Electron work lives mostly in
+helper processes, so every figure sums the app's process and its current
+descendants. While its figures are being read, or when they cannot be, the
+value shows the app's bundle and PID over a state line, never another app's
+figures.
+
+Sampling is scoped to what is shown. Flash reads the process table through
+libproc on a background queue, never the main thread, and only while the bar
+(its template or one of its text popups) or a visible widget reads one of
+these values: the tables every 2 seconds, the focused app every 10 seconds
+and once a focus change settles. A value no surface reads is cleared, so
+showing it again never reads another moment's figures.
 
 Flash has no implicit tmux session, window, pane, client, or pane-history
 inventory. Their missing values expand to empty strings, loops over absent
@@ -147,7 +236,11 @@ interval = 300
 cycle_interval = 60
 ```
 
-Only evaluated source references start jobs. A source interval of zero runs
+A source declared without a `command` is pushed instead: `flash status set
+--name=<source> --value=<text>` sets it from a script or hook, and it runs
+nothing ([pushed status values](commands.md#pushed-status-values));
+`flash status refresh --name=<source>` runs a source's command now. Only
+evaluated source references start jobs. A source interval of zero runs
 once; `cycle_interval` rotates the latest successful nonempty lines independently
 and marks their typed runs as `#[cyc]` content for the carousel push. Failed/empty named source output keeps
 the last good value. Named sources use the configured timeout; native shell jobs
@@ -162,16 +255,44 @@ keeps the last N numeric outputs as `#{flash.history.<name>}`, space-separated
 and oldest first; a run whose output is not a number leaves it unchanged, the
 ring survives while the source is inactive, and it cannot combine with
 `cycle_interval`. Reading the history runs the source like reading its value.
+`output` reads a script written for another bar as it is, so a SwiftBar,
+xbar, i3blocks or waybar script needs no rewrite:
+
+| `output` | Reads | Keeps |
+| --- | --- | --- |
+| `"text"` (default) | Any output | All of it; its nonempty lines when the source cycles |
+| `"xbar"` | SwiftBar, xbar and BitBar plugins | The header lines before `---`, each without its `\| key=value` parameters; several header lines cycle with `cycle_interval`, as xbar cycles them |
+| `"i3blocks"` | i3blocks blocks | The first line, `full_text`; `short_text` and `color` are dropped |
+| `"waybar"` | waybar custom modules with `return-type = json` | The `text` of the last JSON line, without Pango markup |
+
+Only the text survives: the dropdown menu, colours, `href` and `bash` actions
+of these formats have no Flash equivalent, so style the value in the template
+and bind a click with [`[statusbar.click]`](statusbar.md#turn-a-label-into-an-action).
+
+```toml
+[statusbar.sources.cpu]
+command = ["~/Library/Application Support/SwiftBar/cpu.10s.sh"]
+interval = 10
+output = "xbar"
+```
+
 The bar and desktop widgets share one set of sources and jobs: a source or job
 several surfaces show runs once, a job at the fastest of their intervals. Changed/removed jobs
 are invalidated before their processes are stopped in one bounded batch.
 
 The additional style tokens are `label/nolabel`, `pill/nopill`, `shrink/noshrink`,
-`cyc/nocyc`, `breathing/nobreathing`, `link=URL/nolink`,
+`cyc/nocyc` (the host writes `cyc=<key>` on a carousel it rotates, naming
+the one a scroll steps, and `cycback` on a line stepped back to),
+`breathing/nobreathing`, `link=URL/nolink`,
 `popup=name/nopopup` or `popup=inline:<percent-encoded-rich-text>`, and the
 numeric drawings `meter=W[/MAX]/nometer` and `spark[=MIN/MAX]/nospark`
 described under [Flash extensions](#flash-extensions).
-Native `range=user|name` selects a `[statusbar.click]` action. The status renderer
+A `link=URL` opens only `http`, `https` and `mailto` URLs, plus the schemes
+listed in [`[statusbar] link_schemes`](config:statusbar): the URL is text a
+plugin, a source or a program wrote, so a `file:` or custom-scheme link is
+refused, noted in the log by its scheme alone and listed by
+`flash resident doctor` ([status bar](statusbar.md#turn-a-label-into-an-action)).
+Native `range=user|name` selects a [`[statusbar.click]`](config:statusbar.click) action. The status renderer
 reserves explicit mode-pill space and notch clearance, resolves overflow (see
 [Overflow and `#[shrink]`](#overflow-and-shrink)), then draws the native cell
 layout. The feed marks only its title `#[shrink]`, so it folds with an ellipsis
@@ -229,6 +350,17 @@ line moves a full line height up and fades out while the next rises the same
 distance from below and fades in, both on the standard ease-in-out curve. All
 of it runs on the render server: no host timers, no per-frame CPU work.
 
+Scrolling over a carousel steps it by hand: down for the next article, up for
+the previous, wrapping at either end. Down and up are the system's, as in any
+scroll view, so under natural scrolling the line moves with your fingers. One
+swipe or one wheel notch is one step: the glide after a swipe is ignored, and
+no step starts until the last push has played out, so a fast spin moves one
+line. The next article rises from below exactly as on the clock; one stepped
+back to plays the same push mirrored, down from above. The line you land on
+keeps a full cycle before the clock moves on, and an open popup over the
+carousel stays where it is. Only the bar scrolls: a desktop widget takes no
+mouse input.
+
 Inline popup identities derive from their source origin and invocation, not the
 current text or screen position. A changing source value refreshes an open
 popup in place; separate expansions of the same format remain distinct anchors.
@@ -244,7 +376,7 @@ drawing ([Overflow and `#[shrink]`](#overflow-and-shrink)), so native clipping
 applies only to what cannot give way further. The mode pill requires explicit
 `#[pill]` metadata. It keeps the
 original point-based padding and centred label, reserving the longest
-configured base-mode label; the transient TERMINAL label of a focused popup
+configured label of the built-in modes, `VISUAL` and `V-LINE` included; the transient TERMINAL label of a focused popup
 uses that same width, so focusing a popup does not shift adjacent segments.
 Pill backgrounds and interaction areas share the same geometry.
 
@@ -275,9 +407,9 @@ verifies: `#{E:@name,a}` reads one option literally named `@name,a`.
 `#[fg=label]`). `#[nolabel]` restores the current default foreground and leaves
 every other attribute alone. `#[default]` clears it with the rest of the
 appearance. A template can colour a name and leave the following value in the
-bar's ordinary foreground: `#[label]Cld#[default] #{flash.source.cld}`,
+bar's ordinary foreground: `#[label]Cld#[default] #{flash.plugin.aiproviders.claude}`,
 `#[label]aggr#[default] #{flash.plugin.feed.label}`,
-`#[label]CPU#[default] #{p-3:flash.plugin.cpu.label}`. The source or plugin prints
+`#[label]CPU#[default] #{p-3:flash.plugin.sysinfo.cpu_label}`. The source or plugin prints
 the value. The template owns the name, the colour, the width, the link, and the hover.
 
 ### Meters and sparklines
@@ -294,7 +426,7 @@ greatest value or 0 (an all-zero series is flat, as the Rust SDK's
 `#[spark=MIN/MAX]`, clamped.
 
 ```text
-CPU #[meter=20 fg=#A3BE8C bg=#3B4252]#{flash.plugin.cpu.percent}#[nometer default] #[spark=0/100]#{flash.plugin.cpu.history}#[nospark]
+CPU #[meter=20 fg=#A3BE8C bg=#3B4252]#{flash.plugin.sysinfo.cpu_percent}#[nometer default] #[spark=0/100]#{flash.plugin.sysinfo.cpu_history}#[nospark]
 ```
 
 These are style tokens: they follow the marker rules above and combine with
@@ -329,7 +461,7 @@ end and finish with `…`. The right loses the start and begins with `…`.
 segment, which ends with `…`, so the text after the span stays:
 
 ```text
-#[align=centre]#[shrink]#{flash.active_app_name}#[noshrink]
+#[align=centre]#[shrink]#{flash.focused_app_name}#[noshrink]
 ```
 
 Only once that span is down to the ellipsis does the segment fall back to its
@@ -348,9 +480,11 @@ Time is read on its own boundaries, never polled on an interval. Each
 evaluation reports the finest unit it showed: seconds when a strftime seconds
 conversion (`%S`, `%T`, `%s`, `%X`, `%r`, `%c`, `%+`) was expanded; days when
 only date conversions or `#{flash.calendar}` were; minutes for anything else,
-including `#{flash.date}` and `t:` times. A literal `%%` is not time. The
-controller wakes at the next boundary of the finest unit any visible surface
-shows; a day ends at local midnight or at a daylight-saving transition inside
+including `#{flash.date}` and `t:` times. A literal `%%` is not time, and
+neither are the `#{flash.calendar.next…}` values: the controller wakes at the
+instants they change (the countdown's next minute, an event starting or
+ending). The controller wakes at the next boundary of the finest unit any
+visible surface shows; a day ends at local midnight or at a daylight-saving transition inside
 it. Setting the clock, a time-zone change, a new calendar day and a wake
 re-plan that boundary at once. `[statusbar] interval` and a widget's
 `interval` govern only `#()` jobs and named sources.
@@ -396,14 +530,13 @@ The test-only oracle bootstrap pins tmux 3.8 and statically links utf8proc
 it does not inspect a user's live server or panes:
 
 ```sh
-export TMUX_ORACLE="$(./Scripts/build-tmux-oracle.sh)"
-export FLASH_REQUIRE_TMUX_ORACLE=1
-python3 Scripts/test-status-format-oracle.py
-swift test --filter 'FormatConformanceTests|FormatCommandJobTests|StatusFormatLayoutTests|NativeStatusBarSurfaceTests'
+mise run test:status-format   # builds the pinned oracle into build/tmux-oracle first
+FLASH_REQUIRE_TMUX_ORACLE=1 mise run test -- \
+  --filter 'FormatConformanceTests|FormatCommandJobTests|StatusFormatLayoutTests|NativeStatusBarSurfaceTests'
 ```
 
 `Tests/StatusFormatFixtures/tmux-3.8.json` stores portable native expansion
-results. `Scripts/test-status-format-oracle.py --record` updates that corpus
+results. `mise run test:status-format -- --record` updates that corpus
 against the pinned binary. The drawing suite independently compares final text,
 cell positions, colors, and attributes against an isolated attached tmux client.
 CI requires the exact stamped oracle build; production never invokes tmux.

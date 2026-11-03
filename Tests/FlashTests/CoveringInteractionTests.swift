@@ -34,8 +34,8 @@ final class CoveringInteractionTests: XCTestCase {
     let app = entry(front, layer: 0, x: 0, y: 0, width: 2000, height: 1200)
     let chosen = AppMonitor.coveringInteractionWindow(
       entries: [dialog, app], frontPid: front, screen: screen, owner: owners([front]))
-    XCTAssertEqual(chosen?.pid, agent)
-    XCTAssertEqual(chosen?.nsBounds, dialog.nsBounds)
+    XCTAssertEqual(chosen?.window?.pid, agent)
+    XCTAssertEqual(chosen?.window?.nsBounds, dialog.nsBounds)
   }
 
   func testANormalLevelAgentWindowIsTheHintSurface() {
@@ -43,7 +43,7 @@ final class CoveringInteractionTests: XCTestCase {
     let app = entry(front, layer: 0, x: 0, y: 0, width: 2000, height: 1200)
     let chosen = AppMonitor.coveringInteractionWindow(
       entries: [dialog, app], frontPid: front, screen: screen, owner: owners([front]))
-    XCTAssertEqual(chosen?.pid, agent)
+    XCTAssertEqual(chosen?.window?.pid, agent)
   }
 
   func testGatekeeperIsTheSurfaceEvenWhenItReportsARegularPolicy() {
@@ -51,7 +51,7 @@ final class CoveringInteractionTests: XCTestCase {
     let app = entry(front, layer: 0, x: 0, y: 0, width: 2000, height: 1200)
     let chosen = AppMonitor.coveringInteractionWindow(
       entries: [dialog, app], frontPid: front, screen: screen, owner: owners([front, agent]))
-    XCTAssertEqual(chosen?.pid, agent)
+    XCTAssertEqual(chosen?.window?.pid, agent)
   }
 
   func testAnotherRegularAppsNormalWindowIsActivationLag() {
@@ -70,7 +70,7 @@ final class CoveringInteractionTests: XCTestCase {
       entries: [dialog, behind, app], frontPid: front, screen: screen,
       owner: owners([front, other])
     )
-    XCTAssertEqual(chosen?.pid, agent)
+    XCTAssertEqual(chosen?.window?.pid, agent)
   }
 
   func testPictureInPictureDoesNotStealTheFrontApp() {
@@ -98,32 +98,24 @@ final class CoveringInteractionTests: XCTestCase {
       }
       return self.owners([self.front])(pid)
     }
-    XCTAssertEqual(chosen?.pid, agent)
+    XCTAssertEqual(chosen?.window?.pid, agent)
   }
 
-  func testSystemChromeAndStatusStripsAreSkipped() {
+  func testStatusStripsAreSkipped() {
     let status = entry(
       other, layer: Int(CGWindowLevelForKey(.statusWindow)), x: 1800, y: 1170, width: 180,
       height: 24)
-    let chrome = WindowSnapshot.Entry(
-      pid: 40, layer: Int(CGWindowLevelForKey(.modalPanelWindow)),
-      nsBounds: CGRect(x: 1600, y: 900, width: 360, height: 280))
     let dialog = entry(agent, layer: 0)
     let app = entry(front, layer: 0, x: 0, y: 0, width: 2000, height: 1200)
     let chosen = AppMonitor.coveringInteractionWindow(
-      entries: [status, chrome, dialog, app], frontPid: front, screen: screen
+      entries: [status, dialog, app], frontPid: front, screen: screen
     ) { pid in
-      switch pid {
-      case 40:
-        return CoveringInteractionOwner(
-          bundleIdentifier: "com.apple.controlcenter", isRegularApp: false)
-      case self.other:
+      if pid == self.other {
         return CoveringInteractionOwner(bundleIdentifier: "com.example.Menu", isRegularApp: true)
-      default:
-        return self.owners([self.front])(pid)
       }
+      return self.owners([self.front])(pid)
     }
-    XCTAssertEqual(chosen?.pid, agent)
+    XCTAssertEqual(chosen?.window?.pid, agent)
   }
 
   func testATooltipSizedAgentWindowDoesNotHideTheApp() {
@@ -155,5 +147,102 @@ final class CoveringInteractionTests: XCTestCase {
       return self.owners([self.front])(pid)
     }
     XCTAssertNil(chosen)
+  }
+
+  // MARK: System overlays
+
+  private let system = pid_t(50)
+
+  /// One system process's window above the front app, decided with that
+  /// process as `bundle`.
+  private func overlay(
+    _ bundle: String, layer: Int, frame: CGRect, regular: Bool = false
+  ) -> CoveringSurface? {
+    let window = WindowSnapshot.Entry(pid: system, layer: layer, nsBounds: frame)
+    let app = entry(front, layer: 0, x: 0, y: 0, width: 2000, height: 1200)
+    return AppMonitor.coveringInteractionWindow(
+      entries: [window, app], frontPid: front, screen: screen
+    ) { pid in
+      pid == self.system
+        ? CoveringInteractionOwner(bundleIdentifier: bundle, isRegularApp: regular)
+        : self.owners([self.front])(pid)
+    }
+  }
+
+  /// The regression: with Notification Center's panel open over the front
+  /// app (level 21, as the live log recorded it), `f` walked the covered app
+  /// and found nothing. The panel is the surface, widgets included.
+  func testTheNotificationCenterPanelIsTheHintSurface() {
+    let panel = CGRect(x: 1600, y: 0, width: 400, height: 1170)
+    XCTAssertEqual(
+      overlay("com.apple.notificationcenterui", layer: 21, frame: panel)?.window?.nsBounds, panel)
+  }
+
+  /// A banner comes and goes on its own: it never takes `f` from the app
+  /// (`mouse notifications` hints it).
+  func testANotificationBannerDoesNotStealTheFrontApp() {
+    XCTAssertNil(
+      overlay(
+        "com.apple.notificationcenterui", layer: 21,
+        frame: CGRect(x: 1620, y: 1060, width: 360, height: 90)))
+  }
+
+  /// Desktop widgets sit below every window; the lock and login shields sit
+  /// above the screen saver.
+  func testDesktopWidgetsAndLockShieldsAreNotTheHintSurface() {
+    XCTAssertNil(
+      overlay(
+        "com.apple.notificationcenterui", layer: Int(CGWindowLevelForKey(.desktopIconWindow)),
+        frame: CGRect(x: 40, y: 600, width: 340, height: 340)))
+    XCTAssertNil(
+      overlay("com.apple.loginwindow", layer: 2004, frame: screen))
+  }
+
+  func testControlCenterAndMenuExtrasAreTheHintSurface() {
+    let module = CGRect(x: 1640, y: 760, width: 320, height: 400)
+    for layer in [24, Int(CGWindowLevelForKey(.statusWindow)), 101] {
+      XCTAssertEqual(
+        overlay("com.apple.controlcenter", layer: layer, frame: module)?.window?.nsBounds, module,
+        "layer \(layer)")
+    }
+    XCTAssertNotNil(
+      overlay(
+        "com.apple.systemuiserver", layer: 101,
+        frame: CGRect(x: 1500, y: 900, width: 260, height: 240)))
+    // A third-party status item's popover, drawn at the status level.
+    XCTAssertNotNil(
+      overlay(
+        "com.example.MenuExtra", layer: Int(CGWindowLevelForKey(.statusWindow)),
+        frame: CGRect(x: 1500, y: 800, width: 360, height: 380)))
+  }
+
+  func testTheDockBarIsNotTheHintSurfaceButItsStacksAre() {
+    XCTAssertNil(
+      overlay("com.apple.dock", layer: 20, frame: CGRect(x: 0, y: 200, width: 80, height: 800)))
+    XCTAssertNil(
+      overlay("com.apple.dock", layer: 20, frame: CGRect(x: 400, y: 0, width: 1200, height: 90)))
+    let stack = CGRect(x: 120, y: 300, width: 520, height: 420)
+    XCTAssertEqual(overlay("com.apple.dock", layer: 20, frame: stack)?.window?.nsBounds, stack)
+  }
+
+  func testSpotlightAndTheScreenshotToolbarAreTheHintSurface() {
+    XCTAssertNotNil(
+      overlay(
+        "com.apple.Spotlight", layer: 24, frame: CGRect(x: 650, y: 500, width: 700, height: 480)))
+    XCTAssertNotNil(
+      overlay(
+        "com.apple.screencaptureui", layer: 101,
+        frame: CGRect(x: 700, y: 80, width: 600, height: 56)))
+  }
+
+  /// A password or Touch ID prompt is neither walked nor clicked: `f` does
+  /// nothing while it shows, and never reaches the window behind it.
+  func testAnAuthenticationPromptRefusesHints() {
+    let prompt = CGRect(x: 780, y: 450, width: 440, height: 300)
+    for bundle in ["com.apple.SecurityAgent", "com.apple.LocalAuthentication.UIAgent"] {
+      XCTAssertEqual(
+        overlay(bundle, layer: Int(CGWindowLevelForKey(.modalPanelWindow)), frame: prompt),
+        .refused(bundleIdentifier: bundle), bundle)
+    }
   }
 }

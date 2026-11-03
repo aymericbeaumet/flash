@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Shared constants and helpers for build.sh and install.sh.
+# Shared constants and helpers for app/plugin builds and installation.
 # Sourced, never executed directly.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 APP_NAME="Flash"
 BUNDLE_ID="com.flash.app"
+# The oldest macOS Flash runs on: Resources/Info.plist's
+# LSMinimumSystemVersion, which the guardrails keep equal to Package.swift's
+# platform and this value (the plugins' deployment target).
+MACOS_MINIMUM="13.0"
 STAGING_PATH="$PROJECT_DIR/build/$APP_NAME.app"
 # parse_mode refines these: release installs "/Applications/Flash.app",
 # dev installs "/Applications/Flash 🧪.app" (same bundle id — only one
@@ -55,12 +59,32 @@ parse_mode() {
   INSTALL_PATH="/Applications/$APP_PRODUCT_NAME.app"
 }
 
+# Build and assembly share the same declared executable inventory.
+crate_binaries() {
+  local cargo="$1" fallback="$2" names
+  names="$(awk '
+    /^\[\[bin\]\]/ { in_bin = 1; next }
+    /^\[/ { in_bin = 0 }
+    in_bin && $0 ~ /^[[:space:]]*name[[:space:]]*=/ {
+      line = $0
+      sub(/^[^"]*"/, "", line)
+      sub(/".*$/, "", line)
+      if (line != "") print line
+    }
+  ' "$cargo" 2>/dev/null)"
+  if [[ -z "$names" ]]; then
+    printf '%s\n' "$fallback"
+  else
+    printf '%s\n' "$names"
+  fi
+}
+
 kill_all_flash() {
   # Both product flavors ("Flash" release, "Flash 🧪" dev) share the bundle
   # id and must never run concurrently — quit and kill every variant.
-  "$CLI_LINK_PATH" quit >/dev/null 2>&1 ||
-    "/Applications/$APP_NAME.app/Contents/MacOS/flash" quit >/dev/null 2>&1 ||
-    "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" quit >/dev/null 2>&1 ||
+  "$CLI_LINK_PATH" resident quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME.app/Contents/MacOS/flash" resident quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" resident quit >/dev/null 2>&1 ||
     true
   pkill -f "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" 2>/dev/null || true
   # A resident started through the CLI symlink with no arguments.
@@ -221,13 +245,40 @@ assemble_app() {
   fi
   cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$STAGING_PATH/Contents/Resources/AppIcon.icns"
+  # The manual the help serves at /docs/<page> (DebugServer.bundledDocs),
+  # bundled from docs/ by build-inspector.sh. A copy in both modes: the
+  # server only reads files that resolve inside it.
+  if [[ ! -s "$PROJECT_DIR/build/docs/docs.json" ]]; then
+    echo "ERROR: missing build/docs/docs.json; Scripts/build-inspector.sh bundles it" >&2
+    exit 1
+  fi
+  rm -rf "$STAGING_PATH/Contents/Resources/docs"
+  cp -R "$PROJECT_DIR/build/docs" "$STAGING_PATH/Contents/Resources/docs"
   # The default config ships inside the bundle and is loaded at runtime as
   # the base layer under the user's flash.toml (ConfigLoader.load), which
   # also revalidates it on every launch.
   cp "$PROJECT_DIR/config.default.toml" "$STAGING_PATH/Contents/Resources/config.default.toml"
+  cp "$PROJECT_DIR/LICENSE" "$STAGING_PATH/Contents/Resources/LICENSE"
+  local notices="$PROJECT_DIR/build/ThirdPartyNotices.txt"
+  if [[ -s "$notices" ]]; then
+    cp "$notices" "$STAGING_PATH/Contents/Resources/ThirdPartyNotices.txt"
+  elif [[ "$mode" == "release" ]]; then
+    echo "ERROR: missing generated third-party notices $notices" >&2
+    exit 1
+  fi
   cp "$PROJECT_DIR/Resources/Ghostty-LICENSE" "$STAGING_PATH/Contents/Resources/Ghostty-LICENSE"
   cp "$PROJECT_DIR/Resources/tmux-LICENSE" "$STAGING_PATH/Contents/Resources/tmux-LICENSE"
   cp "$PROJECT_DIR/Resources/utf8proc-LICENSE" "$STAGING_PATH/Contents/Resources/utf8proc-LICENSE"
+  # The man page and the shell completions come from the binary itself,
+  # generated from its command table, and ship as files: the Homebrew cask
+  # links them, so installing never runs the downloaded binary.
+  local cli="$STAGING_PATH/Contents/MacOS/flash" completions
+  completions="$STAGING_PATH/Contents/Resources/completions"
+  mkdir -p "$completions"
+  "$cli" cli manpage >"$STAGING_PATH/Contents/Resources/flash.1"
+  "$cli" cli completion --shell=zsh >"$completions/_flash"
+  "$cli" cli completion --shell=bash >"$completions/flash.bash"
+  "$cli" cli completion --shell=fish >"$completions/flash.fish"
   # Stamp the exact commit this bundle was assembled from (the About panel
   # reads FlashGitCommit).
   local git_commit
@@ -250,10 +301,11 @@ assemble_app() {
     local plugins_dest="$STAGING_PATH/Contents/Resources/Plugins"
     for manifest in "$PROJECT_DIR"/Plugins/*/manifest.json; do
       [[ -e "$manifest" ]] || continue
-      local dir id bin companion
+      local dir id bin companion artifact_dir
       dir="$(dirname "$manifest")"
       id="$(basename "$dir")"
-      bin="$dir/flash-plugin-$id"
+      artifact_dir="$PROJECT_DIR/build/plugin-release/$id"
+      bin="$artifact_dir/flash-plugin-$id"
       mkdir -p "$plugins_dest/$id"
       cp "$manifest" "$plugins_dest/$id/manifest.json"
       # Rust plugins ship their built binary; manifest-only plugins ship just
@@ -263,14 +315,17 @@ assemble_app() {
           echo "ERROR: missing plugin binary $bin" >&2
           exit 1
         fi
-        # Every binary the crate produced, not only the manifest `exec`: a
-        # crate may ship companion binaries next to its plugin. sign_app
-        # signs each of them.
-        for companion in "$dir"/flash-plugin-*; do
-          [[ -f "$companion" ]] || continue
-          cp "$companion" "$plugins_dest/$id/$(basename "$companion")"
-          chmod +x "$plugins_dest/$id/$(basename "$companion")"
-        done
+        # Copy only declared release outputs. Native dev binaries and retired
+        # companions in the live plugin tree never enter a release bundle.
+        while IFS= read -r companion; do
+          [[ -n "$companion" ]] || continue
+          if [[ ! -x "$artifact_dir/$companion" ]]; then
+            echo "ERROR: missing plugin binary $artifact_dir/$companion" >&2
+            exit 1
+          fi
+          cp "$artifact_dir/$companion" "$plugins_dest/$id/$companion"
+          chmod +x "$plugins_dest/$id/$companion"
+        done < <(crate_binaries "$dir/Cargo.toml" "flash-plugin-$id")
       fi
       # Plugin-owned payloads that are not Mach-Os but must ship with the
       # plugin: an `extension/` directory, copied as is.

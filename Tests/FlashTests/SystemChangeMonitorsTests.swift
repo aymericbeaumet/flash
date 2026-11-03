@@ -22,28 +22,28 @@ final class SystemChangeMonitorsTests: XCTestCase {
       }
     }
     let sources = HostEventSources([
-      PluginProtocol.networkChangedEvent: factory(PluginProtocol.networkChangedEvent),
-      PluginProtocol.volumesChangedEvent: factory(PluginProtocol.volumesChangedEvent),
+      HostEvent.networkChanged.rawValue: factory(HostEvent.networkChanged.rawValue),
+      HostEvent.volumesChanged.rawValue: factory(HostEvent.volumesChanged.rawValue),
     ])
     sources.reconcile { _ in false }
     XCTAssertTrue(made.isEmpty, "no listener, no monitor")
 
-    var listening: Set<String> = [PluginProtocol.networkChangedEvent]
+    var listening: Set<String> = [HostEvent.networkChanged.rawValue]
     sources.reconcile { listening.contains($0) }
-    XCTAssertEqual(sources.runningEvents, [PluginProtocol.networkChangedEvent])
-    XCTAssertEqual(made[PluginProtocol.networkChangedEvent]?.first?.started, 1)
+    XCTAssertEqual(sources.runningEvents, [HostEvent.networkChanged.rawValue])
+    XCTAssertEqual(made[HostEvent.networkChanged.rawValue]?.first?.started, 1)
     // A reconcile with the same listeners changes nothing.
     sources.reconcile { listening.contains($0) }
-    XCTAssertEqual(made[PluginProtocol.networkChangedEvent]?.count, 1)
+    XCTAssertEqual(made[HostEvent.networkChanged.rawValue]?.count, 1)
 
-    listening = [PluginProtocol.volumesChangedEvent]
+    listening = [HostEvent.volumesChanged.rawValue]
     sources.reconcile { listening.contains($0) }
-    XCTAssertEqual(sources.runningEvents, [PluginProtocol.volumesChangedEvent])
-    XCTAssertEqual(made[PluginProtocol.networkChangedEvent]?.first?.stopped, 1)
+    XCTAssertEqual(sources.runningEvents, [HostEvent.volumesChanged.rawValue])
+    XCTAssertEqual(made[HostEvent.networkChanged.rawValue]?.first?.stopped, 1)
 
     sources.stopAll()
     XCTAssertEqual(sources.runningEvents, [])
-    XCTAssertEqual(made[PluginProtocol.volumesChangedEvent]?.first?.stopped, 1)
+    XCTAssertEqual(made[HostEvent.volumesChanged.rawValue]?.first?.stopped, 1)
   }
 
   func testABurstOfChangesIsOneSignal() {

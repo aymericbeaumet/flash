@@ -6,11 +6,11 @@ import QuartzCore
 enum HintActivationRequest {
   case target(MouseCommand, AppContext?)
   case screen(MouseCommand)
-  /// `mouse_target --words`: the visible words of the focused window.
+  /// `mouse target --words`: the visible words of the focused window.
   case words(MouseCommand, AppContext?)
-  /// `mouse_screens`: one hint per display.
-  case screens
-  /// `mouse_position --action=hints`: the saved pointer positions.
+  /// `mouse screens`: one numbered hint per display.
+  case screens(ScreenSelectRequest)
+  /// `mouse position --action=hints`: the saved pointer positions.
   case positions(MouseCommand)
   case grid(MouseGridRequest, AppContext?)
   case pointer
@@ -22,6 +22,8 @@ enum HintActivationRequest {
   case bigram(MouseCommand, AppContext?)
   /// A question gating a command; see `Confirmation.swift`.
   case confirm(HintSession.Confirmation)
+  /// `window switch`; see `WindowSwitcherCommands.swift`.
+  case windowSwitcher
 }
 
 extension AppDelegate {
@@ -49,7 +51,15 @@ extension AppDelegate {
               + "point=(\(Int(selection.point.x)),\(Int(selection.point.y))); click dropped")
           DispatchQueue.main.async {
             guard let self, self.activationLifecycle.complete(token: token) else { return }
-            self.cancelOverlay()
+            // A chain discovers again and waits for the next pick instead.
+            if ClickChain.survivesUnavailableTarget(self.hintSession),
+              !self.hintSession.hints.isEmpty
+            {
+              self.hintSession.prefix = ""
+              self.rediscoverMultiTargets()
+            } else {
+              self.cancelOverlay()
+            }
           }
           return
         }
@@ -62,27 +72,6 @@ extension AppDelegate {
     }
   }
 
-  /// Judge a grid point the way discovery judges a hint target — is it a text
-  /// input? — before the click lands, so `F` enters INSERT under `f`'s rule.
-  /// The AX hit-test runs on the geometry queue under the same commit token as
-  /// `resolveHintPoints`, so a cancelled or replaced session drops it.
-  func resolveGridClickTarget(
-    at point: CGPoint,
-    completion: @escaping (AppDelegate, NormalModePointerPolicy.ClickTarget) -> Void
-  ) {
-    guard !activationLifecycle.inFlight else { return }
-    let token = activationLifecycle.begin()
-    let topLeft = CGPoint(x: point.x, y: ScreenSpace.primaryHeight - point.y)
-    monitor.geometryQueue.async { [weak self] in
-      let entersInsert = AXTextInputProbe.isTextInput(at: topLeft)
-      DispatchQueue.main.async {
-        guard let self, self.activationLifecycle.complete(token: token) else { return }
-        FlashLog.trace("[commit] grid_target text_input=\(entersInsert)")
-        completion(self, .grid(entersInsertMode: entersInsert))
-      }
-    }
-  }
-
   func prepareHintActivation(_ request: HintActivationRequest) -> Bool {
     guard activationLifecycle.requestReplacement(request) else { return false }
     switch modeStore.mode {
@@ -90,7 +79,6 @@ extension AppDelegate {
     case .terminal: dismissPopup(restoreApplication: false)
     default: break
     }
-    cancelPointerInsertHandoff(reason: "hint_replaced")
     overlay.hide()
     clearHintSessionState()
     beginHintSession()
@@ -124,8 +112,10 @@ extension AppDelegate {
   /// activation in `hintActivationStats`.
   func presentHints(
     _ hints: [AssignedHint], prepared: HintLatencyProbe.Prepared,
-    outcome: HintLatencyProbe.Outcome, bundleIdentifier: String?, surface: String
+    outcome: HintLatencyProbe.Outcome, bundleIdentifier: String?, surface: String,
+    missReason: PreparedModelMiss? = nil
   ) {
+    announceHintSession(surface: surface, targets: hints.count)
     guard let probe = hintSession.latencyProbe else {
       overlay.display(hints: hints)
       return
@@ -138,8 +128,12 @@ extension AppDelegate {
       let visibleAt = ProcessInfo.processInfo.systemUptime
       let line = probe.line(
         visibleAt: visibleAt, prepared: prepared, outcome: outcome, targets: targets,
-        appClass: appClass, bundleIdentifier: bundleIdentifier, surface: surface)
+        appClass: appClass, bundleIdentifier: bundleIdentifier, surface: surface,
+        missReason: missReason)
       Trace.run(in: probe.trace) { FlashLog.info(line) }
+      probe.recordTelemetry(
+        endedAt: visibleAt, surface: surface, outcome: outcome.rawValue,
+        appClass: appClass.rawValue, targets: targets)
       self?.recordHintActivation(
         bundleIdentifier: bundleIdentifier, surface: surface, ms: probe.elapsedMs(at: visibleAt),
         empty: outcome == .empty)
@@ -162,6 +156,8 @@ extension AppDelegate {
     let line = probe.emptyLine(
       endedAt: endedAt, bundleIdentifier: bundleIdentifier, path: path, surface: surface)
     Trace.run(in: probe.trace) { FlashLog.info(line) }
+    probe.recordTelemetry(
+      endedAt: endedAt, surface: surface, outcome: "empty", appClass: nil, targets: 0)
     guard countsForApp else { return }
     recordHintActivation(
       bundleIdentifier: bundleIdentifier, surface: surface, ms: probe.elapsedMs(at: endedAt),
@@ -197,7 +193,7 @@ extension AppDelegate {
     case .words(let command, let context):
       activateWordHints(
         command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
-    case .screens: activateScreenHints()
+    case .screens(let request): activateScreens(request)
     case .positions(let command): activatePositionHints(command)
     case .grid(let request, let context):
       activateMouseGrid(
@@ -214,6 +210,8 @@ extension AppDelegate {
     case .confirm(let confirmation):
       presentConfirmation(
         confirmation.prompt, command: confirmation.command, repeatCount: confirmation.repeatCount)
+    case .windowSwitcher:
+      presentWindowSwitcher()
     }
   }
 
@@ -326,14 +324,17 @@ extension AppDelegate {
     }
   }
 
-  /// Forget the session. A button `mouse_button` or pointer mode's `v`
+  /// Forget the session. A button `mouse button` or pointer mode's `v`
   /// holds survives it — a `--move` commit or a replacing activation carries
-  /// the drag on — until Escape, `leave_mode` or quit releases it.
+  /// the drag on — until Escape, `mode leave` or quit releases it.
   func clearHintSessionState(preservingStatusBarSnapshot: Bool = false) {
     bigramSearch?.invalidate()
+    supersedeClickChainRefresh()
+    noteHintSessionEnding(hintSession)
     hintSession = HintSession()
     if !preservingStatusBarSnapshot, !activationLifecycle.isCommitting {
       overlay.releaseStatusBarHintSnapshot()
     }
+    presentPendingMonitorAlert()
   }
 }

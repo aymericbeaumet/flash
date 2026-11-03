@@ -89,7 +89,6 @@ final class PluginInstallJob {
   }
 
   private func spawn() throws {
-    let executable = argv[0]
     var out: [Int32] = [-1, -1]
     var err: [Int32] = [-1, -1]
     guard pipe(&out) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
@@ -98,45 +97,18 @@ final class PluginInstallJob {
       close(out[1])
       throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
     }
-    var actions: posix_spawn_file_actions_t?
-    var attributes: posix_spawnattr_t?
-    posix_spawn_file_actions_init(&actions)
-    posix_spawnattr_init(&attributes)
     defer {
-      posix_spawn_file_actions_destroy(&actions)
-      posix_spawnattr_destroy(&attributes)
       close(out[1])
       close(err[1])
     }
-    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
-    posix_spawn_file_actions_adddup2(&actions, out[1], STDOUT_FILENO)
-    posix_spawn_file_actions_adddup2(&actions, err[1], STDERR_FILENO)
-    for fd in out + err { posix_spawn_file_actions_addclose(&actions, fd) }
-    flash_spawn_file_actions_addchdir(&actions, workingDirectory)
-    var mask = sigset_t()
-    var defaults = sigset_t()
-    sigemptyset(&mask)
-    sigfillset(&defaults)
-    sigdelset(&defaults, SIGKILL)
-    sigdelset(&defaults, SIGSTOP)
-    posix_spawnattr_setsigmask(&attributes, &mask)
-    posix_spawnattr_setsigdefault(&attributes, &defaults)
-    posix_spawnattr_setpgroup(&attributes, 0)
-    posix_spawnattr_setflags(
-      &attributes,
-      Int16(
-        POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK
-          | POSIX_SPAWN_SETSIGDEF))
-    let error = Self.withCStringArray(argv) { arguments in
-      Self.withCStringArray(environment.keys.sorted().map { "\($0)=\(environment[$0]!)" }) {
-        environment in
-        posix_spawn(&pid, executable, &actions, &attributes, arguments, environment)
-      }
-    }
-    guard error == 0 else {
+    do {
+      pid = try ProcessGroupSpawn.spawn(
+        argv: argv, environment: environment, workingDirectory: workingDirectory,
+        stdout: .descriptor(out[1]), stderr: .descriptor(err[1]), closeInChild: out + err)
+    } catch {
       close(out[0])
       close(err[0])
-      throw NSError(domain: NSPOSIXErrorDomain, code: Int(error))
+      throw error
     }
     stdoutFD = out[0]
     stderrFD = err[0]
@@ -276,13 +248,5 @@ final class PluginInstallJob {
     exitSource = nil
     completionQueue.async { [completion] in completion(output) }
     releaseOwnership()
-  }
-
-  private static func withCStringArray<T>(
-    _ strings: [String], body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-  ) -> T {
-    var values = strings.map { strdup($0) } + [nil]
-    defer { for value in values { free(value) } }
-    return values.withUnsafeMutableBufferPointer { body($0.baseAddress!) }
   }
 }

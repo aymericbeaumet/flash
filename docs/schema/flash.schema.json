@@ -1,0 +1,2193 @@
+{
+  "$id" : "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/flash.schema.json",
+  "$schema" : "http://json-schema.org/draft-07/schema#",
+  "additionalProperties" : false,
+  "description" : "Flash's configuration. Every key is optional: config.default.toml holds the defaults and documents each one (flash help show --topic=configuration).",
+  "properties" : {
+    "app" : {
+      "additionalProperties" : false,
+      "description" : "App-level integration with macOS. Both keys reconcile live on config reload: the menu-bar bolt (About / Open Configuration / Quit) appears or disappears immediately, and the login item (System Settings → General → Login Items → \"Flash\", via SMAppService) registers or unregisters.",
+      "properties" : {
+        "autostart" : {
+          "type" : "boolean"
+        },
+        "hide_from_capture" : {
+          "description" : "Ask macOS to leave every Flash window (hints, the grid, the command line, the flashlight, alerts, the status bar, popups, widgets, About) out of screenshots, recordings and screen sharing (NSWindow.sharingType = none). A request, not a protection: legacy window captures honour it, while QuickTime and Cmd-Shift-5 recordings, video calls (Zoom, Meet, Teams), AirPlay and Screen Sharing on macOS 15 and later still show the windows (docs: privacy, screen capture). Turning it on applies at once; turning it off again reaches Flash's open windows when Flash restarts.",
+          "type" : "boolean"
+        },
+        "keyboard_layout" : {
+          "description" : "Which keyboard layout hint labels, mouse-grid keys and NORMAL mappings are read on. Keys are matched by where they sit on that layout, so labels keep working while a non-Latin input source (Russian, Greek, Hebrew, a CJK input method) is selected. \"auto\"  read keys as typed while the selected source can type Latin letters; otherwise read them on the Latin layout macOS pairs with it (ABC or U.S.), or US-ANSI when there is none. an ID   always read keys on that input source, whatever is selected, e.g. \"com.apple.keylayout.US\" or \"com.apple.keylayout.Colemak\". The table is rebuilt when the input source changes. `--search` still matches the text you actually type. `flash resident status` shows the source and reference.",
+          "type" : "string"
+        },
+        "menu_bar_icon" : {
+          "type" : "boolean"
+        },
+        "updates" : {
+          "description" : "New releases of Flash, from GitHub (docs: updates): \"install\"  check daily; download and verify a new release, and install it when you quit Flash or lock the screen. A build without a Developer ID signature (the default releases) only downloads it and tells you: `updates install` installs it, after which macOS asks you to allow Flash in Accessibility again. \"check\"    check daily and tell you when a release is out. \"off\"      never look by itself; `updates check` still does. A development build (mise run install:dev) never updates itself.",
+          "enum" : [
+            "install",
+            "check",
+            "off"
+          ],
+          "type" : "string"
+        }
+      },
+      "type" : "object"
+    },
+    "calendar" : {
+      "additionalProperties" : false,
+      "description" : "The events #{flash.calendar.next}, #{flash.calendar.next_minutes} and the other next-meeting values show, and `calendar join` and `calendar next` read. Flash reads your calendars (and macOS asks once whether it may) only when a status format, widget or monitor reads one of those values, or one of those commands runs. Cancelled events never count.",
+      "properties" : {
+        "all_day" : {
+          "description" : "Count all-day events.",
+          "type" : "boolean"
+        },
+        "calendars" : {
+          "description" : "Calendar titles to read, as Calendar shows them; empty reads every calendar.",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "declined" : {
+          "description" : "Count events you declined.",
+          "type" : "boolean"
+        },
+        "lookahead_hours" : {
+          "description" : "How far ahead the next event may start, in hours (1-168).",
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "clipboard" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "history_size" : {
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "debug" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "hints_bounds_bg" : {
+          "description" : "Fill + stroke for the debug outline rectangle.",
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "hints_bounds_fg" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "http_inspector_enabled" : {
+          "description" : "Optional loopback-only dense debug page with live logs and Flash/plugin state. Set `http_inspector_enabled = true` to start the HTTP server; host is restricted to `localhost` / `127.0.0.1` / `::1`.",
+          "type" : "boolean"
+        },
+        "http_inspector_host" : {
+          "type" : "string"
+        },
+        "http_inspector_port" : {
+          "type" : "integer"
+        },
+        "log_level" : {
+          "description" : "Accepted values: \"trace\", \"debug\", \"info\", \"warn\", \"error\", \"fatal\". Logs are newline-delimited JSON written to stderr and ~/Library/Logs/Flash/flash.log. Set \"trace\" to include AX tree dumps.",
+          "enum" : [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error",
+            "fatal"
+          ],
+          "type" : "string"
+        },
+        "show_hints_bounds" : {
+          "description" : "Set to true to draw the raw detected rect for every target alongside its hint chip. Useful when diagnosing missing or misplaced hints.",
+          "type" : "boolean"
+        }
+      },
+      "type" : "object"
+    },
+    "flashlight" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "aliases" : {
+          "additionalProperties" : {
+            "type" : "string"
+          },
+          "type" : "object"
+        },
+        "app_directories" : {
+          "description" : "Directories scanned (recursively) and watched for .app bundles — the flashlight's installed-app catalog and the `app open` search roots. `~` expands to your home. Changes apply live: the watcher re-points and the catalog rescans on config reload.",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "bangs" : {
+          "additionalProperties" : {
+            "anyOf" : [
+              {
+                "pattern" : "^https?://",
+                "type" : "string"
+              },
+              {
+                "additionalProperties" : false,
+                "properties" : {
+                  "description" : {
+                    "type" : "string"
+                  },
+                  "url" : {
+                    "pattern" : "^https?://",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "url"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "A bang of your own: an http or https URL, {query} where the query goes (none: a quicklink), as a string or { url, description }."
+          },
+          "type" : "object"
+        },
+        "frecency_half_life_days" : {
+          "description" : "Frecency (recency-weighted frequency) ranking boost. half_life_days is the sticky-vs-fresh dial: past opens fade with this half-life. max_boost caps the score bonus (0 disables frecency outright).",
+          "type" : "number"
+        },
+        "frecency_max_boost" : {
+          "type" : "integer"
+        },
+        "ignored_apps" : {
+          "description" : "App candidates hidden from the flashlight and the `app open --name=...` command. Entries match display name, bundle identifier, bundle path, .app filename, or app filename without .app, case-insensitively.",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "live_query_timeout_ms" : {
+          "description" : "Per-keystroke deadline of the file search's Spotlight query (!f and @files), which then lists the files found so far. Live sources never join the first paint, so raising this cannot slow the flashlight open.",
+          "type" : "integer"
+        },
+        "precedence" : {
+          "additionalProperties" : {
+            "type" : "integer"
+          },
+          "type" : "object"
+        },
+        "precedence_alive_bonus" : {
+          "description" : "The default flashlight pool is intentionally location-only: apps, tabs, tmux windows, and any plugin-provided location entities. Other sources are hidden unless the query names their type (@notes, @emojis). Bonus added to candidates backed by a running process, ordering them ahead of installed-but-not-running rows of the same source inside one match tier.",
+          "type" : "integer"
+        },
+        "suggestion_count" : {
+          "description" : "Number of suggestion rows shown below the command bar.",
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "hints" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "adjust_digits" : {
+          "description" : "What the digits do in `mouse target --adjust`. \"width\"  `1`-`9` place the point across the target's width, in tenths. \"grid\"   a numeric keypad: `7` `8` `9` across the top third of the target, `4` `5` `6` the middle, `1` `2` `3` the bottom.",
+          "enum" : [
+            "width",
+            "grid"
+          ],
+          "type" : "string"
+        },
+        "key_priority" : {
+          "description" : "Keys that outrank the layout's ease when labels are handed out, best first, as a string of hint keys: \"fjdk\" gives f, j, d and k the first one-key labels and the strongest two-key pairs. Every other key keeps its place behind them. A key that is not in `keys` is reported and ignored. Empty keeps the layout's own order.",
+          "type" : "string"
+        },
+        "keys" : {
+          "description" : "Alphabet used to generate prefix-free hint labels. Either a layout selector token or a literal string of ASCII letters. Layout selector syntax: <$layout[_$row][_$hand]+...> layouts: qwerty, colemak, dvorak, bepo rows: homerow, toprow, bottomrow hands: lefthand, righthand One-key labels stay in front while the withheld keys can still spell the rest as left/right alternations. A hand change ranks first, then less travel between rows, then ease. Ease is the physical position, the same formula on every layout: home row, then bottom row, then top row; on a row, index, middle, the inward reach, ring, then pinky.",
+          "type" : "string"
+        },
+        "label_order" : {
+          "description" : "Which target gets the easiest label. \"reading\"  the first in reading order: top to bottom, left to right. \"center\"   the one nearest the centre of the window (or screen). \"zones\"    the first key of every label names the zone of the window the target sits in, laid out like your keyboard: with the default alphabet the window splits into two bands of ten columns, `q` top-left, `p` top-right, `a` to `;` below. The rest of the label is handed out as usual inside the zone, so a target's first key is predictable before the labels show.",
+          "enum" : [
+            "reading",
+            "center",
+            "zones"
+          ],
+          "type" : "string"
+        },
+        "magic_modifiers" : {
+          "description" : "Modifiers that can be held on the final hint key. Target and mouse-grid clicks preserve them consistently; terminal links additionally require Shift so the terminal handles the link instead of forwarding the click to its application. Supported names: \"cmd\", \"ctrl\", \"alt\", \"shift\".",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "min_length" : {
+          "description" : "Floor on label length. Force longer labels by raising this.",
+          "type" : "integer"
+        },
+        "mouse_grid_cursor_follow" : {
+          "description" : "Move the pointer to the centre of the grid region after every step, so hover effects follow along. \"`\" toggles it while the grid is up.",
+          "type" : "boolean"
+        },
+        "mouse_grid_keys" : {
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "mouse_grid_opacity" : {
+          "description" : "Opacity (0.0..1.0) applied to every mouse-grid chip. 1.0 = fully opaque, 0.0 = invisible. The grid fills the screen during a precision click, so a slight translucency keeps the underlying app visible.",
+          "type" : "number"
+        },
+        "mouse_grid_preview" : {
+          "description" : "Draw the step that follows each cell faintly inside it, labelled with the two keys that reach each of its cells (`qw` is `q`, then `w`), so the next key can be read before the first is pressed. The step's own labels stay on top; the clicking step and cells too small for a label show no preview.",
+          "type" : "boolean"
+        },
+        "mouse_grid_steps" : {
+          "description" : "Selection steps for the `mouse grid` command. Each selection zooms into a cell and re-tiles it with the same keys; the last one clicks. Selection also clicks early once cells reach 18 points. Larger step counts give finer precision at the cost of more keystrokes. Valid range: 2–6.",
+          "type" : "integer"
+        },
+        "pointer_acceleration" : {
+          "type" : "integer"
+        },
+        "pointer_follows_focus" : {
+          "description" : "Bring the pointer to the centre of a newly focused app's window, when it is outside that window, so the next scroll or pointer move lands there.",
+          "type" : "boolean"
+        },
+        "pointer_max_step" : {
+          "type" : "integer"
+        },
+        "pointer_step" : {
+          "description" : "`mouse pointer` movement, in points: one keystroke at rest, what each autorepeat adds, and the ceiling. Shift always moves by 2 points.",
+          "type" : "integer"
+        },
+        "position_history_scope" : {
+          "description" : "\"global\" shares one list between every app; \"app\" keeps a list per app, so a position saved in one never shows in another.",
+          "enum" : [
+            "global",
+            "app"
+          ],
+          "type" : "string"
+        },
+        "position_history_size" : {
+          "description" : "`mouse position` saves pointer positions, labels them and cycles through them. This many are kept; past it the oldest is forgotten.",
+          "type" : "integer"
+        },
+        "restore_pointer" : {
+          "description" : "Put the pointer back where it was after a committed click, drag or selection, from hints and the grid alike, and after `mouse repeat`. Off, the pointer stays on the target as with a real click. `--move` and `mouse pointer` always move it. NORMAL's scroll keys act at the pointer, so with this on they keep scrolling where the pointer was, not the clicked area.",
+          "type" : "boolean"
+        }
+      },
+      "type" : "object"
+    },
+    "keyboard" : {
+      "additionalProperties" : false,
+      "description" : "qwerty, colemak, dvorak, bepo When hints.keys is still the bundled default, a layout other than qwerty uses that layout's letters (home, top and bottom rows): colemak is `<colemak>`. An explicit hints.keys token wins.",
+      "properties" : {
+        "layout" : {
+          "enum" : [
+            "bepo",
+            "colemak",
+            "dvorak",
+            "qwerty"
+          ],
+          "type" : "string"
+        }
+      },
+      "type" : "object"
+    },
+    "mode" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "all" : {
+          "additionalProperties" : false,
+          "properties" : {
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "apps" : {
+          "additionalProperties" : {
+            "additionalProperties" : false,
+            "description" : "Mappings for one exact bundle ID, by mode scope, and its text switch.",
+            "properties" : {
+              "all" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "command" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "hold" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "hyper" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "insert" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "normal" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "terminal" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "text" : {
+                "additionalProperties" : false,
+                "description" : "enabled = true engages this app's fields although a plugin declared it an editor with its own text editing; false never engages them. Its text mappings share this table.",
+                "properties" : {
+                  "enabled" : {
+                    "type" : "boolean"
+                  },
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              },
+              "visual" : {
+                "additionalProperties" : false,
+                "properties" : {
+                  "mappings" : {
+                    "additionalProperties" : {
+                      "anyOf" : [
+                        {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        {
+                          "const" : false
+                        },
+                        {
+                          "additionalProperties" : false,
+                          "properties" : {
+                            "command" : {
+                              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                              "items" : {
+                                "type" : "string"
+                              },
+                              "minItems" : 1,
+                              "type" : "array"
+                            },
+                            "repeat" : {
+                              "type" : "boolean"
+                            }
+                          },
+                          "required" : [
+                            "command"
+                          ],
+                          "type" : "object"
+                        }
+                      ],
+                      "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                    },
+                    "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                    "type" : "object"
+                  }
+                },
+                "type" : "object"
+              }
+            },
+            "type" : "object"
+          },
+          "type" : "object"
+        },
+        "click_hold_ms" : {
+          "description" : "Mouse-down-to-up hold on synthesized clicks (ms); some apps need a non-zero press to register.",
+          "type" : "integer"
+        },
+        "command" : {
+          "additionalProperties" : false,
+          "properties" : {
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "hold" : {
+          "additionalProperties" : false,
+          "description" : "HOLD is a drag with a mouse button held, entered by mode hold. These keys are read before NORMAL's. h / j / k / l nudge what is dragged by 16 points and H / J / K / L by 96, a picked target (f, F or s) is where it goes; w / b / e and 0 / $ jump by text. ctrl+d / ctrl+u, ctrl+f / ctrl+b and gg / G scroll under the held button, so the selection follows. y copies and clears a text selection and p pastes over it; nothing cuts, and x does nothing, so a drag never closes its tab. None enters INSERT. Return (or the key that entered HOLD) drops it; Escape returns to origin.",
+          "properties" : {
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "hyper" : {
+          "additionalProperties" : false,
+          "description" : "HYPER is on while mode.normal.hyper is held. The default is <leader>, which follows mode.normal.leader. leader = false leaves that default unset, so HYPER stays off until hyper is a real key (\"a\", \"<space>\", \"cmd+space\"). The status pill turns purple and shows mode.labels.hyper (default HYPER). Keys in the mappings table run during the hold. While the hyper key is the leader, a key with no hyper mapping can still finish a NORMAL <leader> sequence. Releasing the leader returns to NORMAL. A tap that pressed nothing else arms the <leader> prefix, so a <leader> sequence still works as press, release, then the next key. `+` is written <plus>. Holding a key also posts an arrow from the physical QWERTY ESDF positions (up, left, down, right). F is the home-row index-finger mark, so the right arrow sits on that bump. The keys are spelled as the letters [keyboard] layout types there: QWERTY esdf, Colemak frst, Dvorak .oeu, Bépo puie. Shift uses that same letter, so Colemak down is shift+s. A punctuation key uses the character Shift types there, so Dvorak up is >. A mapping or `false` on one of those keys wins. These bindings are derived, so they are not listed below. The Apple function row, in the order printed on the keyboard. Shift plus the same key sends F1–F12. `=` is the unshifted volume-up key.",
+          "properties" : {
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "insert" : {
+          "additionalProperties" : false,
+          "properties" : {
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "labels" : {
+          "additionalProperties" : false,
+          "description" : "Mode labels shown after the active app name in the persistent status bar when advanced mode is enabled. `terminal`, `hyper` and `hold` (defaults TERMINAL, HYPER, HOLD) label the popup, the held leader and a drag; `visual` and `visual_line` a VISUAL selection of characters and of lines.",
+          "properties" : {
+            "command" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            },
+            "hold" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            },
+            "hyper" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            },
+            "insert" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            },
+            "normal" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            },
+            "terminal" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            },
+            "visual" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            },
+            "visual_line" : {
+              "maxLength" : 32,
+              "minLength" : 1,
+              "type" : "string"
+            }
+          },
+          "type" : "object"
+        },
+        "layers" : {
+          "additionalProperties" : {
+            "additionalProperties" : false,
+            "properties" : {
+              "label" : {
+                "maxLength" : 32,
+                "minLength" : 1,
+                "type" : "string"
+              },
+              "mappings" : {
+                "additionalProperties" : {
+                  "anyOf" : [
+                    {
+                      "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                      "items" : {
+                        "type" : "string"
+                      },
+                      "minItems" : 1,
+                      "type" : "array"
+                    },
+                    {
+                      "const" : false
+                    },
+                    {
+                      "additionalProperties" : false,
+                      "properties" : {
+                        "command" : {
+                          "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                          "items" : {
+                            "type" : "string"
+                          },
+                          "minItems" : 1,
+                          "type" : "array"
+                        },
+                        "repeat" : {
+                          "type" : "boolean"
+                        }
+                      },
+                      "required" : [
+                        "command"
+                      ],
+                      "type" : "object"
+                    }
+                  ],
+                  "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+                },
+                "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+                "type" : "object"
+              },
+              "sticky" : {
+                "type" : "boolean"
+              }
+            },
+            "type" : "object"
+          },
+          "type" : "object"
+        },
+        "move_page_lines" : {
+          "description" : "Arrows per ctrl+d/ctrl+u where they move a caret (editable text) or a selection (a list, a table, an outline, a column browser); ctrl+f/ctrl+b send twice as many. 15 is about half of what a typical text or list view shows, as Vim's ctrl+d moves half a window. Between 1 and 200.",
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "normal" : {
+          "additionalProperties" : false,
+          "properties" : {
+            "hyper" : {
+              "anyOf" : [
+                {
+                  "type" : "string"
+                },
+                {
+                  "const" : false
+                }
+              ],
+              "description" : "Key held to enter HYPER. \"<leader>\" follows leader above."
+            },
+            "leader" : {
+              "anyOf" : [
+                {
+                  "type" : "string"
+                },
+                {
+                  "const" : false
+                }
+              ],
+              "description" : "Normal-mode sequence prefix. Use it in normal mappings as <leader>. false clears it. mode.normal.hyper of \"<leader>\" then does nothing."
+            },
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "scroll_page_lines" : {
+          "type" : "integer"
+        },
+        "scroll_smooth_ms" : {
+          "description" : "Spread each of those vertical scrolls over this many milliseconds (at most 300) as several smaller line events, so the content glides instead of jumping. Still line events, so terminals scroll the same distance. A new scroll cancels what is left of the previous one; gg / G stay instant. 0 (the default) scrolls at once.",
+          "type" : "integer"
+        },
+        "scroll_step" : {
+          "description" : "Pixels per horizontal h/l scroll step.",
+          "type" : "integer"
+        },
+        "scroll_step_lines" : {
+          "description" : "Mouse-wheel lines per j/k step where they scroll (a page, a terminal); ctrl+e/ctrl+y scroll one line per press, as Vim's (scroll line_down / line_up), a count multiplying it (5 ctrl+e is five). scroll_page_lines is ctrl+d/ctrl+u's half page where those scroll; ctrl+f/ctrl+b scroll a full page, twice that. Scrolls land at the pointer, or in the focused window's scroll area when the pointer is outside that window, in every app, terminals included.",
+          "type" : "integer"
+        },
+        "send_key_interval_ms" : {
+          "description" : "Delay between chords of a multi-key `key sequence` (ms) — terminals and remote-desktop apps drop chords sent back-to-back.",
+          "type" : "integer"
+        },
+        "sequence_timeout_ms" : {
+          "description" : "`timeoutlen` default of 1000.",
+          "type" : "integer"
+        },
+        "terminal" : {
+          "additionalProperties" : false,
+          "properties" : {
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "text" : {
+          "additionalProperties" : false,
+          "description" : "Where NORMAL engages a field at all: the text keys below act only in a field you engaged, and this table decides whether that can happen.",
+          "properties" : {
+            "enabled" : {
+              "description" : "false never engages a field: every key keeps its page meaning, v and V do nothing and the text keys below are never read, for kindaVim or SketchyVim users who keep Vim inside the field. Editors with their own modal editing or partial Accessibility text (VS Code and its forks, the JetBrains IDEs, Zed, Sublime Text: the defaults plugin's own_text_editing list) are never engaged whatever this says; with the switch on, an app's enabled key under [mode.apps.\"<bundle id>\".text] forces it either way, beside any [mode.apps.\"<bundle id>\".text.mappings].",
+              "type" : "boolean"
+            },
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "NORMAL reads these keys before its own while a field is engaged: editable text (a text field or area, a search field, a combo box, a password field, a web input, never a terminal) you acted in. Leaving INSERT there, gi, a click or an f on a field, and v / V engage it; the focus moving elsewhere, Escape and any mode but INSERT and VISUAL disengage it. A field focused on its own (a page's search box, the address bar) is a page until then. They are Vim's motions, computed from the text Accessibility gives and set as the selection; where an app gives no text, the app's own chord runs where macOS has one (Option-Left / Option-Right, Cmd-Left / Cmd-Right, Cmd-Up / Cmd-Down), else nothing. A count measures the motion (3w, 5|, 10G is line 10, 50% half way). H / L (history) and t (new tab) are Vim's here and keep their meaning everywhere else; f / F stay the hints. h / j / k / l and the page keys are NORMAL's move, which moves the caret in text already. t and T read the next key as the character; ; and , repeat the search. p pastes after the cursor, P at it. gv selects the last VISUAL range of this field again.",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "visual" : {
+          "additionalProperties" : false,
+          "description" : "VISUAL (v, V in text) is a selection the motions grow from where it began: charwise through the cursor's character, linewise whole lines with their breaks. These keys are read first; the text table's and NORMAL's motions (h j k l, the page keys, w b e 0 $ gg G and the rest) move the selection's moving end, set through Accessibility, or, where the app gives no text, with its own Shift selection keys. Any other key is swallowed. y copies, p and P paste over the selection, each with the app's own keys; a register prefix (\"ay, \"ap) works as in NORMAL. Nothing cuts, deletes or changes it: Flash never edits text. o moves to the other end; Escape or v / V again deselect. Changing the focus, or a click, ends it.",
+          "properties" : {
+            "mappings" : {
+              "additionalProperties" : {
+                "anyOf" : [
+                  {
+                    "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                    "items" : {
+                      "type" : "string"
+                    },
+                    "minItems" : 1,
+                    "type" : "array"
+                  },
+                  {
+                    "const" : false
+                  },
+                  {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "command" : {
+                        "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                        "items" : {
+                          "type" : "string"
+                        },
+                        "minItems" : 1,
+                        "type" : "array"
+                      },
+                      "repeat" : {
+                        "type" : "boolean"
+                      }
+                    },
+                    "required" : [
+                      "command"
+                    ],
+                    "type" : "object"
+                  }
+                ],
+                "description" : "A command (argv array) for the key, false to remove an inherited one, or { command = [...], repeat = true } to repeat it on its final key."
+              },
+              "description" : "Key → command. Keys use Flash's key syntax (docs/mappings.md).",
+              "type" : "object"
+            }
+          },
+          "type" : "object"
+        },
+        "which_key_ms" : {
+          "description" : "After this pause in ms, list what follows a NORMAL prefix (g, ], z, ctrl+w, <leader>), or the current HYPER/layer keys after entry and prefixes. A displayed sequence waits for your next key. 0 disables every palette.",
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "monitors" : {
+      "additionalProperties" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "alert" : {
+            "type" : "boolean"
+          },
+          "app" : {
+            "type" : "string"
+          },
+          "at" : {
+            "anyOf" : [
+              {
+                "type" : "string"
+              },
+              {
+                "items" : {
+                  "type" : "string"
+                },
+                "type" : "array"
+              }
+            ]
+          },
+          "cooldown" : {
+            "type" : "integer"
+          },
+          "days" : {
+            "anyOf" : [
+              {
+                "type" : "string"
+              },
+              {
+                "items" : {
+                  "type" : "string"
+                },
+                "type" : "array"
+              }
+            ]
+          },
+          "detail" : {
+            "type" : "string"
+          },
+          "direction" : {
+            "enum" : [
+              "above",
+              "below"
+            ],
+            "type" : "string"
+          },
+          "enabled" : {
+            "type" : "boolean"
+          },
+          "error" : {
+            "anyOf" : [
+              {
+                "type" : "number"
+              },
+              {
+                "const" : false
+              }
+            ],
+            "description" : "A threshold; false removes an inherited one."
+          },
+          "event" : {
+            "type" : "string"
+          },
+          "idle" : {
+            "type" : "integer"
+          },
+          "interval" : {
+            "type" : "integer"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "notify" : {
+            "type" : "boolean"
+          },
+          "run" : {
+            "anyOf" : [
+              {
+                "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                "items" : {
+                  "type" : "string"
+                },
+                "minItems" : 1,
+                "type" : "array"
+              },
+              {
+                "items" : {
+                  "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "minItems" : 1,
+                  "type" : "array"
+                },
+                "minItems" : 1,
+                "type" : "array"
+              }
+            ],
+            "description" : "One argv array, or a list of them run in order."
+          },
+          "timeout" : {
+            "type" : "integer"
+          },
+          "usb" : {
+            "additionalProperties" : false,
+            "description" : "The USB device core:usb.attached and core:usb.detached must name: vendor_id and product_id exactly, name as a part of the product name; any subset, never empty.",
+            "properties" : {
+              "name" : {
+                "type" : "string"
+              },
+              "product_id" : {
+                "maximum" : 65535,
+                "minimum" : 0,
+                "type" : "integer"
+              },
+              "vendor_id" : {
+                "maximum" : 65535,
+                "minimum" : 0,
+                "type" : "integer"
+              }
+            },
+            "type" : "object"
+          },
+          "value" : {
+            "type" : "string"
+          },
+          "warning" : {
+            "anyOf" : [
+              {
+                "type" : "number"
+              },
+              {
+                "const" : false
+              }
+            ],
+            "description" : "A threshold; false removes an inherited one."
+          }
+        },
+        "type" : "object"
+      },
+      "type" : "object"
+    },
+    "overlay" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "alert_duration" : {
+          "description" : "Seconds an `alert show` toast stays up when the call passes no explicit --duration.",
+          "type" : "number"
+        },
+        "banner_duration_ms" : {
+          "description" : "Milliseconds a transient banner (command output, \"Copied: ...\") stays up.",
+          "type" : "integer"
+        },
+        "click_feedback" : {
+          "description" : "Draw a short ring where each committed click lands (hint, grid, `mouse pointer` and `mouse repeat` clicks). It never delays the click or the next key. Handy for demos and screencasts.",
+          "type" : "boolean"
+        },
+        "dark" : {
+          "additionalProperties" : false,
+          "properties" : {
+            "hint_bg_bottom" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            },
+            "hint_bg_top" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            },
+            "hint_border" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            },
+            "hint_fg" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            },
+            "important_hint_bg_bottom" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            },
+            "important_hint_bg_top" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            },
+            "important_hint_border" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            },
+            "important_hint_fg" : {
+              "pattern" : "^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)?$",
+              "type" : "string"
+            }
+          },
+          "type" : "object"
+        },
+        "font_size" : {
+          "description" : "Hint chip typography and colors. font_size drives the hint label size (chip geometry derives from it); colors are #RRGGBB or #RRGGBBAA.",
+          "type" : "integer"
+        },
+        "hint_bg_bottom" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "hint_bg_top" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "hint_border" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "hint_fg" : {
+          "description" : "Regular `f` hint chips: text, vertical gradient (set both stops equal for a flat fill), and the 1px chip border.",
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "hint_placement" : {
+          "description" : "Where a hint chip sits relative to its target: \"corner\" (the target's top-left corner, centred on a target barely larger than the chip), \"center\", \"above\" (on the target's top edge) or \"below\" (under its bottom edge). Chips stay on the target's screen. Only the chip moves: the click aims at the same point whatever the placement.",
+          "enum" : [
+            "corner",
+            "center",
+            "above",
+            "below"
+          ],
+          "type" : "string"
+        },
+        "important_hint_bg_bottom" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "important_hint_bg_top" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "important_hint_border" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "important_hint_fg" : {
+          "description" : "Chips whose target priority is `important`/`urgent` (tmux panes, browser tabs, …) — a red accent against the yellow regular chips. Set any field equal to its hint_* counterpart to opt out per surface.",
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "window_border" : {
+          "description" : "Colored stroke around the focused app's frontmost window while advanced mode is on — green in normal, glowing blue in insert, purple in command — so the active window is always identifiable (most useful for apps with several windows). Set to false to turn it off entirely.",
+          "type" : "boolean"
+        },
+        "window_border_color" : {
+          "description" : "Stroke color (#RRGGBB or #RRGGBBAA), applied to every mode. Empty (the default) keeps the per-mode colors above.",
+          "type" : "string"
+        },
+        "window_border_size" : {
+          "description" : "Stroke width in points, applied to every mode. 0 (the default) keeps the per-mode widths: 1 in normal/command, 2 in insert.",
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "plugins" : {
+      "additionalProperties" : {
+        "description" : "A plugin's settings ([plugins.<id>]).",
+        "type" : "object"
+      },
+      "properties" : {
+        "disabled" : {
+          "description" : "Official bundled plugins are enabled unless listed in `disabled`. Disable `defaults` for a raw host-only experience: it carries the macOS conventions apps share for Flash's commands (Cmd-T new tab, Cmd-Z undo, Cmd-S save, Cmd-C copy…), so without it those commands do nothing.",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        },
+        "install_timeout" : {
+          "description" : "Hard kill for a third-party plugin's install script — a cold cargo build on a slow machine can legitimately take minutes.",
+          "type" : "integer"
+        },
+        "startup_timeout" : {
+          "description" : "initialize reply deadline. The reply is immediate by contract (catalogs publish after it), so this only absorbs interpreter startup.",
+          "type" : "integer"
+        },
+        "third_party" : {
+          "description" : "Third-party plugins are loaded only when listed here. Supported references: github:user/project@<40-char commit sha> file:<path> GitHub references must pin a full 40-char commit SHA — branches and tags are rejected because third-party install/start scripts run as the user, and a moving ref would let a compromised plugin author land arbitrary code on each config reload.",
+          "items" : {
+            "type" : "object"
+          },
+          "type" : "array"
+        },
+        "watching_enabled" : {
+          "description" : "When true (the default), each plugin's directory tree is watched and a file change triggers a plugin reload. Set to false to disable hot-reload across every plugin.",
+          "type" : "boolean"
+        }
+      },
+      "type" : "object"
+    },
+    "popup" : {
+      "additionalProperties" : {
+        "anyOf" : [
+          {
+            "additionalProperties" : false,
+            "properties" : {
+              "text" : {
+                "description" : "A status format shown in the pager.",
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "text"
+            ],
+            "type" : "object"
+          },
+          {
+            "additionalProperties" : false,
+            "properties" : {
+              "command" : {
+                "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                "items" : {
+                  "type" : "string"
+                },
+                "minItems" : 1,
+                "type" : "array"
+              },
+              "cwd" : {
+                "type" : "string"
+              },
+              "env" : {
+                "additionalProperties" : {
+                  "type" : "string"
+                },
+                "type" : "object"
+              },
+              "pause_hidden" : {
+                "description" : "Stop a persistent popup's process while hidden and continue it when shown (needs persistent = true).",
+                "type" : "boolean"
+              },
+              "persistent" : {
+                "type" : "boolean"
+              },
+              "size" : {
+                "description" : "Columns x rows in cells, or a percentage of the screen: \"100x28\", \"90%x85%\".",
+                "pattern" : "^[0-9.]+%?x[0-9.]+%?$",
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "command"
+            ],
+            "type" : "object"
+          }
+        ],
+        "description" : "A named popup ([popup.<name>]): text or command, not both."
+      },
+      "description" : "Popups: every popup runs in a real PTY and shares this chrome, whether it previews under a #[popup=<name>] status label, is pinned by a right-click, or shows standalone through `mode terminal --name=<name>`. Colours are #RRGGBB or #RRGGBBAA; sizes are points.",
+      "properties" : {
+        "bg" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "border" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "border_size" : {
+          "type" : "integer"
+        },
+        "corner_radius" : {
+          "type" : "integer"
+        },
+        "fg" : {
+          "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+          "type" : "string"
+        },
+        "max_width" : {
+          "type" : "integer"
+        },
+        "min_width" : {
+          "description" : "A text popup is as wide as its widest line, between these two widths; the pager wraps longer lines. At the 13-point font with padding = 10, 480 fits 50 columns and 750 fits 80, room for the three-month calendar.",
+          "type" : "integer"
+        },
+        "offset" : {
+          "description" : "Gap between the status bar and a hover popup's top edge. The popup hangs centred below its label, not the pointer.",
+          "type" : "integer"
+        },
+        "padding" : {
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "startup" : {
+      "additionalProperties" : false,
+      "description" : "Commands Flash runs once each time it starts, after loading this file: in order, each once the previous one ended, the next one even when one failed. A command is [\"flash\", \"<topic>\", \"<action>\", ...] or an executable with its arguments, run without a shell or terminal (stdin is /dev/null), in your home directory, with your login PATH. Each failure is logged; flash startup run runs the list again and prints how each command ended. Saving this file never runs it. Set the Mac up here with its own tools (defaults write, killall Dock); Flash checks nothing they write and undoes nothing you remove. See docs/startup.md.",
+      "properties" : {
+        "run" : {
+          "anyOf" : [
+            {
+              "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+              "items" : {
+                "type" : "string"
+              },
+              "minItems" : 1,
+              "type" : "array"
+            },
+            {
+              "items" : {
+                "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                "items" : {
+                  "type" : "string"
+                },
+                "minItems" : 1,
+                "type" : "array"
+              },
+              "type" : "array"
+            }
+          ],
+          "description" : "Commands run in order, once at each launch and on startup run: a list of argv arrays (one argv array is one command, [] none)."
+        },
+        "timeout" : {
+          "description" : "Seconds each command may take; then its process group gets SIGTERM, and the next command runs.",
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "statusbar" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "click" : {
+          "additionalProperties" : {
+            "anyOf" : [
+              {
+                "format" : "uri",
+                "type" : "string"
+              },
+              {
+                "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                "items" : {
+                  "type" : "string"
+                },
+                "minItems" : 1,
+                "type" : "array"
+              }
+            ]
+          },
+          "description" : "`#[link=URL]…#[nolink]` remains the shorthand for plain URL spans.",
+          "type" : "object"
+        },
+        "command_timeout" : {
+          "description" : "Timeout for one named Flash source run; keep its last successful value on timeout. Native #(...) jobs and persistent PTY commands have no such timeout.",
+          "type" : "number"
+        },
+        "enabled" : {
+          "description" : "Show the persistent top status bar. This switch alone controls the bar's visibility — it is independent of advanced mode (mode normal/mode leave binding). Defaults to false. Enabling it also asks macOS to auto-hide the native menu bar, whose band the Flash bar takes over; reaching for the top edge still reveals it. Turning the bar off restores the menu bar only if Flash was the one that hid it.",
+          "type" : "boolean"
+        },
+        "font_size" : {
+          "description" : "Bar text size in points (the mode pill uses the same size).",
+          "type" : "integer"
+        },
+        "interval" : {
+          "description" : "Default poll cadence for named Flash sources and #(...) jobs. Each source can override it. 0 runs once; cycle_interval controls rotation independently of polling. Time (strftime codes, flash.date, flash.calendar) is not polled: it refreshes on the next second, minute or day it shows.",
+          "type" : "integer"
+        },
+        "link_schemes" : {
+          "description" : "URL schemes a #[link=…] may open beside http, https and mailto, which are always allowed: exact lowercase names, each once, such as \"slack\" or \"x-apple.systempreferences\". A link is text a plugin, a source or a popup's program wrote, so any other scheme is refused; the log notes the scheme (never the URL) once and `flash resident doctor` lists it. The URLs in statusbar.click are your own and are not filtered.",
+          "items" : {
+            "pattern" : "^[a-z][a-z0-9+.-]*$",
+            "type" : "string"
+          },
+          "type" : "array",
+          "uniqueItems" : true
+        },
+        "monitor" : {
+          "description" : "Which displays show the bar: \"all\" (default, every screen's top band) or \"primary\" (only the main / menu-bar display).",
+          "enum" : [
+            "all",
+            "primary"
+          ],
+          "type" : "string"
+        },
+        "notch_margin" : {
+          "description" : "Points kept clear on each side of a notch — the real camera housing on a notched screen, and the recess the bar draws behind its centred lane elsewhere. 4pt rather than 6: on the 16-inch housing a 6pt margin overlaps the next cell by under a point and that whole glyph is dropped. Both notches are the same width and use this same margin, so the lane lays out the same way on a notched Mac and an external display. #[align=centre] and #[align=notch] are that lane: a housing at the middle of the bar. It hides entirely on notched screens, where the hardware supplies the gap.",
+          "type" : "integer"
+        },
+        "sources" : {
+          "additionalProperties" : {
+            "additionalProperties" : false,
+            "description" : "A named status source ([statusbar.sources.<name>]).",
+            "properties" : {
+              "command" : {
+                "description" : "An argv array: [\"flash\", \"<topic>\", \"<action>\", …] runs a Flash command; any other head is an executable run without a shell.",
+                "items" : {
+                  "type" : "string"
+                },
+                "minItems" : 1,
+                "type" : "array"
+              },
+              "cycle_interval" : {
+                "type" : "integer"
+              },
+              "env" : {
+                "additionalProperties" : {
+                  "type" : "string"
+                },
+                "type" : "object"
+              },
+              "history" : {
+                "type" : "integer"
+              },
+              "interval" : {
+                "type" : "integer"
+              },
+              "output" : {
+                "enum" : [
+                  "text",
+                  "xbar",
+                  "i3blocks",
+                  "waybar"
+                ],
+                "type" : "string"
+              },
+              "working_directory" : {
+                "type" : "string"
+              }
+            },
+            "type" : "object"
+          },
+          "type" : "object"
+        },
+        "template" : {
+          "description" : "label/nolabel (the name colour, #EBCB8B), pill/nopill, cyc/nocyc, meter=W[/MAX]/nometer (a W-cell bar of the first number inside), spark[=MIN/MAX]/nospark (a sparkline of every number inside) and shrink/noshrink (the last marked span in a segment is cut first, ending in \"…\"; otherwise the left and centre end with \"…\" and the right starts with \"…\"), e.g. #[align=centre]#[shrink]#{flash.focused_app_name}#[noshrink]. Native range=user|name binds statusbar.click. Values stay plain text unless a plugin intentionally publishes rich status.",
+          "type" : "string"
+        },
+        "top_count" : {
+          "description" : "Rows of #{flash.top_cpu} and #{flash.top_mem}, 1-20: aligned tables of the busiest processes by CPU and by resident memory (conky's ${top}), sampled every 2 seconds only while the bar, a popup or a widget shows one of them.",
+          "type" : "integer"
+        }
+      },
+      "type" : "object"
+    },
+    "telemetry" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "exporter" : {
+          "additionalProperties" : false,
+          "description" : "The exporter sends Flash's own telemetry to an OTLP/HTTP endpoint: plugin request, spawn and hint latencies, plugin restarts and errors and monitor values (metrics); interactions with their plugin requests and hints (traces); log records at [debug] log_level (logs, opt-in: their text can name apps and commands). An empty endpoint keeps it off.",
+          "properties" : {
+            "compression" : {
+              "description" : "\"none\" or \"gzip\".",
+              "enum" : [
+                "none",
+                "gzip"
+              ],
+              "type" : "string"
+            },
+            "endpoint" : {
+              "description" : "Base URL; each signal posts to <endpoint>/v1/<signal>.",
+              "type" : "string"
+            },
+            "headers" : {
+              "additionalProperties" : {
+                "type" : "string"
+              },
+              "description" : "Sent with every request, e.g. { \"x-honeycomb-team\" = \"…\" }. Explicit values only: never read from the environment, logged or shown in the help.",
+              "type" : "object"
+            },
+            "interval" : {
+              "description" : "Seconds between sends while something changed; nothing is sent when idle.",
+              "type" : "integer"
+            },
+            "protocol" : {
+              "description" : "\"http/protobuf\" or \"http/json\".",
+              "enum" : [
+                "http/protobuf",
+                "http/json"
+              ],
+              "type" : "string"
+            },
+            "service_name" : {
+              "type" : "string"
+            },
+            "signals" : {
+              "description" : "Any of \"metrics\", \"logs\" and \"traces\".",
+              "items" : {
+                "enum" : [
+                  "metrics",
+                  "logs",
+                  "traces"
+                ],
+                "type" : "string"
+              },
+              "type" : "array"
+            }
+          },
+          "type" : "object"
+        },
+        "receiver" : {
+          "additionalProperties" : false,
+          "description" : "OpenTelemetry in and out; both are off. See docs/telemetry.md. The receiver takes OTLP/HTTP (protobuf or JSON, gzip or not) on 127.0.0.1 only, and keeps what it receives in memory, never on disk. Status formats read its metrics anywhere a value goes, the bar, widgets and [monitors.<name>] alike: #{flash.otel:<metric>}                         latest value, all series added #{flash.otel.<field>:<metric>[<attribute>=<value>]...} Fields: latest, rate (per second), total, count, sum, min, max, mean and pNN percentiles (p50, p99.9). [attribute!=value] excludes; * matches any run. The help's telemetry page (flash telemetry show) lists everything received.",
+          "properties" : {
+            "enabled" : {
+              "type" : "boolean"
+            },
+            "max_logs" : {
+              "type" : "integer"
+            },
+            "max_points" : {
+              "type" : "integer"
+            },
+            "max_series" : {
+              "description" : "Series kept (least recently updated evicted first), history points per series, and the most recent log records and spans.",
+              "type" : "integer"
+            },
+            "max_spans" : {
+              "type" : "integer"
+            },
+            "port" : {
+              "description" : "OTLP/HTTP's standard port; senders use http://127.0.0.1:4318.",
+              "type" : "integer"
+            },
+            "token" : {
+              "type" : "string"
+            }
+          },
+          "type" : "object"
+        }
+      },
+      "type" : "object"
+    },
+    "tiling" : {
+      "additionalProperties" : false,
+      "description" : "Tiling and workspaces, as AeroSpace and i3 do it, without macOS Spaces or disabling System Integrity Protection (docs/tiling.md). Off by default: with it on, every standard window is tiled in its display's workspace, dialogs float, and the windows of hidden workspaces wait at the bottom-right corner of their display. Quitting Flash or turning it off puts them back.",
+      "properties" : {
+        "accordion_padding" : {
+          "description" : "How much of each window an accordion leaves visible behind the focused one, in points (0-200).",
+          "type" : "integer"
+        },
+        "enabled" : {
+          "type" : "boolean"
+        },
+        "gaps" : {
+          "additionalProperties" : false,
+          "properties" : {
+            "inner" : {
+              "type" : "integer"
+            },
+            "inner_horizontal" : {
+              "type" : "integer"
+            },
+            "inner_vertical" : {
+              "type" : "integer"
+            },
+            "outer" : {
+              "type" : "integer"
+            },
+            "outer_bottom" : {
+              "type" : "integer"
+            },
+            "outer_left" : {
+              "type" : "integer"
+            },
+            "outer_right" : {
+              "type" : "integer"
+            },
+            "outer_top" : {
+              "type" : "integer"
+            }
+          },
+          "type" : "object"
+        },
+        "layout" : {
+          "description" : "The root layout of a new workspace: \"tiles\" or \"accordion\".",
+          "type" : "string"
+        },
+        "monitors" : {
+          "additionalProperties" : {
+            "anyOf" : [
+              {
+                "enum" : [
+                  "main",
+                  "secondary"
+                ],
+                "type" : "string"
+              },
+              {
+                "minimum" : 1,
+                "type" : "integer"
+              }
+            ]
+          },
+          "type" : "object"
+        },
+        "orientation" : {
+          "description" : "\"auto\" lays out along a display's long side; or \"horizontal\", \"vertical\".",
+          "type" : "string"
+        },
+        "persist" : {
+          "description" : "Keep workspace layouts across restarts in a private tiling.json file.",
+          "type" : "boolean"
+        },
+        "rules" : {
+          "items" : {
+            "additionalProperties" : false,
+            "properties" : {
+              "bundle_id" : {
+                "type" : "string"
+              },
+              "float" : {
+                "type" : "boolean"
+              },
+              "title_contains" : {
+                "type" : "string"
+              },
+              "workspace" : {
+                "type" : "string"
+              }
+            },
+            "required" : [
+              "bundle_id"
+            ],
+            "type" : "object"
+          },
+          "type" : "array"
+        },
+        "workspaces" : {
+          "description" : "Workspaces always listed (#{flash.workspaces}), in this order; others are made by `workspace switch --name=` and dropped once empty and hidden.",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : "array"
+        }
+      },
+      "type" : "object"
+    },
+    "widgets" : {
+      "additionalProperties" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "anchor" : {
+            "enum" : [
+              "top_left",
+              "top_centre",
+              "top_right",
+              "centre_left",
+              "centre",
+              "centre_right",
+              "bottom_left",
+              "bottom_centre",
+              "bottom_right"
+            ],
+            "type" : "string"
+          },
+          "bg" : {
+            "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+            "type" : "string"
+          },
+          "border" : {
+            "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+            "type" : "string"
+          },
+          "border_size" : {
+            "type" : "number"
+          },
+          "columns" : {
+            "type" : "integer"
+          },
+          "corner_radius" : {
+            "type" : "number"
+          },
+          "enabled" : {
+            "type" : "boolean"
+          },
+          "fg" : {
+            "pattern" : "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+            "type" : "string"
+          },
+          "font" : {
+            "type" : "string"
+          },
+          "font_size" : {
+            "type" : "number"
+          },
+          "gap_x" : {
+            "type" : "number"
+          },
+          "gap_y" : {
+            "type" : "number"
+          },
+          "hide_from_capture" : {
+            "type" : "boolean"
+          },
+          "interval" : {
+            "type" : "integer"
+          },
+          "line_spacing" : {
+            "type" : "number"
+          },
+          "max_columns" : {
+            "type" : "integer"
+          },
+          "padding" : {
+            "type" : "number"
+          },
+          "screen" : {
+            "anyOf" : [
+              {
+                "enum" : [
+                  "primary",
+                  "all"
+                ],
+                "type" : "string"
+              },
+              {
+                "type" : "integer"
+              }
+            ]
+          },
+          "template" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "description" : "Desktop widgets: a status format drawn as stacked lines on the desktop, above the wallpaper and below Finder icons and every app window. Widgets are click-through and never take focus, so link=, popup= and range= do nothing. Each [widgets.<name>] (letters, digits, _ and -) is evaluated beside the bar with the same values, sources and #(...) jobs, even while the bar is off; a widget whose windows are all covered stops refreshing until it shows again. Each line of the template is its own status line: colours carry over, and alignment starts again on the left. A trailing backslash joins two lines. #{flash.widget.name} is the widget's name and #{flash.widget.columns} its width (columns, or max_columns when sized to fit). See docs/widgets.md.",
+      "type" : "object"
+    },
+    "window_rules" : {
+      "description" : "Placement rules ([[window_rules]]); see docs/windows.md.",
+      "items" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "bundle_id" : {
+            "type" : "string"
+          },
+          "height" : {
+            "maximum" : 100,
+            "minimum" : 0,
+            "type" : "number"
+          },
+          "position" : {
+            "type" : "string"
+          },
+          "screen" : {
+            "type" : "integer"
+          },
+          "title_contains" : {
+            "type" : "string"
+          },
+          "width" : {
+            "maximum" : 100,
+            "minimum" : 0,
+            "type" : "number"
+          },
+          "x" : {
+            "maximum" : 100,
+            "minimum" : 0,
+            "type" : "number"
+          },
+          "y" : {
+            "maximum" : 100,
+            "minimum" : 0,
+            "type" : "number"
+          }
+        },
+        "type" : "object"
+      },
+      "type" : "array"
+    }
+  },
+  "title" : "flash.toml",
+  "type" : "object"
+}

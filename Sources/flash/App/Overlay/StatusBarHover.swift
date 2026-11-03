@@ -45,7 +45,7 @@ extension OverlayPanel {
     statusBarHover = next
     if effect != .none {
       FlashLog.debug(
-        "Status hover eligibility changed",
+        "[statusbar] hover_eligibility_changed",
         fields: [
           "permits": String(next.permitsHover),
           "native_menu_revealed": String(next.nativeMenuBarRevealed),

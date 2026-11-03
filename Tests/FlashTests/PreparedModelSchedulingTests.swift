@@ -104,6 +104,71 @@ final class PreparedModelSchedulingTests: XCTestCase {
     XCTAssertEqual(state.wake(refresh.ticket, now: clock.now), .fire(.refresh(.maintenance)))
   }
 
+  /// The maintenance interval is the one backoff. A slow walk — one that
+  /// would cost over a tenth of a core at the current interval — doubles it
+  /// toward the 30 s ceiling; a walk cheap enough for a shorter interval
+  /// shrinks it back, only as far as its cost allows; a static app's
+  /// unchanged reproduction grows it as before; an empty tree, fast because
+  /// there was nothing to read, leaves it alone.
+  func testTheMaintenanceIntervalDoublesToTheCeilingAndShrinksBackAsWalksGetCheaper() {
+    let floor = AppMonitor.modelFreshnessMs
+    let ceiling = AppMonitor.modelFreshnessMaxMs
+    func next(
+      _ current: Int, _ elapsedMs: Double, unchanged: Bool = false, degenerate: Bool = false
+    ) -> Int {
+      AppMonitor.nextModelIntervalMs(
+        current: current, elapsedMs: elapsedMs, unchanged: unchanged, degenerate: degenerate)
+    }
+    XCTAssertEqual(next(floor, 60), floor)
+    XCTAssertEqual(next(floor, 200), 3000, "slow at 1.5 s: doubles")
+    XCTAssertEqual(next(3000, 200), 3000, "kept: still slow for the floor")
+    XCTAssertEqual(next(3000, 100), floor, "cheap for the floor: shrinks back")
+    XCTAssertEqual(next(3000, 500), 6000)
+    XCTAssertEqual(next(6000, 500), 6000)
+    XCTAssertEqual(next(24_000, 2000), 24_000)
+    XCTAssertEqual(next(24_000, 100), floor, "all the way back in one step")
+    XCTAssertEqual(next(24_000, 5000), ceiling, "the ceiling")
+    XCTAssertEqual(next(ceiling, 5000), ceiling)
+    XCTAssertEqual(next(ceiling, 800), 15_000, "halves while the halved interval stays cheap")
+    XCTAssertEqual(next(floor, 10, unchanged: true), 3000, "a static app is walked less often")
+    XCTAssertEqual(next(ceiling, 10, unchanged: true), ceiling)
+    XCTAssertEqual(next(6000, 5, degenerate: true), 6000)
+    XCTAssertEqual(next(6000, 900, degenerate: true), 12_000, "a slow empty walk still backs off")
+
+    // The wake follows the interval: 250 ms before it.
+    var state = scheduler()
+    let backedOff = state.scheduleMaintenance(
+      pid: 42, computedAt: 0, dirtyToken: 1, configRevision: 1,
+      freshnessNs: UInt64(next(floor, 200)) * 1_000_000)
+    XCTAssertEqual(backedOff.deadline, 2_750_000_000)
+  }
+
+  /// An app's interval also spaces its event-driven refreshes: the fixed
+  /// 2.5 s minimum is the floor, the app's interval the throttle, and only
+  /// throttled reasons wait.
+  func testAnAppsIntervalThrottlesItsEventRefreshesBeyondTheFixedMinimum() throws {
+    var clock = Clock()
+    var state = scheduler()
+    state.noteRefreshStarted(pid: 42, now: clock.now)
+    clock.advance(100)
+    let spaced = try XCTUnwrap(
+      state.scheduleRefresh(
+        pid: 42, reason: .axEvent("layout"), now: clock.now, minimumIntervalNs: 6_000_000_000))
+    XCTAssertEqual(spaced.deadline, 6_000_000_000)
+    XCTAssertEqual(state.refreshDeadline(pid: 42), 6_000_000_000)
+    state.cancelRefresh(pid: 42)
+    let short = try XCTUnwrap(
+      state.scheduleRefresh(
+        pid: 42, reason: .axEvent("layout"), now: clock.now, minimumIntervalNs: 1_500_000_000))
+    XCTAssertEqual(short.deadline, 2_500_000_000, "never under the fixed minimum")
+    state.cancelRefresh(pid: 42)
+    let focus = try XCTUnwrap(
+      state.scheduleRefresh(
+        pid: 42, reason: .focus, now: clock.now, minimumIntervalNs: 6_000_000_000))
+    XCTAssertEqual(focus.deadline, 180_000_000, "only throttled reasons wait")
+    XCTAssertNil(state.refreshDeadline(pid: 7))
+  }
+
   func testMaintenanceWakesLeadBeforeTheModelsOwnFreshness() {
     var state = scheduler()
     let extended = state.scheduleMaintenance(

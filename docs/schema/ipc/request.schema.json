@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/request.schema.json",
+  "title": "request",
+  "description": "Client to resident: run the words of a command line, exactly as typed after : in Flash. The resident answers a result, or an error with the same id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "id",
+    "words"
+  ],
+  "properties": {
+    "type": {
+      "const": "request"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Chosen by the client, 1 to 128 bytes; the reply carries it back. Distinct among the connection's requests in flight."
+    },
+    "words": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "string"
+      },
+      "description": "The words after flash: [\"tab\", \"next\"], [\"window\", \"move\", \"--position=lefthalf\"], [\"#aws\", \"whoami\"]."
+    },
+    "cwd": {
+      "type": "string",
+      "pattern": "^/",
+      "maxLength": 4096,
+      "description": "Where relative paths in the words resolve (open, :!, menu choose --file). Absolute."
+    }
+  }
+}

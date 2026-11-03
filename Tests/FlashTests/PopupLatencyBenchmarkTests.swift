@@ -8,7 +8,7 @@ import XCTest
 /// Showing-latency instrumentation for popups: hover or standalone show to
 /// the first frame the view draws, how stale that frame is, the main-thread
 /// cost of showing and hiding, and the rows a re-show repaints. Every test
-/// prints `[popup-bench]` lines and asserts only that the work happened, so it
+/// prints `[bench] popup` lines and asserts only that the work happened, so it
 /// stays green on loaded machines.
 final class PopupLatencyBenchmarkTests: XCTestCase {
   private let screen = CGRect(x: 0, y: 0, width: 1600, height: 1000)
@@ -20,7 +20,7 @@ final class PopupLatencyBenchmarkTests: XCTestCase {
   }
 
   private static func report(_ name: String, _ value: Double, _ unit: String) {
-    print("[popup-bench] \(name): \(String(format: "%.3f", value)) \(unit)")
+    print("[bench] popup \(name): \(String(format: "%.3f", value)) \(unit)")
   }
 
   private static func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
@@ -187,7 +187,7 @@ final class PopupLatencyBenchmarkTests: XCTestCase {
     controller.dismiss()
   }
 
-  /// `enter_terminal_mode` on a persistent popup: main-thread cost of the
+  /// `mode terminal` on a persistent popup: main-thread cost of the
   /// show and time until its first frame.
   func testStandaloneShowLatency() throws {
     let registry = registry()

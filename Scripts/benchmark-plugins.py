@@ -72,7 +72,6 @@ def plugin_environment(plugin_id: str, data_dir: Path) -> dict[str, str]:
             "FLASH_PLUGIN_VERSION": "benchmark",
             "FLASH_PLUGIN_DATA_DIR": str(data_dir),
             "FLASH_PLUGIN_CONFIG": "{}",
-            "FLASH_PLUGIN_PARENT_PID": str(os.getpid()),
         }
     )
     return env

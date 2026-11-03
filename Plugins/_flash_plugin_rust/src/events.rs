@@ -16,7 +16,7 @@ pub(crate) const REPLACEMENT_SLOTS: usize = 256;
 
 /// State signals whose latest value supersedes every earlier one
 /// (`protocol.json` `host_events.replacement`).
-pub(crate) const REPLACEMENT_EVENTS: [&str; 10] = [
+pub(crate) const REPLACEMENT_EVENTS: [&str; 12] = [
     host_events::APPS_CHANGED,
     host_events::FOCUS_CHANGED,
     host_events::WINDOW_FOCUS_CHANGED,
@@ -25,8 +25,10 @@ pub(crate) const REPLACEMENT_EVENTS: [&str; 10] = [
     host_events::POWER_CHANGED,
     host_events::NETWORK_CHANGED,
     host_events::VOLUMES_CHANGED,
-    host_events::SPACE_CHANGED,
     host_events::STATUS_OBSERVED,
+    host_events::SPACE_CHANGED,
+    host_events::WORKSPACE_CHANGED,
+    host_events::MODE_CHANGED,
 ];
 
 /// The slot a replacement event supersedes (`protocol.json`
@@ -137,7 +139,7 @@ mod tests {
         InboundEvent {
             event: Event {
                 name: name.into(),
-                text: Some(marker.into()),
+                bundle_id: Some(marker.into()),
                 ..Event::default()
             },
             running_applications: Vec::new(),
@@ -203,7 +205,7 @@ mod tests {
                 name: host_events::AX_CHANGED.into(),
                 pid: Some(pid),
                 notification: Some(notification.into()),
-                text: Some(marker.into()),
+                bundle_id: Some(marker.into()),
                 ..Event::default()
             },
             running_applications: Vec::new(),
@@ -228,7 +230,7 @@ mod tests {
             assert_eq!(mailbox.pop().unwrap().event.name, "edge");
         }
         let delivered: Vec<String> = std::iter::from_fn(|| mailbox.pop())
-            .map(|inbound| inbound.event.text.unwrap())
+            .map(|inbound| inbound.event.bundle_id.unwrap())
             .collect();
         assert_eq!(delivered, ["title-7", "value-99", "title-8"]);
     }
@@ -265,7 +267,10 @@ mod tests {
         for _ in 0..EVENT_QUEUE_CAPACITY {
             assert_eq!(mailbox.pop().unwrap().event.name, "edge");
         }
-        assert_eq!(mailbox.pop().unwrap().event.text.as_deref(), Some("empty"));
+        assert_eq!(
+            mailbox.pop().unwrap().event.bundle_id.as_deref(),
+            Some("empty")
+        );
         assert!(mailbox.pop().is_none());
     }
 
@@ -284,7 +289,7 @@ mod tests {
             assert_eq!(mailbox.pop().unwrap().event.name, "edge");
         }
         assert_eq!(
-            mailbox.pop().unwrap().event.text.as_deref(),
+            mailbox.pop().unwrap().event.bundle_id.as_deref(),
             Some("disarmed")
         );
         assert!(mailbox.pop().is_none());
@@ -296,7 +301,13 @@ mod tests {
         assert!(mailbox.push(event("edge", "full"), EVENT_QUEUE_BYTES));
         assert!(!mailbox.push(event("edge", "extra"), 1));
         assert!(mailbox.push(event("core:focus.changed", "latest"), 10));
-        assert_eq!(mailbox.pop().unwrap().event.text.as_deref(), Some("full"));
-        assert_eq!(mailbox.pop().unwrap().event.text.as_deref(), Some("latest"));
+        assert_eq!(
+            mailbox.pop().unwrap().event.bundle_id.as_deref(),
+            Some("full")
+        );
+        assert_eq!(
+            mailbox.pop().unwrap().event.bundle_id.as_deref(),
+            Some("latest")
+        );
     }
 }

@@ -1,0 +1,97 @@
+{
+  "id": "sysinfo",
+  "name": "System info",
+  "version": "0.1.0",
+  "description": "Publish the Mac's own figures as status segments: one-second CPU snapshots with periodically refreshed GPU telemetry, one-second memory snapshots, three-second disk activity with capacity re-read on every mount change, one-second default-route traffic with network identity refreshed on every network change, and battery snapshots on power-source changes with TTL-bounded health. Every domain carries a summary, a label, structured hover details and raw numeric segments; summary_mode=full restores charts and secondary telemetry inline. Local addresses are copyable from @network.",
+  "sandbox": {
+    "mach": [
+      "com.apple.PowerManagement.control"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-sysinfo"
+  ],
+  "commands": [
+    {
+      "command": "sysinfo",
+      "subcommand": "cpu",
+      "description": "Show the latest CPU and GPU snapshot"
+    },
+    {
+      "command": "sysinfo",
+      "subcommand": "memory",
+      "description": "Show the latest memory snapshot"
+    },
+    {
+      "command": "sysinfo",
+      "subcommand": "disks",
+      "description": "Show current disk capacity and activity"
+    },
+    {
+      "command": "sysinfo",
+      "subcommand": "network",
+      "description": "Show current network traffic and addresses"
+    },
+    {
+      "command": "sysinfo",
+      "subcommand": "power",
+      "description": "Show current battery and power details"
+    },
+    {
+      "command": "sysinfo",
+      "subcommand": "refresh",
+      "description": "Refresh every system figure: CPU, memory, disks, network (Wi-Fi, routes, addresses) and power"
+    }
+  ],
+  "status": [
+    "cpu_summary",
+    "cpu_label",
+    "cpu_details",
+    "cpu_percent",
+    "cpu_history",
+    "cpu_load",
+    "cpu_uptime",
+    "memory_summary",
+    "memory_label",
+    "memory_details",
+    "memory_percent",
+    "memory_history",
+    "disks_summary",
+    "disks_label",
+    "disks_details",
+    "disks_percent",
+    "disks_read_bps",
+    "disks_write_bps",
+    "disks_read",
+    "disks_write",
+    "network_summary",
+    "network_label",
+    "network_details",
+    "network_down_bps",
+    "network_up_bps",
+    "network_down_history",
+    "network_up_history",
+    "network_address",
+    "power_summary",
+    "power_label",
+    "power_details",
+    "power_percent",
+    "power_state"
+  ],
+  "capabilities": [
+    "wifi_info"
+  ],
+  "listen": [
+    "core:status.observed",
+    "core:power.changed",
+    "core:volumes.changed",
+    "core:network.changed"
+  ],
+  "sources": [
+    {
+      "name": "network.addresses",
+      "type": "network",
+      "priority": "low"
+    }
+  ]
+}

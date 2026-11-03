@@ -5,6 +5,9 @@ import Foundation
 enum StatusTerminalChange: Equatable {
   case start(String)
   case resize(String)
+  /// `pause_hidden` changed: the running process is paused or continued in
+  /// place.
+  case pause(String)
   case replace(String)
   case remove(String)
 
@@ -29,11 +32,33 @@ enum StatusTerminalChange: Equatable {
         || previous.environment != next.environment || previous.lifecycle != next.lifecycle
       {
         changes.append(.replace(name))
-      } else if previous.size != next.size {
-        changes.append(.resize(name))
+      } else {
+        if previous.size != next.size { changes.append(.resize(name)) }
+        if previous.pauseHidden != next.pauseHidden { changes.append(.pause(name)) }
       }
     }
     return changes
+  }
+}
+
+/// Whether a popup's process is stopped or continued, from the facts alone:
+/// only a persistent popup's running process, stopped while nothing shows it
+/// and `pause_hidden` is on, continued when it shows or the policy goes. A
+/// fresh popup's process ends with its showing and is never paused.
+enum StatusPopupPause {
+  enum Action: Equatable {
+    /// SIGSTOP the process group.
+    case pause
+    /// SIGCONT it.
+    case resume
+  }
+
+  static func action(
+    for definition: Config.Terminal, state: TerminalSessionState, shown: Bool, paused: Bool
+  ) -> Action? {
+    guard definition.lifecycle == .persistent, case .running = state else { return nil }
+    if shown || !definition.pauseHidden { return paused ? .resume : nil }
+    return paused ? nil : .pause
   }
 }
 
@@ -102,6 +127,10 @@ final class StatusTerminalRegistry {
   /// reports, which start their process when shown until their definition
   /// changes.
   private(set) var startsOnShowNames: Set<String> = []
+  /// Terminal popups a showing is attached to (`open` until `hide`).
+  private(set) var shownNames: Set<String> = []
+  /// Persistent popups whose process group is stopped (`pause_hidden`).
+  private(set) var pausedNames: Set<String> = []
   private(set) var inputGenerations: [String: UInt64] = [:]
   private var nextInputGeneration: UInt64 = 0
   private var retiringSessions: [ObjectIdentifier: TerminalSession] = [:]
@@ -185,6 +214,11 @@ final class StatusTerminalRegistry {
         definitions[name] = definition
         let grid = gridResolver(definition.size)
         entries[name]?.session.resize(columns: grid.columns, rows: grid.rows)
+      case .pause(let name):
+        guard let definition = terminals[name], let entry = entries[name] else { continue }
+        definitions[name] = definition
+        entries[name] = Entry(kind: .terminal(definition), session: entry.session)
+        reconcilePause(name)
       }
     }
     let previousPrewarm = prewarmNames
@@ -206,8 +240,10 @@ final class StatusTerminalRegistry {
   func open(_ name: String, link: String? = nil) -> TerminalSession? {
     dispatchPrecondition(condition: .onQueue(.main))
     guard let definition = definitions[name] else { return nil }
+    shownNames.insert(name)
     if let entry = entries[name] {
       prewarmedNames.remove(name)
+      reconcilePause(name)
       return entry.session
     }
     start(name, definition, link: link)
@@ -219,9 +255,39 @@ final class StatusTerminalRegistry {
   /// one stops and, when prewarmed, the next starts once it is gone; a pager
   /// stops and its snapshot file goes.
   func hide(_ name: String) {
+    shownNames.remove(name)
     guard let entry = entries[name] else { return }
-    if case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent { return }
+    if case .terminal(let definition) = entry.kind, definition.lifecycle == .persistent {
+      reconcilePause(name)
+      return
+    }
     release(name)
+  }
+
+  /// Apply `StatusPopupPause` to `name`'s process: the one place a popup's
+  /// process is stopped or continued. A stop, restart or quit continues a
+  /// paused process itself before signalling it (`TerminalSession`).
+  private func reconcilePause(_ name: String) {
+    guard let entry = entries[name], case .terminal(let definition) = entry.kind else { return }
+    switch StatusPopupPause.action(
+      for: definition, state: entry.session.state, shown: shownNames.contains(name),
+      paused: pausedNames.contains(name))
+    {
+    case .pause?:
+      pausedNames.insert(name)
+      entry.session.pause()
+      FlashLog.debug(
+        "[popup] paused", fields: ["popup_id": StatusFormatDocument.stableID(name)],
+        source: "core:StatusTerminalRegistry.pause")
+    case .resume?:
+      pausedNames.remove(name)
+      entry.session.resume()
+      FlashLog.debug(
+        "[popup] continued", fields: ["popup_id": StatusFormatDocument.stableID(name)],
+        source: "core:StatusTerminalRegistry.pause")
+    case nil:
+      break
+    }
   }
 
   /// A fresh popup whose process ended while it showed: its last screen stays
@@ -256,7 +322,7 @@ final class StatusTerminalRegistry {
     start(name, definition)
     prewarmedNames.insert(name)
     FlashLog.debug(
-      "Status popup prewarmed", fields: ["popup_id": StatusFormatDocument.stableID(name)],
+      "[popup] prewarmed", fields: ["popup_id": StatusFormatDocument.stableID(name)],
       source: "core:StatusTerminalRegistry.prewarm")
     didChange?()
   }
@@ -265,6 +331,7 @@ final class StatusTerminalRegistry {
   private func detach(_ name: String) -> Entry? {
     guard let entry = entries.removeValue(forKey: name) else { return nil }
     prewarmedNames.remove(name)
+    pausedNames.remove(name)
     inputGenerations.removeValue(forKey: name)
     restarts[name]?.pending?.cancel()
     restarts[name]?.pending = nil
@@ -341,7 +408,12 @@ final class StatusTerminalRegistry {
           session.send(Data("gR".utf8))
         }
       case .failure(let error):
-        FlashLog.warn("Status popup snapshot failed: \(error.localizedDescription)")
+        FlashLog.warn(
+          "[popup] snapshot_failed",
+          fields: [
+            "popup_id": StatusFormatDocument.stableID(name),
+            "error": error.localizedDescription,
+          ])
         self.release(name)
       }
     }
@@ -378,7 +450,7 @@ final class StatusTerminalRegistry {
     }
     session.onInputRejected = { count in
       FlashLog.warn(
-        "Status terminal input queue full",
+        "[popup] input_queue_full",
         fields: ["popup_id": StatusFormatDocument.stableID(name), "rejected_bytes": String(count)],
         source: "core:StatusTerminalRegistry.input")
     }
@@ -394,8 +466,8 @@ final class StatusTerminalRegistry {
         phase = "reaped"
         pid = childPID
       }
-      FlashLog.info(
-        "Terminal process cleanup changed",
+      FlashLog.debug(
+        "[popup] process_cleanup",
         fields: ["popup_id": popupID, "child_pid": String(pid), "phase": phase],
         source: "core:StatusTerminalRegistry.process")
     }
@@ -415,7 +487,12 @@ final class StatusTerminalRegistry {
         at: ProcessInfo.processInfo.systemUptime)
       restarts[name]?.pending?.cancel()
       restarts[name]?.pending = nil
+      // A new process is paused at once while hidden: its first screen is
+      // drawn when first shown, as a fresh popup's would be.
+      pausedNames.remove(name)
+      reconcilePause(name)
     case .exited, .failed:
+      pausedNames.remove(name)
       guard case .terminal(let definition) = entry.kind else {
         release(name)
         return
@@ -448,8 +525,8 @@ final class StatusTerminalRegistry {
   /// changes.
   private func startOnShow(_ name: String) {
     startsOnShowNames.insert(name)
-    FlashLog.info(
-      "Status popup starts on show", fields: ["popup_id": StatusFormatDocument.stableID(name)],
+    FlashLog.debug(
+      "[popup] starts_on_show", fields: ["popup_id": StatusFormatDocument.stableID(name)],
       source: "core:StatusTerminalRegistry.prewarm")
     release(name)
   }
@@ -459,8 +536,8 @@ final class StatusTerminalRegistry {
     var restart = restarts[name] ?? Restart()
     guard restart.pending == nil else { return }
     guard let delay = restart.backoff.nextDelay(at: ProcessInfo.processInfo.systemUptime) else {
-      FlashLog.warn(
-        "Status terminal restart parked after repeated failures",
+      FlashLog.error(
+        "[popup] restart_parked",
         fields: [
           "popup_id": StatusFormatDocument.stableID(name),
           "attempts": String(restart.backoff.attempt),
@@ -489,7 +566,7 @@ final class StatusTerminalRegistry {
       self.restartSession(name: name, resetBackoff: false)
     }
     FlashLog.info(
-      "Status terminal restart scheduled",
+      "[popup] restart_scheduled",
       fields: [
         "popup_id": StatusFormatDocument.stableID(name),
         "attempt": String(restart.backoff.attempt), "delay_seconds": String(delay),
@@ -522,11 +599,11 @@ final class StatusTerminalRegistry {
     }
     if isFailure {
       FlashLog.warn(
-        "Status terminal state changed", fields: fields,
+        "[popup] terminal_state", fields: fields,
         source: "core:StatusTerminalRegistry.lifecycle")
     } else {
-      FlashLog.info(
-        "Status terminal state changed", fields: fields,
+      FlashLog.debug(
+        "[popup] terminal_state", fields: fields,
         source: "core:StatusTerminalRegistry.lifecycle")
     }
   }
@@ -648,6 +725,8 @@ final class StatusTerminalRegistry {
     prewarmNames.removeAll()
     prewarmedNames.removeAll()
     startsOnShowNames.removeAll()
+    shownNames.removeAll()
+    pausedNames.removeAll()
     let names = entries.keys.sorted()
     if !names.isEmpty { willChange?(names.map(StatusTerminalChange.remove)) }
     for entry in entries.values {

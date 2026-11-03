@@ -60,12 +60,25 @@ extension AppDelegate {
     FlashLog.trace(
       "[activation] begin command=\(command) mode=\(flashMode) "
         + "hints=\(hintSession.hints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
+    // Mission Control or App Exposé shrinks every window into a thumbnail:
+    // the Dock's view is what is on screen to press.
+    if let view = missionControlView {
+      activateMissionControlHints(command, view: view)
+      return
+    }
 
     let resolved: AppMonitor.ActivationTarget?
     if let contextOverride {
-      resolved = AppMonitor.ActivationTarget(
-        context: monitor.coveringInteractionContext(inFrontOf: contextOverride) ?? contextOverride,
-        windowEntries: nil)
+      switch monitor.coveringInteractionContext(inFrontOf: contextOverride) {
+      case nil:
+        resolved = AppMonitor.ActivationTarget(context: contextOverride, windowEntries: nil)
+      case .surface(let covering)?:
+        resolved = AppMonitor.ActivationTarget(
+          context: covering, windowEntries: nil, fallback: contextOverride)
+      case .refused(let bundleIdentifier)?:
+        resolved = AppMonitor.ActivationTarget(
+          context: contextOverride, windowEntries: nil, refusedBy: bundleIdentifier)
+      }
     } else {
       resolved = currentNonFlashActivationTarget()
     }
@@ -74,6 +87,15 @@ extension AppDelegate {
       FlashLog.trace(
         "[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
       endHintActivationEmpty(bundleIdentifier: nil, path: "no_context", surface: "targets")
+      applyModeOverlay()
+      return
+    }
+    // An authentication prompt in front refuses hints: nothing behind it is
+    // walked or clicked either, so no command answers it for the user.
+    if let refusedBy = target.refusedBy {
+      FlashLog.debug("[activation] refused_surface bundle=\(refusedBy)")
+      endHintActivationEmpty(
+        bundleIdentifier: refusedBy, path: "refused_surface", surface: "targets")
       applyModeOverlay()
       return
     }
@@ -124,98 +146,140 @@ extension AppDelegate {
     let isCurrent: () -> Bool = { [weak self] in
       self?.activationLifecycle.isCurrent(myGen) ?? false
     }
+    let finish: (AppContext, [AssignedHint], DiscoveryOutcome) -> Void = {
+      [weak self] context, discovered, discovery in
+      self?.finishTargetActivation(
+        discovered, discovery: discovery, context: context, command: command, generation: myGen)
+    }
     monitor.discoverAsync(
       context: context, windowEntries: target.windowEntries, isCurrent: isCurrent
-    ) { [weak self] hints, discovery in
+    ) { [weak self] discovered, discovery in
       guard let self else { return }
-      self.activationLifecycle.complete(token: myGen)
-      FlashLog.trace(
-        "[activation] discover_complete gen=\(myGen) current_gen=\(self.activationGen) "
-          + "hints=\(hints.count) mode=\(self.flashMode)")
-      // The walk is done; gate is open for the next activation
-      // regardless of whether *this* walk's result is still relevant. A stale
-      // activation's probe went with its session; the current session's
-      // probe belongs to the activation that replaced it.
-      guard self.activationLifecycle.isCurrent(myGen) else {
+      // A covering surface with nothing to press (a volume or brightness
+      // display, a panel still drawing) gives `f` back to the app it covers.
+      if discovered.isEmpty, let fallback = target.fallback, isCurrent() {
         FlashLog.debug(
-          "[activation] stale_generation pid=\(context.processID) "
-            + "bundle=\(context.bundleIdentifier)"
-        )
+          "[activation] covering_empty pid=\(context.processID) "
+            + "bundle=\(context.bundleIdentifier) fallback_pid=\(fallback.processID)")
+        self.hintSession.sourceAppPID = fallback.processID
+        self.monitor.discoverAsync(
+          context: fallback, windowEntries: target.windowEntries, isCurrent: isCurrent
+        ) { discovered, discovery in
+          finish(fallback, discovered, discovery)
+        }
         return
       }
-      // Click and move hints (`f`, `mf`) also label the status bar's
-      // interactive spans, but only on the active window's screen.
-      let statusBarHints = Self.statusBarHintTargets(
-        for: command, screens: self.overlay.statusBarInteractionsByScreen,
-        activeWindowFrame: context.frontWindowFrame)
-      let statusBarTargets = statusBarHints.map(\.target)
-      for hint in statusBarHints {
-        if let popup = hint.popup {
-          self.hintSession.statusBarPopupSnapshots[hint.target.id] = popup
-        }
-      }
-
-      if hints.isEmpty {
-        // Empty result is also the symptom of accessibility
-        // permission being revoked between activations: AX walks
-        // silently return [] when the process is no longer trusted.
-        // Cheap to re-check — and we want the permission banner to
-        // appear instead of the user staring at nothing. Surface it
-        // regardless of any status-bar links (which don't need AX).
-        if !PermissionCheck.isAccessibilityTrusted {
-          self.cachedAccessibilityTrusted = false
-          self.promptForAccessibility()
-          FlashLog.debug(
-            "[activation] accessibility_revoked pid=\(context.processID) "
-              + "bundle=\(context.bundleIdentifier)"
-          )
-          self.endHintActivationEmpty(
-            bundleIdentifier: context.bundleIdentifier, path: "accessibility_revoked",
-            surface: "targets", countsForApp: false)
-          self.applyModeOverlay()
-          return
-        }
-        if statusBarTargets.isEmpty {
-          FlashLog.debug(
-            "[activation] no_targets pid=\(context.processID) "
-              + "bundle=\(context.bundleIdentifier)"
-          )
-          self.endHintActivationEmpty(
-            bundleIdentifier: context.bundleIdentifier, path: discovery.path, surface: "targets")
-          self.applyModeOverlay()
-          return
-        }
-      }
-      // Re-assign labels over the combined set so the app targets and the
-      // status-bar segments share one prefix-free alphabet (app targets keep the
-      // shorter labels — they come first).
-      let displayHints =
-        statusBarTargets.isEmpty
-        ? hints
-        : self.assignHints(
-          hints.map(\.target) + statusBarTargets, region: context.frontWindowFrame)
-      self.hintSession.hints = displayHints
-      self.hintSession.prefix = ""
-      if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
-      // An app that yielded nothing while status-bar segments still show is
-      // logged as shown, with `outcome=empty`: the activation drew hints, but
-      // the app's discovery found none.
-      self.presentHints(
-        displayHints, prepared: discovery.prepared,
-        outcome: HintLatencyProbe.outcome(discovery, appHints: hints.count),
-        bundleIdentifier: context.bundleIdentifier, surface: "targets")
-      if command.isSearch {
-        // Seek & click: the panel routes subsequent keys to the search
-        // interpreter instead of hint-prefix typing.
-        self.hintSession.phase = .search(.init(allHints: displayHints))
-        self.updateSearchSelectionMarker()
-      }
-      FlashLog.debug(
-        "[activation] displayed pid=\(context.processID) "
-          + "bundle=\(context.bundleIdentifier) hints=\(displayHints.count) "
-          + "status_segments=\(statusBarTargets.count)"
-      )
+      finish(context, discovered, discovery)
     }
+  }
+
+  /// The end of a target activation: what discovery found over `context`,
+  /// with the status bar's spans, labelled and shown.
+  private func finishTargetActivation(
+    _ discovered: [AssignedHint], discovery: DiscoveryOutcome, context: AppContext,
+    command: MouseCommand, generation myGen: UInt64
+  ) {
+    self.activationLifecycle.complete(token: myGen)
+    // `--copy-url` and `--copy-text` label only the targets with a URL or
+    // text to copy, relabelled so they get the shortest labels; none left is
+    // an empty discovery.
+    let hints: [AssignedHint]
+    switch command {
+    case .copyURL:
+      hints = self.assignHints(
+        Self.urlTargets(discovered.map(\.target)), region: context.frontWindowFrame)
+    case .copyText:
+      hints = self.assignHints(
+        Self.textTargets(discovered.map(\.target)), region: context.frontWindowFrame)
+    default:
+      hints = discovered
+    }
+    FlashLog.trace(
+      "[activation] discover_complete gen=\(myGen) current_gen=\(self.activationGen) "
+        + "hints=\(hints.count) mode=\(self.flashMode)")
+    // The walk is done; gate is open for the next activation
+    // regardless of whether *this* walk's result is still relevant. A stale
+    // activation's probe went with its session; the current session's
+    // probe belongs to the activation that replaced it.
+    guard self.activationLifecycle.isCurrent(myGen) else {
+      FlashLog.debug(
+        "[activation] stale_generation pid=\(context.processID) "
+          + "bundle=\(context.bundleIdentifier)"
+      )
+      return
+    }
+    // Click and move hints (`f`, `mf`) also label the status bar's
+    // interactive spans, but only on the active window's screen.
+    let statusBarHints = Self.statusBarHintTargets(
+      for: command, screens: self.overlay.statusBarInteractionsByScreen,
+      activeWindowFrame: context.frontWindowFrame)
+    let statusBarTargets = statusBarHints.map(\.target)
+    for hint in statusBarHints {
+      if let popup = hint.popup {
+        self.hintSession.statusBarPopupSnapshots[hint.target.id] = popup
+      }
+    }
+
+    if hints.isEmpty {
+      // Empty result is also the symptom of accessibility
+      // permission being revoked between activations: AX walks
+      // silently return [] when the process is no longer trusted.
+      // Cheap to re-check — and we want the permission banner to
+      // appear instead of the user staring at nothing. Surface it
+      // regardless of any status-bar links (which don't need AX).
+      if !PermissionCheck.isAccessibilityTrusted {
+        self.cachedAccessibilityTrusted = false
+        self.promptForAccessibility()
+        FlashLog.debug(
+          "[activation] accessibility_revoked pid=\(context.processID) "
+            + "bundle=\(context.bundleIdentifier)"
+        )
+        self.endHintActivationEmpty(
+          bundleIdentifier: context.bundleIdentifier, path: "accessibility_revoked",
+          surface: "targets", countsForApp: false)
+        self.applyModeOverlay()
+        return
+      }
+      if statusBarTargets.isEmpty {
+        FlashLog.debug(
+          "[activation] no_targets pid=\(context.processID) "
+            + "bundle=\(context.bundleIdentifier)"
+        )
+        self.endHintActivationEmpty(
+          bundleIdentifier: context.bundleIdentifier, path: discovery.path, surface: "targets")
+        self.applyModeOverlay()
+        return
+      }
+    }
+    // Re-assign labels over the combined set so the app targets and the
+    // status-bar segments share one prefix-free alphabet (app targets keep the
+    // shorter labels — they come first).
+    let displayHints =
+      statusBarTargets.isEmpty
+      ? hints
+      : self.assignHints(
+        hints.map(\.target) + statusBarTargets, region: context.frontWindowFrame)
+    self.hintSession.hints = displayHints
+    self.hintSession.prefix = ""
+    if !statusBarTargets.isEmpty { self.overlay.captureStatusBarHintSnapshot() }
+    // An app that yielded nothing while status-bar segments still show is
+    // logged as shown, with `outcome=empty`: the activation drew hints, but
+    // the app's discovery found none.
+    self.presentHints(
+      displayHints, prepared: discovery.prepared,
+      outcome: HintLatencyProbe.outcome(discovery, appHints: hints.count),
+      bundleIdentifier: context.bundleIdentifier, surface: "targets", missReason: discovery.miss)
+    if command.isSearch {
+      // Seek & click: the panel routes subsequent keys to the search
+      // interpreter instead of hint-prefix typing.
+      self.hintSession.phase = .search(.init(allHints: displayHints))
+      self.updateSearchSelectionMarker()
+    }
+    FlashLog.debug(
+      "[activation] displayed pid=\(context.processID) "
+        + "bundle=\(context.bundleIdentifier) hints=\(displayHints.count) "
+        + "status_segments=\(statusBarTargets.count)"
+    )
   }
 
   /// Assign prefix-free hint labels over `targets` using the active alphabet —
@@ -248,6 +312,16 @@ extension AppDelegate {
   /// same targets — `f` and `cf` included — and only the commit differs
   /// (`statusBarHintCommit`). Empty when the bar is hidden or the active
   /// window is on a screen without a bar.
+  /// The targets `mouse target --copy-url` labels: those carrying a URL.
+  static func urlTargets(_ targets: [JumpTarget]) -> [JumpTarget] {
+    targets.filter { !($0.url ?? "").isEmpty }
+  }
+
+  /// The targets `mouse target --copy-text` labels: those with text.
+  static func textTargets(_ targets: [JumpTarget]) -> [JumpTarget] {
+    targets.filter { !($0.accessibilityLabel ?? "").trimmed.isEmpty }
+  }
+
   static func statusBarHintTargets(
     for command: MouseCommand, screens: [StatusBarScreenInteractions],
     activeWindowFrame windowFrame: CGRect
@@ -283,7 +357,6 @@ extension AppDelegate {
             frame: frame,
             role: "AXLink",
             url: url.absoluteString,
-            entersInsertMode: false,
             providerID: statusBarProviderID),
           region.popup
         )
@@ -294,7 +367,6 @@ extension AppDelegate {
             frame: frame,
             role: statusBarHoverHintRole,
             url: nil,
-            entersInsertMode: false,
             providerID: statusBarProviderID),
           region.popup
         )
@@ -393,7 +465,6 @@ extension AppDelegate {
             frame: item.frame,
             role: "AXLink",
             url: url.absoluteString,
-            entersInsertMode: false,
             providerID: statusBarProviderID),
           popup
         )
@@ -405,7 +476,6 @@ extension AppDelegate {
             frame: item.frame,
             role: statusBarHoverHintRole,
             url: nil,
-            entersInsertMode: false,
             providerID: statusBarProviderID),
           popup
         )
@@ -435,14 +505,19 @@ extension AppDelegate {
     }
   }
 
-  /// `mouse_target --scope=screen`: hints across the front-most surface of
+  /// `mouse target --scope=screen`: hints across the front-most surface of
   /// every app on the focused window's screen. Runs the explicit slower path
   /// (`discoverScreenAsync`) — the focused-app prepared model is never used,
   /// and each app's walk completes whole or is dropped whole.
   func activateScreenScopeHints(_ command: MouseCommand) {
     guard prepareHintActivation(.screen(command)) else { return }
+    // Mission Control already shows every app on every display.
+    if let view = missionControlView {
+      activateMissionControlHints(command, view: view)
+      return
+    }
     guard let context = currentNonFlashContext() ?? normalModeContext() else {
-      FlashLog.debug("[screen_scope] no target app")
+      FlashLog.debug("[screen] no target app")
       applyModeOverlay()
       return
     }
@@ -468,7 +543,7 @@ extension AppDelegate {
       self.activationLifecycle.complete(token: myGen)
       guard self.activationLifecycle.isCurrent(myGen) else { return }
       guard !hints.isEmpty else {
-        FlashLog.debug("[screen_scope] no_targets")
+        FlashLog.debug("[screen] no_targets")
         self.endHintActivationEmpty(
           bundleIdentifier: context.bundleIdentifier, path: "screen_scope", surface: "screen")
         self.applyModeOverlay()
@@ -479,11 +554,11 @@ extension AppDelegate {
       self.presentHints(
         hints, prepared: .miss, outcome: .miss, bundleIdentifier: context.bundleIdentifier,
         surface: "screen")
-      FlashLog.debug("[screen_scope] displayed hints=\(hints.count)")
+      FlashLog.debug("[screen] displayed hints=\(hints.count)")
     }
   }
 
-  /// `scroll_target`: hint-label the focused window's scroll areas.
+  /// `scroll target`: hint-label the focused window's scroll areas.
   /// Committing runs the `move` command — the pointer lands inside the
   /// chosen area, and `Scroller.scrollWheelPoint` already prefers the cursor's
   /// position, so every subsequent scroll verb targets that area with no
@@ -504,7 +579,7 @@ extension AppDelegate {
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
         guard !targets.isEmpty else {
-          FlashLog.debug("[scroll_target] no_scroll_areas pid=\(pid)")
+          FlashLog.debug("[scroll] no_scroll_areas pid=\(pid)")
           self.endHintActivationEmpty(
             bundleIdentifier: context.bundleIdentifier, path: "no_scroll_areas",
             surface: "scroll")
@@ -514,7 +589,7 @@ extension AppDelegate {
         if targets.count == 1, let target = targets.first {
           let point = CGPoint(x: target.frame.midX, y: target.frame.midY)
           self.resolveHintPoints([(target, point)]) { owner, points in
-            _ = ActionDispatcher.moveCursor(to: points[0])
+            _ = ActionDispatcher.moveCursor(to: ScreenPoint<NSSpace>(points[0]))
             owner.applyModeOverlay()
           }
           return
@@ -531,7 +606,7 @@ extension AppDelegate {
         self.presentHints(
           hints, prepared: .miss, outcome: .miss, bundleIdentifier: context.bundleIdentifier,
           surface: "scroll")
-        FlashLog.debug("[scroll_target] displayed pid=\(pid) areas=\(hints.count)")
+        FlashLog.debug("[scroll] displayed pid=\(pid) areas=\(hints.count)")
       }
     }
   }
@@ -565,18 +640,14 @@ extension AppDelegate {
     // normal mode can immediately recapture keyboard input.
     if !hintSession.isActive && !activationInFlight {
       overlay.hide()
-      let captureOverride =
-        Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-          until: pointerInsertHandoffRecaptureSuppressedUntil)
-        ? false : nil
-      applyModeOverlay(captureOverride: captureOverride)
+      applyModeOverlay()
       return
     }
     // A session that took the key window (secure input) hands activation
     // back to the app it covered; a commit does so by raising its target.
     let returnsActivation = hintSession.capture == .keyWindow && keyboardCaptureTap != nil
     // Escape out of a hint, grid, pointer, search or adjust session lets go
-    // of a button `mouse_button` or `v` holds.
+    // of a button `mouse button` or `v` holds.
     releaseHeldMouseButton(reason: "overlay_cancel")
     invalidateActivation(reason: "cancel_overlay")
     overlay.hide()

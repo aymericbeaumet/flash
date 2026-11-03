@@ -18,7 +18,13 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    let context = monitor.coveringInteractionContext(inFrontOf: base) ?? base
+    guard let context = monitor.hintContext(inFrontOf: base) else {
+      // An authentication prompt is in front: nothing is walked or clicked.
+      endHintActivationEmpty(
+        bundleIdentifier: base.bundleIdentifier, path: "refused_surface", surface: "bigram")
+      applyModeOverlay()
+      return
+    }
     guard !context.frontWindowFrame.isNull, !context.frontWindowFrame.isInfinite,
       !context.frontWindowFrame.isEmpty
     else {
@@ -60,6 +66,10 @@ extension AppDelegate {
       discoverFrame: { [weak self] context in
         guard let self else { return context.frontWindowFrame }
         return self.monitor.providerFrame(for: context, primaryH: screenH)
+      },
+      requestTextGrid: { [weak self] context, reply in
+        guard let self else { return reply(nil) }
+        self.monitor.requestTextGrid(for: context, completion: reply)
       },
       deliver: { [weak self] result in
         self?.presentBigramMatches(result)

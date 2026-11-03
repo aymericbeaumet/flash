@@ -79,6 +79,9 @@ final class CandidateFinderSession {
     (normalizedQuery: String, matches: [CandidateMatch], epoch: UInt64, signature: String)?
   var matches: [CandidateMatch] = []
   var selectedIndex = 0
+  /// A clipboard row just pinned or unpinned: the selection follows it to
+  /// its new place once the refreshed rows list it under `source`.
+  var followedRow: (payload: String, source: String)?
   /// Ephemeral answer rows returned by query evaluators for the exact current
   /// input. They are deliberately separate from the frozen catalog so they can
   /// occupy a fixed lane above fuzzy matches without polluting later queries.
@@ -105,6 +108,9 @@ final class CandidateFinderSession {
   var queryEvaluationSettledGeneration: UInt64?
   var currentQuery = ""
   var scope: CandidateScope = .all
+  /// A `menu choose` pick the command line shows instead of the catalogs:
+  /// its rows are the whole pool, and its answer waits on Return or a close.
+  var menu: MenuSession?
   /// Bumped every time a flashlight session is (re)seeded. Plugin replies and
   /// the first-paint deadline capture this value so work from a closed or
   /// superseded session cannot publish a stale snapshot.
@@ -168,10 +174,22 @@ final class CandidateFinderSession {
   /// completed query generation.
   var submissionDeferral = CandidateSubmissionDeferral()
   /// Non-location plugin stores already pulled into this flashlight session.
-  /// Track providers individually so an explicit `@emojis.glyphs` query does
-  /// not deserialize every unrelated catalog, while a later `@notes.notes`
+  /// Track providers individually so an explicit `@emojis` query does
+  /// not deserialize every unrelated catalog, while a later `@notes`
   /// query can still fetch its own provider.
   var fetchedNonLocationSourceIDs = Set<String>()
+  /// The `!` list's index for one candidate epoch of one session (whose
+  /// focused app decides the declared bangs), built off the main thread when
+  /// either moves (`bangIndexBuilding` holds the epoch in flight).
+  var bangIndex: (epoch: UInt64, session: UInt64, index: BangCompletionIndex)?
+  var bangIndexBuilding: UInt64?
+  /// A token's complete bang list, scored over every bang off the main
+  /// thread when its prefix tier did not fill the display.
+  var bangCompletion: (epoch: UInt64, token: String, matches: [CandidateMatch])?
+  /// One completion at a time, and only the latest: a keystroke supersedes
+  /// the scoring a previous one queued before it starts.
+  let bangScoringQueue = DispatchQueue(label: "com.flash.bang-scoring", qos: .userInitiated)
+  let bangScoringTicket = LatestTicket()
   /// Prepared opt-in replies that finished while the deterministic initial
   /// location snapshot was still being normalized. They are published with
   /// that first snapshot instead of being overwritten or causing an extra
@@ -183,4 +201,23 @@ final class CandidateFinderSession {
   /// explicitly selects one. Coalesce those opt-in updates within a runloop
   /// turn; the initial location snapshot never uses this incremental path.
   var mergeRerenderScheduled = false
+}
+
+/// The latest of a series of requests, readable from the queue that serves
+/// them: a request superseded before it starts is skipped.
+final class LatestTicket: @unchecked Sendable {
+  private let lock = NSLock()
+  private var latest: UInt64 = 0
+
+  func issue(_ value: UInt64) {
+    lock.lock()
+    latest = value
+    lock.unlock()
+  }
+
+  func isLatest(_ value: UInt64) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return latest == value
+  }
 }

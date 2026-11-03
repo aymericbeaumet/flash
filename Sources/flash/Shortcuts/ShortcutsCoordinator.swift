@@ -47,7 +47,7 @@ final class MappingsCoordinator {
   /// Messages tab-traversal fallback). `postToPid` is *supposed* to bypass
   /// the session-level Carbon dispatcher, but the OS sometimes routes the
   /// synthetic event back through it, where it re-triggers the scope-bound
-  /// hotkey for the SAME chord: `tab_next` → synthesize `⌘⇧]` → `tab_next`
+  /// hotkey for the SAME chord: `tab next` → synthesize `⌘⇧]` → `tab next`
   /// … a self-feeding loop. `fire`'s 80 ms same-action debounce masks it
   /// only when the round-trip beats 80 ms; Messages' conversation-switch
   /// latency regularly loses that race, so the loop runs away. Each
@@ -105,12 +105,12 @@ final class MappingsCoordinator {
     lastAppliedScope = mappingScope
     let tables = tables(for: mappingScope)
     activeMappings = tables.active
-    reconcile(tables.scoped, with: scopedHotkeys, label: "\(mappingScope)")
+    reconcile(tables.scoped, with: scopedHotkeys, label: mappingScope.name)
   }
 
   /// Mapping keys macOS refused to register, per registration set. A refused
   /// chord stays desired, so every reconcile retries it and this is the
-  /// current set; `flash doctor` reports it.
+  /// current set; `flash resident doctor` reports it.
   private var refusedKeys: [ObjectIdentifier: [String]] = [:]
 
   /// Mapping keys registered with macOS, per registration set: the chords
@@ -159,7 +159,10 @@ final class MappingsCoordinator {
     case .command: return scope == .all || scope == .command
     case .normal: return scope == .all || scope == .normal
     case .hold: return scope == .all || scope == .normal || scope == .hold
+    case .text: return scope == .all || scope == .normal || scope == .text
+    case .visual: return scope == .all || scope == .visual
     case .insert: return scope == .all || scope == .insert
+    case .layer: return scope == .all
     }
   }
 
@@ -173,10 +176,13 @@ final class MappingsCoordinator {
   }
 
   static func nativeMappings(in mode: Config.Mode, scope: MappingScope) -> [ModeMapping] {
-    // A held-button mode reads the interpreter's own table: its entries over
-    // the NORMAL ones it leaves alone.
+    // A held-button mode and a layer read the interpreter's own table: its
+    // entries over the NORMAL or all-mode ones it leaves alone.
     switch scope {
     case .hold: return mode.heldMappings(.hold).filter { $0.nativeHotkey != nil }
+    case .text: return mode.textMappings().filter { $0.nativeHotkey != nil }
+    case .visual: return mode.visualMappings().filter { $0.nativeHotkey != nil }
+    case .layer(let name): return mode.layerMappings(name).filter { $0.nativeHotkey != nil }
     case .normal, .insert, .command, .terminal: break
     }
     let scopes: [(ModeScope, [ModeMapping])] = [
@@ -260,7 +266,7 @@ final class MappingsCoordinator {
       lastFireAt = now
     }
     Trace.ensure(.hotkey) {
-      FlashLog.debug("[mappings] fired \(action.diagnosticDescription)")
+      FlashLog.trace("[mappings] fired \(action.diagnosticDescription)")
       mappingDispatch?(action)
     }
   }

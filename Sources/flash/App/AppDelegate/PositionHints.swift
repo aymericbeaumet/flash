@@ -1,7 +1,7 @@
 import AppKit
 import FlashCore
 
-/// `mouse_position`: save where the pointer is, hint the saved positions,
+/// `mouse position`: save where the pointer is, hint the saved positions,
 /// cycle through them, forget them. The history is in memory, like the
 /// movement history; `[hints] position_history_size` bounds it and
 /// `position_history_scope` keeps one list per app.
@@ -17,34 +17,34 @@ extension AppDelegate {
       let count = positionHistory.save(
         pointer, app: app, scope: scope, maxSize: config.hints.positionHistorySize)
       overlay.displayBanner("Saved position \(count)", durationMs: config.overlay.bannerDurationMs)
-      FlashLog.debug("[mouse_position] saved count=\(count) scope=\(scope.rawValue)")
+      FlashLog.debug("[positions] saved count=\(count) scope=\(scope.rawValue)")
     case .unsave:
       let removed = positionHistory.unsave(near: pointer, app: app, scope: scope)
       if removed {
         overlay.displayBanner("Forgot position", durationMs: config.overlay.bannerDurationMs)
       }
-      FlashLog.debug("[mouse_position] unsave removed=\(removed)")
+      FlashLog.debug("[positions] unsave removed=\(removed)")
     case .clear:
       positionHistory.clear(app: app, scope: scope)
       overlay.displayBanner("Forgot saved positions", durationMs: config.overlay.bannerDurationMs)
-      FlashLog.debug("[mouse_position] cleared scope=\(scope.rawValue)")
+      FlashLog.debug("[positions] cleared scope=\(scope.rawValue)")
     case .next, .previous:
       let target =
         request == .next
         ? positionHistory.next(from: pointer, app: app, scope: scope)
         : positionHistory.previous(from: pointer, app: app, scope: scope)
       guard let target else {
-        FlashLog.debug("[mouse_position] no_positions")
+        FlashLog.debug("[positions] no_positions")
         return
       }
-      _ = ActionDispatcher.moveCursor(to: target)
+      _ = ActionDispatcher.moveCursor(to: ScreenPoint<NSSpace>(target))
     case .hints(let command):
       activatePositionHints(command)
     }
     debugStateDidChange()
   }
 
-  /// `mouse_position --action=hints`: one hint per saved position; the pick
+  /// `mouse position --action=hints`: one hint per saved position; the pick
   /// gets the command's click, or the pointer with `--move`.
   func activatePositionHints(_ command: MouseCommand) {
     guard prepareHintActivation(.positions(command)) else { return }
@@ -53,7 +53,7 @@ extension AppDelegate {
       app: context?.bundleIdentifier, scope: config.hints.positionHistoryScope)
     let targets = Self.positionTargets(positions, pid: context?.processID)
     guard !targets.isEmpty else {
-      FlashLog.debug("[mouse_position] no_positions")
+      FlashLog.debug("[positions] no_positions")
       endHintActivationEmpty(
         bundleIdentifier: context?.bundleIdentifier, path: "no_positions", surface: "positions",
         countsForApp: false)
@@ -71,7 +71,7 @@ extension AppDelegate {
     presentHints(
       hints, prepared: .none, outcome: .none, bundleIdentifier: context?.bundleIdentifier,
       surface: "positions")
-    FlashLog.debug("[mouse_position] displayed positions=\(hints.count)")
+    FlashLog.debug("[positions] displayed positions=\(hints.count)")
   }
 
   /// A coordinate target on each saved position, newest last.
@@ -83,7 +83,6 @@ extension AppDelegate {
         role: "FlashPosition",
         accessibilityLabel: "Position \(index + 1)",
         pid: pid,
-        entersInsertMode: false,
         providerID: positionsProviderID)
     }
   }

@@ -2,14 +2,35 @@
   "id": "browsers",
   "name": "Browsers",
   "version": "0.1.0",
-  "description": "Browser tab catalogs and tab actions: AppleScript for Chromium-family browsers and Safari, the Accessibility tab strip and session store for Firefox",
+  "description": "Browser tab catalogs and the tab commands a browser performs itself: AppleScript for Chromium-family browsers and Safari, the Accessibility tab strip and session store for Firefox. Per-browser history and bookmarks too: at launch, when the flashlight opens, and when you leave Firefox or Chrome (at most once a minute, and only when the stores changed) it copies Firefox places.sqlite and Chrome History into its private cache and reads Chrome Bookmarks. Those rows stay out of default flashlight results and appear only through their @<browser>.history/.bookmarks source filters or !fh/!fb/!ch/!cb.",
   "exec": [
     "./flash-plugin-browsers"
   ],
   "capabilities": [
     "accessibility",
     "app_control",
-    "subprocess"
+    "apple_events"
+  ],
+  "apple_events_targets": [
+    "com.google.Chrome",
+    "com.google.Chrome.canary",
+    "com.google.Chrome.beta",
+    "com.google.Chrome.dev",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.brave.Browser.beta",
+    "com.brave.Browser.nightly",
+    "com.microsoft.edgemac",
+    "com.microsoft.edgemac.Beta",
+    "com.microsoft.edgemac.Dev",
+    "com.microsoft.edgemac.Canary",
+    "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi",
+    "com.operasoftware.Opera",
+    "com.operasoftware.OperaNext",
+    "com.operasoftware.OperaDeveloper",
+    "com.apple.Safari",
+    "com.apple.SafariTechnologyPreview"
   ],
   "navigation": [
     "flash-browser"
@@ -51,90 +72,390 @@
   "sources": [
     {
       "name": "chrome.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "chromium.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "brave.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "edge.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "arc.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "vivaldi.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "opera.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "safari.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
     },
     {
       "name": "firefox.tabs",
+      "type": "tabs",
       "kind": "locations",
       "priority": "high"
+    },
+    {
+      "name": "firefox.history",
+      "type": "history",
+      "priority": "normal"
+    },
+    {
+      "name": "firefox.bookmarks",
+      "type": "bookmarks",
+      "priority": "normal"
+    },
+    {
+      "name": "chrome.history",
+      "type": "history",
+      "priority": "normal"
+    },
+    {
+      "name": "chrome.bookmarks",
+      "type": "bookmarks",
+      "priority": "normal"
     }
   ],
-  "actions": [
-    "tab_select",
-    "tab_move_previous",
-    "tab_move_next"
+  "commands": [
+    {
+      "command": "tab",
+      "subcommand": "select"
+    },
+    {
+      "command": "tab",
+      "subcommand": "next"
+    },
+    {
+      "command": "tab",
+      "subcommand": "previous"
+    },
+    {
+      "command": "tab",
+      "subcommand": "first"
+    },
+    {
+      "command": "tab",
+      "subcommand": "last"
+    },
+    {
+      "command": "tab",
+      "subcommand": "move_previous"
+    },
+    {
+      "command": "tab",
+      "subcommand": "move_next"
+    }
   ],
-  "action_bindings": {
-    "tab_next": {
+  "bindings": {
+    "tab next": {
       "": "cmd+shift+]"
     },
-    "tab_previous": {
+    "tab previous": {
       "": "cmd+shift+["
     },
-    "tab_last": {
+    "tab last": {
       "": "cmd+9"
     },
-    "tab_new": {
+    "tab new": {
       "": "cmd+t"
     },
-    "tab_reopen": {
+    "tab reopen": {
       "": "cmd+shift+t"
     },
-    "app_reload": {
+    "app reload": {
       "": "cmd+r"
     },
-    "app_reload_force": {
+    "app reload --force": {
       "": "cmd+shift+r",
       "com.apple.Safari": "cmd+option+r",
       "com.apple.SafariTechnologyPreview": "cmd+option+r"
     },
-    "scroll_top": {
+    "app view_source": {
+      "": "cmd+option+u",
+      "org.mozilla.firefox": "cmd+u",
+      "org.mozilla.firefoxdeveloperedition": "cmd+u",
+      "org.mozilla.nightly": "cmd+u"
+    },
+    "scroll top": {
       "": "cmd+up"
     },
-    "scroll_bottom": {
+    "scroll bottom": {
       "": "cmd+down"
     },
-    "tab_move_previous": {
+    "tab move_previous": {
       "": "ctrl+shift+pageup"
     },
-    "tab_move_next": {
+    "tab move_next": {
       "": "ctrl+shift+pagedown"
+    },
+    "url bookmark": {
+      "": "cmd+d",
+      "company.thebrowser.Browser": false,
+      "com.operasoftware.Opera": false,
+      "com.operasoftware.OperaNext": false,
+      "com.operasoftware.OperaDeveloper": false
+    },
+    "url edit": {
+      "": "cmd+l"
+    },
+    "history show": {
+      "": "cmd+y",
+      "com.operasoftware.Opera": "cmd+shift+h",
+      "com.operasoftware.OperaNext": "cmd+shift+h",
+      "com.operasoftware.OperaDeveloper": "cmd+shift+h"
+    },
+    "window new --private": {
+      "": "cmd+shift+n",
+      "org.mozilla.firefox": "cmd+shift+p",
+      "org.mozilla.firefoxdeveloperedition": "cmd+shift+p",
+      "org.mozilla.nightly": "cmd+shift+p"
+    },
+    "app stop": {
+      "com.apple.Safari": "cmd+.",
+      "com.apple.SafariTechnologyPreview": "cmd+.",
+      "com.google.Chrome": "cmd+.",
+      "com.google.Chrome.canary": "cmd+.",
+      "com.google.Chrome.beta": "cmd+.",
+      "com.google.Chrome.dev": "cmd+.",
+      "org.chromium.Chromium": "cmd+.",
+      "com.brave.Browser": "cmd+.",
+      "com.brave.Browser.beta": "cmd+.",
+      "com.brave.Browser.nightly": "cmd+.",
+      "org.mozilla.firefox": "cmd+.",
+      "org.mozilla.firefoxdeveloperedition": "cmd+.",
+      "org.mozilla.nightly": "cmd+."
+    },
+    "app downloads": {
+      "com.apple.Safari": "cmd+alt+l",
+      "com.apple.SafariTechnologyPreview": "cmd+alt+l",
+      "com.google.Chrome": "cmd+shift+j",
+      "com.google.Chrome.canary": "cmd+shift+j",
+      "com.google.Chrome.beta": "cmd+shift+j",
+      "com.google.Chrome.dev": "cmd+shift+j",
+      "org.chromium.Chromium": "cmd+shift+j",
+      "com.brave.Browser": "cmd+shift+j",
+      "com.brave.Browser.beta": "cmd+shift+j",
+      "com.brave.Browser.nightly": "cmd+shift+j",
+      "com.microsoft.edgemac": "cmd+alt+l",
+      "com.microsoft.edgemac.Beta": "cmd+alt+l",
+      "com.microsoft.edgemac.Dev": "cmd+alt+l",
+      "com.microsoft.edgemac.Canary": "cmd+alt+l",
+      "com.vivaldi.Vivaldi": "cmd+alt+l",
+      "com.operasoftware.Opera": "cmd+j",
+      "com.operasoftware.OperaNext": "cmd+j",
+      "com.operasoftware.OperaDeveloper": "cmd+j",
+      "org.mozilla.firefox": "cmd+j",
+      "org.mozilla.firefoxdeveloperedition": "cmd+j",
+      "org.mozilla.nightly": "cmd+j"
+    },
+    "app developer_tools": {
+      "": "cmd+alt+i",
+      "com.operasoftware.Opera": false,
+      "com.operasoftware.OperaNext": false,
+      "com.operasoftware.OperaDeveloper": false
+    },
+    "window close_all": {
+      "": false,
+      "com.google.Chrome": "cmd+alt+shift+w",
+      "com.google.Chrome.canary": "cmd+alt+shift+w",
+      "com.google.Chrome.beta": "cmd+alt+shift+w",
+      "com.google.Chrome.dev": "cmd+alt+shift+w",
+      "org.chromium.Chromium": "cmd+alt+shift+w"
+    },
+    "tab duplicate": {
+      "com.apple.Safari": {
+        "menu": [
+          "Window",
+          "Duplicate Tab"
+        ]
+      },
+      "com.apple.SafariTechnologyPreview": {
+        "menu": [
+          "Window",
+          "Duplicate Tab"
+        ]
+      },
+      "com.google.Chrome": {
+        "menu": [
+          "Tab",
+          "Duplicate Tab"
+        ]
+      },
+      "com.google.Chrome.canary": {
+        "menu": [
+          "Tab",
+          "Duplicate Tab"
+        ]
+      },
+      "com.google.Chrome.beta": {
+        "menu": [
+          "Tab",
+          "Duplicate Tab"
+        ]
+      },
+      "com.google.Chrome.dev": {
+        "menu": [
+          "Tab",
+          "Duplicate Tab"
+        ]
+      },
+      "org.chromium.Chromium": {
+        "menu": [
+          "Tab",
+          "Duplicate Tab"
+        ]
+      }
+    },
+    "tab pin": {
+      "com.apple.Safari": {
+        "menu": [
+          "Window",
+          "Pin Tab"
+        ]
+      },
+      "com.apple.SafariTechnologyPreview": {
+        "menu": [
+          "Window",
+          "Pin Tab"
+        ]
+      },
+      "com.google.Chrome": {
+        "menu": [
+          "Tab",
+          "Pin Tab"
+        ]
+      },
+      "com.google.Chrome.canary": {
+        "menu": [
+          "Tab",
+          "Pin Tab"
+        ]
+      },
+      "com.google.Chrome.beta": {
+        "menu": [
+          "Tab",
+          "Pin Tab"
+        ]
+      },
+      "com.google.Chrome.dev": {
+        "menu": [
+          "Tab",
+          "Pin Tab"
+        ]
+      },
+      "org.chromium.Chromium": {
+        "menu": [
+          "Tab",
+          "Pin Tab"
+        ]
+      }
+    },
+    "tab mute": {
+      "org.mozilla.firefox": "ctrl+m",
+      "org.mozilla.firefoxdeveloperedition": "ctrl+m",
+      "org.mozilla.nightly": "ctrl+m",
+      "com.microsoft.edgemac": "ctrl+m",
+      "com.microsoft.edgemac.Beta": "ctrl+m",
+      "com.microsoft.edgemac.Dev": "ctrl+m",
+      "com.microsoft.edgemac.Canary": "ctrl+m",
+      "com.brave.Browser": "ctrl+m",
+      "com.brave.Browser.beta": "ctrl+m",
+      "com.brave.Browser.nightly": "ctrl+m"
+    },
+    "tab detach": {
+      "com.apple.Safari": {
+        "menu": [
+          "Window",
+          "Move Tab to New Window"
+        ]
+      },
+      "com.apple.SafariTechnologyPreview": {
+        "menu": [
+          "Window",
+          "Move Tab to New Window"
+        ]
+      },
+      "com.google.Chrome": {
+        "menu": [
+          "Tab",
+          "Move Tab to New Window"
+        ]
+      },
+      "com.google.Chrome.canary": {
+        "menu": [
+          "Tab",
+          "Move Tab to New Window"
+        ]
+      },
+      "com.google.Chrome.beta": {
+        "menu": [
+          "Tab",
+          "Move Tab to New Window"
+        ]
+      },
+      "com.google.Chrome.dev": {
+        "menu": [
+          "Tab",
+          "Move Tab to New Window"
+        ]
+      },
+      "org.chromium.Chromium": {
+        "menu": [
+          "Tab",
+          "Move Tab to New Window"
+        ]
+      }
     }
-  }
+  },
+  "bangs": [
+    {
+      "token": "fh",
+      "description": "Firefox history: !fh <query>",
+      "source": "firefox.history"
+    },
+    {
+      "token": "fb",
+      "description": "Firefox bookmarks: !fb <query>",
+      "source": "firefox.bookmarks"
+    },
+    {
+      "token": "ch",
+      "description": "Chrome history: !ch <query>",
+      "source": "chrome.history"
+    },
+    {
+      "token": "cb",
+      "description": "Chrome bookmarks: !cb <query>",
+      "source": "chrome.bookmarks"
+    }
+  ]
 }

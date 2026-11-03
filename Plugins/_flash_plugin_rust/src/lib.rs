@@ -6,6 +6,8 @@
 //! dispatch, the push-based `publish`/`status`/`log` notifications, and the
 //! typed host RPC client. Everything a plugin touches is a typed value.
 
+mod applescript;
+mod cf;
 mod context;
 mod deadline;
 mod emit;
@@ -30,11 +32,10 @@ pub use flash_plugin_macros::plugin;
 
 pub use context::{
     AppWatch, CommandOutput, Context, NormalModeTarget, RefreshGate, applescript_quote,
-    run_command, run_command_with_slow_threshold, run_osascript, shorten, spawn_managed,
+    run_command, run_command_with_slow_threshold, shorten,
 };
 pub use observed::ObservedCadences;
 pub use poll::{Deadline, PollHandle, PollPriority};
-pub use process::{ManagedChild, ManagedChildError};
 pub use runtime::{Plugin, run};
 pub use settle::Settle;
 pub use status::{
@@ -42,8 +43,10 @@ pub use status::{
     PreviewTooLarge, Published, StatusCarousel, StatusSegment, StatusValue, Style, Table,
 };
 pub use types::{
-    ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest, EvaluateRequest,
-    EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest,
-    Perform, PerformResponse, Priority, QueryAnswer, RunningApplication, SearchRequest,
-    SearchResponse, TERMINAL_LINK_ROLE, ax_notifications, candidate_metadata, host_events,
+    Candidate, CandidateEffect, CommandContext, CommandRequest, EvaluateRequest, EvaluateResponse,
+    Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, Perform,
+    PerformResponse, Priority, QueryAnswer, RunningApplication, TERMINAL_LINK_ROLE, TextGridLine,
+    TextGridRequest, TextGridResponse, ax_notifications, candidate_metadata, host_events,
 };
+
+pub use applescript::AppleScriptOperation;

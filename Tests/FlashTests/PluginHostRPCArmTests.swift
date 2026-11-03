@@ -7,10 +7,8 @@ import XCTest
 /// Every arm of the plugin→host RPC surface, driven through
 /// `handleHostRequest` with synthetic capability sets. Side-effecting arms
 /// go through the closure/static seams (urlOpener, appOpener,
-/// mediaKeyPoster, signalSender, onNotifyRequested, onSyntheticKeysRequested,
-/// onGlobalSyntheticKeyRequested, onNormalModeTargetRequested, wifiInfoProvider) — no test
-/// here ever opens a browser, posts a HID event, signals a process, or
-/// touches the clipboard.
+/// onSyntheticKeysRequested, onNormalModeTargetRequested, wifiInfoProvider) —
+/// no test here ever opens a browser or posts a HID event.
 final class PluginHostRPCArmTests: XCTestCase {
 
   // MARK: - Plumbing
@@ -26,7 +24,7 @@ final class PluginHostRPCArmTests: XCTestCase {
   }
 
   /// Synchronously collect one `handleHostRequest` reply (replies may hop
-  /// through main, the storage queue, or the AX broker queue).
+  /// through main or the AX broker queue).
   private func hostReply(
     _ rpc: PluginHostRPC,
     _ method: String,
@@ -34,7 +32,8 @@ final class PluginHostRPCArmTests: XCTestCase {
     pluginID: String = "rpctest",
     capabilities: Set<PluginCapability> = [],
     fetchURLs: [String] = [],
-    dataDir: URL? = nil,
+    appleEventsTargets: [String] = [],
+    timeout: TimeInterval = 5,
     file: StaticString = #filePath,
     line: UInt = #line
   ) -> [String: Any] {
@@ -47,25 +46,18 @@ final class PluginHostRPCArmTests: XCTestCase {
       pluginID: pluginID,
       capabilities: capabilities,
       fetchURLs: fetchURLs,
-      dataDir: dataDir
+      appleEventsTargets: appleEventsTargets,
+      scope: PluginHostRequestScope(isCurrent: { true })
     ) { result in
       lock.lock()
       reply = result
       lock.unlock()
       replied.fulfill()
     }
-    wait(for: [replied], timeout: 5)
+    wait(for: [replied], timeout: timeout)
     lock.lock()
     defer { lock.unlock() }
     return reply
-  }
-
-  private func temporaryDataDir() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("flash-rpc-data-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
-    return dir
   }
 
   // MARK: - Capability gate, table-driven from protocol.json
@@ -74,7 +66,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 20, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 12, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -88,12 +80,9 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 17, "17 gated + host.ping + host.storage_get/set ungated")
-    // The ungated arms answer without any capability at all.
+    XCTAssertEqual(gated, 11, "11 gated + host.ping ungated")
+    // The ungated arm answers without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_get", ["key": "k"])["error"] as? String,
-      "storage unavailable", "storage is data-dir-scoped, never capability-gated")
   }
 
   func testUnknownHostMethodRepliesTheCanonicalError() {
@@ -227,178 +216,32 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertEqual(openedURLs.count, 3, "a rejected call must not reach the opener")
   }
 
-  // MARK: - host.post_media_key (mediaKeyPoster seam)
-
-  func testAudioDevicesListsAndSelectsWithCapabilityAndDirectionValidation() {
-    final class Stub: AudioDeviceProviding {
-      var selected: [(String, AudioDeviceDirection)] = []
-      var volumeDeltas: [Int] = []
-      var muteToggles = 0
-      func list(direction: AudioDeviceDirection) throws -> [AudioDeviceRecord] {
-        [AudioDeviceRecord(uid: "device-1", name: "USB Audio", isDefault: true)]
-      }
-      func select(uid: String, direction: AudioDeviceDirection) throws {
-        selected.append((uid, direction))
-      }
-      func adjustOutputVolume(deltaPercent: Int) throws -> Int {
-        volumeDeltas.append(deltaPercent)
-        return 50
-      }
-      func toggleOutputMute() throws {
-        muteToggles += 1
-      }
-    }
-
-    let rpc = PluginHostRPC()
-    let stub = Stub()
-    rpc.audioDevices = stub
-    let listed = hostReply(
-      rpc, "host.audio_devices", ["direction": "input"], capabilities: [.audioDevices])
-    XCTAssertEqual(listed["ok"] as? Bool, true)
-    let devices = listed["devices"] as? [[String: Any]]
-    XCTAssertEqual(devices?.first?["uid"] as? String, "device-1")
-    XCTAssertEqual(devices?.first?["default"] as? Bool, true)
-
-    let selected = hostReply(
-      rpc, "host.audio_devices", ["direction": "output", "select_uid": "device-1"],
-      capabilities: [.audioDevices])
-    XCTAssertEqual(selected["ok"] as? Bool, true)
-    XCTAssertEqual(stub.selected.count, 1)
-    XCTAssertEqual(stub.selected.first?.0, "device-1")
-    XCTAssertEqual(stub.selected.first?.1, .output)
-
-    let invalid = hostReply(
-      rpc, "host.audio_devices", ["direction": "effects"], capabilities: [.audioDevices])
-    XCTAssertEqual(invalid["ok"] as? Bool, false)
-    XCTAssertEqual(stub.selected.count, 1)
-
-    let louder = hostReply(
-      rpc, "host.audio_devices", ["volume_delta": 10], capabilities: [.audioDevices])
-    XCTAssertEqual(louder["ok"] as? Bool, true)
-    XCTAssertEqual(louder["volume_percent"] as? Int, 50)
-    XCTAssertEqual(stub.volumeDeltas, [10])
-    let quieter = hostReply(
-      rpc, "host.audio_devices", ["volume_delta": -10], capabilities: [.audioDevices])
-    XCTAssertEqual(quieter["ok"] as? Bool, true)
-    XCTAssertEqual(stub.volumeDeltas, [10, -10])
-    let muted = hostReply(
-      rpc, "host.audio_devices", ["mute": "toggle"], capabilities: [.audioDevices])
-    XCTAssertEqual(muted["ok"] as? Bool, true)
-    XCTAssertEqual(stub.muteToggles, 1)
-    let mixed = hostReply(
-      rpc, "host.audio_devices", ["direction": "output", "volume_delta": 10],
-      capabilities: [.audioDevices])
-    XCTAssertEqual(mixed["ok"] as? Bool, false)
-    XCTAssertEqual(stub.volumeDeltas, [10, -10])
-    let bezel = [0, 6, 13, 19, 25, 31, 38, 44, 50, 56, 63, 69, 75, 81, 88, 94, 100]
-    for (index, percent) in bezel.enumerated() {
-      XCTAssertEqual(
-        CoreAudioDevices.volumePercent(Float(index) / 16), percent,
-        "tick \(index)")
-    }
-    var up = Float(0)
-    for percent in bezel.dropFirst() {
-      up = CoreAudioDevices.nativeVolume(up, direction: 1)
-      XCTAssertEqual(CoreAudioDevices.volumePercent(up), percent)
-    }
-    XCTAssertEqual(CoreAudioDevices.nativeVolume(1, direction: 1), 1, accuracy: 0.0001)
-    var down = Float(1)
-    for percent in bezel.dropLast().reversed() {
-      down = CoreAudioDevices.nativeVolume(down, direction: -1)
-      XCTAssertEqual(CoreAudioDevices.volumePercent(down), percent)
-    }
-    XCTAssertEqual(CoreAudioDevices.nativeVolume(0, direction: -1), 0, accuracy: 0.0001)
-    XCTAssertEqual(
-      CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, direction: 1)), 44)
-    XCTAssertEqual(
-      CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, direction: -1)), 38)
-  }
-
-  func testMediaKeyPostsDownUpPairThroughTheSeamAndValidatesRange() {
-    let original = PluginHostRPC.mediaKeyPoster
-    defer { PluginHostRPC.mediaKeyPoster = original }
-    var posted: [CGEvent] = []
-    PluginHostRPC.mediaKeyPoster = { posted.append($0) }
-    let rpc = PluginHostRPC()
-
-    let reply = hostReply(rpc, "host.post_media_key", ["key_code": 16], capabilities: [.mediaKeys])
-    XCTAssertEqual(reply["ok"] as? Bool, true)
-    XCTAssertEqual(posted.count, 2, "one NX_KEYDOWN + one NX_KEYUP")
-
-    let outOfRange = hostReply(
-      rpc, "host.post_media_key", ["key_code": 32], capabilities: [.mediaKeys])
-    XCTAssertEqual(outOfRange["error"] as? String, "host.post_media_key requires key_code 0-31")
-    XCTAssertEqual(posted.count, 2, "a rejected key_code must not post")
-  }
-
-  // MARK: - host.signal (signalSender seam)
-
-  func testSignalRoutesThroughTheSeamAndRefusesLowPids() {
-    let original = PluginHostRPC.signalSender
-    defer { PluginHostRPC.signalSender = original }
-    var signaled: [pid_t] = []
-    PluginHostRPC.signalSender = { pid in
-      signaled.append(pid)
-      return 0
+  /// The regression: `host.open` handed any URL to LaunchServices, so a
+  /// sandboxed plugin with `open` could write `x.command` (or an app, a
+  /// script) into its own data directory and open it as a `file:` URL:
+  /// Terminal or Finder then ran it outside the sandbox. Local files are
+  /// never opened for a plugin; web and app URLs still are.
+  func testHostOpenNeverOpensALocalFileForAPlugin() {
+    let originalURLOpener = PluginHostRPC.urlOpener
+    defer { PluginHostRPC.urlOpener = originalURLOpener }
+    var opened: [URL] = []
+    PluginHostRPC.urlOpener = { url in
+      opened.append(url)
+      return true
     }
     let rpc = PluginHostRPC()
-
-    let reply = hostReply(rpc, "host.signal", ["pid": 4321], capabilities: [.processControl])
-    XCTAssertEqual(reply["ok"] as? Bool, true)
-    XCTAssertEqual(signaled, [4321])
-
-    for params in [["pid": 1], ["pid": 0], [:]] {
-      let refused = hostReply(rpc, "host.signal", params, capabilities: [.processControl])
-      XCTAssertEqual(refused["error"] as? String, "host.signal requires pid > 1")
+    for url in [
+      "file:///Users/me/Library/Application%20Support/Flash/Plugins/x/run.command",
+      "FILE:///Applications/Terminal.app", "file://localhost/tmp/x.sh",
+    ] {
+      let reply = hostReply(rpc, "host.open", ["url": url], capabilities: [.open])
+      XCTAssertEqual(reply["ok"] as? Bool, false, url)
+      XCTAssertEqual(reply["error"] as? String, "host.open does not open local files", url)
     }
-    XCTAssertEqual(signaled, [4321], "refused pids must never reach kill()")
-  }
-
-  // MARK: - host.process_table (read-only, no seam needed)
-
-  func testProcessTableReturnsRowsWithABoundedSampleWindow() {
-    let reply = hostReply(
-      PluginHostRPC(), "host.process_table", ["sample_window_ms": 10],
-      capabilities: [.processControl])
-    XCTAssertEqual(reply["ok"] as? Bool, true)
-    let rows = reply["processes"] as? [[String: Any]] ?? []
-    XCTAssertFalse(rows.isEmpty)
-    let mine = rows.first { ($0["pid"] as? Int) == Int(getpid()) }
-    XCTAssertNotNil(mine, "the test process itself must appear in the table")
-    XCTAssertNotNil(mine?["comm"] as? String)
-  }
-
-  func testProcessTableCanReturnDetailedMetricsForOnePID() throws {
-    let child = Process()
-    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
-    child.arguments = ["2"]
-    try child.run()
-    defer {
-      if child.isRunning { child.terminate() }
-      child.waitUntilExit()
-    }
-    let pid = Int(getpid())
-    let reply = hostReply(
-      PluginHostRPC(), "host.process_table",
-      ["sample_window_ms": 10, "pid": pid], capabilities: [.processControl])
-    XCTAssertEqual(reply["ok"] as? Bool, true)
-    let rows = reply["processes"] as? [[String: Any]] ?? []
-    XCTAssertEqual(rows.count, 1)
-    XCTAssertEqual(rows.first?["pid"] as? Int, pid)
-    XCTAssertNotNil(rows.first?["memory_bytes"] as? Int)
-    XCTAssertNotNil(rows.first?["disk_read_bytes"] as? Int)
-    XCTAssertNotNil(rows.first?["disk_write_bytes"] as? Int)
-    XCTAssertNotNil(rows.first?["uptime_seconds"] as? Int)
-    XCTAssertNotNil(rows.first?["thread_count"] as? Int)
-    XCTAssertNotNil(rows.first?["socket_count"] as? Int)
-    XCTAssertGreaterThanOrEqual(rows.first?["process_count"] as? Int ?? 0, 2)
-  }
-
-  func testProcessTableRejectsAnInvalidPidFilter() {
-    let reply = hostReply(
-      PluginHostRPC(), "host.process_table", ["pid": 0], capabilities: [.processControl])
-    XCTAssertEqual(reply["ok"] as? Bool, false)
-    XCTAssertEqual(reply["error"] as? String, "host.process_table pid must be positive")
+    XCTAssertEqual(opened, [], "no local file reaches LaunchServices")
+    let web = hostReply(rpc, "host.open", ["url": "https://example.com"], capabilities: [.open])
+    XCTAssertEqual(web["ok"] as? Bool, true)
+    XCTAssertEqual(opened, [URL(string: "https://example.com")])
   }
 
   // MARK: - host.normal_mode_target (closure seam)
@@ -444,169 +287,6 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertEqual(notAnApp["error"] as? String, "no running app for pid")
   }
 
-  // MARK: - host.clipboard_write (quota only; the production body has no seam
-  // and would clobber the real clipboard, so the success path stays untested)
-
-  func testClipboardWriteRejectsOversizedAndMissingText() {
-    let rpc = PluginHostRPC()
-    let oversized = String(
-      repeating: "x", count: PluginProtocol.maxClipboardWriteBytes + 1)
-    let tooBig = hostReply(
-      rpc, "host.clipboard_write", ["text": oversized], capabilities: [.clipboard])
-    XCTAssertEqual(tooBig["ok"] as? Bool, false)
-    XCTAssertEqual(
-      tooBig["error"] as? String, "host.clipboard_write requires text under 1 MiB")
-    let missing = hostReply(rpc, "host.clipboard_write", [:], capabilities: [.clipboard])
-    XCTAssertEqual(missing["ok"] as? Bool, false)
-  }
-
-  // MARK: - host.notify (onNotifyRequested seam)
-
-  func testNotifyClampsDurationRejectsOversizeAndRateLimitsPerPlugin() {
-    let rpc = PluginHostRPC()
-    var banners: [(message: String, durationMs: Int)] = []
-    rpc.onNotifyRequested = { banners.append(($0, $1)) }
-
-    // Duration clamps: 100 → 500 (floor).
-    let low = hostReply(
-      rpc, "host.notify", ["message": "hi", "duration_ms": 100], capabilities: [.notify])
-    XCTAssertEqual(low["ok"] as? Bool, true)
-    XCTAssertEqual(banners.last?.durationMs, 500)
-
-    // 1/s rate limit per plugin: a second call within the same second is
-    // rejected with the exact error, and the banner seam is not called.
-    let limited = hostReply(rpc, "host.notify", ["message": "again"], capabilities: [.notify])
-    XCTAssertEqual(limited["ok"] as? Bool, false)
-    XCTAssertEqual(limited["error"] as? String, "host.notify rate limit: 1 per second")
-    XCTAssertEqual(banners.count, 1)
-
-    // The limit is per plugin id, not global.
-    let other = hostReply(
-      rpc, "host.notify", ["message": "other"], pluginID: "otherplugin",
-      capabilities: [.notify])
-    XCTAssertEqual(other["ok"] as? Bool, true)
-    XCTAssertEqual(banners.count, 2)
-
-    // Ceiling clamp and default on a fresh instance (fresh rate-limit table).
-    let rpc2 = PluginHostRPC()
-    var banners2: [(message: String, durationMs: Int)] = []
-    rpc2.onNotifyRequested = { banners2.append(($0, $1)) }
-    XCTAssertEqual(
-      hostReply(
-        rpc2, "host.notify", ["message": "hi", "duration_ms": 60_000],
-        capabilities: [.notify])["ok"] as? Bool,
-      true)
-    XCTAssertEqual(banners2.last?.durationMs, 10_000)
-    XCTAssertEqual(
-      hostReply(
-        rpc2, "host.notify", ["message": "hi"], pluginID: "p2",
-        capabilities: [.notify])["ok"] as? Bool,
-      true)
-    XCTAssertEqual(banners2.last?.durationMs, 3_000, "default duration is 3 s")
-
-    // >1 KiB and empty messages are rejected before any main-thread hop.
-    let oversized = String(repeating: "m", count: PluginProtocol.maxNotifyMessageBytes + 1)
-    XCTAssertEqual(
-      hostReply(rpc2, "host.notify", ["message": oversized], capabilities: [.notify])["error"]
-        as? String,
-      "host.notify requires a message under 1 KiB")
-    XCTAssertEqual(
-      hostReply(rpc2, "host.notify", ["message": ""], capabilities: [.notify])["ok"] as? Bool,
-      false)
-  }
-
-  // MARK: - host.storage_get / host.storage_set
-
-  func testStorageRoundTripNullDeleteAndQuotas() throws {
-    let dataDir = try temporaryDataDir()
-    let rpc = PluginHostRPC()
-
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": "k", "value": "v"], dataDir: dataDir)["ok"]
-        as? Bool,
-      true)
-    let got = hostReply(rpc, "host.storage_get", ["key": "k"], dataDir: dataDir)
-    XCTAssertEqual(got["present"] as? Bool, true)
-    XCTAssertEqual(got["value"] as? String, "v")
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_get", ["key": "absent"], dataDir: dataDir)["present"] as? Bool,
-      false)
-
-    // null deletes; deleting an absent key stays ok.
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": "k", "value": NSNull()], dataDir: dataDir)["ok"]
-        as? Bool,
-      true)
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_get", ["key": "k"], dataDir: dataDir)["present"] as? Bool,
-      false)
-
-    // Key bound: >128 B (and empty) rejected on both arms.
-    let longKey = String(repeating: "k", count: PluginProtocol.maxStorageKeyBytes + 1)
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": longKey, "value": "v"], dataDir: dataDir)[
-        "error"] as? String,
-      "host.storage_set requires a key under 128 bytes")
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_get", ["key": longKey], dataDir: dataDir)["error"] as? String,
-      "host.storage_get requires a key under 128 bytes")
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": "", "value": "v"], dataDir: dataDir)["ok"]
-        as? Bool,
-      false)
-
-    // Value bound: >64 KiB rejected atomically.
-    let bigValue = String(repeating: "v", count: PluginProtocol.maxStorageValueBytes + 1)
-    XCTAssertTrue(
-      (hostReply(rpc, "host.storage_set", ["key": "big", "value": bigValue], dataDir: dataDir)[
-        "error"] as? String ?? "")
-        .contains("storage bound exceeded"))
-
-    // Non-string, non-null values are a type error, not a coercion.
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": "n", "value": 42], dataDir: dataDir)["error"]
-        as? String,
-      "host.storage_set value must be a string or null")
-
-    // Missing dataDir (no plugin identity): storage unavailable.
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": "k", "value": "v"])["error"] as? String,
-      "storage unavailable")
-  }
-
-  func testStorageEntryCapAndPersistenceAcrossHandlerInstances() throws {
-    let dataDir = try temporaryDataDir()
-    // Pre-fill exactly maxStorageEntries entries on disk.
-    var full: [String: String] = [:]
-    for index in 0..<PluginProtocol.maxStorageEntries { full["k\(index)"] = "v" }
-    let data = try JSONSerialization.data(withJSONObject: full)
-    try data.write(to: dataDir.appendingPathComponent("storage.json"))
-
-    let rpc = PluginHostRPC()
-    // The 257th key is rejected; updating and deleting existing keys still work.
-    XCTAssertTrue(
-      (hostReply(rpc, "host.storage_set", ["key": "overflow", "value": "v"], dataDir: dataDir)[
-        "error"] as? String ?? "")
-        .contains("storage bound exceeded"))
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": "k0", "value": "updated"], dataDir: dataDir)[
-        "ok"] as? Bool,
-      true)
-    XCTAssertEqual(
-      hostReply(rpc, "host.storage_set", ["key": "k1", "value": NSNull()], dataDir: dataDir)[
-        "ok"] as? Bool,
-      true)
-
-    // storage.json persists: a brand-new handler instance reads the same store.
-    let fresh = PluginHostRPC()
-    let reread = hostReply(fresh, "host.storage_get", ["key": "k0"], dataDir: dataDir)
-    XCTAssertEqual(reread["present"] as? Bool, true)
-    XCTAssertEqual(reread["value"] as? String, "updated")
-    XCTAssertEqual(
-      hostReply(fresh, "host.storage_get", ["key": "k1"], dataDir: dataDir)["present"] as? Bool,
-      false)
-  }
-
   // MARK: - host.fetch (validation paths only; an allowlisted https URL would
   // hit the real network)
 
@@ -650,6 +330,117 @@ final class PluginHostRPCArmTests: XCTestCase {
   }
 
   // MARK: - host.post_keys (onSyntheticKeysRequested seam)
+
+  // MARK: - host.applescript
+
+  func testAppleScriptValidatesOperationsAndBoundsResults() {
+    let rpc = PluginHostRPC()
+    var executions = 0
+    rpc.appleScriptRunner = { source, _ in
+      executions += 1
+      XCTAssertTrue(source.contains("com.apple.shortcuts.events"))
+      return AppleScriptOutput(status: 0, stdout: "names\n", stderr: "")
+    }
+    let granted: Set<PluginCapability> = [.appleEvents]
+    let targets = ["com.apple.shortcuts.events"]
+    for params: [String: Any] in [
+      [:], ["script": "return 1"], ["operation": "shortcuts_list", "script": "return 1"],
+      ["operation": "shortcuts_list", "timeout_ms": true],
+      ["operation": "shortcuts_list", "timeout_ms": 0],
+    ] {
+      XCTAssertEqual(
+        hostReply(
+          rpc, "host.applescript", params, capabilities: granted, appleEventsTargets: targets)["ok"]
+          as? Bool, false)
+    }
+    XCTAssertEqual(executions, 0)
+    let params: [String: Any] = ["operation": "shortcuts_list"]
+    XCTAssertEqual(
+      hostReply(
+        rpc, "host.applescript", params, capabilities: granted, appleEventsTargets: targets)[
+          "result"] as? String, "names")
+    XCTAssertEqual(executions, 1)
+    rpc.appleScriptRunner = { _, _ in
+      AppleScriptOutput(
+        status: 0,
+        stdout: String(repeating: "x", count: PluginProtocol.maxAppleScriptResultBytes + 1),
+        stderr: "")
+    }
+    XCTAssertEqual(
+      hostReply(
+        rpc, "host.applescript", params, capabilities: granted, appleEventsTargets: targets)[
+          "status"] as? Int, Int(AppleScriptOutput.outputLimitStatus))
+    rpc.appleScriptRunner = { _, _ in
+      AppleScriptOutput(status: 1, stdout: "", stderr: "execution error: denied (-1743)")
+    }
+    XCTAssertEqual(
+      hostReply(
+        rpc, "host.applescript", params, capabilities: granted, appleEventsTargets: targets)[
+          "status"] as? Int, 1)
+  }
+
+  func testStaleAppleScriptRequestDoesNotExecuteItsOperation() {
+    let unexpected = expectation(description: "stale operation never executes or replies")
+    unexpected.isInverted = true
+    PluginHostAppleScript.handle(
+      ["operation": "shortcuts_list"], targets: ["com.apple.shortcuts.events"],
+      pluginID: "stale-operation", scope: PluginHostRequestScope(isCurrent: { false }),
+      runner: { _, _ in
+        unexpected.fulfill()
+        return AppleScriptOutput(status: 0, stdout: "", stderr: "")
+      }, reply: { _ in unexpected.fulfill() })
+    wait(for: [unexpected], timeout: 0.1)
+  }
+
+  /// At most `concurrency` scripts of one plugin run at once; the next waits
+  /// for a slot within its own timeout, and another plugin's scripts do not
+  /// wait on them.
+  func testAppleScriptConcurrencyIsPerPlugin() {
+    let rpc = PluginHostRPC()
+    rpc.appleScriptRunner = { source, _ in
+      if source.contains("delay") { Thread.sleep(forTimeInterval: 1) }
+      return AppleScriptOutput(
+        status: 0, stdout: source.contains("delay") ? "busy\n" : "idle\n", stderr: "")
+    }
+
+    let granted: Set<PluginCapability> = [.appleEvents]
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var replies: [String: [String: Any]] = [:]
+    func call(_ plugin: String, _ index: Int, _ script: String, timeoutMs: Int) {
+      group.enter()
+      rpc.handleHostRequest(
+        method: "host.applescript",
+        params: ["operation": "shortcut_run", "name": script, "timeout_ms": timeoutMs],
+        pluginID: plugin, capabilities: granted, fetchURLs: [],
+        appleEventsTargets: ["com.apple.shortcuts.events"],
+        scope: PluginHostRequestScope(isCurrent: { true })
+      ) { reply in
+        lock.lock()
+        replies["\(plugin)/\(index)"] = reply
+        lock.unlock()
+        group.leave()
+      }
+    }
+    // Every slot of `busy` is held for a second; its fifth script must wait
+    // for one, and a 300 ms timeout does not get it.
+    for index in 0..<PluginProtocol.appleScriptConcurrency {
+      call("busy", index, "delay 1\nreturn \(index)", timeoutMs: 10_000)
+    }
+    Thread.sleep(forTimeInterval: 0.2)
+    call("busy", PluginProtocol.appleScriptConcurrency, "return 99", timeoutMs: 300)
+    call("idle", 0, "return 7", timeoutMs: 10_000)
+    XCTAssertEqual(group.wait(timeout: .now() + 60), .success)
+    lock.lock()
+    defer { lock.unlock() }
+    for index in 0..<PluginProtocol.appleScriptConcurrency {
+      XCTAssertEqual(replies["busy/\(index)"]?["result"] as? String, "busy")
+    }
+    let waited = replies["busy/\(PluginProtocol.appleScriptConcurrency)"]
+    XCTAssertEqual(waited?["ok"] as? Bool, false)
+    XCTAssertEqual(waited?["error"] as? String, "applescript timed out timeout_ms=300")
+    XCTAssertEqual(replies["idle/0"]?["result"] as? String, "idle", "another plugin's slots")
+  }
 
   func testPostKeysValidatesChordsBoundsCountAndClampsInterval() {
     let rpc = PluginHostRPC()
@@ -716,28 +507,6 @@ final class PluginHostRPCArmTests: XCTestCase {
         capabilities: [.accessibility])["error"] as? String,
       "unknown modifier: hyper")
     XCTAssertEqual(captured.count, 2, "rejected payloads must never reach the poster")
-  }
-
-  // MARK: - host.post_global_key
-
-  func testPostGlobalKeyRejectsUnmodifiedChordsAndHighKeyCodes() {
-    let rpc = PluginHostRPC()
-    var posted = 0
-    rpc.onGlobalSyntheticKeyRequested = { _, _ in
-      posted += 1
-      return true
-    }
-    for params in [
-      ["key_code": Int(kVK_ANSI_Q), "modifiers": [] as [String]],
-      ["key_code": 0x80, "modifiers": ["command"]],
-      ["key_code": Int(kVK_ANSI_Q)],
-    ] as [[String: Any]] {
-      let reply = hostReply(rpc, "host.post_global_key", params, capabilities: [.accessibility])
-      XCTAssertEqual(
-        reply["error"] as? String,
-        "host.post_global_key requires key_code and valid non-empty modifiers")
-    }
-    XCTAssertEqual(posted, 0)
   }
 
   // MARK: - host.ax_* routing (validation errors only; real trees are the

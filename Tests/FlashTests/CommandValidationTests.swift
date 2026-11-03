@@ -5,20 +5,16 @@ import XCTest
 
 final class CommandValidationTests: XCTestCase {
   func testInvalidBuiltinArgumentsCannotBecomePluginCalls() {
-    XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: "enter_terminal_mode", args: ["name": ""]))
-    XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: "leave_mode", args: ["unexpected": "1"]))
-    // A built-in action parses as itself; only unknown verbs become plugin calls.
-    XCTAssertEqual(URLEventHandler.parseOrPluginVerb(verb: "app_save", args: [:]), .save)
-    XCTAssertEqual(
-      URLEventHandler.parseOrPluginVerb(verb: "spotify_pause", args: [:]),
-      .pluginVerb(name: "spotify_pause", args: [:]))
+    XCTAssertNil(URLEventHandler.parse(topic: "mode", action: "terminal", args: ["name": ""]))
+    XCTAssertNil(URLEventHandler.parse(topic: "mode", action: "leave", args: ["unexpected": "1"]))
+    XCTAssertEqual(URLEventHandler.parse(topic: "app", action: "save", args: [:]), .save)
   }
 
   func testStraySubcommandsAndMalformedFlagsAreRejectedInMappings() {
     for tail in [["typo"], ["--"], ["--=value"], ["name=value"]] {
-      XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_normal_mode"] + tail))
+      XCTAssertNil(parseMappingCommand(argv: ["flash", "mode", "normal"] + tail))
     }
-    XCTAssertNotNil(parseMappingCommand(argv: ["flash", "enter_normal_mode"]))
+    XCTAssertNotNil(parseMappingCommand(argv: ["flash", "mode", "normal"]))
     XCTAssertNotNil(parseMappingCommand(argv: ["echo", "name=value"]))
   }
 
@@ -26,23 +22,23 @@ final class CommandValidationTests: XCTestCase {
     let accepted = ConfigLoader.parse(
       """
       [mode.normal.mappings]
-      "<leader>c" = ["flash", "caffeinate", "toggle"]
+      "<leader>c" = ["flash", "screenshot", "window"]
       """)
     XCTAssertTrue(accepted.loadingDiagnostics.isEmpty, "\(accepted.loadingDiagnostics)")
     XCTAssertTrue(
       accepted.mode.normal.contains {
         $0.action.command
-          == .pluginCommand(command: "caffeinate", subcommand: "toggle", args: [])
+          == .pluginCommand(command: "screenshot", subcommand: "window", args: [])
       })
 
     let oneWord = ConfigLoader.parse(
       """
       [mode.all.mappings]
-      "cmd+shift+[" = ["flash", "caffeinate_toggle"]
+      "cmd+shift+[" = ["flash", "screenshot_window"]
       """)
     XCTAssertTrue(
       oneWord.loadingDiagnostics.contains {
-        $0.message.contains("cmd+shift+[") && $0.message.contains("caffeinate_toggle")
+        $0.message.contains("cmd+shift+[") && $0.message.contains("screenshot_window")
       })
 
     for action in [
@@ -57,85 +53,21 @@ final class CommandValidationTests: XCTestCase {
     }
   }
 
-  func testCLIRejectsInvalidArgumentsWithoutSendingAnEvent() {
-    XCTAssertEqual(FlashCLI.run(args: ["leave_mode", "typo"]), 2)
-    XCTAssertEqual(FlashCLI.run(args: ["enter_terminal_mode", "--name="]), 2)
-    XCTAssertEqual(FlashCLI.run(args: ["media"]), 2)
-    XCTAssertEqual(FlashCLI.run(args: ["media", "not-a-subcommand"]), 2)
-    XCTAssertEqual(FlashCLI.run(args: ["caffeinate_toggle"]), 2)
-    XCTAssertEqual(FlashCLI.run(args: ["caffeinate"]), 2)
-  }
-
-  func testResidentRejectsMalformedBuiltinAndReturnsAnErrorReply() {
-    var dispatched = false
-    var rejected: [String] = []
-    let handler = URLEventHandler(
-      handler: { _ in
-        dispatched = true
-        return true
-      },
-      rejected: { rejected.append($0) }, queries: noQueries)
-    let reply = event("reply")
-    handler.handleFlashEvent(
-      event("leave_mode", arguments: "{\"unexpected\":\"1\"}"),
-      withReplyEvent: reply)
-    XCTAssertFalse(dispatched)
-    XCTAssertEqual(rejected.count, 1)
-    XCTAssertTrue(rejected.first?.contains("leave_mode") == true)
-    XCTAssertNotEqual(reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value, 0)
-  }
-
-  func testUnclaimedPluginCommandReturnsAnErrorReply() {
-    let handler = URLEventHandler(
-      handler: { _ in false }, rejected: { _ in }, queries: noQueries)
-    let reply = event("reply")
-    handler.handleFlashEvent(event("missing_plugin_verb"), withReplyEvent: reply)
-    XCTAssertTrue(
-      reply.paramDescriptor(forKeyword: AEKeyword(keyErrorString))?.stringValue?
-        .contains("missing_plugin_verb") == true)
-  }
-
-  /// `flash status` is answered from the query table with JSON in the reply's
-  /// direct object; it never reaches the verb handler, so no mapping or plugin
-  /// can stand in for it.
-  func testStatusIsAnsweredFromTheQueryTableWithJSON() {
-    var dispatched = false
-    let handler = URLEventHandler(
-      handler: { _ in
-        dispatched = true
-        return true
-      },
-      rejected: { _ in },
-      queries: URLEventHandler.QueryAnswers(
-        status: { Data(#"{"schema":1}"#.utf8) }, doctor: { $0(Data()) }))
-    let reply = event("reply")
-    handler.handleFlashEvent(event("status"), withReplyEvent: reply)
-    XCTAssertFalse(dispatched)
-    XCTAssertEqual(
-      reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-      #"{"schema":1}"#)
-
-    for (verb, arguments) in [("status", #"{"json":"1"}"#), ("config_check", "{}")] {
-      let rejected = event("reply")
-      handler.handleFlashEvent(event(verb, arguments: arguments), withReplyEvent: rejected)
-      XCTAssertNil(rejected.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)), verb)
-      XCTAssertEqual(
-        rejected.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value,
-        Int32(errAEEventNotHandled), verb)
+  /// Without a resident, the CLI resolves the words itself to say why they
+  /// name no command; with one, the resident resolves them (`CommandInvocationTests`).
+  func testCLIRejectsInvalidArguments() {
+    let notRunning = CommandInvocationTests.StubTransport().transport
+    for args in [
+      ["mode", "leave", "typo"], ["mode", "terminal", "--name="], ["screenshot"],
+      ["screenshot", "not-a-subcommand"], ["screenshot_window"],
+      // Every command is two words: the one-word forms are gone.
+      ["mode_leave"], ["mode"], ["media", "volumedown"], ["caffeinate", "on", "--minutes=0"],
+      ["audio", "output", "--device="],
+      // A mark's letter is a `--letter=` argument of one ASCII letter or digit.
+      ["mark", "set", "a"], ["mark", "set"], ["mark", "set", "--letter=ab"],
+      ["mark", "jump", "--letter=é"],
+    ] {
+      XCTAssertEqual(FlashCLI.run(args: args, transport: notRunning), 2, "\(args)")
     }
-    XCTAssertFalse(dispatched)
-  }
-
-  private var noQueries: URLEventHandler.QueryAnswers {
-    URLEventHandler.QueryAnswers(status: { Data() }, doctor: { $0(Data()) })
-  }
-
-  private func event(_ verb: String, arguments: String = "{}") -> NSAppleEventDescriptor {
-    let event = NSAppleEventDescriptor.appleEvent(
-      withEventClass: FlashCLI.appleEventClass, eventID: FlashCLI.appleEventID,
-      targetDescriptor: nil, returnID: 0, transactionID: 0)
-    event.setParam(NSAppleEventDescriptor(string: verb), forKeyword: FlashCLI.verbKey)
-    event.setParam(NSAppleEventDescriptor(string: arguments), forKeyword: FlashCLI.argsKey)
-    return event
   }
 }

@@ -1,9 +1,10 @@
 import CoreGraphics
+import FlashCore
 import XCTest
 
 @testable import flash
 
-/// `mouse_button` and pointer mode's `v` share one held button, owned by
+/// `mouse button` and pointer mode's `v` share one held button, owned by
 /// `ActionDispatcher`; every transition says which events to post.
 final class MouseButtonHoldTests: XCTestCase {
   func testDownPressesOnceAndUpReleasesOnce() {
@@ -40,7 +41,7 @@ final class MouseButtonHoldTests: XCTestCase {
     XCTAssertEqual(hold.held?.button, .primary)
   }
 
-  /// Escape, leave_mode, quit and a committed gesture all release through
+  /// Escape, mode leave, quit and a committed gesture all release through
   /// `release()`, exactly once however many of them run.
   func testReleaseConsumesTheHoldExactlyOnce() {
     var hold = MouseButtonHold()
@@ -70,7 +71,7 @@ final class MouseButtonHoldTests: XCTestCase {
 
   func testVerbParsesTheModeAndCancel() {
     func parse(_ args: [String: String]) -> URLCommand? {
-      URLEventHandler.parse(verb: "mouse_button", args: args)
+      URLEventHandler.parse(topic: "mouse", action: "button", args: args)
     }
     XCTAssertNil(parse(["state": "toggle", "mode": "visual"]))
     XCTAssertEqual(
@@ -80,31 +81,33 @@ final class MouseButtonHoldTests: XCTestCase {
       parse(["state": "cancel"]), .mouseButton(.init(state: .cancel, button: .primary, hold: .hold))
     )
     XCTAssertNil(parse(["state": "toggle", "mode": "select"]))
-    // `enter_hold_mode` is the drag toggle by name.
+    // `mode hold` is the drag toggle by name.
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "enter_hold_mode", args: [:]), .holdMode(.primary))
+      URLEventHandler.parse(topic: "mode", action: "hold", args: [:]), .holdMode(.primary))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "enter_hold_mode", args: ["secondary": "1"]),
+      URLEventHandler.parse(topic: "mode", action: "hold", args: ["secondary": "1"]),
       .holdMode(.secondary))
     XCTAssertNil(
-      URLEventHandler.parse(verb: "enter_hold_mode", args: ["secondary": "1", "middle": "1"]))
+      URLEventHandler.parse(topic: "mode", action: "hold", args: ["secondary": "1", "middle": "1"]))
     XCTAssertEqual(
-      URLCommand.holdMode(.middle).diagnosticDescription, "flash enter_hold_mode --middle")
+      URLCommand.holdMode(.middle).diagnosticDescription, "flash mode hold --middle")
     XCTAssertEqual(
       URLCommand.mouseButton(.init(state: .toggle, button: .primary, hold: .hold))
         .diagnosticDescription,
-      "flash mouse_button --state=toggle --mode=hold")
+      "flash mouse button --state=toggle --mode=hold")
   }
 
   func testHoldVerbReplacesDragVerb() {
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "enter_hold_mode", args: [:]), .holdMode(.primary))
-    XCTAssertNil(URLEventHandler.parse(verb: "enter_drag_mode", args: [:]))
+      URLEventHandler.parse(topic: "mode", action: "hold", args: [:]), .holdMode(.primary))
+    XCTAssertNil(URLEventHandler.parse(topic: "mode", action: "drag", args: [:]))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "mouse_button", args: ["state": "toggle", "mode": "hold"]),
+      URLEventHandler.parse(
+        topic: "mouse", action: "button", args: ["state": "toggle", "mode": "hold"]),
       .mouseButton(.init(state: .toggle, button: .primary, hold: .hold)))
     XCTAssertNil(
-      URLEventHandler.parse(verb: "mouse_button", args: ["state": "toggle", "mode": "drag"]))
+      URLEventHandler.parse(
+        topic: "mouse", action: "button", args: ["state": "toggle", "mode": "drag"]))
   }
 
   func testEachButtonPostsItsOwnEventTypes() {
@@ -127,8 +130,8 @@ final class MouseButtonHoldTests: XCTestCase {
   func testHeldPointerMovesAreDraggedEvents() throws {
     let event = try XCTUnwrap(
       ActionDispatcher.pointerMoveEvent(
-        to: CGPoint(x: 40, y: 30), from: CGPoint(x: 10, y: 10), holding: .secondary,
-        source: nil))
+        to: ScreenPoint<AXSpace>(x: 40, y: 30), from: ScreenPoint<AXSpace>(x: 10, y: 10),
+        holding: .secondary, source: nil))
     XCTAssertEqual(event.type, .rightMouseDragged)
     XCTAssertEqual(event.getIntegerValueField(.mouseEventDeltaX), 30)
     XCTAssertEqual(event.getIntegerValueField(.mouseEventDeltaY), 20)
@@ -136,13 +139,14 @@ final class MouseButtonHoldTests: XCTestCase {
       event.getIntegerValueField(.eventSourceUserData), ActionDispatcher.syntheticMouseEventTag)
     let free = try XCTUnwrap(
       ActionDispatcher.pointerMoveEvent(
-        to: CGPoint(x: 40, y: 30), from: CGPoint(x: 10, y: 10), holding: nil, source: nil))
+        to: ScreenPoint<AXSpace>(x: 40, y: 30), from: ScreenPoint<AXSpace>(x: 10, y: 10),
+        holding: nil, source: nil))
     XCTAssertEqual(free.type, .mouseMoved)
   }
 
   func testVerbParsesStateAndButton() {
     func parse(_ args: [String: String]) -> URLCommand? {
-      URLEventHandler.parse(verb: "mouse_button", args: args)
+      URLEventHandler.parse(topic: "mouse", action: "button", args: args)
     }
     XCTAssertEqual(
       parse(["state": "down"]), .mouseButton(.init(state: .down, button: .primary, hold: .hold)))
@@ -165,26 +169,26 @@ final class MouseButtonHoldTests: XCTestCase {
   func testVerbRoundTripsThroughMappingsAndDiagnostics() {
     let command = URLCommand.mouseButton(.init(state: .toggle, button: .secondary, hold: .hold))
     XCTAssertEqual(
-      command.diagnosticDescription, "flash mouse_button --state=toggle --secondary --mode=hold")
+      command.diagnosticDescription, "flash mouse button --state=toggle --secondary --mode=hold")
     XCTAssertEqual(
       URLCommand.mouseButton(.init(state: .down, button: .primary, hold: .hold))
         .diagnosticDescription,
-      "flash mouse_button --state=down --mode=hold")
+      "flash mouse button --state=down --mode=hold")
     let config = ConfigLoader.parse(
       """
       [mode.normal.mappings]
-      "zv" = ["flash", "mouse_button", "--state=toggle", "--secondary"]
-      "zb" = ["flash", "mouse_button"]
+      "zv" = ["flash", "mouse", "button", "--state=toggle", "--secondary"]
+      "zb" = ["flash", "mouse", "button"]
       """)
     XCTAssertEqual(
       config.mode.normal.first { $0.key == NormalModeInterpreter.canonicalizeMappingKey("zv") }?
         .action.command, command)
     XCTAssertNil(
       config.mode.normal.first { $0.key == NormalModeInterpreter.canonicalizeMappingKey("zb") },
-      "a bare mouse_button is rejected")
+      "a bare mouse button is rejected")
     XCTAssertEqual(config.warnings.count, 1)
     XCTAssertTrue(
       URLEventHandler.usageText.contains(
-        "flash mouse_button --state=<down|up|toggle|release|cancel>"))
+        "flash mouse button --state=<down|up|toggle|release|cancel>"))
   }
 }

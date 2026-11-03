@@ -26,8 +26,8 @@ extension URLCommand {
     case .mouseTargetWords(let command):
       return
         "Labels the visible words in the focused window and \(gesture(command, object: "the start of the one you pick", plural: "the ones you pick"))."
-    case .mouseScreens:
-      return "Labels each display and moves the pointer to the centre of the one you pick."
+    case .mouseScreens(let request):
+      return screenSelectExplanation(request)
     case .mouseWarp(let request):
       let area = request.area == .window ? "the focused window" : "the screen"
       let edge = request.edge == .center ? "the centre" : "the \(request.edge.rawValue) edge"
@@ -42,11 +42,16 @@ extension URLCommand {
       }
     case .selection(let action, _):
       switch action {
-      case .copy: return "Copies the selected text, ending a drag."
-      case .cut: return "Cuts the selected text, ending a drag."
-      case .change: return "Cuts the selected text and enters INSERT to type its replacement."
-      case .paste: return "Pastes over the selected text, ending a drag."
+      case .copy: return "Copies the selected text, ending a drag or VISUAL."
+      case .paste: return "Pastes over the selected text, ending a drag or VISUAL."
+      case .swapEnds: return "Moves VISUAL's moving end to the other end of the selection."
       }
+    case .visualMode(let kind):
+      return kind == .linewise
+        ? "Selects whole lines from the cursor (VISUAL), or switches to them; again, leaves."
+        : "Selects from the cursor (VISUAL), or switches to characters; again, leaves."
+    case .visualReselect:
+      return "Selects the last VISUAL range again, in the field it was made in."
     case .mouseNudge(let direction, let distance):
       return "Moves the pointer \(distance) points \(direction.rawValue)."
     case .mouseStep(let direction):
@@ -79,6 +84,23 @@ extension URLCommand {
       return "Grabs what is under the pointer with the \(name) button (HOLD), or drops it."
     case .focusInput:
       return "Moves into an editable field in the focused window without changing mode."
+    case .inputMotion(let motion):
+      switch motion {
+      case .lineStart: return "Moves the cursor to the start of its line in the focused text."
+      case .lineEnd: return "Moves the cursor to the end of its line in the focused text."
+      case .charRight: return "Moves the cursor one character right in the focused text."
+      case .charLeft: return "Moves the cursor one character left in the focused text."
+      case .lineUp: return "Moves the cursor up a line in the focused text."
+      case .lineDown: return "Moves the cursor down a line in the focused text."
+      case .documentStart: return "Moves the cursor to the start of the focused text."
+      case .documentEnd: return "Moves the cursor to the end of the focused text."
+      case .selectLeft, .selectRight, .selectUp, .selectDown, .selectWordLeft, .selectWordRight,
+        .selectLineStart, .selectLineEnd, .selectDocumentStart, .selectDocumentEnd:
+        return "Extends the selection with the app's selection key ("
+          + motion.rawValue.replacingOccurrences(of: "_", with: " ") + ") in the focused text."
+      }
+    case .move(let move):
+      return moveExplanation(move)
     case .scrollTarget:
       return
         "Labels scroll areas in the focused window and moves the pointer into the one you pick."
@@ -103,6 +125,8 @@ extension URLCommand {
     case .terminalMode(let name):
       return name.map { "Opens the \($0) popup and gives its terminal the keyboard." }
         ?? "Opens the terminal popup and gives it the keyboard."
+    case .layerMode(let name):
+      return "Enters the \(name) layer: its keys act until Escape."
     case .scroll(let kind):
       return scrollExplanation(kind)
     case .reload(let force):
@@ -122,17 +146,37 @@ extension URLCommand {
     case .tabClose:
       return "Closes the current tab."
     case .find:
-      return "Opens Find, then enters INSERT."
-    case .candidateFinder(let all):
-      return all ? "Opens Flashlight across every source." : "Opens Flashlight."
+      return "Opens Find in the focused app."
+    case .findNext:
+      return "Goes to the next Find match in the focused app."
+    case .findPrevious:
+      return "Goes to the previous Find match in the focused app."
+    case .appSwitch:
+      return "Opens Flashlight on what is running."
+    case .flashlight(let query, let restoreMode):
+      let base =
+        query.map { "Opens Flashlight on `\($0)`." } ?? "Opens Flashlight across every source."
+      return restoreMode ? base + " Closing it returns to the mode it opened from." : base
     case .enterCommand(let input, let restoreMode):
       return commandLineExplanation(input: input, restoreMode: restoreMode)
     case .copyURL:
       return "Copies the URL of the focused page."
     case .yankSelection(let register):
       return yankExplanation(register)
-    case .paste(let register):
-      return pasteExplanation(register)
+    case .paste(let register, let after):
+      return after
+        ? "Steps past the character under the cursor, then "
+          + pasteExplanation(register).prefix(1).lowercased()
+          + pasteExplanation(register).dropFirst()
+        : pasteExplanation(register)
+    case .cursor(let command):
+      return cursorExplanation(command)
+    case .scrollCursor(let position):
+      switch position {
+      case .top: return "Scrolls the focused text so the cursor's line is at the top."
+      case .middle: return "Scrolls the focused text so the cursor's line is in the middle."
+      case .bottom: return "Scrolls the focused text so the cursor's line is at the bottom."
+      }
     case .tabNext:
       return "Selects the next tab."
     case .tabPrev:
@@ -177,28 +221,98 @@ extension URLCommand {
       return force
         ? "Saves the focused document, then force-quits the app."
         : "Saves the focused document, then quits the app."
+    case .appClose:
+      return "Closes the current tab, else the focused window; the app's last window quits it."
     case .tabNew:
-      return "Opens a new tab, then enters INSERT."
+      return "Opens a new tab in the focused app."
     case .save:
       return "Saves the focused document."
     case .print:
       return "Prints the focused document."
     case .documentOpen:
       return "Opens a document in the focused app."
-    case .windowNew:
-      return "Opens a new window."
+    case .windowNew(let isPrivate):
+      return isPrivate ? "Opens a new private browsing window." : "Opens a new window."
+    case .windowCloseAll:
+      return "Asks before closing every window of the focused app."
+    case .windowZoom:
+      return "Zooms the focused window to fit its content, or back."
+    case .documentSaveAs:
+      return "Saves the focused document under another name."
+    case .documentExportPDF:
+      return "Exports the focused document as a PDF."
+    case .documentRevert:
+      return "Asks before reverting the focused document to its last saved version."
+    case .documentDuplicate:
+      return "Duplicates the focused document."
+    case .documentRename:
+      return "Renames the focused document."
+    case .documentPageSetup:
+      return "Opens the focused document's page setup."
+    case .appSettings:
+      return "Opens the focused app's settings."
+    case .selectAll:
+      return "Selects everything in the focused app."
+    case .appHelp:
+      return "Opens the focused app's Help menu."
+    case .appCancel:
+      return "Cancels in the focused app: closes its popover, dialog or search."
+    case .appStop:
+      return "Stops loading the focused browser page."
+    case .appDownloads:
+      return "Shows the focused browser's downloads."
+    case .developerTools:
+      return "Opens the focused browser's developer tools."
+    case .appVisibility(let action):
+      switch action {
+      case .hide: return "Hides the focused app."
+      case .hideOthers: return "Hides every app but the focused one."
+      case .showAll: return "Shows every hidden app."
+      case .raise: return "Brings every window of the focused app to the front."
+      }
+    case .urlBookmark:
+      return "Bookmarks the focused page."
+    case .urlEdit:
+      return "Focuses the focused browser's address bar."
+    case .historyShow:
+      return "Shows the focused browser's history."
+    case .tabDuplicate:
+      return "Duplicates the current tab."
+    case .tabPin:
+      return "Pins or unpins the current tab."
+    case .tabMute:
+      return "Mutes or unmutes the current tab."
+    case .tabDetach:
+      return "Moves the current tab to a new window."
+    case .menuPress(let path):
+      return "Presses the focused app's \(path.joined(separator: " › ")) menu item."
     case .windowClose:
       return "Closes the focused window."
     case .clipboardCopy:
       return "Copies with the focused app's copy command."
-    case .clipboardCut:
-      return "Cuts with the focused app's cut command."
     case .clipboardPaste:
       return "Pastes with the focused app's paste command."
     case .clipboardHistory(let action, _, _):
-      return action == "show" ? "Opens clipboard history." : "Deletes a clipboard history entry."
+      switch action {
+      case "show": return "Opens clipboard history."
+      case "pin": return "Pins a clipboard history entry, so it lists first and is never trimmed."
+      case "unpin": return "Unpins a clipboard history entry."
+      default: return "Deletes a clipboard history entry."
+      }
+    case .clipboardRestore(_, let paste, let plain):
+      let what = plain ? "a clipboard history entry's plain text" : "a clipboard history entry"
+      return paste
+        ? "Pastes \(what) into the focused app." : "Puts \(what) back on the clipboard."
     case .lookUp:
       return "Looks up the word under the pointer with the focused app's Look Up."
+    case .zoomIn:
+      return "Zooms in with the focused app's own zoom."
+    case .zoomOut:
+      return "Zooms out with the focused app's own zoom."
+    case .zoomReset:
+      return "Resets the focused app's zoom to actual size."
+    case .viewSource:
+      return "Shows the focused browser page's source."
     case .trackpadGesture(let fingers, let motion):
       return gestureExplanation(fingers: fingers, motion: motion)
     case .showAlert(let alert):
@@ -209,12 +323,22 @@ extension URLCommand {
       return
         "Asks \"\(request.prompt)\" first; y then \(request.command.explanation.lowercasedFirst)"
     case .showUsage(let topic):
-      if let topic, !topic.isEmpty { return "Opens the \(topic) help topic." }
-      return "Opens the help homepage."
+      if let topic, !topic.isEmpty { return "Opens the \(topic) documentation page." }
+      return "Opens Flash's help home page."
     case .showMappings:
       return "Opens the mappings page."
     case .showPlugins:
       return "Opens the plugins page."
+    case .reloadPlugins:
+      return "Stops and restarts every loaded plugin."
+    case .showLogs:
+      return "Opens the logs page."
+    case .showCommands:
+      return "Opens the command catalog."
+    case .showMonitors:
+      return "Opens the monitors page."
+    case .showTelemetry:
+      return "Opens the telemetry page."
     case .showAbout:
       return "Opens the About window."
     case .dismissHints:
@@ -238,11 +362,61 @@ extension URLCommand {
         return "Focuses the next window up the stacking order."
       case .cycle(.behind):
         return "Focuses the window just behind the focused one."
+      case .app(.next):
+        return "Focuses the app's next window."
+      case .app(.previous):
+        return "Focuses the app's previous window."
       }
     case .windowState(let action):
       return windowStateExplanation(action)
+    case .windowSwitch:
+      return "Lists every window, most recently used first, to pick one by its label."
+    case .windowLast:
+      return "Focuses the window you were in before this one."
+    case .tile(let command):
+      return command.explanation
+    case .workspace(let command):
+      return command.explanation
+    case .media(let command):
+      return mediaExplanation(command)
+    case .caffeinate(let request):
+      return caffeinateExplanation(request)
+    case .statusPush(let push):
+      return push.explanation
+    case .statusRefresh(let source):
+      return StatusRefresh.explanation(source)
+    case .notify(let command):
+      return command.explanation
+    case .logWrite(let write):
+      return write.explanation
+    case .metricRecord(let record):
+      return record.explanation
+    case .menuChoose(let file, _):
+      return MenuChoice.explanation(file: file)
+    case .macro(let command):
+      return command.explanation
+    case .configReload:
+      return "Re-reads the configuration file now."
+    case .configEdit:
+      return "Opens the configuration file in its default app."
+    case .updates(let command):
+      return command.explanation
+    case .startup(let command):
+      return command.explanation
+    case .appleCatalog(let command):
+      return command.explanation
+    case .calendar(let command):
+      return command.explanation
+    case .marks(let command):
+      return command.explanation
     case .systemKey(let key):
       return systemKeyExplanation(key)
+    case .systemSurface(let command):
+      return command.explanation
+    case .systemAction(let action):
+      return action.explanation
+    case .processKill(let pid):
+      return "Asks before terminating process \(pid)."
     case .functionKey(let index):
       return "Sends F\(index) to the focused app."
     case .arrow(let direction, let shift):
@@ -252,10 +426,6 @@ extension URLCommand {
       return "Types \(keys) into the focused app."
     case .sendKeys(let keys, _, _):
       return "Types \(keys) into the focused app."
-    case .pluginVerb(let name, let args):
-      if args.isEmpty { return "Runs the \(name) verb." }
-      let detail = args.keys.sorted().map { "\($0) \(args[$0] ?? "")" }.joined(separator: ", ")
-      return "Runs the \(name) verb with \(detail)."
     }
   }
 }
@@ -265,6 +435,10 @@ private func gesture(_ command: MouseCommand, object: String, plural: String) ->
   switch command {
   case .move:
     return "moves the pointer onto \(object)"
+  case .copyURL:
+    return "copies the URL of \(object)"
+  case .copyText:
+    return "copies the text of \(object)"
   case .gesture(.lookUp):
     return "looks up the word at \(object)"
   case .gesture(.smartZoom):
@@ -358,8 +532,12 @@ private func scrollExplanation(_ kind: NormalModeDispatcher.ScrollKind) -> Strin
   case .right: return "Scrolls right at the pointer."
   case .up: return "Scrolls up one step at the pointer."
   case .down: return "Scrolls down one step at the pointer."
-  case .halfPageUp: return "Scrolls up one page step at the pointer."
-  case .halfPageDown: return "Scrolls down one page step at the pointer."
+  case .lineUp: return "Scrolls up one line at the pointer, a count that many."
+  case .lineDown: return "Scrolls down one line at the pointer, a count that many."
+  case .halfPageUp: return "Scrolls up half a page at the pointer."
+  case .halfPageDown: return "Scrolls down half a page at the pointer."
+  case .pageUp: return "Scrolls up a full page at the pointer."
+  case .pageDown: return "Scrolls down a full page at the pointer."
   case .top: return "Scrolls to the top."
   case .bottom: return "Scrolls to the bottom."
   }
@@ -426,6 +604,21 @@ private func slotName(_ position: WindowPosition) -> String {
   }
 }
 
+private func screenSelectExplanation(_ request: ScreenSelectRequest) -> String {
+  let display: String
+  switch request.pick {
+  case .labels:
+    display = "Labels each display by its number and moves the pointer to the one you pick"
+  case .index(let number): display = "Moves the pointer to display \(number)"
+  case .next: display = "Moves the pointer to the next display"
+  case .previous: display = "Moves the pointer to the previous display"
+  }
+  let landing =
+    request.landing == .last ? ", where it last left that display" : ", to its centre"
+  let focus = request.focus ? ", and focuses the frontmost window there" : ""
+  return display + landing + focus + "."
+}
+
 private func displayName(_ screen: Int) -> String {
   switch screen {
   case 0: return "the screen"
@@ -456,11 +649,34 @@ private func windowStateExplanation(_ action: WindowStateAction) -> String {
   }
 }
 
+private func mediaExplanation(_ command: MediaCommand) -> String {
+  switch command {
+  case .volumeUp: return "Raises the output volume one step and shows the percent."
+  case .volumeDown: return "Lowers the output volume one step and shows the percent."
+  case .volumeMute: return "Mutes or unmutes the output."
+  case .device(let direction, nil): return "Lists the audio \(direction.rawValue) devices."
+  case .device(let direction, let query?):
+    return "Makes \(query) the default audio \(direction.rawValue)."
+  case .status: return "Shows what the media apps are playing and the volume."
+  }
+}
+
+private func caffeinateExplanation(_ request: CaffeinateRequest) -> String {
+  func bound(_ minutes: Int?) -> String {
+    minutes.map { " for \($0) minute\($0 == 1 ? "" : "s")" } ?? ""
+  }
+  switch request {
+  case .on(let minutes): return "Keeps the Mac awake\(bound(minutes))."
+  case .off: return "Lets the Mac sleep again."
+  case .toggle(let minutes): return "Keeps the Mac awake\(bound(minutes)), or lets it sleep again."
+  case .status: return "Shows whether the Mac is kept awake."
+  }
+}
+
 private func systemKeyExplanation(_ key: SystemKeyboard.RowKey) -> String {
   switch key {
   case .brightnessDown: return "Lowers the display brightness."
   case .brightnessUp: return "Raises the display brightness."
-  case .missionControl: return "Opens Mission Control."
   case .spotlight: return "Opens Spotlight."
   case .dictation: return "Starts dictation."
   case .focus: return "Toggles Focus."
@@ -493,13 +709,65 @@ private func gestureExplanation(fingers: Int, motion: TrackpadGesture.Motion) ->
   case .historyBack: what = "goes back a page"
   case .historyForward: what = "goes forward a page"
   case .lookUp: what = "looks up the word under the pointer"
-  case .missionControl: what = "opens Mission Control"
-  case .appExpose: what = "shows the app's windows (App Exposé)"
-  case .launchpad: what = "opens Launchpad"
-  case .showDesktop: what = "shows the desktop"
+  case .surface(let surface):
+    what = SystemSurfaceCommand(surface, .toggle).action.lowercasedFirst
   case .spaceLeft: what = "moves to the Space on the left"
   case .spaceRight: what = "moves to the Space on the right"
   case nil: what = "does nothing"
   }
   return "A \(fingers)-finger \(motion.rawValue.replacingOccurrences(of: "_", with: " ")): \(what)."
+}
+
+extension URLCommand {
+  /// `move`: what each region makes of it, in one sentence.
+  fileprivate func moveExplanation(_ move: MoveCommand) -> String {
+    switch move {
+    case .down, .up:
+      let way = move.rawValue
+      return
+        "Moves \(way): the caret in text, the selection in a list, else scrolls \(way)."
+    case .left, .right:
+      let way = move.rawValue
+      return
+        "Moves \(way): the caret within its line, the selection in a list, else scrolls \(way)."
+    case .halfPageDown, .halfPageUp:
+      let way = move == .halfPageDown ? "down" : "up"
+      return
+        "Moves \(way) by [mode] move_page_lines arrows in text and lists, else scrolls "
+        + "half a page."
+    case .pageDown, .pageUp:
+      let way = move == .pageDown ? "down" : "up"
+      return
+        "Moves \(way) by twice [mode] move_page_lines arrows in text and lists, else scrolls "
+        + "a page."
+    case .top:
+      return "Moves to the start of the text, the first item where the app binds one, else the top."
+    case .bottom:
+      return "Moves to the end of the text, the last item where the app binds one, else the bottom."
+    }
+  }
+}
+
+extension URLCommand {
+  /// `cursor`: the motion's summary as a sentence.
+  fileprivate func cursorExplanation(_ command: CursorCommand) -> String {
+    let summary: String
+    switch command {
+    case .motion(let motion):
+      summary =
+        CursorCommand.action(of: motion).flatMap { CursorCommand.motionSummaries[$0] }
+        ?? "Moves the cursor"
+    case .line(let index): summary = "Move to line \(index)"
+    case .percent(let percent): summary = "Move to the line \(percent)% of the way through"
+    case .findCharacter(let kind, let character):
+      summary =
+        kind.summary + (character.map { ": \($0)" } ?? ", reading the character next")
+    case .repeatCharacterSearch(let reversed):
+      summary =
+        reversed
+        ? "Repeat the last character search the other way" : "Repeat the last character search"
+    }
+    let verb = summary.hasPrefix("Move") ? "Moves" + summary.dropFirst(4) : summary
+    return verb + " in the focused text."
+  }
 }

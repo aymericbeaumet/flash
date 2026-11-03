@@ -17,16 +17,16 @@ final class TrackpadGestureTests: XCTestCase {
     XCTAssertEqual(action(2, .swipeRight), .historyBack, "content follows the fingers")
     XCTAssertEqual(action(2, .swipeLeft), .historyForward)
     XCTAssertEqual(action(3, .tap), .lookUp)
-    XCTAssertEqual(action(3, .swipeUp), .missionControl)
-    XCTAssertEqual(action(3, .swipeDown), .appExpose)
+    XCTAssertEqual(action(3, .swipeUp), .surface(.missionControl))
+    XCTAssertEqual(action(3, .swipeDown), .surface(.appWindows))
     XCTAssertEqual(action(3, .swipeLeft), .spaceRight, "the Space to the right slides in")
     XCTAssertEqual(action(3, .swipeRight), .spaceLeft)
-    XCTAssertEqual(action(4, .swipeUp), .missionControl)
-    XCTAssertEqual(action(4, .pinch), .launchpad)
-    XCTAssertEqual(action(4, .spread), .showDesktop)
-    XCTAssertEqual(action(5, .pinch), .launchpad)
-    XCTAssertEqual(action(5, .spread), .showDesktop)
-    XCTAssertNil(action(1, .tap), "one finger is a plain click: mouse_target")
+    XCTAssertEqual(action(4, .swipeUp), .surface(.missionControl))
+    XCTAssertEqual(action(4, .pinch), .surface(.launchpad))
+    XCTAssertEqual(action(4, .spread), .surface(.desktop))
+    XCTAssertEqual(action(5, .pinch), .surface(.launchpad))
+    XCTAssertEqual(action(5, .spread), .surface(.desktop))
+    XCTAssertNil(action(1, .tap), "one finger is a plain click: mouse target")
     XCTAssertNil(action(5, .tap))
     XCTAssertNil(action(3, .pinch))
   }
@@ -55,7 +55,7 @@ final class TrackpadGestureTests: XCTestCase {
 
   func testTheVerbParsesFingersAndMotion() {
     func parse(_ args: [String: String]) -> URLCommand? {
-      URLEventHandler.parse(verb: "gesture", args: args)
+      URLEventHandler.parse(topic: "mouse", action: "gesture", args: args)
     }
     XCTAssertEqual(
       parse(["fingers": "4", "motion": "spread"]), .trackpadGesture(fingers: 4, motion: .spread))
@@ -64,7 +64,7 @@ final class TrackpadGestureTests: XCTestCase {
     XCTAssertNil(parse(["motion": "tap"]))
     XCTAssertEqual(
       URLCommand.trackpadGesture(fingers: 2, motion: .doubleTap).diagnosticDescription,
-      "flash gesture --fingers=2 --motion=double_tap")
+      "flash mouse gesture --fingers=2 --motion=double_tap")
   }
 
   func testACountBeforeAMouseFinisherIsAFingerCount() {
@@ -84,24 +84,27 @@ final class TrackpadGestureTests: XCTestCase {
 
   func testTheMouseVerbsTakeATargetGesture() {
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "mouse_target", args: ["gesture": "look_up"]),
+      URLEventHandler.parse(topic: "mouse", action: "target", args: ["gesture": "look_up"]),
       .mouseTarget(.gesture(.lookUp)))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "mouse_bigram", args: ["gesture": "smart_zoom"]),
+      URLEventHandler.parse(topic: "mouse", action: "bigram", args: ["gesture": "smart_zoom"]),
       .mouseBigram(.gesture(.smartZoom)))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "mouse_grid", args: ["gesture": "look_up"]),
+      URLEventHandler.parse(topic: "mouse", action: "grid", args: ["gesture": "look_up"]),
       .mouseGrid(.init(.gesture(.lookUp))))
-    XCTAssertNil(URLEventHandler.parse(verb: "mouse_target", args: ["gesture": "pinch"]))
     XCTAssertNil(
-      URLEventHandler.parse(verb: "mouse_target", args: ["gesture": "look_up", "move": ""]))
-    XCTAssertNil(
-      URLEventHandler.parse(verb: "mouse_target", args: ["gesture": "look_up", "secondary": ""]))
+      URLEventHandler.parse(topic: "mouse", action: "target", args: ["gesture": "pinch"]))
     XCTAssertNil(
       URLEventHandler.parse(
-        verb: "mouse_target", args: ["gesture": "look_up", "scope": "screen"]))
+        topic: "mouse", action: "target", args: ["gesture": "look_up", "move": ""]))
+    XCTAssertNil(
+      URLEventHandler.parse(
+        topic: "mouse", action: "target", args: ["gesture": "look_up", "secondary": ""]))
+    XCTAssertNil(
+      URLEventHandler.parse(
+        topic: "mouse", action: "target", args: ["gesture": "look_up", "scope": "screen"]))
     XCTAssertEqual(
       URLCommand.mouseTarget(.gesture(.smartZoom)).diagnosticDescription,
-      "flash mouse_target --gesture=smart_zoom")
+      "flash mouse target --gesture=smart_zoom")
   }
 }

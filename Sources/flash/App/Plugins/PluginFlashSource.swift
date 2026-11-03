@@ -5,21 +5,28 @@ import Foundation
 
 /// Thin `FlashSource` adapter over one plugin: candidates are a synchronous
 /// read of the host-owned catalog store (first paint never waits on a
-/// plugin); search/evaluate/hints/perform pass straight through to the
+/// plugin); evaluate/hints/text_grid/perform pass straight through to the
 /// process. No pre-flight, no availability bookkeeping — a stopped plugin's
 /// requests settle empty inside `PluginProcess`.
 final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   private let plugin: PluginProcess
   private let store: PluginCatalogStore
   private let selector: PluginSelectorStack
+  /// The core commands the manifest declares, read once: the registry's
+  /// chain asks for them on every repeated NORMAL mapping.
+  let commands: Set<CommandName>
 
   init(plugin: PluginProcess, store: PluginCatalogStore) {
     self.plugin = plugin
     self.store = store
     self.selector = PluginSelectorStack([plugin.manifest.selector])
+    self.commands = plugin.manifest.sourceCommands
   }
 
   var identifier: String { "plugin:\(plugin.identifier)" }
+  /// The plugin answers every `!<bang>` (manifest `bangs` token `*`): its
+  /// catalog is where the bang list's rows come from.
+  var answersEveryBang: Bool { plugin.manifest.bangs.contains { $0.token == "*" } }
   var displayName: String { plugin.manifest.name }
   var priority: Int { plugin.manifest.priority }
   func priority(in context: AppContext) -> Int {
@@ -35,7 +42,6 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     if plugin.manifest.providesCandidates {
       caps.formUnion([.candidates, .appActivation])
     }
-    caps.formUnion(Self.sourceActionCapabilities(plugin.manifest.actions))
     if !plugin.manifest.navigationSchemes.isEmpty {
       caps.insert(.navigationRoutes)
     }
@@ -45,11 +51,20 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   /// selector match happens in `supports(_:)`. A terminal-scoped plugin is
   /// instantiated only while a known terminal emulator runs, and is never
   /// consulted for hints in any other app — which is what keeps the warm
-  /// prepared-model path zero-hop outside terminals.
+  /// prepared-model path zero-hop outside terminals. A warm catalog the user
+  /// reaches by name rather than through the default pool (browser history
+  /// and bookmarks: `@history`, `!fh`) is a host-store read whatever
+  /// runs, so a plugin declaring one stays active while none of its apps
+  /// does; `supports(_:)` still scopes its hints and commands to them.
   var activationPolicy: FlashSourceActivationPolicy {
     if plugin.manifest.selector.onlyTerminals { return .terminalBundles }
     let manifestBundles = Set(plugin.manifest.onlyBundleIDs)
-    return manifestBundles.isEmpty ? .always : .bundleIDs(manifestBundles)
+    if manifestBundles.isEmpty || servesNamedCatalog { return .always }
+    return .bundleIDs(manifestBundles)
+  }
+  /// A declared candidate source outside the default location pool.
+  private var servesNamedCatalog: Bool {
+    plugin.manifest.candidateSourceDescriptors.contains { $0.kind != .locations }
   }
   /// Hints are always a live wire request now — never cache a prepared
   /// model of plugin targets.
@@ -60,15 +75,8 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   var fallsBackOnEmptyDiscovery: Bool {
     plugin.manifest.hints?.fallbackOnEmpty ?? false
   }
-  var candidateSourceLabels: [String] { plugin.manifest.candidateSources }
   var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     plugin.manifest.candidateSourceDescriptors
-  }
-  /// Manifest validation guarantees all-warm or all-live, so the adapter
-  /// classifies whole: a live plugin never serves warm catalogs and only
-  /// participates in explicitly scoped queries.
-  var servesLiveCandidates: Bool {
-    plugin.manifest.sources.contains(where: \.live)
   }
   var navigationSchemes: Set<String> { Set(plugin.manifest.navigationSchemes) }
   var queryEvaluatorIdentifier: String { identifier }
@@ -85,7 +93,7 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     return plugin.manifest.providesHints
       || plugin.manifest.providesCandidates
       || plugin.manifest.providesQueryEvaluation
-      || !plugin.manifest.actions.isEmpty
+      || !commands.isEmpty
       || !plugin.manifest.navigationSchemes.isEmpty
   }
 
@@ -93,6 +101,12 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     plugin.discoverTargets(
       context: context,
       timeout: Double(FlashTunables.hintProviderTimeoutMs) / 1_000)
+  }
+
+  /// The plugin's text grid of `context` for a letter search; see
+  /// `PluginProcess.textGrid`. Asked only of a hint provider for `context`.
+  func textGrid(in context: AppContext, completion: @escaping (PluginTextGrid?) -> Void) {
+    plugin.textGrid(context: context, completion: completion)
   }
 
   /// Warm candidates are a synchronous host-memory read of the push-based
@@ -104,34 +118,7 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   ) -> [Candidate] {
     _ = environment
     _ = scope
-    guard !servesLiveCandidates else { return [] }
     return store.rows(for: plugin.identifier)
-  }
-
-  func liveCandidates(
-    matching text: String,
-    in environment: FlashSourceEnvironment,
-    scope: CandidateScope,
-    completion: @escaping ([Candidate]) -> Void
-  ) {
-    _ = environment
-    guard servesLiveCandidates else {
-      DispatchQueue.main.async { completion([]) }
-      return
-    }
-    let startedNs = DispatchTime.now().uptimeNanoseconds
-    plugin.search(
-      matching: text,
-      scope: scope,
-      timeoutMs: FlashTunables.flashlightLiveQueryTimeoutMs
-    ) { [identifier = identifier] candidates in
-      let elapsedMs = Int(
-        (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
-      FlashLog.trace(
-        "[candidate_finder] plugin_search source=\(identifier) "
-          + "ms=\(elapsedMs) count=\(candidates?.count ?? -1)")
-      completion(candidates ?? [])
-    }
   }
 
   func evaluateQuery(
@@ -169,47 +156,47 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     }
   }
 
-  func performAction(
-    _ action: SourceAction,
+  /// A core command the manifest declares, asked in an app the selector
+  /// matches: the same `perform {kind: "command"}` as the plugin's own
+  /// commands, with the argument words a mapping wrote and, because it is a
+  /// core command, the focused app as `context`.
+  func perform(
+    _ command: SourceCommand,
     in context: AppContext,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
     _ = environment
-    guard
-      plugin.manifest.supportsAction(
-        action.wireName,
-        context: selectorContext(for: context))
-    else {
+    guard commands.contains(command.name), selector.matches(selectorContext(for: context)) else {
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
-    var params: [String: Any] = [
-      "name": action.wireName,
+    let params: [String: Any] = [
+      "command": command.name.topic,
+      "subcommand": command.name.action,
+      "args": command.arguments,
       "context": PluginWireCodec.contextJSON(context),
     ]
-    if !action.wireExtras.isEmpty {
-      params["args"] = action.wireExtras
-    }
-    plugin.perform(kind: "action", params: params) { outcome in
-      completion(Self.sourceActionResult(from: outcome))
+    plugin.perform(kind: "command", params: params) { outcome in
+      completion(Self.sourceCommandResult(from: outcome))
     }
   }
 
   func restoreNavigation(
     to url: URL,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
     _ = environment
     plugin.perform(kind: "navigate", params: ["url": url.absoluteString]) { outcome in
-      completion(Self.sourceActionResult(from: outcome))
+      completion(Self.sourceCommandResult(from: outcome))
     }
   }
 
-  /// Trichotomy → source-action tri-state. `.failed` (including timeout and
+  /// Trichotomy → source-command tri-state. `.failed` (including timeout and
   /// crash coercions) must never fall through to a keystroke fallback.
-  private static func sourceActionResult(from outcome: PluginPerformOutcome) -> SourceActionResult {
+  private static func sourceCommandResult(from outcome: PluginPerformOutcome) -> SourceCommandResult
+  {
     switch outcome {
     case .performed(let pid, let navigationURL, _):
       return .performed(pid: pid, navigationURL: navigationURL)
@@ -222,11 +209,5 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
 
   private func selectorContext(for context: AppContext) -> PluginSelectorContext {
     PluginSelectorContext(bundleID: context.bundleIdentifier)
-  }
-
-  private static func sourceActionCapabilities(_ actions: [String]) -> FlashSourceCapabilities {
-    actions.reduce(into: []) { caps, name in
-      if let action = SourceAction.byWireName[name] { caps.insert(action.requiredCapability) }
-    }
   }
 }

@@ -237,4 +237,46 @@ final class StatusSurfaceControllerTests: XCTestCase {
     harness.drain()
     XCTAssertEqual(harness.barText, "2.5 3 4", "the ring is retained while inactive")
   }
+
+  /// A SwiftBar/xbar script runs unchanged: its header shows, its menu and
+  /// parameters do not.
+  func testAnXbarScriptShowsOnlyItsHeader() {
+    let source = FlashStatusBarSourceDefinition(
+      command: ["/bin/cpu.5s.sh"], intervalSeconds: 5, output: .xbar)
+    let harness = Harness(bar: "#{flash.source.cpu}", sources: ["cpu": source])
+    defer { harness.controller.stop() }
+    harness.queue.sync {
+      harness.tasks[0].completion(0, "CPU 12% | color=red\n---\nTop | bash=/usr/bin/top\n")
+    }
+    XCTAssertEqual(harness.barText, "CPU 12%")
+  }
+
+  /// `status refresh` runs a shown source now, as an i3blocks signal or a
+  /// SketchyBar trigger does; a source nothing shows runs nothing.
+  func testARefreshRunsAShownSourceNowAndRefusesAHiddenOne() {
+    let source = FlashStatusBarSourceDefinition(command: ["/bin/vol"], intervalSeconds: 600)
+    let harness = Harness(
+      bar: "#{flash.source.vol}", sources: ["vol": source, "other": source])
+    defer { harness.controller.stop() }
+    harness.queue.sync { harness.tasks[0].completion(0, "40%") }
+    XCTAssertEqual(harness.tasks.count, 1)
+    func refresh(_ name: String) -> String? {
+      let done = expectation(description: name)
+      var refusal: String?
+      harness.controller.refresh(source: name) {
+        refusal = $0
+        done.fulfill()
+      }
+      wait(for: [done], timeout: 2)
+      harness.drain()
+      return refusal
+    }
+    XCTAssertNil(refresh("vol"))
+    XCTAssertEqual(harness.tasks.count, 2, "it runs at once, not in ten minutes")
+    harness.queue.sync { harness.tasks[1].completion(0, "60%") }
+    XCTAssertEqual(harness.barText, "60%")
+    XCTAssertEqual(
+      refresh("other"), "other is not shown: no bar or widget reads #{flash.source.other}")
+    XCTAssertEqual(harness.tasks.count, 2)
+  }
 }

@@ -27,11 +27,20 @@ struct HintSession {
   var hints: [AssignedHint] = []
   var prefix: String = ""
   var sourceAppPID: pid_t?
+  /// The Dock view whose targets this session labels (Mission Control or
+  /// App Exposé, `MissionControlSurface`); nil for an app's targets.
+  var missionControl: DockView?
   /// How this session's keys arrive, fixed when it starts
   /// (`KeyboardCaptureTap.sessionCapture`).
   var capture = KeyboardCaptureTap.SessionCapture.tap
   /// Armed when the activation starts, spent by its first display.
   var latencyProbe: HintLatencyProbe?
+  /// The surface whose first labels went out as `core:hints.shown`; nil
+  /// until the session draws.
+  var shownSurface: String?
+  /// It committed a target (`core:hints.committed`), so its end is not a
+  /// cancellation.
+  var committed = false
   var statusBarPopupSnapshots: [String: StatusBarPopupRegion] = [:]
   /// Where the mouse grid is and how it got there; nil outside the grid.
   var grid: MouseGrid.Navigation?
@@ -61,8 +70,8 @@ struct HintSession {
     var allHints: [AssignedHint] = []
   }
 
-  /// `mouse_pointer`: autorepeat acceleration bookkeeping. The button its
-  /// drag toggle holds is `ActionDispatcher`'s, shared with `mouse_button`.
+  /// `mouse pointer`: autorepeat acceleration bookkeeping. The button its
+  /// drag toggle holds is `ActionDispatcher`'s, shared with `mouse button`.
   struct Pointer {
     var moveStreak = 0
     var lastMoveAt: Date?
@@ -84,14 +93,17 @@ struct HintSession {
     /// Typing hint labels; `anchor` once a two-phase gesture chose its first
     /// point.
     case labels(anchor: Anchor?)
-    /// `mouse_bigram`: the letter to find, before its hint label.
+    /// `mouse bigram`: the letter to find, before its hint label.
     case bigram
     case search(Search)
     /// `--adjust`: the matched hint and the point the commit key clicks.
     case adjusting(hint: AssignedHint, point: CGPoint)
     case pointer(Pointer)
-    /// `confirm`: the question is up and the next key answers it.
+    /// `alert confirm`: the question is up and the next key answers it.
     case confirming(Confirmation)
+    /// `window switch`: the window list is up; a label, Return or the end of
+    /// its hold chooses a window.
+    case switching(WindowSwitcherState<WindowSwitcherKey>)
   }
 
   var phase = Phase.labels(anchor: nil)
@@ -111,6 +123,7 @@ struct HintSession {
     case .adjusting: return .adjustment
     case .pointer: return .pointer
     case .confirming: return .confirmation
+    case .switching: return .switcher
     }
   }
 
@@ -134,7 +147,12 @@ struct HintSession {
     return nil
   }
 
-  /// EasyMotion (`mouse_bigram`): the query, or the hint labels that follow it.
+  var windowSwitcher: WindowSwitcherState<WindowSwitcherKey>? {
+    if case .switching(let switcher) = phase { return switcher }
+    return nil
+  }
+
+  /// EasyMotion (`mouse bigram`): the query, or the hint labels that follow it.
   /// `bigramQuery` stays set while those labels are typed, so Backspace can
   /// return to the letter. Nil for every other session.
   var isBigramCapture: Bool {
@@ -142,8 +160,8 @@ struct HintSession {
     return bigramQuery != nil
   }
 
-  /// Search, adjustment, pointer, bigram and confirmation phases own the
-  /// keyboard even with no hint on screen; typing labels needs hints.
+  /// Search, adjustment, pointer, bigram, confirmation and switcher phases
+  /// own the keyboard even with no hint on screen; typing labels needs hints.
   var isActive: Bool {
     if case .labels = phase { return !hints.isEmpty }
     return true

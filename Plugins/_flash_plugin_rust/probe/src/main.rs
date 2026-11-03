@@ -1,9 +1,9 @@
 //! Wire probe: a generic `plugin!`-generated plugin with no Flash business
-//! concepts. Its manifest opts into every surface (sources, query, hints,
-//! commands, actions, navigation, status, events) so the tests below can
-//! drive the complete generated `FlashPlugin` routing over the real protocol
-//! through `flash_plugin::testing::WireHarness`. Test fixture only: never
-//! shipped or spawned by the host.
+//! concepts. Its manifest opts into every surface (sources, query, hints and
+//! their text grid, commands, navigation, status, events) so the
+//! tests below can drive the complete generated `FlashPlugin` routing over
+//! the real protocol through `flash_plugin::testing::WireHarness`. Test
+//! fixture only: never shipped or spawned by the host.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,9 +11,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use flash_plugin::{
-    ActionRequest, Candidate, CommandRequest, Context, EvaluateRequest, EvaluateResponse, Event,
-    Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, PollPriority,
-    QueryAnswer, SearchRequest, SearchResponse, TERMINAL_LINK_ROLE, run,
+    Candidate, CommandRequest, Context, EvaluateRequest, EvaluateResponse, Event, Frame,
+    HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, PollPriority,
+    QueryAnswer, TERMINAL_LINK_ROLE, TextGridLine, TextGridRequest, TextGridResponse, run,
 };
 
 const SOURCE: &str = "probe.items";
@@ -48,7 +48,7 @@ fn j(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// The `[plugin.probe] probe` settings table (`Null` when unset).
+/// The `[plugins.probe] probe` settings table (`Null` when unset).
 fn probe_config(ctx: &Context) -> Value {
     ctx.config_json("probe").unwrap_or(Value::Null)
 }
@@ -85,35 +85,15 @@ fn host_arm(subcommand: &str, args: &[String]) -> Option<(&'static str, Value)> 
         "ping" => ("host.ping", json!({})),
         "fetch" => ("host.fetch", json!({ "url": arg(args, 0) })),
         "open" => ("host.open", json!({ "url": arg(args, 0) })),
-        "clipboard" => ("host.clipboard_write", json!({ "text": arg(args, 0) })),
-        "notify" => ("host.notify", json!({ "message": arg(args, 0) })),
-        "storage-set" => (
-            "host.storage_set",
-            json!({ "key": arg(args, 0), "value": arg(args, 1) }),
-        ),
-        "storage-get" => ("host.storage_get", json!({ "key": arg(args, 0) })),
-        "media" => (
-            "host.post_media_key",
-            json!({ "key_code": int_arg(args, 0, 16) }),
-        ),
-        "audio" => ("host.audio_devices", json!({ "direction": "input" })),
-        "ps" => ("host.process_table", json!({})),
-        "signal" => (
-            "host.signal",
-            json!({ "pid": int_arg(args, 0, TARGET_PID) }),
+        "applescript" => (
+            "host.applescript",
+            json!({ "operation": "browser_tabs", "bundle_id": "com.apple.Safari", "timeout_ms": 10_000 }),
         ),
         "keys" => (
             "host.post_keys",
             json!({ "pid": TARGET_PID, "keys": [{ "key_code": 4, "modifiers": ["command"] }] }),
         ),
-        "global-key" => (
-            "host.post_global_key",
-            json!({ "key_code": 4, "modifiers": ["command"] }),
-        ),
-        "ax-snapshot" => (
-            "host.ax_snapshot",
-            json!({ "pid": TARGET_PID, "roots": "app" }),
-        ),
+        "ax-snapshot" => ("host.ax_snapshot", json!({ "pid": TARGET_PID })),
         "activate" => ("host.activate", json!({ "pid": TARGET_PID })),
         "normal-mode-target" => ("host.normal_mode_target", json!({})),
         _ => return None,
@@ -156,15 +136,6 @@ impl FlashPlugin for Probe {
         EvaluateResponse::answers(answers)
     }
 
-    async fn on_search(&self, ctx: Context, request: SearchRequest) -> SearchResponse {
-        SearchResponse::rows(
-            catalog(&ctx)
-                .into_iter()
-                .filter(|row| row.title.contains(&request.query))
-                .collect(),
-        )
-    }
-
     async fn on_hints(&self, _ctx: Context, _request: HintsRequest) -> HintsResponse {
         HintsResponse::targets(vec![
             JumpTarget::new("t1", Frame::new(-10.5, 20.0, 30.0, 40.0))
@@ -176,19 +147,25 @@ impl FlashPlugin for Probe {
         ])
     }
 
+    async fn on_text_grid(&self, _ctx: Context, request: TextGridRequest) -> TextGridResponse {
+        if request.pid != Some(999) {
+            return TextGridResponse::default();
+        }
+        TextGridResponse::new(
+            12,
+            3,
+            vec![
+                TextGridLine::format(0, 0, 12, "#[align=centre]héllo"),
+                TextGridLine::text(2, 4, "世界 ⚡"),
+            ],
+        )
+    }
+
     async fn on_resolve(&self, _ctx: Context, row: Candidate) -> PerformResponse {
         if row.title == "alpha" {
             return PerformResponse::ok().target_pid(TARGET_PID);
         }
         PerformResponse::unhandled()
-    }
-
-    async fn on_action(&self, _ctx: Context, action: ActionRequest) -> PerformResponse {
-        match action.name.as_str() {
-            "probe_performed" => PerformResponse::ok().target_pid(TARGET_PID),
-            "probe_failed" => PerformResponse::fail("probe failure"),
-            _ => PerformResponse::unhandled(),
-        }
     }
 
     async fn on_navigate(&self, _ctx: Context, request: NavigateRequest) -> PerformResponse {
@@ -200,10 +177,16 @@ impl FlashPlugin for Probe {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         let args = &command.args;
+        // The trichotomy, as a core command the host asks of the focused app
+        // would answer it; `performed` echoes the context it was asked in.
+        let context_pid = command.context.as_ref().and_then(|context| context.pid);
         match command.subcommand.as_str() {
-            "echo" => {
-                PerformResponse::ok().message(j(&json!({ "args": args, "raw": command.raw })))
-            }
+            "performed" => PerformResponse::ok()
+                .target_pid(TARGET_PID)
+                .message(format!("pid={}", context_pid.unwrap_or_default())),
+            "unhandled" => PerformResponse::unhandled(),
+            "failed" => PerformResponse::fail("probe failure"),
+            "echo" => PerformResponse::ok().message(j(&json!({ "args": args }))),
             "config" => PerformResponse::ok().message(j(&probe_config(&ctx))),
             "state" => PerformResponse::ok().message(
                 self.last_event
@@ -262,6 +245,10 @@ impl FlashPlugin for Probe {
                 ctx.publish(rows);
                 PerformResponse::ok()
             }
+            "publish-source" => {
+                ctx.publish_source(SOURCE, vec![Candidate::new(SOURCE, "delta")]);
+                PerformResponse::ok()
+            }
             other => match host_arm(other, args) {
                 Some((method, params)) => {
                     let result = ctx.call_host(method, params).await;
@@ -299,7 +286,7 @@ mod tests {
     fn command(id: u64, subcommand: &str, args: &[&str]) -> Value {
         json!({ "id": id, "method": "perform", "params": {
             "kind": "command", "command": "probe", "subcommand": subcommand,
-            "args": args, "raw": format!(":probe {subcommand} {}", args.join(" ")),
+            "args": args,
         }})
     }
 
@@ -310,6 +297,13 @@ mod tests {
             { "source": SOURCE, "title": "gamma", "url": "https://example.com/g",
               "effect": { "type": "open", "url": "https://example.com/g" } },
         ])
+    }
+
+    /// A manifest without `lifecycle` serves until stdin closes: the
+    /// generated impl keeps the runtime's default.
+    #[test]
+    fn a_resident_manifest_does_not_end_its_run_after_start() {
+        assert!(!flash_plugin::Plugin::exits_after_start(&probe()));
     }
 
     /// Serve the probe with `config` and complete the handshake.
@@ -364,6 +358,22 @@ mod tests {
         wire.finished().await;
     }
 
+    /// A per-source publish names the manifest source it replaces beside
+    /// its rows, leaving the plugin's other sources to the host store.
+    #[tokio::test]
+    async fn a_source_publish_replaces_one_source() {
+        let mut wire = serve(json!({})).await;
+        wire.recv_notification("publish").await;
+        wire.send(command(83, "publish-source", &[])).await;
+        assert_eq!(
+            wire.recv_notification("publish").await,
+            json!({ "source": SOURCE, "rows": [{ "source": SOURCE, "title": "delta" }] })
+        );
+        assert_eq!(wire.recv_response(83).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
     #[tokio::test]
     async fn perform_routes_every_kind_through_the_trichotomy() {
         let mut wire = serve(json!({})).await;
@@ -371,17 +381,17 @@ mod tests {
         for (id, params, expected) in [
             (
                 90,
-                json!({ "kind": "action", "name": "probe_performed", "context": context }),
-                json!({ "ok": true, "target_pid": TARGET_PID }),
+                json!({ "kind": "command", "command": "probe", "subcommand": "performed", "args": [], "context": context }),
+                json!({ "ok": true, "target_pid": TARGET_PID, "message": "pid=999" }),
             ),
             (
                 91,
-                json!({ "kind": "action", "name": "probe_unhandled", "context": context }),
+                json!({ "kind": "command", "command": "probe", "subcommand": "unhandled", "args": [], "context": context }),
                 json!({ "ok": false, "unhandled": true }),
             ),
             (
                 92,
-                json!({ "kind": "action", "name": "probe_failed", "context": context }),
+                json!({ "kind": "command", "command": "probe", "subcommand": "failed", "args": [], "context": context }),
                 json!({ "ok": false, "error": "probe failure" }),
             ),
             (
@@ -406,7 +416,7 @@ mod tests {
             ),
             (
                 97,
-                json!({ "kind": "command", "command": "probe", "subcommand": "nope", "args": [], "raw": "" }),
+                json!({ "kind": "command", "command": "probe", "subcommand": "nope", "args": [] }),
                 json!({ "ok": false, "error": "unsupported subcommand: nope" }),
             ),
         ] {
@@ -419,16 +429,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn command_echo_round_trips_unicode_args_and_raw_input() {
+    async fn command_echo_round_trips_unicode_args() {
         let mut wire = serve(json!({})).await;
         wire.send(json!({ "id": 62, "method": "perform", "params": {
             "kind": "command", "command": "probe", "subcommand": "echo",
-            "args": ["héllo ⚡ 世界", "名前", "café"], "raw": "rawé ⚡ check 名前",
+            "args": ["héllo ⚡ 世界", "名前", "café"],
         }}))
         .await;
         assert_eq!(
             wire.recv_response(62).await,
-            json!({ "ok": true, "message": r#"{"args":["héllo ⚡ 世界","名前","café"],"raw":"rawé ⚡ check 名前"}"# })
+            json!({ "ok": true, "message": r#"{"args":["héllo ⚡ 世界","名前","café"]}"# })
         );
         wire.close_stdin().await;
         wire.finished().await;
@@ -454,9 +464,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn text_grid_reply_carries_exact_lines_and_an_empty_default() {
+        let mut wire = serve(json!({})).await;
+        let request = |id: u64, pid: i64| {
+            json!({ "id": id, "method": "text_grid", "params": {
+                "bundle_id": "dev.flash.probe", "pid": pid,
+                "front_window_frame": { "x": 0, "y": 0, "width": 1512, "height": 982 },
+            }})
+        };
+        wire.send(request(98, 999)).await;
+        assert_eq!(
+            wire.recv_response(98).await,
+            json!({ "ok": true, "columns": 12, "rows": 3, "lines": [
+                { "row": 0, "column": 0, "width": 12, "format": "#[align=centre]héllo" },
+                { "row": 2, "column": 4, "text": "世界 ⚡" },
+            ]})
+        );
+        wire.send(request(99, 1)).await;
+        assert_eq!(
+            wire.recv_response(99).await,
+            json!({ "ok": true, "columns": 0, "rows": 0, "lines": [] })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
     async fn evaluate_answers_are_literal_and_never_truncated() {
         let mut wire = serve(json!({})).await;
-        let evaluate = |id: u64, query: &str| json!({ "id": id, "method": "evaluate", "params": { "surface": "flashlight", "scope": "", "query": query } });
+        let evaluate = |id: u64, query: &str| json!({ "id": id, "method": "evaluate", "params": { "query": query } });
         wire.send(evaluate(85, "probe:one")).await;
         assert_eq!(
             wire.recv_response(85).await,
@@ -481,29 +517,6 @@ mod tests {
         assert_eq!(
             wire.recv_response(87).await,
             json!({ "ok": true, "answers": [] })
-        );
-        wire.close_stdin().await;
-        wire.finished().await;
-    }
-
-    #[tokio::test]
-    async fn search_returns_catalog_rows_or_an_empty_array() {
-        let mut wire = serve(json!({})).await;
-        wire.send(
-            json!({ "id": 83, "method": "search", "params": { "query": "alpha", "scope": "" } }),
-        )
-        .await;
-        assert_eq!(
-            wire.recv_response(83).await,
-            json!({ "ok": true, "rows": [{ "source": SOURCE, "title": "alpha", "metadata": { "k": "v1" } }] })
-        );
-        wire.send(
-            json!({ "id": 84, "method": "search", "params": { "query": "zzz", "scope": "" } }),
-        )
-        .await;
-        assert_eq!(
-            wire.recv_response(84).await,
-            json!({ "ok": true, "rows": [] })
         );
         wire.close_stdin().await;
         wire.finished().await;
@@ -689,47 +702,10 @@ mod tests {
                 json!({ "url": "https://example.com/x" }),
             ),
             (
-                "clipboard",
-                vec!["copy-me"],
-                "host.clipboard_write",
-                json!({ "text": "copy-me" }),
-            ),
-            (
-                "notify",
-                vec!["hi"],
-                "host.notify",
-                json!({ "message": "hi" }),
-            ),
-            (
-                "storage-set",
-                vec!["k1", "v1"],
-                "host.storage_set",
-                json!({ "key": "k1", "value": "v1" }),
-            ),
-            (
-                "storage-get",
-                vec!["k1"],
-                "host.storage_get",
-                json!({ "key": "k1" }),
-            ),
-            (
-                "media",
-                vec![],
-                "host.post_media_key",
-                json!({ "key_code": 16 }),
-            ),
-            (
-                "audio",
-                vec![],
-                "host.audio_devices",
-                json!({ "direction": "input" }),
-            ),
-            ("ps", vec![], "host.process_table", json!({})),
-            (
-                "signal",
-                vec!["4242"],
-                "host.signal",
-                json!({ "pid": 4242 }),
+                "applescript",
+                vec!["return 1"],
+                "host.applescript",
+                json!({ "operation": "browser_tabs", "bundle_id": "com.apple.Safari", "timeout_ms": 10_000 }),
             ),
             (
                 "keys",
@@ -738,16 +714,10 @@ mod tests {
                 json!({ "pid": TARGET_PID, "keys": [{ "key_code": 4, "modifiers": ["command"] }] }),
             ),
             (
-                "global-key",
-                vec![],
-                "host.post_global_key",
-                json!({ "key_code": 4, "modifiers": ["command"] }),
-            ),
-            (
                 "ax-snapshot",
                 vec![],
                 "host.ax_snapshot",
-                json!({ "pid": TARGET_PID, "roots": "app" }),
+                json!({ "pid": TARGET_PID }),
             ),
             (
                 "activate",

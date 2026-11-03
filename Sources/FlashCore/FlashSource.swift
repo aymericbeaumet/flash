@@ -31,60 +31,9 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   public static let candidates = FlashSourceCapabilities(rawValue: 1 << 1)
   public static let documentURL = FlashSourceCapabilities(rawValue: 1 << 2)
   public static let appActivation = FlashSourceCapabilities(rawValue: 1 << 3)
-  public static let tabSelection = FlashSourceCapabilities(rawValue: 1 << 4)
-  public static let tabCreation = FlashSourceCapabilities(rawValue: 1 << 5)
-  public static let tabNavigation = FlashSourceCapabilities(rawValue: 1 << 6)
-  public static let tabClosing = FlashSourceCapabilities(rawValue: 1 << 7)
-  /// Source handles `gg`/`G` (scroll-to-top / scroll-to-bottom). Used by
-  /// providers whose target app cannot be driven by a synthesized wheel
-  /// edge — tmux is the canonical case: wheel-down at the bottom of a
-  /// live buffer is a no-op, so `G` needs `tmux send-keys -X cancel`
-  /// (exit copy mode) rather than another wheel tick.
-  public static let scrollExtremes = FlashSourceCapabilities(rawValue: 1 << 8)
-  /// Source handles `[m`/`]m` (move the focused-window's current tab
-  /// left/right). Tmux runs `swap-window -t -1`/`+1`; browsers have no
-  /// portable shortcut so they don't claim this capability.
-  public static let tabReorder = FlashSourceCapabilities(rawValue: 1 << 9)
-  /// Source handles `X` (`tab_reopen`: reopen the most recently closed tab).
-  /// No bundled source claims it; browsers and editors declare their ⌘⇧T
-  /// through `action_bindings`, and tmux has no closed-window history.
-  public static let tabReopen = FlashSourceCapabilities(rawValue: 1 << 10)
-  /// Source handles `r` / `R` (`app_reload`). Browsers declare their native
-  /// refresh chords through `action_bindings`; terminal-backed sources opt
-  /// in when they have a real refresh primitive (tmux refreshes its client).
-  public static let reload = FlashSourceCapabilities(rawValue: 1 << 11)
-  /// Source handles `e` (`resource_archive`) for the currently focused
-  /// resource. Web-app integrations use this for app-specific archive
-  /// gestures such as Gmail's `e` shortcut.
-  public static let resourceArchiving = FlashSourceCapabilities(rawValue: 1 << 12)
   /// Source can restore movement-history entries addressed by URL-like
   /// schemes it registered, e.g. `tmux://window/<target>`.
-  public static let navigationRoutes = FlashSourceCapabilities(rawValue: 1 << 13)
-  /// Source handles resource-local next/previous navigation. Web-app
-  /// integrations use this for app-specific motions such as Gmail's
-  /// newer/older conversation buttons.
-  public static let resourceNavigation = FlashSourceCapabilities(rawValue: 1 << 14)
-  /// Source handles `[p`/`]p` (`pane_previous`/`pane_next`): cycle the
-  /// active split *inside* the focused window. Tmux is the canonical case
-  /// (`select-pane -t :.-`/`:.+`); a terminal without a tmux client receives
-  /// its native ⌘[ / ⌘] split chord instead, and other apps ignore the pair.
-  public static let paneNavigation = FlashSourceCapabilities(rawValue: 1 << 15)
-  /// Source handles `pane_split_vertical` / `pane_split_horizontal`: create a
-  /// new split inside the focused window. Tmux is the canonical case; the
-  /// host does not synthesize a fallback keystroke when no source claims it.
-  public static let paneSplitting = FlashSourceCapabilities(rawValue: 1 << 16)
-  /// Source handles `pane_close`: close the active split inside the focused
-  /// window. Tmux is the canonical case; browsers/native apps keep using
-  /// `tab_close` / their own native close semantics.
-  public static let paneClosing = FlashSourceCapabilities(rawValue: 1 << 17)
-  /// Source handles `H` / `L` (`history_back` / `history_forward`): the
-  /// focused app's own back/forward navigation. No bundled source claims it;
-  /// apps bind it through `action_bindings` (Cmd-[ / Cmd-] in `defaults`).
-  public static let historyNavigation = FlashSourceCapabilities(rawValue: 1 << 18)
-  /// Source handles the focused app's generic commands: undo, redo, find,
-  /// save, print, open, new and close window, and the clipboard. No bundled
-  /// source claims them; apps bind them through `action_bindings`.
-  public static let appCommands = FlashSourceCapabilities(rawValue: 1 << 19)
+  public static let navigationRoutes = FlashSourceCapabilities(rawValue: 1 << 4)
 
   /// Human-readable list of the flags this set carries, for trace logs.
   /// Order is stable so log lines diff cleanly between runs.
@@ -94,29 +43,9 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
     if contains(.candidates) { names.append("candidates") }
     if contains(.documentURL) { names.append("documentURL") }
     if contains(.appActivation) { names.append("appActivation") }
-    if contains(.tabSelection) { names.append("tabSelection") }
-    if contains(.tabCreation) { names.append("tabCreation") }
-    if contains(.tabNavigation) { names.append("tabNavigation") }
-    if contains(.tabClosing) { names.append("tabClosing") }
-    if contains(.scrollExtremes) { names.append("scrollExtremes") }
-    if contains(.tabReorder) { names.append("tabReorder") }
-    if contains(.tabReopen) { names.append("tabReopen") }
-    if contains(.reload) { names.append("reload") }
-    if contains(.resourceArchiving) { names.append("resourceArchiving") }
     if contains(.navigationRoutes) { names.append("navigationRoutes") }
-    if contains(.resourceNavigation) { names.append("resourceNavigation") }
-    if contains(.paneNavigation) { names.append("paneNavigation") }
-    if contains(.paneSplitting) { names.append("paneSplitting") }
-    if contains(.paneClosing) { names.append("paneClosing") }
-    if contains(.historyNavigation) { names.append("historyNavigation") }
-    if contains(.appCommands) { names.append("appCommands") }
     return names.isEmpty ? "none" : names.joined(separator: "|")
   }
-}
-
-extension SourceAction {
-  /// Short tag used in source-action trace logs (`tab_next`, `scroll_top`, …).
-  public var traceTag: String { wireName }
 }
 
 public enum CandidateScope: Sendable {
@@ -143,54 +72,53 @@ public enum CandidateSourceKind: String, Codable, Sendable, Equatable, Hashable 
   case locations
 }
 
+/// One flashlight source: its internal `name` (the label its rows carry, for
+/// routing, ranking and bang bindings) and the one-word resource `type` users
+/// filter by with `@<type>` (`tabs`, `history`, `emojis`). Every source of a
+/// type yields rows of that type's shape; see the flash module's
+/// `ResourceTypes` for the rules a type follows.
 public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
   public var name: String
+  /// The resource type. Empty only for a manifest that omitted it, which
+  /// plugin validation rejects.
+  public var type: String
   public var kind: CandidateSourceKind
   public var priority: FlashPriority
-  /// A live (pull) source is queried per flashlight keystroke (`search`)
-  /// under a drop-late deadline, and ONLY when the query is explicitly
-  /// scoped to the source (`@source` filter or a bang's `source`) — the
-  /// default pool's first-paint contract is untouched. For catalogs that are
-  /// structurally impossible to keep warm (file search, live process/window
-  /// lists). `false` (the default) means warm: a complete pushed catalog the
-  /// host reads from memory when the flashlight opens.
-  public var live: Bool
 
   public init(
     name: String,
+    type: String,
     kind: CandidateSourceKind = .standard,
-    priority: FlashPriority = .normal,
-    live: Bool = false
+    priority: FlashPriority = .normal
   ) {
     self.name = name
+    self.type = type
     self.kind = kind
     self.priority = priority
-    self.live = live
   }
 
   public enum CodingKeys: String, CodingKey, CaseIterable {
-    case name, kind, priority, live
+    case name, type, kind, priority
   }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     self.name = try c.decode(String.self, forKey: .name)
+    // Decoded leniently so validation can name the source missing it.
+    self.type = try c.decodeIfPresent(String.self, forKey: .type) ?? ""
     self.kind = try c.decodeIfPresent(CandidateSourceKind.self, forKey: .kind) ?? .standard
     self.priority = try c.decodeIfPresent(FlashPriority.self, forKey: .priority) ?? .normal
-    self.live = try c.decodeIfPresent(Bool.self, forKey: .live) ?? false
   }
 
   public func encode(to encoder: Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
     try c.encode(name, forKey: .name)
+    try c.encode(type, forKey: .type)
     if kind != .standard {
       try c.encode(kind, forKey: .kind)
     }
     if priority != .normal {
       try c.encode(priority, forKey: .priority)
-    }
-    if live {
-      try c.encode(live, forKey: .live)
     }
   }
 }
@@ -225,6 +153,11 @@ public struct Candidate: @unchecked Sendable {
   /// The frecency item key, or "" when the row has none; "" also while the
   /// row is unprepared (`sortKey` empty).
   public var frecencyKey: String
+  /// The row's place in its source's own order, lowest first: the last
+  /// ranking tie-break before the stable key, so a source that lists newest
+  /// first (clipboard history) keeps that order among equal matches and for
+  /// an empty query. `Int.max` for a source without an order of its own.
+  public var sourceOrder: Int
 
   public init(
     title: String,
@@ -238,7 +171,8 @@ public struct Candidate: @unchecked Sendable {
     scoringMask: UInt64 = 0,
     wordStartMask: UInt64 = 0,
     loweredSource: String = "",
-    frecencyKey: String = ""
+    frecencyKey: String = "",
+    sourceOrder: Int = .max
   ) {
     self.title = title
     self.url = url
@@ -252,6 +186,7 @@ public struct Candidate: @unchecked Sendable {
     self.wordStartMask = wordStartMask
     self.loweredSource = loweredSource
     self.frecencyKey = frecencyKey
+    self.sourceOrder = sourceOrder
   }
 }
 
@@ -337,194 +272,67 @@ public struct CandidateResolution: Sendable {
   }
 }
 
-/// Discrete source actions the host can dispatch through ``FlashSource``.
-/// Each case carries the parameters the action needs and knows which
-/// ``FlashSourceCapabilities`` flag gates participation, so one dispatch
-/// method on the SPI covers every action.
-public enum SourceAction: Sendable, Equatable {
-  case tabSelect(index: Int)
-  case tabNext
-  case tabPrev
-  case tabFirst
-  case tabLast
-  case tabNew
-  case tabClose
-  case tabMovePrev
-  case tabMoveNext
-  case tabReopen
-  case paneNext
-  case panePrev
-  case paneSplitVertical
-  case paneSplitHorizontal
-  case paneClose
-  case reload(force: Bool)
-  case archive
-  case resourceNext
-  case resourcePrevious
-  case scrollTop
-  case scrollBottom
-  case historyBack
-  case historyForward
-  case undo
-  case redo
-  case find
-  case save
-  case print
-  case documentOpen
-  case windowNew
-  case windowClose
-  case clipboardCopy
-  case clipboardCut
-  case clipboardPaste
-  case lookUp
+/// A command Flash asks the focused app to perform, dispatched through
+/// ``FlashSource`` to the sources that declare it and otherwise to the app's
+/// plugin-declared binding. The words are exactly what a mapping writes after
+/// `flash <topic> <action>`: value arguments `--key=value`, bool flags
+/// `--flag`, nothing else. `app reload --force` is the `app reload` command
+/// with its flag in `arguments`; only its binding key keeps the flag.
+public struct SourceCommand: Hashable, Sendable, CustomStringConvertible {
+  public let name: CommandName
+  /// The words after the two command words, as a mapping writes them:
+  /// `["--index=3"]`, `["--force"]`, `[]`.
+  public let arguments: [String]
 
-  /// Capability flag a source must advertise to be considered for this action.
-  public var requiredCapability: FlashSourceCapabilities {
-    switch self {
-    case .tabSelect: return .tabSelection
-    case .tabNext, .tabPrev, .tabFirst, .tabLast: return .tabNavigation
-    case .tabNew: return .tabCreation
-    case .tabClose: return .tabClosing
-    case .tabMovePrev, .tabMoveNext: return .tabReorder
-    case .tabReopen: return .tabReopen
-    case .paneNext, .panePrev: return .paneNavigation
-    case .paneSplitVertical, .paneSplitHorizontal: return .paneSplitting
-    case .paneClose: return .paneClosing
-    case .reload: return .reload
-    case .archive: return .resourceArchiving
-    case .resourceNext, .resourcePrevious: return .resourceNavigation
-    case .scrollTop, .scrollBottom: return .scrollExtremes
-    case .historyBack, .historyForward: return .historyNavigation
-    case .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp:
-      return .appCommands
-    }
+  public init(name: CommandName, arguments: [String] = []) {
+    self.name = name
+    self.arguments = arguments
   }
 
-  /// The name users map and plugins bind (`action_bindings`): the wire name,
-  /// except that a forced reload is its own `app_reload_force`.
-  public var name: SourceActionName {
-    switch self {
-    case .reload(let force): return force ? .appReloadForce : .appReload
-    default: return SourceActionName(rawValue: wireName)!
+  /// The value of `--<key>=<value>` among the arguments (`"--index=3"` →
+  /// `"3"`), or nil.
+  public func argument(_ key: String) -> String? {
+    let prefix = "--\(key)="
+    for word in arguments where word.hasPrefix(prefix) {
+      return String(word.dropFirst(prefix.count))
     }
+    return nil
   }
 
-  /// Wire-protocol name plugins receive in `SourceActionRequest.name`.
-  public var wireName: String {
-    switch self {
-    case .tabSelect: return "tab_select"
-    case .tabNext: return "tab_next"
-    case .tabPrev: return "tab_previous"
-    case .tabFirst: return "tab_first"
-    case .tabLast: return "tab_last"
-    case .tabNew: return "tab_new"
-    case .tabClose: return "tab_close"
-    case .tabMovePrev: return "tab_move_previous"
-    case .tabMoveNext: return "tab_move_next"
-    case .tabReopen: return "tab_reopen"
-    case .paneNext: return "pane_next"
-    case .panePrev: return "pane_previous"
-    case .paneSplitVertical: return "pane_split_vertical"
-    case .paneSplitHorizontal: return "pane_split_horizontal"
-    case .paneClose: return "pane_close"
-    case .reload: return "app_reload"
-    case .archive: return "resource_archive"
-    case .resourceNext: return "resource_next"
-    case .resourcePrevious: return "resource_previous"
-    case .scrollTop: return "scroll_top"
-    case .scrollBottom: return "scroll_bottom"
-    case .historyBack: return "history_back"
-    case .historyForward: return "history_forward"
-    case .undo: return "app_undo"
-    case .redo: return "app_redo"
-    case .find: return "app_find"
-    case .save: return "app_save"
-    case .print: return "app_print"
-    case .documentOpen: return "document_open"
-    case .windowNew: return "window_new"
-    case .windowClose: return "window_close"
-    case .clipboardCopy: return "clipboard_copy"
-    case .clipboardCut: return "clipboard_cut"
-    case .clipboardPaste: return "clipboard_paste"
-    case .lookUp: return "look_up"
-    }
+  /// Whether the bare flag `--<key>` is among the arguments.
+  public func flag(_ key: String) -> Bool {
+    arguments.contains("--\(key)")
   }
 
-  /// Every action by wire name, for manifests that declare the actions a
-  /// plugin performs (`actions`); the parameters of a representative value
-  /// don't matter there.
-  public static let byWireName: [String: SourceAction] = Dictionary(
-    uniqueKeysWithValues: [
-      SourceAction.tabSelect(index: 1), .tabNext, .tabPrev, .tabFirst, .tabLast, .tabNew,
-      .tabClose, .tabMovePrev, .tabMoveNext, .tabReopen, .paneNext, .panePrev,
-      .paneSplitVertical, .paneSplitHorizontal, .paneClose, .reload(force: false), .archive,
-      .resourceNext, .resourcePrevious, .scrollTop, .scrollBottom, .historyBack, .historyForward,
-      .undo, .redo, .find, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp,
-    ].map { ($0.wireName, $0) })
+  /// The bare flags among the arguments, sorted, without their dashes.
+  public var flags: [String] {
+    arguments.compactMap { word in
+      guard word.hasPrefix("--"), !word.contains("=") else { return nil }
+      return String(word.dropFirst(2))
+    }.sorted()
+  }
 
-  /// Extra wire-protocol fields the plugin needs to dispatch this action.
-  /// Only ``tabSelect`` currently carries one (the 1-based tab index).
-  public var wireExtras: [String: Any] {
-    switch self {
-    case .tabSelect(let index): return ["index": index]
-    case .reload(let force): return force ? ["force": true] : [:]
-    default: return [:]
-    }
+  /// The key a manifest `bindings` entry uses for this command: the name plus
+  /// its bool flags, value arguments dropped (`"tab select"`,
+  /// `"app reload --force"`).
+  public var bindingKey: String {
+    ([name.description] + flags.map { "--\($0)" }).joined(separator: " ")
+  }
+
+  /// The command line: `tab select --index=3`.
+  public var description: String {
+    ([name.description] + arguments).joined(separator: " ")
   }
 }
 
-/// An action Flash asks the focused app to perform, named as users map it.
-/// The name is also a key of a plugin manifest's `action_bindings` table:
-/// what the host does in an app when no source performs the action there.
-public enum SourceActionName: String, CaseIterable, Sendable {
-  case tabSelect = "tab_select"
-  case tabNext = "tab_next"
-  case tabPrevious = "tab_previous"
-  case tabFirst = "tab_first"
-  case tabLast = "tab_last"
-  case tabNew = "tab_new"
-  case tabClose = "tab_close"
-  case tabReopen = "tab_reopen"
-  case tabMoveNext = "tab_move_next"
-  case tabMovePrevious = "tab_move_previous"
-  case paneNext = "pane_next"
-  case panePrevious = "pane_previous"
-  case paneSplitVertical = "pane_split_vertical"
-  case paneSplitHorizontal = "pane_split_horizontal"
-  case paneClose = "pane_close"
-  case appReload = "app_reload"
-  case appReloadForce = "app_reload_force"
-  case resourceArchive = "resource_archive"
-  case resourceNext = "resource_next"
-  case resourcePrevious = "resource_previous"
-  case scrollTop = "scroll_top"
-  case scrollBottom = "scroll_bottom"
-  case historyBack = "history_back"
-  case historyForward = "history_forward"
-  case appUndo = "app_undo"
-  case appRedo = "app_redo"
-  case appFind = "app_find"
-  case appSave = "app_save"
-  case appPrint = "app_print"
-  case documentOpen = "document_open"
-  case windowNew = "window_new"
-  case windowClose = "window_close"
-  case clipboardCopy = "clipboard_copy"
-  case clipboardCut = "clipboard_cut"
-  case clipboardPaste = "clipboard_paste"
-  case lookUp = "look_up"
-}
-
-public struct SourceActionResult: Sendable {
+public struct SourceCommandResult: Sendable {
   public enum Disposition: Sendable {
-    /// The source performed the action.
+    /// The source performed the command.
     case performed
-    /// The source owns this action for the context but could not complete
+    /// The source owns this command for the context but could not complete
     /// it (command error, plugin crash, RPC timeout). Callers must not run
     /// a generic keystroke fallback after this — if the claim was a
-    /// timeout the real action may still land, and the synthesized key
+    /// timeout the real command may still land, and the synthesized key
     /// would double-fire (e.g. tmux `new-window` *and* ⌘N).
     case failed
     /// No source claim: the next source in the chain (or the caller's
@@ -535,9 +343,9 @@ public struct SourceActionResult: Sendable {
   public let targetPID: pid_t?
   public let disposition: Disposition
   public let navigationURL: URL?
-  /// Why a claimed action failed, as the source reported it (content-free).
+  /// Why a claimed command failed, as the source reported it (content-free).
   public let failureReason: String?
-  /// The source that performed or failed the action, set by the registry.
+  /// The source that performed or failed the command, set by the registry.
   public private(set) var source: String?
 
   public init(
@@ -551,18 +359,18 @@ public struct SourceActionResult: Sendable {
   }
 
   /// This result, attributed to the source that produced it.
-  public func attributed(to source: String) -> SourceActionResult {
+  public func attributed(to source: String) -> SourceCommandResult {
     var result = self
     result.source = source
     return result
   }
 
-  public static let unhandled = SourceActionResult(targetPID: nil, disposition: .unhandled)
-  public static func failed(reason: String?) -> SourceActionResult {
-    SourceActionResult(targetPID: nil, disposition: .failed, failureReason: reason)
+  public static let unhandled = SourceCommandResult(targetPID: nil, disposition: .unhandled)
+  public static func failed(reason: String?) -> SourceCommandResult {
+    SourceCommandResult(targetPID: nil, disposition: .failed, failureReason: reason)
   }
-  public static func performed(pid: pid_t?, navigationURL: URL? = nil) -> SourceActionResult {
-    SourceActionResult(targetPID: pid, disposition: .performed, navigationURL: navigationURL)
+  public static func performed(pid: pid_t?, navigationURL: URL? = nil) -> SourceCommandResult {
+    SourceCommandResult(targetPID: pid, disposition: .performed, navigationURL: navigationURL)
   }
 }
 
@@ -577,6 +385,11 @@ public protocol FlashSource: AnyObject {
   /// flashlight items, document URL resolution, app activation, or any
   /// combination of those without separate registration paths.
   var capabilities: FlashSourceCapabilities { get }
+  /// The core commands this source performs in a context it owns (`tab
+  /// select` for the Accessibility tab strip, a plugin's core `commands[]`
+  /// entries). The registry's chain asks only the sources declaring the
+  /// command. Default: none.
+  var commands: Set<CommandName> { get }
   /// Cheap process-level activation gate. The registry instantiates and
   /// refreshes non-`always` sources only while this matches the current
   /// running application snapshot.
@@ -599,15 +412,10 @@ public protocol FlashSource: AnyObject {
   /// Keep this false for authoritative providers where an empty result really
   /// means that `f` should stay silent.
   var fallsBackOnEmptyDiscovery: Bool { get }
-  /// User-facing source labels this provider owns for `@<source>` completion
-  /// and source-scoped candidate snapshots. Labels should be canonical dotted
-  /// source names such as `firefox.tabs` or `tmux.windows`; short prefixes are
-  /// inferred by the host filter matcher.
-  var candidateSourceLabels: [String] { get }
-  /// Source descriptors this provider owns for ranking and other source-level
-  /// policy. Labels are matched against `Candidate.source`; `kind` carries the
-  /// semantic category so the host can rank source classes without hardcoding
-  /// plugin ids or browser names.
+  /// The flashlight sources this provider owns: each one's internal name
+  /// (matched against `Candidate.source` for ranking and bang bindings), its
+  /// resource type (what `@<type>` filters by), and its `kind`, the semantic
+  /// category the host ranks by without hardcoding plugin ids or browsers.
   var candidateSourceDescriptors: [CandidateSourceDescriptor] { get }
   /// URL schemes this source can restore for movement history. Schemes are
   /// case-insensitive and should be short stable identifiers such as `tmux`.
@@ -636,14 +444,22 @@ public protocol FlashSource: AnyObject {
     completion: @escaping ([Candidate]) -> Void
   )
   /// Whether this source answers per-query `liveCandidates` pulls instead of
-  /// keeping a warm catalog. Live sources are excluded from the default pool,
-  /// the warm fan-outs, and the first-paint barrier.
+  /// keeping a warm catalog: catalogs that cannot be kept warm, such as the
+  /// frontmost app's menus or file search. Only built-in sources are live.
+  /// Live sources are excluded from the default pool, the warm fan-outs, and
+  /// the first-paint barrier.
   var servesLiveCandidates: Bool { get }
-  /// Fetch candidates for one explicit query against this source's `live`
-  /// descriptors. Called per flashlight keystroke, only when the query is
-  /// scoped to this source (`@source` / a bang's `source`) and only
-  /// for descriptors declaring `mode: "live"`. The aggregator drops late
-  /// replies; implementations complete on the main queue.
+  /// Whether `liveCandidates` reads its `text`. A source that answers every
+  /// query with the same in-memory rows returns false: the flashlight then
+  /// pulls it once per scope rather than on every keystroke, so its rows stay
+  /// on screen, and the ranker's caches stay warm, while the user types.
+  /// Default: true.
+  var liveCandidatesDependOnText: Bool { get }
+  /// Fetch candidates for one explicit query against this source. Called per
+  /// flashlight keystroke, only when the query is scoped to this source
+  /// (`@<type>` / a bang's `source`). The source bounds its own work; the
+  /// aggregator drops replies to superseded queries. Implementations
+  /// complete on the main queue.
   func liveCandidates(
     matching text: String,
     in environment: FlashSourceEnvironment,
@@ -657,31 +473,30 @@ public protocol FlashSource: AnyObject {
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   )
-  /// Resolve a user-provided target, such as the `app_open name=` verb.
+  /// Resolve a user-provided target, such as `app open --name=`.
   func candidate(
     matching target: String,
     in environment: FlashSourceEnvironment
   ) -> Candidate?
   /// Resolve a document URL for the supplied focused context.
   func documentURL(in context: AppContext) -> String?
-  /// Dispatch a discrete source action (tab navigation, scroll extreme,
-  /// reorder, etc.) against the focused app. Sources opt in per action via
-  /// their ``capabilities`` flags — the registry's chain walk skips any
-  /// source whose ``FlashSourceCapabilities`` doesn't include
-  /// ``SourceAction/requiredCapability``. Sources that don't own the
-  /// action return ``SourceActionResult/unhandled`` so the next source
-  /// (or the host keystroke fallback) can run.
-  func performAction(
-    _ action: SourceAction,
+  /// Perform a core command (tab navigation, a scroll edge, a reorder, …)
+  /// against the focused app. The registry's chain walk asks only the
+  /// sources whose ``commands`` declare the command's name. A source that
+  /// does not own the command in this context returns
+  /// ``SourceCommandResult/unhandled`` so the next source (or the host's
+  /// binding fallback) can run.
+  func perform(
+    _ command: SourceCommand,
     in context: AppContext,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   )
   /// Restore a movement-history route whose scheme this source registered.
   func restoreNavigation(
     to url: URL,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   )
 }
 
@@ -689,14 +504,12 @@ extension FlashSource {
   public var displayName: String { identifier }
   public func priority(in context: AppContext) -> Int { priority }
   public var capabilities: FlashSourceCapabilities { [.jumpTargets] }
+  public var commands: Set<CommandName> { [] }
   public var activationPolicy: FlashSourceActivationPolicy { .always }
   public var readinessPolicy: FlashSourceReadinessPolicy { .activationOnly }
   public var resultsAreVolatile: Bool { readinessPolicy == .volatile }
   public var fallsBackOnEmptyDiscovery: Bool { false }
-  public var candidateSourceLabels: [String] { [] }
-  public var candidateSourceDescriptors: [CandidateSourceDescriptor] {
-    candidateSourceLabels.map { CandidateSourceDescriptor(name: $0) }
-  }
+  public var candidateSourceDescriptors: [CandidateSourceDescriptor] { [] }
   public var navigationSchemes: Set<String> { [] }
   public func candidates(
     in environment: FlashSourceEnvironment,
@@ -712,6 +525,7 @@ extension FlashSource {
     completion(candidates(in: environment, scope: scope))
   }
   public var servesLiveCandidates: Bool { false }
+  public var liveCandidatesDependOnText: Bool { true }
   public func liveCandidates(
     matching text: String,
     in environment: FlashSourceEnvironment,
@@ -734,18 +548,18 @@ extension FlashSource {
     nil
   }
   public func documentURL(in context: AppContext) -> String? { nil }
-  public func performAction(
-    _ action: SourceAction,
+  public func perform(
+    _ command: SourceCommand,
     in context: AppContext,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
     DispatchQueue.main.async { completion(.unhandled) }
   }
   public func restoreNavigation(
     to url: URL,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
     DispatchQueue.main.async { completion(.unhandled) }
   }

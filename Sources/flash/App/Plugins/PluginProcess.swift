@@ -11,8 +11,9 @@ import Foundation
 /// this object interprets effects and owns each child transport, with
 /// `failed` the parked terminal state (no auto-restart; file watchers stay
 /// armed so a rebuilt binary recovers). Resident plugins spawn at startup;
-/// on-demand plugins spawn on their first `perform`; manifest-only plugins
-/// never spawn.
+/// on-demand plugins spawn on their first `perform`, or once startup has
+/// settled when a configured mapping keeps them warm (`prewarm`);
+/// manifest-only plugins never spawn.
 final class PluginProcess {
   typealias RequestCompletion = ([String: Any]?) -> Void
   private let stderrLock = NSLock()
@@ -65,10 +66,23 @@ final class PluginProcess {
   /// `status` notification is filtered against it.
   private let declaredStatusSegments: Set<String>
 
+  /// Lifecycle, replies and requests: `.userInitiated`, because a keypress
+  /// (`hints`, `evaluate` under its 50 ms deadline, `perform`) or the
+  /// liveness `ping` waits on what crosses these three queues, and a
+  /// utility-class thread is what the kernel starves first under load.
   private let queue: DispatchQueue
   private let readQueue: DispatchQueue
   private let writeQueue: DispatchQueue
+  /// Catalog decode alone, `.utility`: nobody waits on a publish, and a
+  /// 700 KB catalog decoding here never holds a reply frame behind it on
+  /// the reader. Serial, so one plugin's publishes keep their order; a
+  /// publish and a later reply are not ordered host-side. Internal so a
+  /// test can hold it and prove a reply completes while a publish is still
+  /// undecoded.
+  let catalogQueue: DispatchQueue
   private let dataDir: URL
+  private let sandboxExecPath: String
+  private let installLogDirectory: URL
   private var process: Process?
   private var stdinPipe: Pipe?
   private var frameCollector = NDJSONFrameCollector(maxLineBytes: PluginProtocol.maxFrameBytes)
@@ -101,8 +115,12 @@ final class PluginProcess {
   /// clock. `.low`: nobody watches the instant a stale label blanks. Armed
   /// afresh on every keep-status teardown, so the newest replacement gets
   /// the whole grace. Queue-confined.
+  /// The clock behind this plugin's deadlines and `poll` registrations: the
+  /// shared one, except in tests.
+  private let scheduler: PollScheduler
   private lazy var statusGraceDeadline = PollDeadline(
-    "core:plugin_status_grace:\(manifest.id):\(instanceTag)", priority: .low, on: queue)
+    "core:plugin_status_grace:\(manifest.id):\(instanceTag)", priority: .low, on: queue,
+    scheduler: scheduler)
   private var startDate: Date?
   /// Mirrors of queue-confined runtime fields, guarded by `lock`, so status
   /// reads from main never wait on `queue` (a stop sleeps there for up to
@@ -110,6 +128,9 @@ final class PluginProcess {
   private var publishedPID: pid_t?
   private var publishedStartDate: Date?
   private var publishedRestartCount = 0
+  /// The latest spawn's duration, read as `flash.plugin.spawn_ms`. Guarded
+  /// by `lock`; set where the spawn returns.
+  private var publishedSpawn: PluginSpawnTiming?
   /// Whether a status surface (the enabled bar, its popups, a desktop widget)
   /// shows this plugin's segments; decides a status-bound plugin's
   /// activation. Guarded by `lock`.
@@ -117,6 +138,10 @@ final class PluginProcess {
   /// Whether a perform spawned the current run, which then outlives its status
   /// observers like any on-demand plugin. Queue-confined.
   private var performActivated = false
+  /// Whether a configured mapping can run one of this plugin's commands
+  /// (`PluginWarmPolicy`): an on-demand child is then spawned once startup
+  /// has settled and outlives its status observers. Guarded by `lock`.
+  private var warm = false
   /// The manifest `status` names a live status surface shows, sorted — the
   /// `core:status.observed` payload. Guarded by `lock`.
   private var observedStatusSegments: [String]
@@ -130,7 +155,8 @@ final class PluginProcess {
   /// and a second of slack on a multi-second backoff changes nothing.
   /// Queue-confined.
   private lazy var restartDeadline = PollDeadline(
-    "core:plugin_restart:\(manifest.id):\(instanceTag)", priority: .low, on: queue)
+    "core:plugin_restart:\(manifest.id):\(instanceTag)", priority: .low, on: queue,
+    scheduler: scheduler)
   /// Tells this instance's deadlines from a replacement's for the same id.
   private var instanceTag: String { String(UInt(bitPattern: ObjectIdentifier(self).hashValue)) }
   /// Set by a user-initiated reload so the lifecycle teardown keeps the
@@ -147,15 +173,21 @@ final class PluginProcess {
   /// can recover with `:plugins reload`.
   // Testability seams: production values, overridden (and restored) by the
   // lifecycle tests so restart parking and idle-ping teardown run in
-  // milliseconds instead of minutes. `var` + internal on purpose.
-  static var restartWindowAttempts = 5
-  static var statusReloadGraceSeconds: TimeInterval = 10
-  static var restartWindowSeconds: TimeInterval = 300
-  static var idleBeforePingMs = PluginProtocol.idleBeforePingMs
-  static var pingTimeoutMs = PluginProtocol.pingDeadlineMs
-  static var restartDelaySeconds: (Int) -> Int = { min(30, max(1, $0 + 1)) }
+  // milliseconds instead of minutes, and a wire check on `evaluate` is not
+  // held to the per-keystroke deadline. `var` + internal on purpose.
+  // `@Synchronized`: a test overrides them while an earlier test's plugin
+  // queue may still read them.
+  @Synchronized static var restartWindowAttempts = 5
+  @Synchronized static var statusReloadGraceSeconds: TimeInterval = 10
+  @Synchronized static var restartWindowSeconds: TimeInterval = 300
+  @Synchronized static var idleBeforePingMs = PluginProtocol.idleBeforePingMs
+  @Synchronized static var pingTimeoutMs = PluginProtocol.pingDeadlineMs
+  @Synchronized static var queryDeadlineMs = PluginProtocol.queryDeadlineMs
+  @Synchronized static var restartDelaySeconds: (Int) -> Int = { min(30, max(1, $0 + 1)) }
+  /// Request deadlines settle callers that are waiting: a late timeout is a
+  /// late failure on the key path, so this is not a utility queue either.
   private static let deadlineQueue = DispatchQueue(
-    label: "flash.plugin.deadlines", qos: .utility)
+    label: "flash.plugin.deadlines", qos: .userInitiated)
   private var requestID: Int = 0
   private var pending: [Int: PendingRequest] = [:]
   private var hostRequestToken: UInt64 = 0
@@ -169,14 +201,32 @@ final class PluginProcess {
   /// Trailing debounce for plugin file changes. `.normal`: someone just
   /// rebuilt the plugin and is waiting for it to come back. Queue-confined.
   private lazy var fileReloadDeadline = PollDeadline(
-    "core:plugin_reload:\(manifest.id):\(instanceTag)", priority: .normal, on: queue)
+    "core:plugin_reload:\(manifest.id):\(instanceTag)", priority: .normal, on: queue,
+    scheduler: scheduler)
+  /// Trailing debounce for a change to a file the manifest's
+  /// `watch_settings` name: the user just saved it and may open the
+  /// flashlight next, so `.normal`. Queue-confined.
+  private lazy var watchedFileDeadline = PollDeadline(
+    "core:plugin_watched_file:\(manifest.id):\(instanceTag)", priority: .normal, on: queue,
+    scheduler: scheduler)
+  /// A `publish_then_exit` run ends when both its child's clean exit and
+  /// its stdout EOF were seen, so every byte it wrote is decoded first. The
+  /// generation each was seen for; queue-confined.
+  private var cleanExitGeneration: UInt64?
+  private var stdoutEOFGeneration: UInt64?
+  /// Bounds the wait for that EOF: a descendant holding the pipe open past
+  /// the shutdown grace ends the run with whatever landed. `.low`: nothing
+  /// waits on a plugin whose child has already exited. Queue-confined.
+  private lazy var completionDeadline = PollDeadline(
+    "core:plugin_complete:\(manifest.id):\(instanceTag)", priority: .low, on: queue,
+    scheduler: scheduler)
   private var lastError: String?
   private var lastLog: String?
   /// Mirrors `Config.Plugins.watchingEnabled`. When false, plugin file
   /// watchers are not installed and the plugin only restarts when
   /// content changes propagate via an explicit `:plugins reload`.
   private var watchFiles: Bool
-  /// User settings from `[plugin.<id>]`, delivered to the plugin process
+  /// User settings from `[plugins.<id>]`, delivered to the plugin process
   /// as JSON via `FLASH_PLUGIN_CONFIG`. Retained so a config reload can
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
@@ -192,10 +242,15 @@ final class PluginProcess {
   /// snapshot no longer rides initialize itself).
   var runningApplicationsProvider: (() -> [[String: Any]])?
   /// Handles a plugin→host RPC request (`call_host` on the plugin side):
-  /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
+  /// `(method, params, pluginID, scope, reply)`. Queued host actions validate
+  /// the scope before execution. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
   /// (e.g. AX work hops to the main thread first).
-  var onHostRequest: ((String, [String: Any], String, @escaping ([String: Any]) -> Void) -> Void)?
+  var onHostRequest:
+    (
+      (String, [String: Any], String, PluginHostRequestScope, @escaping ([String: Any]) -> Void) ->
+        Void
+    )?
 
   init(
     root: URL,
@@ -206,8 +261,13 @@ final class PluginProcess {
     settings: [String: PluginConfigValue] = [:],
     statusObserved: Bool = true,
     observedStatusSegments: Set<String> = [],
-    environment: FlashProcessEnvironment = .shared
+    environment: FlashProcessEnvironment = .shared,
+    sandboxExecPath: String = PluginSandbox.sandboxExecPath,
+    installLogDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Logs/Flash/plugin-install"),
+    scheduler: PollScheduler = .shared
   ) {
+    self.scheduler = scheduler
     self.root = root
     self.environment = environment
     self.manifest = manifest
@@ -215,9 +275,14 @@ final class PluginProcess {
     self.listenPatterns = manifest.listen.map(PluginPattern.init)
     self.declaredStatusSegments = Set(manifest.statusSegments)
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
-    self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
-    self.readQueue = DispatchQueue(label: "flash.plugin.\(manifest.id).read", qos: .utility)
-    self.writeQueue = DispatchQueue(label: "flash.plugin.\(manifest.id).write", qos: .utility)
+    self.sandboxExecPath = sandboxExecPath
+    self.installLogDirectory = installLogDirectory
+    self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .userInitiated)
+    self.readQueue = DispatchQueue(
+      label: "flash.plugin.\(manifest.id).read", qos: .userInitiated)
+    self.writeQueue = DispatchQueue(
+      label: "flash.plugin.\(manifest.id).write", qos: .userInitiated)
+    self.catalogQueue = DispatchQueue(label: "flash.plugin.\(manifest.id).catalog", qos: .utility)
     self.watchFiles = watchFiles
     self.settings = settings
     self.statusObserved = statusObserved
@@ -241,8 +306,8 @@ final class PluginProcess {
   /// The status surfaces started or stopped showing this plugin's segments. A
   /// status-bound plugin that becomes observed spawns if it has not yet. One
   /// that stops being observed returns to on-demand: its process stops unless
-  /// a perform started it, since on-demand plugins remain running once a
-  /// command needs them.
+  /// a perform started it or a mapping keeps it warm, since on-demand plugins
+  /// remain running once a command needs them.
   func setStatusObserved(_ observed: Bool) {
     lock.lock()
     let changed = statusObserved != observed
@@ -255,22 +320,57 @@ final class PluginProcess {
         fields: ["id": self.manifest.id])
       if observed {
         self.applyLifecycle(.activate)
-      } else if !self.performActivated, Self.stopsWhenUnobserved(self.lifecycle.state) {
-        self.applyLifecycle(.deactivate)
+      } else {
+        self.deactivateIfUnneeded()
       }
     }
   }
 
-  /// Lifecycle states whose process (running, starting, or about to restart)
-  /// exists only to feed status surfaces once nothing shows them.
-  static func stopsWhenUnobserved(_ state: PluginLifecycle.State) -> Bool {
-    switch state {
-    case .installing, .launching, .running, .backoff: return true
-    case .initial, .idle, .stopped, .failed: return false
-    }
+  /// Whether a configured mapping can run one of this plugin's commands
+  /// (`PluginWarmPolicy`). A plugin that becomes warm spawns at the next
+  /// prewarm; a status-bound one that stops being warm while nothing shows
+  /// its segments stops as any unobserved one does.
+  func setWarm(_ warm: Bool) {
+    lock.lock()
+    let changed = self.warm != warm
+    self.warm = warm
+    lock.unlock()
+    guard changed, !warm, manifest.isStatusBound else { return }
+    queue.async { self.deactivateIfUnneeded() }
   }
 
-  static let statusObservedEvent = "core:status.observed"
+  private var isWarm: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return warm
+  }
+
+  /// Runs on `queue`: a status-bound child that no surface shows, no perform
+  /// started and no mapping keeps warm stops and returns to on-demand.
+  private func deactivateIfUnneeded() {
+    lock.lock()
+    let observed = statusObserved
+    lock.unlock()
+    guard !observed,
+      PluginWarmPolicy.stopsWhenUnobserved(
+        manifest, state: lifecycle.state, performActivated: performActivated, warm: isWarm)
+    else { return }
+    applyLifecycle(.deactivate)
+  }
+
+  /// Spawn a warm on-demand child ahead of its first perform, unless
+  /// something already started it. The manager asks once startup has
+  /// settled; a perform that comes first spawns the child itself, as before.
+  func prewarm() {
+    queue.async {
+      guard
+        PluginWarmPolicy.prewarms(
+          activation: self.activation, state: self.lifecycle.state, warm: self.isWarm)
+      else { return }
+      FlashLog.info("[plugin] prewarm", fields: ["id": self.manifest.id])
+      self.applyLifecycle(.activate)
+    }
+  }
 
   /// The complete observed set a plugin receives: only names its manifest
   /// declares, each nonempty and listed once, sorted.
@@ -297,14 +397,16 @@ final class PluginProcess {
   /// `core:status.observed` to a listening child, unless it already has
   /// this exact set. Runs on `queue`.
   private func deliverObservedStatusSegments() {
-    guard listenPatterns.contains(where: { $0.matches(Self.statusObservedEvent) }) else { return }
+    guard listenPatterns.contains(where: { $0.matches(HostEvent.statusObserved.rawValue) }) else {
+      return
+    }
     lock.lock()
     let segments = observedStatusSegments
     lock.unlock()
     guard segments != deliveredStatusSegments else { return }
     deliveredStatusSegments = segments
     deliverEventOnQueue(
-      PluginEvent(name: Self.statusObservedEvent, payload: ["segments": segments], bundleID: nil))
+      PluginEvent(.statusObserved, payload: ["segments": segments], bundleID: nil))
   }
 
   func reportDefinitionError(_ error: String) {
@@ -318,14 +420,14 @@ final class PluginProcess {
   func start() {
     queue.async {
       let activation = self.activation
-      self.applyLifecycle(.start(resident: activation == .resident))
+      self.applyLifecycle(.start(resident: activation.spawnsAtStart))
       // Performs that arrived before the start — a replacement published
       // while its predecessor was still stopping — asked for the child.
       if activation == .onDemand, !self.deferredPerforms.isEmpty {
         self.performActivated = true
         self.applyLifecycle(.activate)
       }
-      if self.watchFiles { self.installFileWatchers() }
+      self.installFileWatchers()
     }
   }
 
@@ -336,12 +438,16 @@ final class PluginProcess {
     }
   }
 
+  /// Returns once every block already on the lifecycle queue has run — each
+  /// `sendEvent` hop among them, so its frame is queued or written.
+  func drainLifecycleQueue() { queue.sync {} }
+
   func reload(reason: String) {
     queue.async {
-      let resident = self.activation == .resident
+      let resident = self.activation.spawnsAtStart
       self.preserveStatusOnTeardown = resident
       self.applyLifecycle(.reload(resident: resident))
-      if self.watchFiles { self.installFileWatchers() }
+      self.installFileWatchers()
     }
   }
 
@@ -362,6 +468,7 @@ final class PluginProcess {
       case .start(let generation):
         startOnQueue(generation: generation)
       case .retry(let generation, let delay):
+        FlashTelemetry.record(.pluginRestarts, 1, ["plugin": manifest.id])
         restartDeadline.arm(afterMs: delay * 1000) { [weak self] in
           self?.applyLifecycle(.retry(generation))
         }
@@ -369,11 +476,20 @@ final class PluginProcess {
         settleDeferredPerforms(as: .unhandled)
         if lifecycle.failures.count > Self.restartWindowAttempts {
           recordError(
-            "[plugin] restart loop exhausted: \(lifecycle.failures.count) failures within \(Int(Self.restartWindowSeconds))s"
-          )
+            "[plugin] restart loop exhausted: \(lifecycle.failures.count) failures within \(Int(Self.restartWindowSeconds))s",
+            level: .error)
         }
         catalogStore?.drop(pluginID: manifest.id)
-        if watchFiles { installFileWatchers() }
+        installFileWatchers()
+      case .rest:
+        // The catalog stays in the store; the watchers the teardown removed
+        // come back, since a file change is what runs the plugin again.
+        settleDeferredPerforms(as: .unhandled)
+        installFileWatchers()
+        FlashLog.plugin(
+          .info, pluginID: manifest.id,
+          message: "[plugin] published and exited; runs again on a reload or a watched change",
+          fields: ["rows": String(catalogStore?.rows(for: manifest.id).count ?? 0)])
       }
     }
     // Terminal status is observable only after teardown and catalog removal.
@@ -409,7 +525,7 @@ final class PluginProcess {
           do {
             try self.launch(
               startupStartedAt: startedAt, installMs: Self.elapsedMilliseconds(since: startedAt))
-            if self.watchFiles { self.installFileWatchers() }
+            self.installFileWatchers()
           } catch {
             self.recordError("[plugin] launch failed: \(error)")
             self.applyLifecycle(.interrupted(generation))
@@ -436,6 +552,10 @@ final class PluginProcess {
     pendingHostRequests.removeAll()
     restartDeadline.cancel()
     fileReloadDeadline.cancel()
+    watchedFileDeadline.cancel()
+    completionDeadline.cancel()
+    cleanExitGeneration = nil
+    stdoutEOFGeneration = nil
     installer?.cancel()
     installer = nil
     PluginLivenessSweep.shared.leave(self)
@@ -551,11 +671,10 @@ final class PluginProcess {
       manifest: manifest, settings: settings, root: root, dataDir: dataDir,
       executablePath: executablePath)
     let sandboxMs = Self.elapsedMilliseconds(since: sandboxStartedAt)
-    let sandboxed =
-      resolved.profile != nil
-      && FileManager.default.isExecutableFile(atPath: PluginSandbox.sandboxExecPath)
+    let sandboxed = resolved.profile != nil
+    if sandboxed { try requireSandboxExecutable() }
     if sandboxed, let profile = resolved.profile {
-      process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
+      process.executableURL = URL(fileURLWithPath: sandboxExecPath)
       process.arguments = ["-p", profile, executablePath] + execTail
     } else {
       process.executableURL = URL(fileURLWithPath: executablePath)
@@ -563,12 +682,12 @@ final class PluginProcess {
     }
     if resolved.mode == "disabled_by_config" {
       FlashLog.warn(
-        "[plugin] \(manifest.id) sandbox DISABLED by [plugin.\(manifest.id)] sandbox = false",
+        "[plugin] \(manifest.id) sandbox DISABLED by [plugins.\(manifest.id)] sandbox = false",
         fields: ["plugin": manifest.id, "sandbox_mode": resolved.mode])
     }
     FlashLog.info(
-      "[plugin] \(manifest.id) launch sandbox=\(sandboxed ? resolved.mode : "unsandboxed")",
-      fields: ["plugin": manifest.id, "sandbox_mode": sandboxed ? resolved.mode : "unsandboxed"])
+      "[plugin] \(manifest.id) launch sandbox=\(resolved.mode)",
+      fields: ["plugin": manifest.id, "sandbox_mode": resolved.mode])
     process.currentDirectoryURL = root
     process.environment = pluginEnvironment()
     process.standardInput = stdin
@@ -576,7 +695,14 @@ final class PluginProcess {
     process.standardError = stderr
     let transportGeneration = beginTransport()
     stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-      self?.handleStdout(handle.availableData, generation: transportGeneration)
+      let data = handle.availableData
+      guard !data.isEmpty else {
+        // EOF: every writer of the pipe is gone. Once is enough.
+        handle.readabilityHandler = nil
+        self?.handleStdoutEOF(generation: transportGeneration)
+        return
+      }
+      self?.handleStdout(data, generation: transportGeneration)
     }
     stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
       self?.handleStderr(handle.availableData, generation: transportGeneration)
@@ -584,6 +710,13 @@ final class PluginProcess {
     process.terminationHandler = { [weak self] p in
       self?.queue.async {
         guard let self, self.process === p else { return }
+        if self.manifest.lifecycle == .publishThenExit, p.terminationReason == .exit,
+          p.terminationStatus == 0, self.lifecycle.state == .running
+        {
+          // The run it declared: its catalog is read to the end first.
+          self.observeCleanExit(generation: self.lifecycle.generation)
+          return
+        }
         // A signal (a crash, a kill) and an exit status are different stories.
         let reason = p.terminationReason == .uncaughtSignal ? "signal" : "exit"
         self.recordError("[plugin] exited reason=\(reason) status=\(p.terminationStatus)")
@@ -597,7 +730,13 @@ final class PluginProcess {
       invalidateTransport()
       throw PluginError.failure("\(error)")
     }
-    let spawnMs = Self.elapsedMilliseconds(since: spawnStartedAt)
+    let spawnMsValue = Self.elapsedMillisecondsValue(since: spawnStartedAt)
+    let spawnMs = String(format: "%.2f", spawnMsValue)
+    lock.lock()
+    publishedSpawn = PluginSpawnTiming(
+      milliseconds: spawnMsValue, at: DispatchTime.now().uptimeNanoseconds)
+    lock.unlock()
+    FlashTelemetry.record(.pluginSpawnDuration, spawnMsValue, ["plugin": manifest.id])
     self.process = process
     self.stdinPipe = stdin
     self.startDate = Date()
@@ -660,18 +799,13 @@ final class PluginProcess {
   private func completeStartup() {
     clearError()
     applyLifecycle(.initialized(lifecycle.generation))
-    // The running-applications snapshot no longer rides initialize: plugins
-    // whose `listen` matches get exactly one core:apps.changed with the full
-    // snapshot, then live updates through the normal event stream.
-    if let snapshot = runningApplicationsProvider?() {
-      deliverEventOnQueue(
-        PluginEvent(
-          name: "core:apps.changed",
-          payload: [
-            "reason": "initialize",
-            "running_applications": snapshot,
-          ],
-          bundleID: nil))
+    // The running-applications snapshot no longer rides initialize: every
+    // plugin, whatever its `listen`, gets exactly one core:apps.changed with
+    // the full snapshot (it seeds the SDK's running-apps list), then only
+    // subscribers get live updates through the normal event stream. A
+    // `publish_then_exit` child reads no events and may already be gone.
+    if manifest.lifecycle != .publishThenExit, let snapshot = runningApplicationsProvider?() {
+      deliverEventOnQueue(.appsChanged(snapshot))
     }
     // Every child, including a restarted one, starts from the current set —
     // sent even when it is empty.
@@ -701,8 +835,56 @@ final class PluginProcess {
   /// `:plugins reload`; the published catalog is dropped (a failed plugin
   /// could never serve its rows' effects).
   private func parkFailed(_ message: String) {
-    recordError(message)
+    recordError(message, level: .error)
     applyLifecycle(.reject(lifecycle.generation))
+  }
+
+  // MARK: - Publish then exit
+
+  /// The child of a `publish_then_exit` plugin exited 0 while running. Its
+  /// last frames may still be in the pipe or on the catalog queue: the run
+  /// completes once stdout reached EOF and everything read was decoded, or
+  /// fails at the shutdown grace if a descendant keeps the pipe open. Runs on
+  /// `queue`.
+  private func observeCleanExit(generation: UInt64) {
+    cleanExitGeneration = generation
+    completionDeadline.arm(afterMs: PluginProtocol.shutdownGraceMs) { [weak self] in
+      guard let self, self.lifecycle.generation == generation, self.lifecycle.state == .running
+      else { return }
+      FlashLog.plugin(
+        .warn, pluginID: self.manifest.id,
+        message: "[plugin] stdout stayed open after the exit; rejecting incomplete output")
+      self.applyLifecycle(.interrupted(generation))
+    }
+    completeRunIfSettled(generation: generation)
+  }
+
+  /// The pipe callback saw EOF. Ordered behind every chunk already read
+  /// (the read queue), then behind every publish those chunks started (the
+  /// catalog queue), then onto the lifecycle queue: the run completes only
+  /// after the last decoded publish reached the store.
+  private func handleStdoutEOF(generation: UInt64) {
+    readQueue.async { [weak self] in
+      guard let self, self.isTransportActive(generation) else { return }
+      self.catalogQueue.async { [weak self] in
+        guard let self else { return }
+        self.queue.async { [weak self] in
+          guard let self, self.isTransportActive(generation) else { return }
+          self.stdoutEOFGeneration = self.lifecycle.generation
+          self.completeRunIfSettled(generation: self.lifecycle.generation)
+        }
+      }
+    }
+  }
+
+  private func completeRunIfSettled(generation: UInt64) {
+    guard cleanExitGeneration == generation, stdoutEOFGeneration == generation else { return }
+    completeRun(generation: generation)
+  }
+
+  private func completeRun(generation: UInt64) {
+    completionDeadline.cancel()
+    applyLifecycle(.completed(generation))
   }
 
   // MARK: - Idle ping
@@ -745,14 +927,6 @@ final class PluginProcess {
 
   func sendEvent(_ event: PluginEvent) {
     guard listens(to: event.name) else { return }
-    // Default-deny capability gate. Events that carry sensitive data
-    // (clipboard text, etc.) reach a plugin only when its manifest
-    // explicitly opts in via `capabilities`.
-    if let required = PluginCapability.required(for: event.name),
-      !manifest.capabilities.contains(required)
-    {
-      return
-    }
     queue.async { [weak self] in
       guard let self, self.runtimeStateSnapshot() == .running else { return }
       self.deliverEventOnQueue(event)
@@ -766,37 +940,18 @@ final class PluginProcess {
   }
 
   private static func eventFrameObject(_ event: PluginEvent) -> [String: Any] {
-    var payload = event.payload
-    if let bundleID = event.bundleID, payload["bundle_id"] == nil {
-      payload["bundle_id"] = bundleID
-    }
-    if let pid = event.pid, payload["pid"] == nil {
-      payload["pid"] = Int(pid)
-    }
-    if let frame = event.frontWindowFrame, !frame.isNull,
-      payload["front_window_frame"] == nil
-    {
-      payload["front_window_frame"] = [
-        "x": frame.minX,
-        "y": frame.minY,
-        "width": frame.width,
-        "height": frame.height,
-      ]
-    }
-    return [
+    [
       "method": "event",
       "params": [
         "name": event.name,
-        "payload": payload,
+        "payload": event.wirePayload,
       ],
     ]
   }
 
   /// The queue slot `event` replaces, from the payload every listener sees.
   static func coalescingKey(_ event: PluginEvent) -> String? {
-    var payload = event.payload
-    if payload["pid"] == nil, let pid = event.pid { payload["pid"] = Int(pid) }
-    return PluginProtocol.coalescingKey(eventName: event.name, payload: payload)
+    PluginProtocol.coalescingKey(eventName: event.name, payload: event.wirePayload)
   }
 
   private func deliverEventOnQueue(_ event: PluginEvent) {
@@ -906,55 +1061,47 @@ final class PluginProcess {
         else { return nil }
         return captured.matchingClickPoint(preferred: preferred, among: live)
       },
-      entersInsertMode: captured.entersInsertMode, priority: captured.priority,
+      isTextInput: captured.isTextInput, priority: captured.priority,
       providerID: captured.providerID)
   }
 
-  /// `search`: fetch live rows for one explicitly scoped query. Unlike
-  /// `evaluate` (50 ms, CPU-only), a live source may do real work (mdfind,
-  /// window enumeration); the caller's aggregator drops late replies. Rows
-  /// decode through the same catalog codec as `publish`.
-  func search(
-    matching text: String,
-    scope: CandidateScope,
-    timeoutMs: Int,
-    completion: @escaping ([Candidate]?) -> Void
-  ) {
+  /// Live text-grid pull (`text_grid`) for a letter search. Never waits:
+  /// `completion` runs once, on the plugin queue with the validated grid or
+  /// nil for a timeout or a rejected reply, or at once with nil when the
+  /// plugin is not running.
+  func textGrid(context: AppContext, completion: @escaping (PluginTextGrid?) -> Void) {
     guard runtimeStateSnapshot() == .running else {
-      DispatchQueue.main.async { completion(nil) }
+      completion(nil)
       return
     }
+    let startedAt = DispatchTime.now()
     sendRequest(
-      method: "search",
-      params: ["query": text, "scope": Self.scopeName(scope)],
-      timeout: .milliseconds(timeoutMs)
+      method: "text_grid",
+      params: PluginWireCodec.contextJSON(context),
+      timeout: .milliseconds(PluginProtocol.textGridDeadlineMs)
     ) { [weak self] response in
-      guard let self, let payload = PluginWireCodec.okPayload(response) else {
-        DispatchQueue.main.async { completion(nil) }
-        return
+      let payload = PluginWireCodec.okPayload(response)
+      let grid = payload.flatMap(PluginWireCodec.textGrid(from:))
+      if let self {
+        if payload != nil, grid == nil {
+          FlashLog.plugin(
+            .warn, pluginID: self.manifest.id, message: "[plugin] malformed text_grid reply",
+            fields: ["method": "text_grid"])
+        }
+        if FlashLog.wouldEmit(.debug) {
+          FlashLog.debug(
+            "[plugin] text_grid",
+            fields: [
+              "plugin": self.manifest.id,
+              "pid": "\(context.processID)",
+              "lines": "\(grid?.lines.count ?? 0)",
+              "replied": "\(response != nil)",
+              "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
+            ],
+            source: "plugin:\(self.manifest.id)")
+        }
       }
-      guard Set(payload.keys) == ["ok", "rows"], let raw = payload["rows"] as? [[String: Any]]
-      else {
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] malformed search reply",
-          fields: ["method": "search"])
-        DispatchQueue.main.async { completion(nil) }
-        return
-      }
-      let rows = PluginWireCodec.catalogRows(
-        from: raw,
-        sourceID: "plugin:\(self.manifest.id)",
-        allowedSources: Set(self.manifest.candidateSources))?.rows
-      if rows == nil {
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] rejected malformed or oversized search rows",
-          fields: ["received": String(raw.count)])
-      }
-      DispatchQueue.main.async { completion(rows) }
+      completion(grid)
     }
   }
 
@@ -968,15 +1115,11 @@ final class PluginProcess {
       DispatchQueue.main.async { completion([]) }
       return
     }
-    let params: [String: Any] = [
-      "query": request.text,
-      "scope": Self.scopeName(request.scope),
-      "surface": request.surface.rawValue,
-    ]
+    let params: [String: Any] = ["query": request.text]
     sendRequest(
       method: "evaluate",
       params: params,
-      timeout: .milliseconds(PluginProtocol.queryDeadlineMs)
+      timeout: .milliseconds(Self.queryDeadlineMs)
     ) { [weak self] response in
       guard let self, let payload = PluginWireCodec.okPayload(response),
         Set(payload.keys) == ["ok", "answers"],
@@ -1009,8 +1152,8 @@ final class PluginProcess {
 
   // MARK: - Perform (the single effect method)
 
-  /// Dispatch one `perform`. `kind` is one of resolve/command/action/
-  /// navigate; the completion delivers the universal trichotomy on the main
+  /// Dispatch one `perform`. `kind` is one of resolve/command/navigate;
+  /// the completion delivers the universal trichotomy on the main
   /// queue. Never dispatched to a failed or unspawnable plugin — that
   /// settles `.unhandled` immediately without burning the deadline (nothing
   /// could have started). On-demand plugins lazily spawn here; the perform
@@ -1129,13 +1272,6 @@ final class PluginProcess {
     }
   }
 
-  private static func scopeName(_ scope: CandidateScope) -> String {
-    switch scope {
-    case .running: return "running"
-    case .all: return "all"
-    }
-  }
-
   // MARK: - Status reads
 
   /// On `queue`: mirror the queue-confined runtime fields for lock-only reads.
@@ -1174,7 +1310,7 @@ final class PluginProcess {
       pid: pid.map(Int.init),
       startedAtUnixMs: startDate.map { Int64($0.timeIntervalSince1970 * 1000) },
       sourceCount: manifest.sources.count,
-      commandCount: manifest.commands.count,
+      commandCount: manifest.pluginCommands.count,
       restartCount: restartCount,
       lastError: lastError,
       lastLog: lastLog,
@@ -1182,7 +1318,7 @@ final class PluginProcess {
       memoryBytes: usage?.memoryBytes,
       onlyBundleIDs: manifest.onlyBundleIDs,
       priority: manifest.priority,
-      commands: manifest.commands,
+      commands: manifest.pluginCommands,
       statusSegments: segments.mapValues(\.debugText))
   }
 
@@ -1192,12 +1328,14 @@ final class PluginProcess {
     let segments = statusSegments
     let state = self.state
     let hasError = !(lastError ?? "").isEmpty
+    let spawn = publishedSpawn
     lock.unlock()
     return PluginStatusBarInfo(
       id: manifest.id,
       state: Self.stateLabel(state: state, activation: manifest.activation),
       hasError: hasError,
-      statusSegments: segments)
+      statusSegments: segments,
+      lastSpawn: spawn)
   }
 
   /// A manifest-only plugin never enters the process state machine; it
@@ -1235,6 +1373,13 @@ final class PluginProcess {
 
   // MARK: - Install
 
+  private func requireSandboxExecutable() throws {
+    guard FileManager.default.isExecutableFile(atPath: sandboxExecPath) else {
+      throw PluginError.failure(
+        "required sandbox executable is missing or not executable: \(sandboxExecPath)")
+    }
+  }
+
   private func installIfNeeded(
     generation: UInt64, completion: @escaping (Result<Void, Error>) -> Void
   ) throws {
@@ -1243,19 +1388,25 @@ final class PluginProcess {
       return
     }
     let stampURL = dataDir.appendingPathComponent(".install-stamp")
-    let stamp = "\(manifest.version)\n\(install)\n"
-    if let existing = try? String(contentsOf: stampURL), existing == stamp {
+    // Data survives checkout replacement, but an install's outputs may live
+    // in that checkout. A different pinned root must never borrow its
+    // predecessor's success just because its manifest version stayed equal.
+    let stamp = try JSONSerialization.data(
+      withJSONObject: [
+        "root": root.resolvingSymlinksInPath().standardizedFileURL.path,
+        "origin": origin.label,
+        "version": manifest.version,
+        "install": install,
+      ], options: [.sortedKeys])
+    if let existing = try? Data(contentsOf: stampURL), existing == stamp {
       completion(.success(()))
       return
     }
-    let sandboxed = FileManager.default.isExecutableFile(atPath: PluginSandbox.sandboxExecPath)
-    let argv =
-      sandboxed
-      ? [
-        PluginSandbox.sandboxExecPath, "-p",
-        PluginSandbox.installSandboxProfile(root: root, dataDir: dataDir), "/bin/sh", "-c", install,
-      ]
-      : ["/bin/sh", "-c", install]
+    try requireSandboxExecutable()
+    let argv = [
+      sandboxExecPath, "-p",
+      PluginSandbox.installSandboxProfile(root: root, dataDir: dataDir), "/bin/sh", "-c", install,
+    ]
     installer = try PluginInstallJob(
       argv: argv, environment: pluginEnvironment(), workingDirectory: root.path,
       timeoutSeconds: Double(FlashTunables.pluginInstallTimeoutSeconds), completionQueue: queue
@@ -1272,7 +1423,7 @@ final class PluginProcess {
         return
       }
       do {
-        try stamp.write(to: stampURL, atomically: true, encoding: .utf8)
+        try stamp.write(to: stampURL, options: .atomic)
         completion(.success(()))
       } catch { completion(.failure(error)) }
     }
@@ -1284,8 +1435,7 @@ final class PluginProcess {
     status: Int32
   ) {
     let fm = FileManager.default
-    let logsDir = fm.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Logs/Flash/plugin-install")
+    let logsDir = installLogDirectory
     try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]
@@ -1323,7 +1473,6 @@ final class PluginProcess {
     overrides["FLASH_PLUGIN_VERSION"] = manifest.version
     overrides["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
     overrides["FLASH_PLUGIN_CONFIG"] = settingsJSON
-    overrides["FLASH_PLUGIN_PARENT_PID"] = String(getpid())
     return Self.sanitizedPluginEnvironment(base: environment.environment, overrides: overrides)
   }
 
@@ -1400,6 +1549,10 @@ final class PluginProcess {
           self?.queue.async { [weak self] in
             guard let self, let request = self.pending.removeValue(forKey: id) else { return }
             let elapsedMs = Self.elapsedMilliseconds(since: startedAt)
+            Self.recordRequest(
+              pluginID: self.manifest.id, method: method,
+              elapsedMs: Self.elapsedMillisecondsValue(since: startedAt), outcome: "timeout",
+              trace: traceText)
             FlashLog.plugin(
               .warn,
               pluginID: self.manifest.id,
@@ -1448,7 +1601,10 @@ final class PluginProcess {
     hostRequestToken &+= 1
     let token = hostRequestToken
     pendingHostRequests.insert(token)
-    onHostRequest(method, params, manifest.id) { [weak self] result in
+    let scope = PluginHostRequestScope { [weak self] in
+      self?.isTransportActive(generation) == true
+    }
+    onHostRequest(method, params, manifest.id, scope) { [weak self] result in
       self?.sendResponse(id: id, result: result, generation: generation, token: token)
     }
   }
@@ -1533,10 +1689,20 @@ final class PluginProcess {
         generation: generation, message: "[plugin] IPC write queue overflow (method=\(label))")
       return
     }
-    outbound.append(
-      PluginOutboundQueue.Frame(
+    let pendingFrame: PluginOutboundQueue.Frame
+    do {
+      pendingFrame = try PluginOutboundQueue.Frame(
         data: frame, label: label, coalescingKey: coalescingKey, handle: handle,
-        reservation: reservation))
+        reservation: reservation)
+    } catch {
+      transportBudget.release(reservation)
+      transportLock.unlock()
+      handleTransportFailureOnQueue(
+        generation: generation,
+        message: "[plugin] IPC writer allocation failed (method=\(label))")
+      return
+    }
+    outbound.append(pendingFrame)
     let startDrain = !outboundDraining
     outboundDraining = true
     transportLock.unlock()
@@ -1562,7 +1728,8 @@ final class PluginProcess {
         do { try frame.handle.write(contentsOf: frame.data) } catch {
           queue.async { [weak self] in
             self?.handleTransportFailureOnQueue(
-              generation: generation, message: "[plugin] IPC write failed (method=\(frame.label))")
+              generation: generation, message: "[plugin] IPC write failed (method=\(frame.label))",
+              onWrite: true)
           }
         }
       }
@@ -1583,8 +1750,16 @@ final class PluginProcess {
   /// Runs on the lifecycle queue. A broken or saturated stdin makes every
   /// subsequent request unreachable, so recover through the existing bounded
   /// restart state machine instead of dropping individual frames.
-  private func handleTransportFailureOnQueue(generation: UInt64, message: String) {
+  private func handleTransportFailureOnQueue(
+    generation: UInt64, message: String, onWrite: Bool = false
+  ) {
     guard generation != 0, isTransportActive(generation), process?.isRunning == true else {
+      return
+    }
+    if onWrite, manifest.lifecycle == .publishThenExit {
+      // The child ends its run on its own and may be closing stdin as this
+      // frame reaches it; its exit status is the verdict, not the write.
+      FlashLog.plugin(.debug, pluginID: manifest.id, message: message)
       return
     }
     recordError(message)
@@ -1677,20 +1852,29 @@ final class PluginProcess {
       return
     }
     if object["method"] as? String == "publish", object["id"] == nil {
+      // Validation and decode leave the reader at once: a reply frame behind
+      // this publish must not wait for its rows. The frame's bytes travel
+      // along so the byte quota is read off them, never re-encoded.
       let startedAt = DispatchTime.now()
-      let params = object["params"] as? [String: Any] ?? [:]
-      let decoded = (params["rows"] as? [[String: Any]]).flatMap {
-        Set(params.keys) == ["rows"]
-          ? PluginWireCodec.catalogRows(
-            from: $0, sourceID: "plugin:\(manifest.id)",
-            allowedSources: Set(manifest.candidateSources)) : nil
-      }
-      queue.async { [weak self] in
+      let sourceID = "plugin:\(manifest.id)"
+      let allowedSources = Set(manifest.candidateSources)
+      catalogQueue.async { [weak self] in
         guard let self else { return }
-        defer { self.releaseTransport(reservation) }
-        guard self.isTransportActive(generation), self.lifecycle.state == .running else { return }
-        self.lastInboundFrameAt = .now()
-        self.applyPublish(decoded, startedAt: startedAt)
+        guard self.isTransportActive(generation) else {
+          self.releaseTransport(reservation)
+          return
+        }
+        let decoded = PluginWireCodec.publish(
+          frame: line, object: object, sourceID: sourceID, allowedSources: allowedSources)
+        self.queue.async { [weak self] in
+          guard let self else { return }
+          defer { self.releaseTransport(reservation) }
+          guard self.isTransportActive(generation), self.lifecycle.state == .running else {
+            return
+          }
+          self.lastInboundFrameAt = .now()
+          self.applyPublish(decoded, startedAt: startedAt)
+        }
       }
       return
     }
@@ -1746,13 +1930,19 @@ final class PluginProcess {
           .debug, pluginID: manifest.id, message: "[plugin] reply after its deadline",
           fields: ["id": "\(responseID)", "method": request.method, "elapsed_ms": elapsedMs()],
           trace: request.trace)
+        Self.recordRequest(
+          pluginID: manifest.id, method: request.method, elapsedMs: elapsedMsValue,
+          outcome: "late", trace: request.trace)
         request.completion(nil)
         return
       }
+      Self.recordRequest(
+        pluginID: manifest.id, method: request.method, elapsedMs: elapsedMsValue,
+        outcome: result == nil ? "error" : "ok", trace: request.trace)
       // Startup is timed by the launch phases; every other request that
       // takes over a second is worth a line, `perform` included.
       let level: FlashLog.Level =
-        elapsedMsValue > 1_000 && request.method != "initialize" ? .warn : .debug
+        elapsedMsValue > 1_000 && request.method != "initialize" ? .warn : .trace
       FlashLog.plugin(
         level, pluginID: manifest.id,
         message: level == .warn ? "[plugin] slow request" : "[plugin] request done",
@@ -1801,20 +1991,28 @@ final class PluginProcess {
     }
   }
 
-  /// One `publish` notification: validate at receipt (on this plugin's own
-  /// reader queue) and hand the full-replacement catalog to the host store.
-  /// A malformed or over-quota payload is rejected whole — content-free log
-  /// — and the store keeps the previous catalog by construction.
-  private func applyPublish(
-    _ decoded: (rows: [Candidate], encodedBytes: Int)?, startedAt: DispatchTime
-  ) {
+  /// One `publish` notification, decoded on the catalog queue, handed to the
+  /// host store: the whole catalog, or the one source it names. A malformed
+  /// or over-quota payload is rejected whole — content-free log — and the
+  /// store keeps the previous catalog by construction; so is a source
+  /// publish whose merge would exceed the catalog quotas.
+  private func applyPublish(_ decoded: PluginWireCodec.DecodedPublish?, startedAt: DispatchTime) {
     guard let decoded else {
       FlashLog.plugin(
         .warn, pluginID: manifest.id, message: "[plugin] rejected malformed or oversized publish")
       return
     }
-    catalogStore?.publish(
-      pluginID: manifest.id, rows: decoded.rows, encodedBytes: decoded.encodedBytes)
+    let outcome = catalogStore?.publish(pluginID: manifest.id, decoded) ?? .unchanged
+    if outcome == .overQuota {
+      FlashLog.plugin(
+        .warn, pluginID: manifest.id,
+        message: "[plugin] rejected publish: merged catalog over quota",
+        fields: [
+          "source": decoded.source ?? "*", "rows": String(decoded.rows.count),
+          "encoded_bytes": String(decoded.encodedBytes),
+        ])
+      return
+    }
     let elapsedMs = Self.elapsedMillisecondsValue(since: startedAt)
     if elapsedMs >= 50 {
       FlashLog.plugin(
@@ -1823,6 +2021,7 @@ final class PluginProcess {
         message: "[plugin] slow catalog publish",
         fields: [
           "elapsed_ms": String(format: "%.2f", elapsedMs),
+          "source": decoded.source ?? "*",
           "rows": String(decoded.rows.count),
           "encoded_bytes": String(decoded.encodedBytes),
         ])
@@ -1937,7 +2136,7 @@ final class PluginProcess {
     }
     lock.unlock()
     for name in plan.release {
-      PollScheduler.shared.unregister(Self.pollClientID(pluginID: manifest.id, name: name))
+      scheduler.unregister(Self.pollClientID(pluginID: manifest.id, name: name))
     }
     for (name, registration, arming) in armed {
       let id = Self.pollClientID(pluginID: manifest.id, name: name)
@@ -1946,16 +2145,16 @@ final class PluginProcess {
       }
       switch registration.kind {
       case .every:
-        PollScheduler.shared.register(
+        scheduler.register(
           id, everyMs: registration.ms, priority: registration.priority, on: queue, handler: tick)
       case .after:
-        PollScheduler.shared.scheduleOnce(
+        scheduler.scheduleOnce(
           id, afterMs: registration.ms, priority: registration.priority, on: queue, handler: tick)
       }
     }
     guard !plan.arm.isEmpty || !plan.release.isEmpty else { return }
     FlashLog.plugin(
-      .debug, pluginID: manifest.id,
+      .trace, pluginID: manifest.id,
       message: "[plugin] poll registered",
       fields: [
         "registrations": "\(decoded.count)", "armed": "\(plan.arm.count)",
@@ -1995,7 +2194,7 @@ final class PluginProcess {
     pollArmings.removeAll()
     lock.unlock()
     for name in names {
-      PollScheduler.shared.unregister(Self.pollClientID(pluginID: manifest.id, name: name))
+      scheduler.unregister(Self.pollClientID(pluginID: manifest.id, name: name))
     }
   }
 
@@ -2075,11 +2274,14 @@ final class PluginProcess {
   /// Lifecycle failures only (launch, abnormal exit, ping teardown,
   /// initialize failures, write errors, park). Per-request anomalies are
   /// warn-logs, never lastError — a single slow reply must not paint the
-  /// plugin red in `:plugins`.
-  private func recordError(_ message: String) {
+  /// plugin red in `:plugins show`.
+  /// `.warn` for a failure the lifecycle restarts from; `.error` for one
+  /// that parks the plugin until someone acts.
+  private func recordError(_ message: String, level: FlashLog.Level = .warn) {
     // Also log: a throwing launch() (e.g. an unresolvable interpreter)
     // otherwise parks the plugin with zero log evidence.
-    FlashLog.plugin(.warn, pluginID: manifest.id, message: message)
+    FlashLog.plugin(level, pluginID: manifest.id, message: message)
+    FlashTelemetry.record(.pluginErrors, 1, ["plugin": manifest.id])
     lock.lock()
     lastError = message
     lock.unlock()
@@ -2119,6 +2321,30 @@ final class PluginProcess {
 
   // MARK: - File watchers
 
+  /// The plugin's own files when `watchFiles`, and always the files its
+  /// `watch_settings` name.
+  private struct WatchedFileStamp: Equatable {
+    var inode: UInt64?
+    var size: UInt64?
+    var modified: Date?
+
+    init(_ path: URL) {
+      let attributes = try? FileManager.default.attributesOfItem(atPath: path.path)
+      inode = (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value
+      size = (attributes?[.size] as? NSNumber)?.uint64Value
+      modified = attributes?[.modificationDate] as? Date
+    }
+  }
+  private var watchedFileStamps: [URL: WatchedFileStamp] = [:]
+
+  private func watchedSettingChanged() {
+    let current = Dictionary(
+      uniqueKeysWithValues: watchedFileStamps.keys.map { ($0, WatchedFileStamp($0)) })
+    guard current != watchedFileStamps else { return }
+    watchedFileStamps = current
+    scheduleWatchedFileReload()
+  }
+
   private func installFileWatchers() {
     removeFileWatchers()
     // Root only: `manifest.json` and the `flash-plugin-<id>` binary both live
@@ -2126,24 +2352,65 @@ final class PluginProcess {
     // root, which a vnode watcher on the directory sees. Watching the whole
     // tree opened one descriptor per directory (hundreds with a stray
     // `target/`) and fired on source edits that change nothing the host loads.
-    watchPath(root)
+    if watchFiles { watchPath(root) { [weak self] in self?.scheduleFileReload() } }
+    // A watched setting's file, and its directory: an editor's atomic save
+    // renames a new file into place, and a file that does not exist yet
+    // appears there. The reload installs the watchers afresh on the new
+    // vnode.
+    var directories = Set<String>()
+    let watched = Self.watchedSettingPaths(
+      names: manifest.watchSettings, settings: settings, root: root,
+      home: FileManager.default.homeDirectoryForCurrentUser.path)
+    watchedFileStamps = Dictionary(
+      uniqueKeysWithValues: Set(watched).map { ($0, WatchedFileStamp($0)) })
+    for file in watched {
+      watchPath(file) { [weak self] in self?.watchedSettingChanged() }
+      let directory = file.deletingLastPathComponent()
+      guard directories.insert(directory.path).inserted else { continue }
+      watchPath(directory) { [weak self] in self?.watchedSettingChanged() }
+    }
   }
 
-  private func watchPath(_ url: URL) {
+  /// The files a plugin's `watch_settings` name: the string settings among
+  /// `names`, `~` expanded against `home` and a relative path resolved under
+  /// `root`, the child's working directory. Empty and non-string values
+  /// name nothing.
+  static func watchedSettingPaths(
+    names: [String], settings: [String: PluginConfigValue], root: URL, home: String
+  ) -> [URL] {
+    names.compactMap { name in
+      guard case .string(let raw)? = settings[name] else { return nil }
+      let path = raw.trimmed
+      guard !path.isEmpty else { return nil }
+      if path == "~" { return URL(fileURLWithPath: home) }
+      if path.hasPrefix("~/") { return URL(fileURLWithPath: home + path.dropFirst(1)) }
+      if path.hasPrefix("/") { return URL(fileURLWithPath: path) }
+      return root.appendingPathComponent(path)
+    }
+  }
+
+  private func watchPath(_ url: URL, onEvent: @escaping () -> Void) {
     let fd = open(url.path, O_EVTONLY)
     guard fd >= 0 else { return }
     let source = DispatchSource.makeFileSystemObjectSource(
       fileDescriptor: fd,
       eventMask: [.write, .delete, .rename, .extend, .attrib],
       queue: queue)
-    source.setEventHandler { [weak self] in
-      self?.scheduleFileReload()
-    }
+    source.setEventHandler(handler: onEvent)
     source.setCancelHandler {
       close(fd)
     }
     source.resume()
     fileWatchers.append(source)
+  }
+
+  /// A file a `watch_settings` setting names changed: the plugin's data can
+  /// have changed, so it runs again once the burst settles.
+  private func scheduleWatchedFileReload() {
+    watchedFileDeadline.arm(afterMs: 300) { [weak self] in
+      guard let self, self.lifecycle.state != .stopped else { return }
+      self.reload(reason: "watched_file_changed")
+    }
   }
 
   private func removeFileWatchers() {
@@ -2166,6 +2433,20 @@ final class PluginProcess {
 
   private static func elapsedMilliseconds(since start: DispatchTime) -> String {
     String(format: "%.2f", elapsedMillisecondsValue(since: start))
+  }
+
+  /// A finished request as telemetry: its round trip, and a span inside
+  /// the interaction it served. Content-free: plugin id, method, outcome.
+  private static func recordRequest(
+    pluginID: String, method: String, elapsedMs: Double, outcome: String, trace: String?
+  ) {
+    guard FlashTelemetry.current != nil else { return }
+    let attributes = ["plugin": pluginID, "method": method, "outcome": outcome]
+    FlashTelemetry.record(.pluginRequestDuration, elapsedMs, attributes)
+    let end = ProcessInfo.processInfo.systemUptime
+    FlashTelemetry.span(
+      "plugin \(method)", trace: trace, startUptime: end - elapsedMs / 1000, endUptime: end,
+      attributes: attributes, failed: outcome != "ok")
   }
 
   private static func elapsedMillisecondsValue(since start: DispatchTime) -> Double {

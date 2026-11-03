@@ -26,9 +26,21 @@ final class KeyboardCaptureTapTests: XCTestCase {
           .swallowIfNativeSurfaceKeyIsMapped)
       }
     }
-    XCTAssertEqual(
-      decide(flashMode: .normal, inputMode: .normal, aboutWindowVisible: true, aboutOwns: true),
-      .swallowIfNativeSurfaceKeyIsMapped)
+  }
+
+  /// The regression: with the About window key, a NORMAL mapping still ran,
+  /// so closing it (`x`, `:q`, `ctrl+w q`) closed the app behind it. A key
+  /// About window is a normal window: it gets every key.
+  func testAKeyAboutWindowGetsEveryKey() {
+    for flashMode: FlashMode in [.normal, .insert] {
+      for chord in [false, true] {
+        XCTAssertEqual(
+          decide(
+            flashMode: flashMode, inputMode: .normal, chord: chord, aboutWindowVisible: true,
+            aboutOwns: true),
+          .pass)
+      }
+    }
   }
 
   /// The pure decision over the whole state table: NORMAL swallows every key,
@@ -83,13 +95,35 @@ final class KeyboardCaptureTapTests: XCTestCase {
     flashMode: FlashMode, inputMode: OverlayInputMode, chord: Bool = false,
     escape: Bool = false, preview: Bool = false,
     terminal: Bool = false, aboutWindowVisible: Bool = false, aboutOwns: Bool = false,
-    nativeSurfaceSuspended: Bool = false
+    nativeSurfaceSuspended: Bool = false, dockView: Bool = false
   ) -> KeyboardCaptureTap.Decision {
     KeyboardCaptureTap.decide(
       isTerminal: terminal, flashMode: flashMode, inputMode: inputMode,
       aboutWindowVisible: aboutWindowVisible, aboutWindowOwnsKeyboard: aboutOwns,
       nativeSurfaceSuspended: nativeSurfaceSuspended, isModifiedChord: chord,
-      isBareEscape: escape, ephemeralPopupShown: preview)
+      isBareEscape: escape, ephemeralPopupShown: preview, dockViewShown: dockView)
+  }
+
+  /// While Mission Control or App Exposé is up, NORMAL keeps the keys it
+  /// maps (`f` labels the Dock's view) and lets the rest reach the Dock:
+  /// Escape closes Mission Control. A hint
+  /// session still owns every key, and INSERT is unchanged.
+  func testMissionControlGetsTheKeysNormalLeavesAlone() {
+    for chord in [false, true] {
+      XCTAssertEqual(
+        decide(flashMode: .normal, inputMode: .normal, chord: chord, dockView: true),
+        .swallowIfNativeSurfaceKeyIsMapped)
+      XCTAssertEqual(
+        decide(flashMode: .normal, inputMode: .normal, chord: chord, dockView: false), .swallow)
+    }
+    XCTAssertEqual(
+      decide(flashMode: .normal, inputMode: .normal, escape: true, dockView: true),
+      .swallowIfNativeSurfaceKeyIsMapped)
+    XCTAssertEqual(decide(flashMode: .normal, inputMode: .hints, dockView: true), .swallow)
+    XCTAssertEqual(decide(flashMode: .insert, inputMode: .passive, dockView: true), .pass)
+    XCTAssertEqual(
+      decide(flashMode: .insert, inputMode: .passive, chord: true, dockView: true),
+      .swallowIfInsertChordIsMapped)
   }
 
   func testInsertModeSwallowsOnlyForAHintSession() {

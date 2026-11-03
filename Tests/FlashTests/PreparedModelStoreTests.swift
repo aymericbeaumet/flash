@@ -93,31 +93,85 @@ final class PreparedModelStoreTests: XCTestCase {
         occlusion: Self.walkedOcclusion))
   }
 
+  /// Only a maintenance walk that reproduces the model unchanged — same
+  /// dirty token, configuration revision and target digest — counts as a
+  /// static app; the interval it grows is `nextModelIntervalMs`'s.
   func testFreshnessDoublesOnlyForUnchangedMaintenanceWalks() {
     let now = DispatchTime(uptimeNanoseconds: 1_000)
     let previous = model(
       pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])
     let same = model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "one")])
-    XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: previous, built: same, reason: .maintenance),
-      AppMonitor.modelFreshnessMs * 2)
-    var grown = previous
-    grown.freshnessMs = AppMonitor.modelFreshnessMaxMs
-    XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: grown, built: same, reason: .maintenance),
-      AppMonitor.modelFreshnessMaxMs)
-    XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: previous, built: same, reason: .focus),
-      AppMonitor.modelFreshnessMs)
+    XCTAssertTrue(AppMonitor.modelReproducedUnchanged(previous: previous, built: same))
     let moved = model(
       pid: 42, token: 7, revision: 3, computedAt: now,
       targets: [target(id: "one", frame: CGRect(x: 5, y: 5, width: 10, height: 10))])
+    XCTAssertFalse(AppMonitor.modelReproducedUnchanged(previous: previous, built: moved))
+    XCTAssertFalse(
+      AppMonitor.modelReproducedUnchanged(
+        previous: previous,
+        built: model(pid: 42, token: 8, revision: 3, computedAt: now, targets: [target(id: "one")])
+      ))
+    XCTAssertFalse(AppMonitor.modelReproducedUnchanged(previous: nil, built: same))
+
+    let floor = AppMonitor.modelFreshnessMs
     XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: previous, built: moved, reason: .maintenance),
-      AppMonitor.modelFreshnessMs)
+      AppMonitor.nextModelIntervalMs(
+        current: floor, elapsedMs: 10, unchanged: true, degenerate: false),
+      floor * 2)
     XCTAssertEqual(
-      AppMonitor.nextFreshnessMs(previous: nil, built: same, reason: .maintenance),
-      AppMonitor.modelFreshnessMs)
+      AppMonitor.nextModelIntervalMs(
+        current: AppMonitor.modelFreshnessMaxMs, elapsedMs: 10, unchanged: true,
+        degenerate: false),
+      AppMonitor.modelFreshnessMaxMs)
+    XCTAssertEqual(
+      AppMonitor.nextModelIntervalMs(
+        current: floor, elapsedMs: 10, unchanged: false, degenerate: false),
+      floor)
+    // A changed model walked cheaply shrinks a grown interval; a slow walk
+    // grows it even when the model changed.
+    XCTAssertEqual(
+      AppMonitor.nextModelIntervalMs(
+        current: 6000, elapsedMs: 10, unchanged: false, degenerate: false),
+      floor)
+    XCTAssertEqual(
+      AppMonitor.nextModelIntervalMs(
+        current: floor, elapsedMs: 200, unchanged: false, degenerate: false),
+      floor * 2)
+  }
+
+  /// The store says why it has nothing to serve, so a miss can be told apart
+  /// in `[latency] hints_visible`: never walked, discarded by a focus change
+  /// or an AX event, a configuration change, a window-list change, or age.
+  func testTheStoreRemembersWhyItHasNoModel() {
+    let now = DispatchTime(uptimeNanoseconds: 10_000_000_000)
+    var store = PreparedModelStore()
+    func miss(
+      token: UInt64 = 7, revision: UInt64 = 3, at: DispatchTime = now,
+      occlusion: WindowSnapshot.OcclusionSignature? = PreparedModelStoreTests.walkedOcclusion
+    ) -> PreparedModelMiss? {
+      store.resolve(
+        pid: 42, dirtyToken: token, configRevision: revision, now: at, occlusion: occlusion
+      ).miss
+    }
+    XCTAssertEqual(miss(), .absent, "never walked")
+    store.store(model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "a")]))
+    XCTAssertNil(miss())
+    XCTAssertEqual(miss(token: 8), .invalidated)
+    XCTAssertEqual(miss(revision: 4), .config)
+    XCTAssertEqual(miss(occlusion: nil), .occluded)
+    XCTAssertEqual(
+      miss(at: DispatchTime(uptimeNanoseconds: now.uptimeNanoseconds + 1_600_000_000)), .expired)
+    store.discardModel(pid: 42, because: .focus)
+    XCTAssertEqual(miss(), .focus)
+    store.discardModel(pid: 42, because: .invalidated)
+    XCTAssertEqual(miss(), .invalidated)
+    store.store(
+      model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [], occluded: true))
+    XCTAssertEqual(miss(), .occluded, "an occluded walk evicts the model and says so")
+    store.store(model(pid: 42, token: 7, revision: 3, computedAt: now, targets: [target(id: "a")]))
+    XCTAssertNil(miss())
+    store.remove(pid: 42)
+    XCTAssertEqual(miss(), .absent)
   }
 
   func testEmptyReadyModelIsDistinctFromMissingModel() {
@@ -185,24 +239,51 @@ final class PreparedModelStoreTests: XCTestCase {
     XCTAssertEqual(regions(coverAlpha: 0), [window])
   }
 
-  func testDiscardModelKeepsRebuildGuard() {
+  func testDiscardModelKeepsRebuildGuard() throws {
     var store = PreparedModelStore()
-    XCTAssertTrue(store.beginRebuild(pid: 3))
-    store.discardModel(pid: 3)
-    XCTAssertFalse(store.beginRebuild(pid: 3))
-    XCTAssertTrue(store.finishRebuild(pid: 3))
+    let ticket = try XCTUnwrap(store.beginRebuild(pid: 3))
+    store.discardModel(pid: 3, because: .invalidated)
+    XCTAssertNil(store.beginRebuild(pid: 3))
+    XCTAssertEqual(store.finishRebuild(ticket), true)
   }
 
-  func testRebuildQueueCollapsesConcurrentRequests() {
+  func testRebuildQueueCollapsesConcurrentRequests() throws {
     var store = PreparedModelStore()
-    XCTAssertTrue(store.beginRebuild(pid: 11))
-    XCTAssertFalse(store.beginRebuild(pid: 11))
-    XCTAssertFalse(store.beginRebuild(pid: 11))
+    let ticket = try XCTUnwrap(store.beginRebuild(pid: 11))
+    XCTAssertNil(store.beginRebuild(pid: 11))
+    XCTAssertNil(store.beginRebuild(pid: 11))
     XCTAssertTrue(store.isRebuilding(pid: 11))
-    XCTAssertTrue(store.finishRebuild(pid: 11))
+    XCTAssertEqual(store.finishRebuild(ticket), true)
     XCTAssertFalse(store.isRebuilding(pid: 11))
-    XCTAssertTrue(store.beginRebuild(pid: 11))
-    XCTAssertFalse(store.finishRebuild(pid: 11))
+    let next = try XCTUnwrap(store.beginRebuild(pid: 11))
+    XCTAssertEqual(store.finishRebuild(next), false)
+  }
+
+  func testCancelledRebuildCannotFinishItsReplacement() throws {
+    var store = PreparedModelStore()
+    let cancelled = try XCTUnwrap(store.beginRebuild(pid: 11))
+    store.removeAll()
+    let replacement = try XCTUnwrap(store.beginRebuild(pid: 11))
+    XCTAssertNil(store.beginRebuild(pid: 11))
+
+    XCTAssertNil(store.finishRebuild(cancelled), "the cancelled completion owns no queued work")
+    XCTAssertTrue(store.isRebuilding(pid: 11), "the replacement must keep its rebuild guard")
+    XCTAssertEqual(
+      store.finishRebuild(replacement), true, "the replacement owns its queued refresh")
+  }
+
+  func testRemovedAppRevokesItsWalkWithoutRevokingOtherApps() throws {
+    var store = PreparedModelStore()
+    let removed = try XCTUnwrap(store.beginRebuild(pid: 11))
+    let other = try XCTUnwrap(store.beginRebuild(pid: 12))
+    store.remove(pid: 11)
+    let replacement = try XCTUnwrap(store.beginRebuild(pid: 11))
+
+    XCTAssertNil(store.finishRebuild(removed))
+    XCTAssertTrue(store.isRebuilding(pid: 11))
+    XCTAssertEqual(store.finishRebuild(other), false)
+    XCTAssertEqual(store.finishRebuild(replacement), false)
+    XCTAssertNil(store.finishRebuild(replacement), "a completion may consume its ticket only once")
   }
 
   private func model(

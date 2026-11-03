@@ -48,4 +48,25 @@ final class TestWindowHygieneTests: XCTestCase {
     XCTAssertTrue(panel.isVisible)
     XCTAssertEqual(panel.alphaValue, 0)
   }
+
+  /// A panel that can take the key window without activating its app, as
+  /// Flash's overlay does, never becomes key in the suite: a key window in
+  /// the xctest process took the keyboard from the user's frontmost app
+  /// (WindowServer's "keythief"), so keys typed in INSERT reached nothing.
+  @MainActor func testWindowsTestsMakeKeyNeverTakeTheKeyboard() {
+    final class KeyablePanel: NSPanel {
+      override var canBecomeKey: Bool { true }
+    }
+    let panel = KeyablePanel(
+      contentRect: CGRect(x: 0, y: 0, width: 200, height: 200),
+      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    defer { panel.orderOut(nil) }
+    panel.makeKeyAndOrderFront(nil)
+    XCTAssertTrue(panel.isVisible, "ordered in as the test expects")
+    XCTAssertEqual(panel.alphaValue, 0)
+    XCTAssertFalse(panel.isKeyWindow)
+    panel.makeKey()
+    XCTAssertFalse(panel.isKeyWindow)
+    XCTAssertEqual(TestWindowHygiene.refusedKeyRequests(for: panel), 2)
+  }
 }

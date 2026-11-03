@@ -298,4 +298,38 @@ final class WindowSnapshotTests: XCTestCase {
     XCTAssertEqual(entries[0].pid, 42)
     XCTAssertEqual(entries[0].nsBounds, CGRect(x: 10, y: 780, width: 200, height: 100))
   }
+
+  /// The regression: an open Notification Center panel covered the
+  /// frontmost window, and every discovery warned again (66 times in one
+  /// session). A covering warns when it starts or changes, logs its repeats
+  /// at debug, and warns again once the window was visible in between.
+  func testACoveredFrontmostWindowWarnsOncePerEpisode() {
+    let focused = WindowSnapshot.Entry(
+      pid: 42, layer: 0, nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    let panel = WindowSnapshot.Entry(
+      pid: 767, layer: 21, nsBounds: CGRect(x: 0, y: 0, width: 400, height: 400))
+    let lock = NSLock()
+    var levels: [FlashLog.Level] = []
+    let sink = FlashLog.addSink { record in
+      guard record.message.hasPrefix("[discover] frontmost_window_covered") else { return }
+      lock.lock()
+      levels.append(record.level)
+      lock.unlock()
+    }
+    defer { FlashLog.removeSink(sink) }
+    func walk(_ entries: [WindowSnapshot.Entry]) {
+      _ = WindowSnapshot.build(
+        entries: entries, focusedPid: 42, frontmostPID: 42, ignoringPids: [],
+        walkedWindowFrame: focused.nsBounds)
+    }
+    walk([focused])
+    walk([panel, focused])
+    walk([panel, focused])
+    walk([panel, focused])
+    walk([focused])
+    walk([panel, focused])
+    lock.lock()
+    defer { lock.unlock() }
+    XCTAssertEqual(levels, [.warn, .debug, .debug, .warn])
+  }
 }

@@ -2,7 +2,7 @@ import Foundation
 
 /// Static path helpers for the Firefox profile used by browser parity
 /// tests. The profile template is provisioned by
-/// `Scripts/test-integration-browser.sh`; each parallel worker copies it
+/// `mise run test:integration:browser`; each parallel worker copies it
 /// into an isolated profile directory before launching Firefox.
 public enum BrowserTestProfile {
   public static let releaseAppPath = "/Applications/Firefox.app"
@@ -83,12 +83,12 @@ public enum BrowserTestProfile {
       case .profileMissing(let url):
         return """
           Browser test profile template not found at \(url.path).
-          Run ./Scripts/test-integration-browser.sh to provision it.
+          Run `mise run test:integration:browser -- --setup-only` to provision it.
           """
       case .vimiumMissing(let url):
         return """
           Vimium-FF XPI not installed at \(url.path).
-          Run ./Scripts/test-integration-browser.sh to provision it.
+          Run `mise run test:integration:browser -- --setup-only` to provision it.
           """
       }
     }

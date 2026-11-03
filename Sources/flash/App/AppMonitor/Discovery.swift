@@ -33,6 +33,7 @@ extension AppMonitor {
       path: String,
       hints: [AssignedHint],
       retried: Bool = false,
+      miss: PreparedModelMiss? = nil,
       extra: [String: String] = [:]
     ) {
       if FlashLog.wouldEmit(.debug) {
@@ -45,12 +46,13 @@ extension AppMonitor {
           "target_filter": "\(hasTargetFilter)",
           "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
         ]
+        if let miss { fields["miss"] = miss.rawValue }
         for (key, value) in extra {
           fields[key] = value
         }
         FlashLog.debug("[discover] complete", fields: fields)
       }
-      completion(hints, DiscoveryOutcome(path: path, retried: retried))
+      completion(hints, DiscoveryOutcome(path: path, retried: retried, miss: miss))
     }
 
     let plan = registry.hintProviderPlan(for: context)
@@ -97,10 +99,23 @@ extension AppMonitor {
       // a refresh on the same window finds about 92. Fall through and refresh.
       // A degenerate one is the same kind of miss: a Chromium or Firefox tree
       // caught mid-build once gave 1 target for a view that had 98.
-      if let model = lookupPreparedModel(for: pid, windowEntries: windowEntries),
-        !Self.discoveryLooksDegenerate(
-          targets: model.targets.count, lastHealthy: healthyTargetCounts[pid])
-      {
+      let resolution = resolvePreparedModel(
+        for: pid, bundleIdentifier: context.bundleIdentifier, windowEntries: windowEntries)
+      let miss: PreparedModelMiss
+      switch resolution {
+      case .miss(let reason): miss = reason
+      case .model(let model):
+        guard
+          Self.discoveryLooksDegenerate(
+            targets: model.targets.count, lastHealthy: healthyTargetCounts[pid])
+        else {
+          serve(model)
+          return
+        }
+        miss = .degenerate
+      }
+
+      func serve(_ model: PreparedModel) {
         noteHealthyTargets(model.targets.count, pid: pid)
         noteActivationFoundTargets(pid: pid, bundleIdentifier: context.bundleIdentifier)
         if let targetFilter {
@@ -119,7 +134,6 @@ extension AppMonitor {
             hints: model.hints,
             extra: ["targets": "\(model.targets.count)"])
         }
-        return
       }
 
       refreshForActivation(
@@ -137,6 +151,7 @@ extension AppMonitor {
               path: "prepared_model_refresh_filter",
               hints: self.assignTargets(targets, cfg: cfg, region: context.frontWindowFrame),
               retried: retried,
+              miss: miss,
               extra: [
                 "model_targets": "\(model.targets.count)",
                 "targets": "\(targets.count)",
@@ -146,6 +161,7 @@ extension AppMonitor {
               path: "prepared_model_refresh",
               hints: model.hints,
               retried: retried,
+              miss: miss,
               extra: ["targets": "\(model.targets.count)"])
           }
         } else {
@@ -153,7 +169,8 @@ extension AppMonitor {
           // same app displaced; its walk would only queue ahead of that
           // activation's own, so it ends here instead.
           guard isCurrent() else {
-            return complete(path: "activation_superseded", hints: [], retried: retried)
+            return complete(
+              path: "activation_superseded", hints: [], retried: retried, miss: miss)
           }
           self.walkForActivation(
             context: context, providers: plan.preparedProviders, targetFilter: targetFilter,
@@ -163,7 +180,8 @@ extension AppMonitor {
               self?.noteActivationFoundTargets(
                 pid: pid, bundleIdentifier: context.bundleIdentifier)
             }
-            complete(path: "activation_refresh_miss", hints: result.hints, retried: retried)
+            complete(
+              path: "activation_refresh_miss", hints: result.hints, retried: retried, miss: miss)
           }
         }
       }
@@ -182,7 +200,7 @@ extension AppMonitor {
         discoverPreparedFallback(
           afterVolatileDecline: plan.uncachedProviders.contains { $0.resultsAreVolatile })
       } else {
-        complete(path: "activation_uncached", hints: result.hints)
+        complete(path: "activation_uncached", hints: result.hints, miss: .provider)
       }
     }
   }
@@ -830,6 +848,22 @@ extension AppMonitor {
   /// and by EasyMotion so a terminal cell lands on the same point for each.
   func providerFrame(for context: AppContext, primaryH: CGFloat) -> CGRect {
     resolveDiscoveryFrame(for: context, primaryH: primaryH).providerContext.frontWindowFrame
+  }
+
+  /// The focused app's text grid for a letter search, from the plugins `f`
+  /// would ask for its hints, in that order (tmux for a terminal). Selection
+  /// reads the registry only and the requests never block the caller:
+  /// `completion` runs once, at once when no provider is running, else on
+  /// the deciding plugin's queue.
+  func requestTextGrid(
+    for context: AppContext, completion: @escaping (PluginTextGrid?) -> Void
+  ) {
+    let providers = registry.hintProviderPlan(for: context).activationProviders
+      .compactMap { $0 as? PluginFlashSource }
+    TerminalTextGrid.firstGrid(
+      from: providers[...],
+      request: { provider, reply in provider.textGrid(in: context, completion: reply) },
+      completion: completion)
   }
 
   private func resolveDiscoveryFrame(for context: AppContext, primaryH: CGFloat) -> DiscoveryFrame {

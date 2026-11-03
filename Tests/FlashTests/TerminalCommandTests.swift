@@ -5,30 +5,31 @@ import XCTest
 final class TerminalCommandTests: XCTestCase {
   func testEnterTerminalModeIsRecognizedWithStrictArguments() {
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "enter_terminal_mode", args: [:]), .terminalMode(name: nil))
+      URLEventHandler.parse(topic: "mode", action: "terminal", args: [:]), .terminalMode(name: nil))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "enter_terminal_mode", args: ["name": "terminal"]),
+      URLEventHandler.parse(topic: "mode", action: "terminal", args: ["name": "terminal"]),
       .terminalMode(name: "terminal"))
-    XCTAssertNil(URLEventHandler.parse(verb: "enter_terminal_mode", args: ["name": ""]))
-    XCTAssertNil(URLEventHandler.parse(verb: "enter_terminal_mode", args: ["name": " "]))
-    XCTAssertNil(URLEventHandler.parse(verb: "enter_terminal_mode", args: ["unknown": "x"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "mode", action: "terminal", args: ["name": ""]))
+    XCTAssertNil(URLEventHandler.parse(topic: "mode", action: "terminal", args: ["name": " "]))
+    XCTAssertNil(URLEventHandler.parse(topic: "mode", action: "terminal", args: ["unknown": "x"]))
   }
 
-  /// `enter_terminal_mode` replaced `popup_show`, and `leave_mode` replaced
+  /// `mode terminal` replaced `popup_show`, and `mode leave` replaced
   /// `popup_dismiss`: the old names are unknown everywhere, with no alias.
-  func testRetiredPopupShowAndDismissVerbsAreRejected() {
-    for verb in ["popup_show", "popup_dismiss"] {
-      XCTAssertNil(URLEventHandler.parse(verb: verb, args: [:]), verb)
-      XCTAssertNil(URLEventHandler.parse(verb: verb, args: ["name": "terminal"]), verb)
-      XCTAssertNil(parseMappingCommand(argv: ["flash", verb]), verb)
-      XCTAssertNil(NormalModeDispatcher.commandLinePopupCommand(":" + verb), verb)
-      XCTAssertNil(NormalModeDispatcher.popupCommandSyntax[verb], verb)
+  func testRetiredPopupShowAndDismissCommandsAreRejected() {
+    for action in ["show", "dismiss"] {
+      let verb = "popup \(action)"
+      XCTAssertNil(URLEventHandler.parse(topic: "popup", action: action, args: [:]), verb)
+      XCTAssertNil(
+        URLEventHandler.parse(topic: "popup", action: action, args: ["name": "terminal"]), verb)
+      XCTAssertNil(parseMappingCommand(argv: ["flash", "popup", action]), verb)
+      XCTAssertNil(NormalModeDispatcher.commandLineCoreCommand(":" + verb), verb)
       XCTAssertFalse(URLEventHandler.usageText.contains("flash " + verb + "\n"), verb)
       XCTAssertFalse(URLEventHandler.usageText.contains("flash " + verb + " "), verb)
       let config = ConfigLoader.parse(
         """
         [mode.all.mappings]
-        "alt+space" = ["flash", "\(verb)"]
+        "alt+space" = ["flash", "popup", "\(action)"]
         """)
       XCTAssertTrue(
         config.loadingDiagnostics.contains { $0.message.contains(verb) },
@@ -40,78 +41,90 @@ final class TerminalCommandTests: XCTestCase {
 
   func testPopupCommandsParseFromCommandLineAndMappingActions() {
     let commands: [(String, URLCommand)] = [
-      ("enter_terminal_mode", .terminalMode(name: nil)),
-      ("enter_terminal_mode --name=terminal", .terminalMode(name: "terminal")),
-      ("popup_restart --name=terminal", .popupRestart(name: "terminal")),
-      ("popup_quit", .popupQuit(name: nil)),
-      ("popup_quit --name=terminal", .popupQuit(name: "terminal")),
+      ("mode terminal", .terminalMode(name: nil)),
+      ("mode terminal --name=terminal", .terminalMode(name: "terminal")),
+      ("popup restart --name=terminal", .popupRestart(name: "terminal")),
+      ("popup quit", .popupQuit(name: nil)),
+      ("popup quit --name=terminal", .popupQuit(name: "terminal")),
     ]
     for (text, command) in commands {
-      XCTAssertEqual(NormalModeDispatcher.commandLinePopupCommand(":" + text), command)
+      XCTAssertEqual(NormalModeDispatcher.commandLineCoreCommand(":" + text), command)
       let action = MappingCommand.flashCommand(command)
       XCTAssertEqual(
         parseMappingCommand(argv: ["flash"] + text.split(separator: " ").map(String.init)), action)
       XCTAssertEqual(command.diagnosticDescription, "flash " + text)
     }
     for invalid in [
-      ":enter_terminal_mode terminal", ":enter_terminal_mode --name=",
-      ":enter_terminal_mode --name=a --name=b", ":enter_terminal_mode --unknown=x",
-      ":popup_quit shell", ":popup_quit --name=", ":popup_quit --name=a --name=b",
-      ":popup_quit --unknown=x",
+      ":mode terminal terminal", ":mode terminal --name=",
+      ":mode terminal --name=a --name=b", ":mode terminal --unknown=x",
+      ":popup quit shell", ":popup quit --name=", ":popup quit --name=a --name=b",
+      ":popup quit --unknown=x",
     ] {
-      XCTAssertNil(NormalModeDispatcher.commandLinePopupCommand(invalid), invalid)
+      XCTAssertNil(NormalModeDispatcher.commandLineCoreCommand(invalid), invalid)
     }
   }
 
   func testPopupCommandsAppearInCompletionCatalogAndHelp() throws {
+    let topics = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":pop", pluginCommands: [], pluginSubcommands: [:]))
+    let topic = try XCTUnwrap(topics.items.first { $0.label == "popup" })
+    XCTAssertEqual(topic.kind, .acceptsArgs)
+    XCTAssertEqual(topic.insertion, "popup ")
     let popup = try XCTUnwrap(
       NormalModeDispatcher.commandLineCompletions(
-        ":popup_", pluginCommands: [], pluginSubcommands: [:]))
-    XCTAssertEqual(Set(popup.items.map(\.label)), ["popup_restart", "popup_quit"])
-    let terminal = try XCTUnwrap(
+        ":popup ", pluginCommands: [], pluginSubcommands: [:]))
+    XCTAssertEqual(popup.prefix, ":popup ")
+    XCTAssertEqual(popup.items.map(\.label), ["quit", "restart"])
+    let mode = try XCTUnwrap(
       NormalModeDispatcher.commandLineCompletions(
-        ":enter_t", pluginCommands: [], pluginSubcommands: [:]))
-    XCTAssertEqual(terminal.items.map(\.label), ["enter_terminal_mode"])
-    for item in popup.items + terminal.items {
-      XCTAssertEqual(item.kind, .acceptsArgs, item.label)
-      XCTAssertEqual(item.insertion, item.label + " ")
+        ":mode t", pluginCommands: [], pluginSubcommands: [:]))
+    let terminal = try XCTUnwrap(mode.items.first { $0.label == "terminal" })
+    for item in popup.items + [terminal] {
+      XCTAssertEqual(item.kind, .pluginSubcommand, "\(item.label) runs bare on <CR>")
+      XCTAssertEqual(item.insertion, item.label)
     }
-    let config = ConfigLoader.parse(
-      """
-      [mode.normal.mappings]
-      ":" = ["flash", "enter_command_mode"]
-      """)
+    let app = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":app op", pluginCommands: [], pluginSubcommands: [:]))
+    XCTAssertEqual(app.prefix, ":app ")
+    XCTAssertEqual(app.query, "op")
+    XCTAssertEqual(
+      app.items.first { $0.label == "open" },
+      .init(label: "open", insertion: "open ", kind: .acceptsArgs),
+      "a required --name keeps the line open")
     let catalog = NormalModeDispatcher.coreCommandCatalog()
-    for name in ["enter_terminal_mode", "popup_restart", "popup_quit"] {
+    for name in ["mode terminal", "popup restart", "popup quit"] {
       XCTAssertTrue(catalog.contains { $0["name"] as? String == ":" + name })
-      XCTAssertTrue(
-        NormalModeDispatcher.helpText(config: config, showModes: true).contains(":" + name))
       XCTAssertTrue(URLEventHandler.usageText.contains("flash " + name))
     }
-    XCTAssertTrue(URLEventHandler.usageText.contains("flash enter_terminal_mode [--name=<popup>]"))
-    XCTAssertTrue(FlashCLI.usage.contains("flash enter_terminal_mode --name="))
-    XCTAssertTrue(URLEventHandler.helpTopic.body.contains("enter_terminal_mode"))
+    XCTAssertTrue(URLEventHandler.usageText.contains("flash mode terminal [--name=<popup>]"))
+    XCTAssertTrue(FlashCLI.usage.contains("flash mode terminal --name="))
+    let manual = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("docs/commands.md")
+    XCTAssertTrue(try String(contentsOf: manual, encoding: .utf8).contains("mode terminal"))
   }
 
   func testRestartTargetsExplicitOrFocusedSession() {
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "popup_restart", args: [:]),
+      URLEventHandler.parse(topic: "popup", action: "restart", args: [:]),
       .popupRestart(name: nil))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "popup_restart", args: ["name": "system"]),
+      URLEventHandler.parse(topic: "popup", action: "restart", args: ["name": "system"]),
       .popupRestart(name: "system"))
-    XCTAssertNil(URLEventHandler.parse(verb: "popup_restart", args: ["name": ""]))
-    XCTAssertNil(URLEventHandler.parse(verb: "popup_restart", args: ["unknown": "x"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "popup", action: "restart", args: ["name": ""]))
+    XCTAssertNil(URLEventHandler.parse(topic: "popup", action: "restart", args: ["unknown": "x"]))
   }
 
   func testQuitTargetsExplicitOrFocusedSession() {
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "popup_quit", args: [:]),
+      URLEventHandler.parse(topic: "popup", action: "quit", args: [:]),
       .popupQuit(name: nil))
     XCTAssertEqual(
-      URLEventHandler.parse(verb: "popup_quit", args: ["name": "system"]),
+      URLEventHandler.parse(topic: "popup", action: "quit", args: ["name": "system"]),
       .popupQuit(name: "system"))
-    XCTAssertNil(URLEventHandler.parse(verb: "popup_quit", args: ["name": ""]))
-    XCTAssertNil(URLEventHandler.parse(verb: "popup_quit", args: ["unknown": "x"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "popup", action: "quit", args: ["name": ""]))
+    XCTAssertNil(URLEventHandler.parse(topic: "popup", action: "quit", args: ["unknown": "x"]))
   }
 }

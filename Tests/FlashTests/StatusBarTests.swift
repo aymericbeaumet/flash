@@ -95,7 +95,7 @@ final class StatusBarTests: XCTestCase {
     // active menu bar. Applied to every display, it flipped the laptop's band
     // between its visible-frame reserve (32) and its notched bar (33), and the
     // external's between 30 and 33, so a restored window missed the slot the
-    // next `window_move` computed.
+    // next `window move` computed.
     let external = CGRect(x: 0, y: 0, width: 2048, height: 1152)
     let laptop = CGRect(x: 160, y: -1117, width: 1728, height: 1117)
     let laptopVisible = CGRect(x: 160, y: -1117, width: 1728, height: 1085)
@@ -1203,7 +1203,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertNil(panel.toast)
   }
 
-  /// `alert_show`, a plugin result and a confirmation all draw through the
+  /// `alert show`, a plugin result and a confirmation all draw through the
   /// one alert: the verb's dwell and style map onto it, and a question stays
   /// up with no expiry until the session that asked it is torn down.
   func testEveryAlertIsTheOneConfigurableAlert() throws {
@@ -1303,7 +1303,8 @@ final class StatusBarTests: XCTestCase {
     // Routing turns `.commandLine` a moment before the first paint.
     panel.inputMode = .commandLine
     XCTAssertFalse(panel.commandTextFieldIsLaidOut)
-    panel.becomeKey()
+    // What becoming key does, without taking the user's keyboard.
+    panel.refocusCommandFieldOnBecomingKey()
     XCTAssertTrue(panel.commandTextField.isHidden, "an unplaced field would sit in the corner")
     XCTAssertNil(panel.commandTextField.currentEditor())
 
@@ -1575,7 +1576,7 @@ final class StatusBarTests: XCTestCase {
       """
       [statusbar.click]
       "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
-      "quota" = ["flash", "help_show"]
+      "quota" = ["flash", "help", "show"]
       """)
     XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
     XCTAssertEqual(

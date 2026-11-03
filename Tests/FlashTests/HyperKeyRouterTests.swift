@@ -9,10 +9,8 @@ import XCTest
 /// including a key that would be an ordinary NORMAL command.
 final class HyperKeyRouterTests: XCTestCase {
   private let leader = "space"
-  private let volumeDown = URLCommand.pluginCommand(
-    command: "media", subcommand: "volumedown", args: [])
-  private let volumeUp = URLCommand.pluginCommand(
-    command: "media", subcommand: "volumeup", args: [])
+  private let volumeDown = URLCommand.media(.volumeDown)
+  private let volumeUp = URLCommand.media(.volumeUp)
 
   func testMinusAndPlusStepVolume() {
     let down = route(keyCode: kVK_ANSI_Minus, characters: "-")

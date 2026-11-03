@@ -3,15 +3,15 @@ import ApplicationServices
 import FlashCore
 import FlashProviders
 
-/// Hints beyond the focused app's window: the Dock (`mouse_dock`), the menu
-/// bar (`mouse_menubar`) and Notification Center (`mouse_notifications`).
+/// Hints beyond the focused app's window: the Dock (`mouse dock`), the menu
+/// bar (`mouse menubar`) and Notification Center (`mouse notifications`).
 /// Wooshy-parity coverage without new permissions — the Dock, the focused
 /// app's menu titles and Notification Center are read through their AX trees
 /// under the existing Accessibility grant, and status items come from
 /// WindowServer geometry (`CGWindowListCopyWindowInfo`, layer 25, geometry
 /// only — never content). Every commit is a click `ActionDispatcher` posts.
 extension AppDelegate {
-  /// Provider of `mouse_menubar` targets, app menu titles and status items
+  /// Provider of `mouse menubar` targets, app menu titles and status items
   /// alike. Committing one opens a menu that owns the keyboard, so the commit
   /// path suspends NORMAL for it (the right-click context-menu rule).
   static let menuBarProviderID = "mouse_menubar"
@@ -25,9 +25,10 @@ extension AppDelegate {
   }
 
   /// Where a committed hint aims before its target resolves. Most hints aim
-  /// at their chip, which sits on the target; a menu title, status item or
-  /// notification control is clicked at its centre instead — a banner's chip
-  /// sits on its top-left corner, where the close button appears on hover.
+  /// at their chip, which sits on the target; a menu title, status item,
+  /// notification control or Mission Control target is clicked at its centre
+  /// instead — a banner's chip sits on its top-left corner, where the close
+  /// button appears on hover, and a window thumbnail is pressed whole.
   /// A bigram's chip sits beside the letters, and the pointer lands one
   /// point left of the glyph centre.
   /// `selectingThrough` (HOLD) lands a bigram one point right of its glyph
@@ -36,7 +37,9 @@ extension AppDelegate {
     for hint: AssignedHint, fontSize: CGFloat, selectingThrough: Bool = false
   ) -> CGPoint {
     let provider = hint.target.providerID
-    if provider == menuBarProviderID || provider == notificationsProviderID {
+    if provider == menuBarProviderID || provider == notificationsProviderID
+      || provider == MissionControlSurface.providerID
+    {
       return CGPoint(x: hint.target.frame.midX, y: hint.target.frame.midY)
     }
     if provider == BigramTextCollector.providerID {
@@ -53,7 +56,7 @@ extension AppDelegate {
         $0.bundleIdentifier == "com.apple.dock"
       })
     else {
-      FlashLog.debug("[mouse_dock] dock_not_running")
+      FlashLog.debug("[dock] not_running")
       applyModeOverlay()
       return
     }
@@ -66,12 +69,13 @@ extension AppDelegate {
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
         self.presentSystemSurfaceHints(
-          targets, pid: pid, bundleIdentifier: "com.apple.dock", surface: "mouse_dock")
+          targets, pid: pid, bundleIdentifier: "com.apple.dock", area: "dock",
+          surface: "mouse_dock")
       }
     }
   }
 
-  /// `mouse_menubar`: the focused app's menu titles, Apple menu first, then
+  /// `mouse menubar`: the focused app's menu titles, Apple menu first, then
   /// the status items. Committing a title opens its menu.
   func activateMenuBarHints() {
     guard prepareHintActivation(.menuBar) else { return }
@@ -99,12 +103,13 @@ extension AppDelegate {
       DispatchQueue.main.async {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
         self.presentSystemSurfaceHints(
-          targets, pid: nil, bundleIdentifier: ownerBundle, surface: "mouse_menubar")
+          targets, pid: nil, bundleIdentifier: ownerBundle, area: "menubar",
+          surface: "mouse_menubar")
       }
     }
   }
 
-  /// `mouse_notifications`: what Notification Center shows. Silent when it
+  /// `mouse notifications`: what Notification Center shows. Silent when it
   /// shows nothing.
   func activateNotificationHints() {
     guard prepareHintActivation(.notifications) else { return }
@@ -113,7 +118,7 @@ extension AppDelegate {
         $0.bundleIdentifier == NotificationCenterSurface.bundleIdentifier
       })
     else {
-      FlashLog.debug("[mouse_notifications] notification_center_not_running")
+      FlashLog.debug("[notifications] not_running")
       applyModeOverlay()
       return
     }
@@ -127,7 +132,7 @@ extension AppDelegate {
         guard let self, self.activationLifecycle.complete(token: token) else { return }
         self.presentSystemSurfaceHints(
           targets, pid: nil, bundleIdentifier: NotificationCenterSurface.bundleIdentifier,
-          surface: "mouse_notifications")
+          area: "notifications", surface: "mouse_notifications")
       }
     }
   }
@@ -166,8 +171,7 @@ extension AppDelegate {
       return JumpTarget(
         id: target.id, frame: target.frame, role: target.role,
         accessibilityLabel: target.accessibilityLabel, url: target.url,
-        resolveClickPoint: target.resolveClickPoint, entersInsertMode: false,
-        providerID: target.providerID)
+        resolveClickPoint: target.resolveClickPoint, providerID: target.providerID)
     }
   }
 
@@ -190,7 +194,8 @@ extension AppDelegate {
         width >= 8, width <= 400, height >= 8, height <= 44
       else { continue }
       let ownerName = window[kCGWindowOwnerName as String] as? String
-      let frame = CGRect(x: x, y: screenH - y - height, width: width, height: height)
+      let frame = ScreenRect<AXSpace>(x: x, y: y, width: width, height: height)
+        .toNS(primaryHeight: screenH).cgRect
       targets.append(
         JumpTarget(
           id: "status_item_\(ownerPID)_\(windowNumber)",
@@ -206,17 +211,19 @@ extension AppDelegate {
             else { return nil }
             return JumpTarget.relocatedClickPoint(preferred, from: frame, to: current.frame)
           },
-          entersInsertMode: false,
           providerID: menuBarProviderID))
     }
     return targets
   }
 
+  /// `area` names the log lines (`[dock]`); `surface` is the hint events'
+  /// value (`mouse_dock`, docs/ipc-protocol.md).
   private func presentSystemSurfaceHints(
-    _ targets: [JumpTarget], pid: pid_t?, bundleIdentifier: String?, surface: String
+    _ targets: [JumpTarget], pid: pid_t?, bundleIdentifier: String?, area: String,
+    surface: String
   ) {
     guard !targets.isEmpty else {
-      FlashLog.debug("[\(surface)] no_targets")
+      FlashLog.debug("[\(area)] no_targets")
       endHintActivationEmpty(
         bundleIdentifier: bundleIdentifier, path: "no_targets", surface: surface)
       applyModeOverlay()
@@ -234,7 +241,7 @@ extension AppDelegate {
     presentHints(
       hints, prepared: .miss, outcome: .miss, bundleIdentifier: bundleIdentifier,
       surface: surface)
-    FlashLog.debug("[\(surface)] displayed targets=\(hints.count)")
+    FlashLog.debug("[\(area)] displayed targets=\(hints.count)")
   }
 
   private static func dockTargets(pid: pid_t, screenH: CGFloat) -> [JumpTarget] {

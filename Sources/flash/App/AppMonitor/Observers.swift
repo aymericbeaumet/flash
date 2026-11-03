@@ -36,6 +36,7 @@ extension AppMonitor {
       guard let self else { return }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.wakeChromiumAccessibilityInBackground(for: app)
+        self.applicationDidLaunch?(app)
       }
     }
     let activeSpace = nc.addObserver(
@@ -68,7 +69,7 @@ extension AppMonitor {
     // window may have moved). Discarding via token bump is cheaper than
     // re-resolving the bundle frame here.
     dirtyTokens[pid, default: 0] &+= 1
-    invalidatePreparedModel(for: pid)
+    invalidatePreparedModel(for: pid, because: .focus)
     axEventStormingPIDs.remove(pid)
     axEventStormCounts.removeValue(forKey: pid)
     if observers[pid] == nil {
@@ -95,6 +96,7 @@ extension AppMonitor {
     axEventStormingPIDs.remove(pid)
     axEventStormCounts.removeValue(forKey: pid)
     healthyTargetCounts.removeValue(forKey: pid)
+    modelIntervalsMs.removeValue(forKey: pid)
     backgroundWalkGate.forget(pid: pid)
     cancelRefreshWork(for: pid)
   }
@@ -109,9 +111,10 @@ extension AppMonitor {
   ) {
     let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
-    invalidatePreparedModel(for: pid)
+    invalidatePreparedModel(for: pid, because: .invalidated)
     if Self.notificationShouldSchedulePreparedModelRefresh(notification), !eventStorming {
       scheduleModelRefresh(for: pid, reason: .axEvent(notification))
+      uiDidChange?(pid)
     }
     if Self.notificationMayChangeObservedWindow(notification) {
       refreshFocusedWindowObservation(for: pid)
@@ -122,7 +125,7 @@ extension AppMonitor {
     {
       activeWindowMayHaveChanged?(pid, notification, observedWindow)
     }
-    if Self.notificationMayChangeFocusedElement(notification) {
+    if Self.notificationMovesFocus(notification) {
       focusedElementMayHaveChanged?(pid)
     }
     if let menu {
@@ -135,7 +138,7 @@ extension AppMonitor {
     MainThreadHopper.runOrAsync { [weak self] in
       guard let self, pid > 0 else { return }
       self.dirtyTokens[pid, default: 0] &+= 1
-      self.invalidatePreparedModel(for: pid)
+      self.invalidatePreparedModel(for: pid, because: .invalidated)
       self.scheduleModelRefresh(for: pid, reason: .userAction(reason))
       FlashLog.debug("[ax] model_invalidated pid=\(pid) reason=\(reason)")
     }
@@ -194,7 +197,7 @@ extension AppMonitor {
     let pid = app.processIdentifier
     guard pid > 0 else { return }
     dirtyTokens[pid, default: 0] &+= 1
-    invalidatePreparedModel(for: pid)
+    invalidatePreparedModel(for: pid, because: .invalidated)
     scheduleModelRefresh(for: pid, reason: reason)
   }
 
@@ -267,7 +270,7 @@ extension AppMonitor {
   private func registerApplicationNotifications(
     _ notifications: [String], in entry: ObserverEntry, attempt: Int
   ) {
-    guard !entry.isTornDown else { return }
+    guard entry.context.isActive, !entry.isTornDown else { return }
     let refcon = Unmanaged.passUnretained(entry.context).toOpaque()
     let refused = notifications.filter {
       AXObserverAddNotification(entry.observer, entry.appElement, $0 as CFString, refcon)
@@ -303,9 +306,11 @@ extension AppMonitor {
   }
 
   private func replaceFocusedWindowObservation(in entry: ObserverEntry) {
+    guard entry.context.isActive else { return }
     var raw: CFTypeRef?
     let status = AXUIElementCopyAttributeValue(
       entry.appElement, kAXFocusedWindowAttribute as CFString, &raw)
+    guard entry.context.isActive else { return }
     let next: AXUIElement?
     if status == .success, let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() {
       next = (raw as! AXUIElement)
@@ -331,13 +336,15 @@ extension AppMonitor {
           entry.observer, next, notification as CFString, refcon)
       }
       MainThreadHopper.runOrAsync { [weak self] in
-        self?.focusedWindowDidResolve?(entry.context.pid, next)
+        guard let self, self.observers[entry.context.pid] === entry else { return }
+        self.focusedWindowDidResolve?(entry.context.pid, next)
       }
     }
   }
 
   private func teardownObserver(for pid: pid_t) {
     guard let entry = observers.removeValue(forKey: pid) else { return }
+    entry.context.invalidate()
     // Removing the run-loop source stops callback delivery immediately
     // (CFRunLoop is thread-safe); the per-notification deregistrations are
     // IPC — usually against an already-dead process here — so they follow

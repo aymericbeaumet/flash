@@ -17,8 +17,19 @@ struct CompiledMappings: Equatable {
   let byKey: [String: ModeMapping]
   let nonAtomicPrefixes: Set<String>
   private let physicalAtomsBySignature: [UInt64: Set<String>]
+  /// Whether the interpreter reads NORMAL's vim keys here while no mapping
+  /// takes them: `q` and `@` for macros, `m`, `'` and `` ` `` for marks.
+  /// A layer reads only its own keys.
+  let readsVimKeys: Bool
+  /// Whether an unmapped `q` stops a macro recording here: wherever the vim
+  /// keys are read, and in VISUAL, which reads no other.
+  let stopsRecording: Bool
 
-  init(_ mappings: [ModeMapping] = []) {
+  init(
+    _ mappings: [ModeMapping] = [], readsVimKeys: Bool = true, stopsRecording: Bool? = nil
+  ) {
+    self.readsVimKeys = readsVimKeys
+    self.stopsRecording = stopsRecording ?? readsVimKeys
     self.ordered = mappings
     var byKey: [String: ModeMapping] = [:]
     byKey.reserveCapacity(mappings.count)

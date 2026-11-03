@@ -162,6 +162,92 @@ final class StatusBarControllerTests: XCTestCase {
     XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 110)
   }
 
+  /// A scroll over the run steps that carousel: the line shows at once and
+  /// keeps a full cycle, so the clock does not push the reader off it. An
+  /// unknown carousel does nothing.
+  func testScrollingACarouselStepsItAndRestartsItsDwell() {
+    let harness = Harness("#{flash.plugin.feed.summary}")
+    defer { harness.controller.stop() }
+    harness.queue.sync {
+      harness.pluginStatuses = [
+        PluginStatusBarInfo(
+          id: "feed", state: "running", hasError: false,
+          statusSegments: [
+            "summary": .carousel(
+              prefix: "NEWS ", lines: ["one", "two", "three"], cycleSeconds: 30)
+          ])
+      ]
+    }
+    harness.controller.refreshPluginSections()
+    harness.drain()
+    func text() -> String {
+      harness.queue.sync {
+        harness.controller.lastPublishedModel!.document.runs.map(\.text).joined()
+      }
+    }
+    let key = StatusCycleKey.plugin("feed", segment: "summary")
+    XCTAssertEqual(text(), "NEWS one")
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 130)
+
+    harness.queue.sync { harness.now = 110 }
+    harness.controller.stepCycle(key: key, by: 1)
+    harness.drain()
+    XCTAssertEqual(text(), "NEWS two")
+    XCTAssertEqual(
+      harness.queue.sync { harness.controller.nextWakeup }, 140,
+      "the hand-picked line keeps a full cycle")
+
+    func backward() -> Bool? {
+      harness.queue.sync {
+        harness.controller.lastPublishedModel!.document.runs.first(where: \.cycle)?.cycleBackward
+      }
+    }
+    XCTAssertEqual(backward(), false)
+
+    // Backwards, wrapping past the first line: that line arrives from above.
+    harness.controller.stepCycle(key: key, by: -2)
+    harness.drain()
+    XCTAssertEqual(text(), "NEWS three")
+    XCTAssertEqual(backward(), true)
+
+    for unknown in ["plugin:feed.missing", "source:none", "other"] {
+      harness.controller.stepCycle(key: unknown, by: 1)
+    }
+    harness.drain()
+    XCTAssertEqual(text(), "NEWS three")
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 140)
+
+    // The clock's rotation moves forward again.
+    harness.queue.sync { harness.now = 140 }
+    harness.tick()
+    XCTAssertEqual(text(), "NEWS one")
+    XCTAssertEqual(backward(), false)
+  }
+
+  /// A cycling source steps by the key its drawn run carries, whatever the
+  /// source is called, and the step runs on the controller's queue: the
+  /// scroll arrives on the main thread.
+  func testScrollingACyclingSourceStepsItByTheKeyItsRunCarries() {
+    let source = FlashStatusBarSourceDefinition(
+      command: ["/bin/cycle"], intervalSeconds: 60, cycleIntervalSeconds: 30)
+    let harness = Harness("#{flash.source.News}", sources: ["News": source])
+    defer { harness.controller.stop() }
+    harness.queue.sync { harness.tasks[0].completion(0, "one\ntwo\nthree") }
+    func runs() -> [FlashStatusTextSegment] {
+      harness.queue.sync { harness.controller.lastPublishedModel!.document.runs }
+    }
+    XCTAssertEqual(runs().map(\.text).joined(), "one")
+    let key = runs().first(where: \.cycle)?.cycleKey ?? ""
+    XCTAssertEqual(key, StatusCycleKey.source("News"))
+
+    harness.controller.stepCycle(key: key, by: 1)
+    harness.drain()
+    XCTAssertEqual(runs().map(\.text).joined(), "two")
+    harness.controller.stepCycle(key: key, by: -2)
+    harness.drain()
+    XCTAssertEqual(runs().map(\.text).joined(), "three")
+  }
+
   func testPluginCarouselRotatesOnTheHostClockAndKeepsTheVisibleLineAcrossRefreshes() {
     let harness = Harness("#{flash.plugin.feed.summary}")
     defer { harness.controller.stop() }
@@ -274,6 +360,58 @@ final class StatusBarControllerTests: XCTestCase {
         harness.controller.lastPublishedModel!.document.runs.map(\.text).joined().contains(
           "retained")
       })
+  }
+
+  private func pushed(
+    _ harness: Harness, _ name: String, _ value: String?, file: StaticString = #filePath,
+    line: UInt = #line
+  ) -> Bool {
+    let done = expectation(description: "push \(name)")
+    var accepted = false
+    harness.controller.push(source: name, value: value) {
+      accepted = $0
+      done.fulfill()
+    }
+    wait(for: [done], timeout: 5)
+    harness.drain()
+    return accepted
+  }
+
+  private func barText(_ harness: Harness) -> String {
+    harness.queue.sync { harness.controller.lastPublishedModel!.document.runs.map(\.text).joined() }
+  }
+
+  /// `status set`: a source without a command runs nothing and shows what is
+  /// pushed, feeding its history like a run's output; `status clear` empties it.
+  func testAPushedSourceShowsWhatIsPushedAndRunsNothing() {
+    let source = FlashStatusBarSourceDefinition(command: [], historyLength: 3)
+    let harness = Harness(
+      "ws #{flash.source.ws} [#{flash.history.ws}]", sources: ["ws": source])
+    defer { harness.controller.stop() }
+    XCTAssertTrue(source.isPushed)
+    XCTAssertEqual(harness.tasks.count, 0)
+    for value in ["1", "2", "3", "4"] { XCTAssertTrue(pushed(harness, "ws", value)) }
+    XCTAssertTrue(barText(harness).contains("ws 4 [2 3 4]"), barText(harness))
+    XCTAssertEqual(harness.tasks.count, 0, "a pushed source never spawns")
+    XCTAssertTrue(pushed(harness, "ws", nil))
+    XCTAssertFalse(barText(harness).contains("ws 4"), barText(harness))
+    XCTAssertFalse(pushed(harness, "missing", "x"))
+  }
+
+  /// A source with a command also takes a push between its runs; the next
+  /// run replaces it.
+  func testAPushLandsBetweenARunningSourcesRuns() {
+    let source = FlashStatusBarSourceDefinition(command: ["/bin/value"], intervalSeconds: 60)
+    let harness = Harness("#{flash.source.value}", sources: ["value": source])
+    defer { harness.controller.stop() }
+    harness.queue.sync { harness.tasks[0].completion(0, "polled") }
+    XCTAssertTrue(pushed(harness, "value", "pushed"))
+    XCTAssertTrue(barText(harness).contains("pushed"))
+    harness.queue.sync { harness.now += 61 }
+    harness.controller.refreshPluginSections()
+    harness.drain()
+    harness.queue.sync { harness.tasks.last!.completion(0, "polled again") }
+    XCTAssertTrue(barText(harness).contains("polled again"))
   }
 
   func testReplacementRejectsOldCompletionAndRetainsLastGoodValueOnFailure() {

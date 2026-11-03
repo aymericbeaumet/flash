@@ -46,6 +46,9 @@ final class StatusPopupController {
   /// The label a preview or pinned popup hangs from, or a standalone popup's
   /// label-less stand-in.
   private var region: StatusBarPopupRegion?
+  /// Where this showing hangs from its label (`hangingFrame`), cleared when
+  /// it ends.
+  private var hang: PopupHang?
   private var visibleFrame = CGRect.zero
   private var style = Config.PopupStyle()
   private var font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
@@ -72,7 +75,7 @@ final class StatusPopupController {
   var inputInterceptor: ((NSEvent) -> Bool)?
 
   var frame: CGRect { panel.frame }
-  /// `[overlay] screen_capture` for the popup panel.
+  /// `[app] hide_from_capture` for the popup panel.
   var sharingType: NSWindow.SharingType {
     get { panel.sharingType }
     set { panel.sharingType = newValue }
@@ -277,6 +280,39 @@ final class StatusPopupController {
     return regions.filter { $0.name == current.name }.min { distance($0) < distance($1) }
   }
 
+  /// A showing opens centred on its label. While the label only changes
+  /// width, one edge staying put (a carousel line, a metric growing), the
+  /// popup stays where it is rather than sliding sideways under a reader, as
+  /// long as the label's centre is still over it. A label that moved (the
+  /// bar re-laid out) or a changed screen hangs it from the label afresh.
+  private func hangingFrame(region: StatusBarPopupRegion, size: CGSize) -> CGRect {
+    let anchor = region.anchor
+    let offset = CGFloat(style.offset)
+    if let hang, hang.name == region.name, hang.visibleFrame == visibleFrame,
+      abs(anchor.minX - hang.anchor.minX) < 0.5 || abs(anchor.maxX - hang.anchor.maxX) < 0.5
+    {
+      let kept = OverlayPanel.statusBarPopupFrame(
+        span: CGRect(x: hang.x, y: anchor.minY, width: 0, height: anchor.height),
+        popupSize: size, visibleFrame: visibleFrame, offset: offset)
+      if kept.minX <= anchor.midX, anchor.midX <= kept.maxX {
+        self.hang?.anchor = anchor
+        return kept
+      }
+    }
+    hang = PopupHang(name: region.name, visibleFrame: visibleFrame, x: anchor.midX, anchor: anchor)
+    return OverlayPanel.statusBarPopupFrame(
+      span: anchor, popupSize: size, visibleFrame: visibleFrame, offset: offset)
+  }
+
+  private struct PopupHang {
+    var name: String
+    var visibleFrame: CGRect
+    /// The x the popup is centred on, before clamping to the screen.
+    var x: CGFloat
+    /// The label as last laid out, to tell a resize from a move.
+    var anchor: CGRect
+  }
+
   func updateStyle(_ style: Config.PopupStyle) {
     self.style = style
     if isVisible, let region { layout(region: region) }
@@ -298,6 +334,7 @@ final class StatusPopupController {
     if windowActionsEnabled { panel.orderOut(nil) }
     logLifecycle(reason: reason)
     region = nil
+    hang = nil
     isContentSnapshot = false
     if wasFocused { didDismissFocus?(reason) }
     guard let previousName else { return }
@@ -327,7 +364,7 @@ final class StatusPopupController {
   }
 
   /// Make Flash the active app while a popup has the keyboard. Activation
-  /// is cooperative since macOS 14: a plain `NSApp.activate()` from Flash is
+  /// is cooperative since macOS 14: a plain activation request from Flash is
   /// declined while another app is frontmost, and the popup then had the
   /// keyboard while that app stayed active, so bringing it forward again
   /// changed nothing Flash could see and the popup stayed up. Activating
@@ -336,9 +373,9 @@ final class StatusPopupController {
   /// popup closes on.
   static func activateFlash() {
     if let front = NSWorkspace.shared.frontmostApplication, front != .current {
-      _ = NSRunningApplication.current.activate(from: front, options: [])
+      AppActivation.activate(from: front)
     } else {
-      NSApp.activate()
+      AppActivation.activate()
     }
   }
 
@@ -367,7 +404,7 @@ final class StatusPopupController {
     details["popup_id"] = popupName.map(StatusFormatDocument.stableID) ?? "none"
     details["content_bytes"] = String(content.utf8.count)
     FlashLog.debug(
-      "Status popup presentation changed", fields: details,
+      "[popup] presentation_changed", fields: details,
       source: "core:StatusPopupController.presentation")
     if !isVisible {
       lastLayoutName = nil
@@ -481,9 +518,7 @@ final class StatusPopupController {
         y: visibleFrame.midY - layout.popupSize.height / 2,
         width: layout.popupSize.width, height: layout.popupSize.height)
     } else {
-      target = OverlayPanel.statusBarPopupFrame(
-        span: region.anchor, popupSize: layout.popupSize, visibleFrame: visibleFrame,
-        offset: CGFloat(style.offset))
+      target = hangingFrame(region: region, size: layout.popupSize)
     }
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -519,7 +554,7 @@ final class StatusPopupController {
       details["reason"] = "layout"
       details["popup_id"] = StatusFormatDocument.stableID(region.name)
       FlashLog.debug(
-        "Status popup layout changed", fields: details,
+        "[popup] layout_changed", fields: details,
         source: "core:StatusPopupController.layout")
     }
   }

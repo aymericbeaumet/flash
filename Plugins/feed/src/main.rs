@@ -2,6 +2,7 @@ mod feed;
 mod preview;
 mod state;
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -89,14 +90,21 @@ impl FlashPlugin for Feed {
                     let result = fetch_articles(&client, &url).await;
                     match &result {
                         Ok(articles) => {
-                            ctx.log(
-                                "info",
-                                &format!(
-                                    "[feed] refresh outcome={} count={} elapsed_ms={}",
-                                    if articles.is_empty() { "empty" } else { "ok" },
-                                    articles.len(),
-                                    started.elapsed().as_millis()
-                                ),
+                            ctx.log_fields(
+                                "debug",
+                                "[feed] refresh",
+                                BTreeMap::from([
+                                    (
+                                        "outcome".to_string(),
+                                        if articles.is_empty() { "empty" } else { "ok" }
+                                            .to_string(),
+                                    ),
+                                    ("count".to_string(), articles.len().to_string()),
+                                    (
+                                        "elapsed_ms".to_string(),
+                                        started.elapsed().as_millis().to_string(),
+                                    ),
+                                ]),
                             );
                             *failure_logged.lock().unwrap() = false;
                         }
@@ -241,6 +249,7 @@ mod tests {
             title: "Title".into(),
             url: "https://aggr.example/a".into(),
             original_url: "https://www.source.example/x".into(),
+            source: "source.example".into(),
             preview: String::new(),
             published_at: 100,
         };
@@ -266,6 +275,7 @@ mod tests {
             title: "Title".into(),
             url: "https://aggr.example/a".into(),
             original_url: "https://www.source.example/x".into(),
+            source: "source.example".into(),
             preview: "A preview".into(),
             published_at: 100,
         };

@@ -51,6 +51,27 @@ PROD_SWIFT=(
   Sources/FlashProviders
 )
 
+# Hard constraint 4: the resident listens in exactly three places. Its IPC
+# socket is one Unix domain socket (IPCServer, with IPCEndpoint's bind),
+# never TCP; besides it only the loopback help server (DebugServer) and the
+# opt-in OTLP receiver (OTLPReceiver) accept connections. No other listener,
+# Mach service or XPC listener, and no Apple Event command handler: `flash`
+# reaches the resident over the socket, and the retired `Flsh`/`Cmd ` event
+# is not spelled anywhere it once was (rule 7: no dual paths).
+check_absent_except \
+  "listeners are IPCServer's socket, DebugServer and OTLPReceiver" \
+  "NWListener\\(|[^A-Za-z_.]listen\\(|Darwin\\.bind\\(|CFMessagePortCreateLocal|NSXPCListener|xpc_connection_create_mach_service|bootstrap_check_in" \
+  '^Sources/flash/App/(IPC/IPCServer|IPC/IPCEndpoint|DebugServer|Telemetry/OTLPReceiver)\.swift:' \
+  "${PROD_SWIFT[@]}"
+check_absent \
+  "the IPC socket is a Unix domain socket, never TCP" \
+  "AF_INET|NWListener|NWParameters|NWConnection" \
+  Sources/flash/App/IPC Sources/flash/IPCClient.swift
+check_absent \
+  "no Apple Event command handler: commands arrive over the IPC socket" \
+  "NSAppleEventManager|AEInstallEventHandler|Flsh" \
+  Sources Resources AGENTS.md SECURITY.md README.md docs config.default.toml
+
 # NORMAL/hints capture is intentionally a session-level CGEventTap, confined to
 # the single sanctioned file `KeyboardCaptureTap.swift` (see its header for the
 # rationale: the old key-window model greyed the focused app and leaked keys
@@ -62,14 +83,14 @@ check_absent_except \
   'KeyboardCaptureTap\.swift' \
   "${PROD_SWIFT[@]}"
 
-# App knowledge is plugin data: what an app does for a Flash action is the
-# winning `action_bindings` entry, dispatched by ActionBindingDispatch. Virtual
-# key constants therefore appear only where Flash parses or names keys
-# (hotkey syntax, the keyboard layout, NORMAL's key names, Escape detection),
-# brackets UIKit modifiers, or applies the terminal rule — never as a chord an
-# action synthesizes.
+# App knowledge is plugin data: what an app does for a Flash command is the
+# winning manifest `bindings` entry, dispatched by CommandBindingDispatch.
+# Virtual key constants therefore appear only where Flash parses or names
+# keys (hotkey syntax, the keyboard layout, NORMAL's key names, Escape
+# detection), brackets UIKit modifiers, or applies the terminal rule — never
+# as a chord a command synthesizes.
 check_absent_except \
-  "no kVK_ chord synthesis for app actions outside the binding dispatcher" \
+  "no kVK_ chord synthesis for app commands outside the binding dispatcher" \
   "kVK_" \
   '/(HotkeySyntax|KeyboardLayout|UIKitApps|NormalModeTerminalChords)\.swift:|/NormalMode\.swift:[0-9]+:[[:space:]]*case kVK_|/AppDelegate\.swift:[0-9]+:.*== Int64\(kVK_Escape\)' \
   "${PROD_SWIFT[@]}"
@@ -82,6 +103,62 @@ check_absent_except \
   "window-list reads go through WindowSnapshot.windowList (main thread only)" \
   "CGWindowListCopyWindowInfo\\(" \
   '/WindowSnapshot\.swift:' \
+  "${PROD_SWIFT[@]}"
+
+# Accessibility / CGEvent (top-left) and NSScreen (bottom-left) coordinates
+# convert about the primary display's height in exactly one place:
+# `ScreenSpace.flip`, behind the typed `ScreenPoint` / `ScreenRect`
+# `toAX` / `toNS` conversions. An inline `height - y` anywhere else is the
+# mix-up the types exist to prevent.
+check_absent_except \
+  "AX/NSScreen Y conversions go through ScreenPoint/ScreenRect (ScreenSpace.swift)" \
+  '(^|[^A-Za-z_])(screenH|primaryH|primaryHeight|screenHeight|primaryScreenHeight)(\(\))? *- *[A-Za-z_(.]*(y|Y|minY|maxY)([^A-Za-z_]|$)|y: *[A-Za-z_.]*[Hh]eight[A-Za-z_.]* *- *[A-Za-z_.()]*\.(y|minY|maxY)([^A-Za-z_]|$)' \
+  '/ScreenSpace\.swift:' \
+  "${PROD_SWIFT[@]}"
+
+check_absent_except \
+  "Raw coordinate flips stay private to ScreenSpace.swift" \
+  'ScreenSpace\.flip\(' \
+  '/ScreenSpace\.swift:' \
+  "${PROD_SWIFT[@]}"
+
+# Flash writes one Apple preference: NativeMenuBarAutoHide owns the menu
+# bar's auto-hide, and reverses only what it set. Every other preference is
+# the user's, set from `[startup] run` with the system's own tools. Flash's
+# own code writes no plist file and runs no `defaults`, which cfprefsd's
+# cache would overwrite or never see.
+check_absent_except \
+  "Apple preferences are written only by NativeMenuBarAutoHide" \
+  "CFPreferencesSetValue|CFPreferencesSetAppValue|CFPreferencesSetMultiple" \
+  '/NativeMenuBarAutoHide\.swift:' \
+  "${PROD_SWIFT[@]}"
+check_absent \
+  "no defaults(1) subprocess" \
+  "/usr/bin/defaults" \
+  "${PROD_SWIFT[@]}"
+
+# Mode entry changes capture over the current app. App commands and committed
+# clicks own activation; a cached NORMAL PID must never become an INSERT target.
+check_absent \
+  "mode events and effects never target application activation" \
+  'targetPID|case[[:space:]]+[[:alnum:]_]*[Aa]ctivat' \
+  Sources/flash/App/Mode
+
+# Host RPC queue hops must validate the requesting transport when dequeued,
+# before any input, activation, storage or AX operation can affect the host.
+check_absent \
+  "queued host RPC work must use its transport scope" \
+  '\.async(After)?([^[:alnum:]_]|$)|scope:[[:space:]]+PluginHostRequestScope[[:space:]]*=' \
+  Sources/flash/App/Plugins/PluginHostRPC.swift Sources/flash/App/Plugins/AXBroker.swift
+
+# A bare-name executable resolution that misses its cache spawns `mise which`,
+# which can stall for seconds while syspolicyd is busy. It runs only on a
+# plugin's queue and the doctor's background queue, never on the main
+# thread's keyboard path.
+check_absent_except \
+  "executable resolution stays off the main thread" \
+  "resolveExecutable\\(" \
+  '^Sources/flash/App/Plugins/(PluginSandbox|PluginProcess|PluginDoctor)\.swift:' \
   "${PROD_SWIFT[@]}"
 
 # Polling is a last resort and goes through PollScheduler, the one clock in
@@ -98,17 +175,55 @@ check_absent_except \
   "DispatchSource\\.makeTimerSource|DispatchSourceTimer|Timer\\.scheduledTimer|Timer\\.publish|[^[:alnum:]_.]Timer\\(|CFRunLoopTimerCreate|Task\\.sleep|afterDelay:" \
   '^Sources/flash/App/PollScheduler\.swift:' \
   "${RUNTIME_SWIFT[@]}"
+# A registration's priority and its handler queue's QoS must match: a
+# `system` or `high` wake-up planned onto a `.utility` queue is starved under
+# load however tight its slack (AGENTS.md, docs/architecture.md). Pairs each
+# `register`/`scheduleOnce`/`PollDeadline` at those priorities with the
+# `on:` queue it names and fails when that queue is declared `.utility` in
+# the same file.
+if ! python3 -I - "${RUNTIME_SWIFT[@]}" <<'PY'
+import pathlib, re, sys
+
+utility = re.compile(
+    r"(?:let|var)\s+(\w+)(?:\s*:\s*DispatchQueue)?\s*=\s*DispatchQueue\(\s*label:[^)]*?qos:\s*\.utility",
+    re.S)
+default_param = re.compile(
+    r"(\w+)\s*:\s*DispatchQueue\s*=\s*DispatchQueue\(\s*label:[^)]*?qos:\s*\.utility", re.S)
+registration = re.compile(
+    r"(?:register|scheduleOnce|PollDeadline)\((?:(?!\n\s*\n).){0,400}?priority:\s*\.(?:system|high)"
+    r"(?:(?!\n\s*\n).){0,200}?on:\s*([\w.]+)",
+    re.S)
+failed = False
+for root in sys.argv[1:]:
+    for file in sorted(pathlib.Path(root).rglob("*.swift")):
+        text = file.read_text(encoding="utf-8")
+        names = set(utility.findall(text)) | set(default_param.findall(text))
+        if not names:
+            continue
+        for match in registration.finditer(text):
+            queue = match.group(1).split(".")[-1]
+            if queue in names:
+                line = text.count("\n", 0, match.start()) + 1
+                print(f"{file}:{line}: system/high registration on utility queue `{queue}`")
+                failed = True
+sys.exit(1 if failed else 0)
+PY
+then
+  echo "GUARDRAIL FAILED: system/high poll registrations run on user-initiated queues" >&2
+  fail=1
+fi
+
 # Blocking sleeps only inside one bounded operation, never as a loop's clock:
 # - ActionDispatcher.swift: the spacing of one synthesized mouse gesture on
 #   the click queue (down/up hold, drag steps);
-# - PluginHostRPC.swift: the measurement window of one `host.process_metrics`
-#   call, on its own queue;
+# - ProcessTable.swift: the CPU measurement window of a pid read for the
+#   first time, on the reader's background queue;
 # - TerminalSession.swift: the 1 ms back-off inside a bounded wait for one
 #   child's exit when the kqueue wait itself fails.
 check_absent_except \
   "blocking sleeps stay inside one bounded operation" \
   "Thread\\.sleep|usleep\\(|[^[:alnum:]_.]sleep\\(|nanosleep\\(" \
-  '^Sources/flash/App/ActionDispatcher\.swift:|^Sources/flash/App/Plugins/PluginHostRPC\.swift:|^Sources/FlashTerminal/TerminalSession\.swift:' \
+  '^Sources/flash/App/ActionDispatcher\.swift:|^Sources/flash/App/ProcessTable\.swift:|^Sources/FlashTerminal/TerminalSession\.swift:' \
   "${RUNTIME_SWIFT[@]}"
 
 # Every production app AX element must carry a bounded messaging timeout, or a
@@ -119,6 +234,34 @@ check_absent_except \
   "AXUIElementCreateApplication\\(" \
   'AXApp\.swift' \
   "${PROD_SWIFT[@]}"
+
+# A timeout set on a system-wide AX element is the process-wide default for
+# every AX call. AXApp sets it once at launch and hands out the element;
+# nothing else creates one, so no probe can rewrite every walk's bound.
+check_absent_except \
+  "system-wide AX elements come from AXApp.systemWide (one process timeout)" \
+  "AXUIElementCreateSystemWide\\(" \
+  'AXApp\.swift' \
+  "${PROD_SWIFT[@]}"
+
+# Flash activates itself only through AppActivation, which does nothing in
+# the test runner: an xctest process that activates takes the keyboard from
+# the user's app, and its transparent test windows swallow the keys.
+check_absent_except \
+  "self-activation and activation policy go through AppActivation" \
+  "(NSApp|NSApplication\\.shared)\\.activate\\(|setActivationPolicy\\(|NSRunningApplication\\.current\\.activate\\(|[^.]current\\.activate\\((from|options)" \
+  'AppActivation\.swift|/main\.swift' \
+  "${PROD_SWIFT[@]}"
+
+# macOS 13's URL(string:) and URLComponents(string:) return nil for a string
+# macOS 14 repairs (a space, a non-ASCII path or host). Every string Flash did
+# not write as a literal parses through URLParsing, which repairs it the same
+# way on both.
+check_absent_except \
+  "URL strings parse through URLParsing (same result on every supported macOS)" \
+  "(NSURL|URL|URLComponents)\\(string: [^\"]" \
+  'FlashCore/URLParsing\.swift' \
+  "${PROD_SWIFT[@]}" Sources/FlashTerminal
 
 check_absent \
   "no global keyboard monitors" \
@@ -168,7 +311,7 @@ check_absent \
   "$widget_window"
 
 check_absent \
-  "the help_show verb is routed to the alert toast instead of the help overlay" \
+  "the help show command is routed to the alert toast instead of the help overlay" \
   "case \\.showUsage:.*alertPanel\\.show" \
   Sources/flash
 
@@ -182,6 +325,11 @@ check_absent \
   "performance\\.concurrent_walk|BrowserScriptProvider|cache_ttl|hints\\.scope|hints\\.layout|hints-layout|FLASH_HINTS_LAYOUT" \
   Sources README.md
 
+check_absent \
+  "no references to removed bundled plugins" \
+  "windows\\.items|kitty\\.windows|github\\.(repos|prs)|spotify_player|kitten @|httpstatus\\.codes|flash-plugin-reference|flash\\.plugin\\.tmux\\.|\\[plugin\\.tmux\\]|flash-plugin-tmux|flash-plugin-history|flash\\.plugin\\.(cpu|memory|disks|network|power)\\.|\\[plugin\\.(cpu|memory|disks|network|power)\\]|flash-plugin-(cpu|memory|disks|network|power)|flash-plugin-marks|flash-plugin-vscode|Plugins/vscode/" \
+  Sources README.md docs config.default.toml
+
 if [[ -d Plugins ]]; then
   # The protocol-v1 redefinition retired these wire names outright (repo
   # rule 9: no compatibility shims) — none may reappear as wire strings in
@@ -190,6 +338,23 @@ if [[ -d Plugins ]]; then
     "retired protocol wire names must not reappear" \
     '"(sources\.snapshot|sources\.query|query\.evaluate|hints\.discover|candidate\.resolve|source\.action|command\.invoke|navigation\.restore|heartbeat|sources\.invalidated|status\.updated|flash\.log)"' \
     Sources/flash Plugins/_flash_plugin_rust
+
+  # Flash has one vocabulary for what it asks of the focused app: commands.
+  # A plugin performs a core command through a `commands[]` entry under one
+  # of Flash's topics, `bindings` keyed by the command line say what an app
+  # does for one, and `confirm` on the entry gates a destructive one. The
+  # retired source-action vocabulary (manifest actions, action bindings and
+  # confirmations, the `action` perform kind and its SDK types) must not
+  # reappear anywhere it was spelled (rule 7: no dual readers). The one
+  # allowed site is the SDK runtime test that pins the retired kind as
+  # unknown.
+  check_absent_except \
+    "retired action vocabulary must not reappear" \
+    'action_bindings|action_confirmations|"actions"[[:space:]]*[:)]|kind"?:[[:space:]]*"action"|on_action|ActionRequest|SourceActionName|SourceAction\b' \
+    'Plugins/_flash_plugin_rust/src/runtime\.rs:[0-9]+:.*decode_perform\(json!\(\{ "kind": "action"' \
+    Sources/flash Sources/FlashCore Sources/FlashProviders Plugins/*/manifest.json \
+    Plugins/_flash_plugin_rust/src Plugins/_flash_plugin_rust/macros Plugins/_flash_plugin_rust/probe \
+    Plugins/*/src docs AGENTS.md README.md config.default.toml Inspector/src
 
   # Plugins never arm a timer or sleep to schedule work: cadences, deadlines
   # and waits go through the host clock (`ctx.interval`, `ctx.after`,
@@ -340,33 +505,377 @@ PY
         fail=1
       fi
     fi
-    source="$plugin_dir/src/main.rs"
-    [[ -f "$source" ]] || continue
-    if search_paths -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then
-      # Warm sources push their catalog; live sources (all-or-nothing per
-      # plugin) serve per-keystroke search instead and never publish.
-      if search_paths -q '"live"[[:space:]]*:[[:space:]]*true' "$manifest"; then
-        if ! search_paths -q 'fn on_search' "$source"; then
-          echo "GUARDRAIL FAILED: live-sources plugin must implement on_search: $plugin_dir" >&2
-          fail=1
-        fi
-      elif ! search_paths -q 'publish[[:space:]]*\(' "$source"; then
-        echo "GUARDRAIL FAILED: sources plugin must push-publish its catalog: $plugin_dir" >&2
-        fail=1
-      fi
+    [[ -f "$plugin_dir/src/main.rs" ]] || continue
+    # Plugin sources are warm: each pushes its complete catalog, whole or
+    # source by source, from whichever module of the crate owns it.
+    if search_paths -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest" &&
+      ! search_paths -q 'publish(_source)?[[:space:]]*\(' "$plugin_dir/src"; then
+      echo "GUARDRAIL FAILED: sources plugin must push-publish its catalog: $plugin_dir" >&2
+      fail=1
     fi
   done
 
   check_absent \
     "plugin installs must stay localized to FLASH_PLUGIN_DATA_DIR" \
-    "sudo|brew install|npm install -g|deno install -g|/usr/local/bin|\\$HOME/\\.local/bin|~/\\.local/bin" \
+    "(^|[^[:alnum:]_])sudo($|[^[:alnum:]_])|brew install|npm install -g|deno install -g|/usr/local/bin|\\$HOME/\\.local/bin|~/\\.local/bin" \
     Plugins
+fi
+
+# The help serves the manual from the app bundle at /docs/<page>: nothing the
+# resident or its pages render links the published copy. docs/nav.json alone
+# names the site's URL, and the renderer turns a link into it into a local one.
+check_absent \
+  "the help links its bundled manual (/docs/<page>), never the published site" \
+  'aymericbeaumet\.github\.io' \
+  Sources Inspector/src config.default.toml Plugins/*/manifest.json
+
+# Every command is `flash <topic> <action>`: no default, doc, help text or
+# bundled manifest names a one-word command in an argv, and every bundled
+# plugin command is two words of [a-z][a-z0-9_]*. CommandGrammarTests holds
+# the command table and plugin loading to the same shape.
+check_absent \
+  "every Flash command is two words: flash <topic> <action>" \
+  '"flash",[[:space:]]*"[a-z][a-z0-9_]*"[[:space:]]*(\]|,[[:space:]]*"--)' \
+  config.default.toml README.md AGENTS.md docs Inspector/src Plugins/*/manifest.json \
+  Sources/flash/App/HelpDocs.swift Sources/flash/App/NormalMode/HelpText.swift
+
+if ! plugin_command_report="$(python3 - <<'PY'
+import json
+import pathlib
+import re
+
+word = re.compile(r"[a-z][a-z0-9_]*\Z")
+bad = []
+for path in sorted(pathlib.Path("Plugins").glob("*/manifest.json")):
+    for command in json.loads(path.read_text()).get("commands", []):
+        pair = (command.get("command", ""), command.get("subcommand", ""))
+        if not all(word.match(part) for part in pair):
+            bad.append(f"{path}: flash {pair[0]} {pair[1]}")
+print("\n".join(bad))
+raise SystemExit(1 if bad else 0)
+PY
+)"; then
+  echo "GUARDRAIL FAILED: bundled plugin commands are two words of [a-z][a-z0-9_]*" >&2
+  echo "$plugin_command_report" >&2
+  fail=1
 fi
 
 if tracked="$(git ls-files -- 'Tests/BrowserSnapshots/snapshots/collected-*' 'Tests/BrowserSnapshots/allowlists/collected-*')" &&
   [[ -n "$tracked" ]]; then
   echo "GUARDRAIL FAILED: collected browser captures are personal browsing data and must stay untracked" >&2
   echo "$tracked" >&2
+  fail=1
+fi
+
+# mise is the single developer environment: tools, environment and tasks live
+# in mise.toml, and Scripts/ holds what the tasks run. No other task runner or
+# task file exists; every task is described and runs scripts that exist; every
+# script is reachable from a task or another script; and no guide, workflow or
+# message tells a developer to call a script, or a tool through `mise exec`,
+# instead of `mise run <task>`. The task table in docs/development.md lists
+# exactly the tasks, and only it names the script behind each one.
+if ! dev_env_report="$(python3 - <<'PY'
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    print("python3 has no tomllib (3.11+): use 'mise run guardrails'")
+    sys.exit(1)
+
+VENDORED = {"build", ".build", "node_modules", "target"}
+RUNNER = re.compile(r"(?:gnu)?makefile|\.?justfile|taskfile(?:\.dist)?\.ya?ml", re.IGNORECASE)
+FILE_TASKS = re.compile(r"(?:^|/)(?:\.?mise-tasks|\.?mise/tasks|\.config/mise/tasks)/")
+MISE_CONFIG = re.compile(
+    r"(?:^|/)(?:\.?mise(?:\.[\w-]+)?\.toml|\.tool-versions|\.?mise/config\.toml|\.config/mise(?:/config)?\.toml)$"
+)
+SCRIPT = re.compile(r"(?<![\w./-])(\./)?(Scripts/[\w.-]+)")
+MISE_EXEC = re.compile(r"\bmise\s+(?:exec|x)\b")
+INVOKE = re.compile(
+    r"(?:\./|\b(?:bash|sh|zsh|python3?|source|exec)\s+(?:\./)?"
+    r"|\b[Rr]un:?\s+(?:\x60|<code>)?(?:\./)?|\$\(\s*(?:\./)?)(Scripts/[\w.-]+)"
+)
+RUN_HINT = re.compile(r"\b[Rr]un:?\s+(?:\x60|<code>)?(?:\./)?(Scripts/[\w.-]+)")
+SPAN_WITH_ARGS = re.compile(r"\x60(?:\./)?(Scripts/[\w.-]+)\s[^\x60]*\x60")
+FENCE = re.compile(r"^\s*(?:\x60{3,}|~{3,})")
+FENCED_COMMAND = re.compile(r"^\s*(?:\$\s+)?(?:\w+=\S*\s+)*(?:\./)?(Scripts/[\w.-]+)")
+CODE_ROOTS = {"Sources", "Tests", "Scripts", "Plugins", "Inspector"}
+CODE_SUFFIXES = {".swift", ".sh", ".py", ".rs", ".ts", ".svelte"}
+
+failures = []
+
+
+def git_files(*arguments):
+    try:
+        output = subprocess.run(
+            ["git", "ls-files", "-z", *arguments], check=True, capture_output=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return [path for path in output.decode().split("\0") if path]
+
+
+tracked = git_files("--cached")
+present = git_files("--cached", "--others", "--exclude-standard")
+if tracked is None or present is None:
+    present = []
+    for root, directories, names in os.walk("."):
+        directories[:] = [name for name in directories if name not in VENDORED | {".git"}]
+        present += [os.path.relpath(os.path.join(root, name)) for name in names]
+    tracked = present
+present = [
+    path for path in present
+    if os.path.isfile(path) and not VENDORED.intersection(path.split("/")[:-1])
+]
+
+for path in present:
+    if RUNNER.fullmatch(path.rsplit("/", 1)[-1]):
+        failures.append(f"{path}: another task runner; define a task in mise.toml")
+    elif FILE_TASKS.search(path):
+        failures.append(f"{path}: a file task; define the task in mise.toml")
+for path in tracked:
+    if path != "mise.toml" and MISE_CONFIG.search(path):
+        failures.append(f"{path}: a second mise configuration; tools, env and tasks live in mise.toml")
+
+try:
+    tasks = tomllib.loads(pathlib.Path("mise.toml").read_text()).get("tasks", {})
+except (OSError, tomllib.TOMLDecodeError) as error:
+    print(f"mise.toml: {error}")
+    sys.exit(1)
+if not tasks:
+    failures.append("mise.toml: no tasks")
+
+runs = {}
+for name, task in tasks.items():
+    where = f"mise.toml: task {name}"
+    if not isinstance(task, dict):
+        failures.append(f"{where}: not a table")
+        continue
+    if not str(task.get("description", "")).strip():
+        failures.append(f"{where}: no description")
+    steps = task.get("run", [])
+    steps = steps if isinstance(steps, list) else [steps]
+    if not steps and "file" not in task:
+        failures.append(f"{where}: runs nothing")
+    references = []
+    for key in ("depends", "depends_post", "wait_for"):
+        value = task.get(key, [])
+        references += [value] if isinstance(value, str) else value
+    for step in steps:
+        if isinstance(step, dict):
+            references += [step["task"]] if "task" in step else step.get("tasks", [])
+            continue
+        for match in SCRIPT.finditer(step):
+            script = pathlib.Path(match.group(2))
+            if not script.is_file():
+                failures.append(f"{where}: runs missing {script}")
+            elif match.group(1) and not os.access(script, os.X_OK):
+                failures.append(f"{where}: runs ./{script}, which is not executable")
+            runs.setdefault(str(script), []).append(name)
+    if "file" in task and not pathlib.Path(str(task["file"])).is_file():
+        failures.append(f"{where}: runs missing {task['file']}")
+    for reference in references:
+        reference = (reference[0] if isinstance(reference, list) else reference).split()[0]
+        if reference not in tasks:
+            failures.append(f"{where}: refers to unknown task {reference}")
+
+scripts = sorted(path for path in present if re.fullmatch(r"Scripts/[^/]+\.(?:sh|py)", path))
+texts = {path: pathlib.Path(path).read_text(errors="replace") for path in scripts}
+for script in scripts:
+    name = script.rsplit("/", 1)[-1]
+    if script in runs or any(name in text for path, text in texts.items() if path != script):
+        continue
+    failures.append(f"{script}: no task or script runs it; add a task to mise.toml")
+
+documented = re.findall(
+    r"^\| \x60([^\x60]+)\x60 \|", pathlib.Path("docs/development.md").read_text(), re.MULTILINE
+)
+for name in sorted(set(tasks) - set(documented)):
+    failures.append(f"docs/development.md: the task table lacks {name}")
+for name in sorted(set(documented) - set(tasks)):
+    failures.append(f"docs/development.md: the task table lists {name}, which mise.toml lacks")
+
+
+def task_hint(script):
+    names = runs.get(script)
+    if names:
+        return "use " + " or ".join(f"'mise run {name}'" for name in sorted(set(names)))
+    return "add a task to mise.toml for this entry point"
+
+
+guides = [
+    path for path in present
+    if path.endswith(".md") or (path.startswith(".github/") and path.endswith((".yml", ".yaml")))
+]
+for path in guides:
+    fenced = False
+    for number, line in enumerate(pathlib.Path(path).read_text(errors="replace").splitlines(), 1):
+        if path.endswith(".md") and FENCE.match(line):
+            fenced = not fenced
+            continue
+        where = f"{path}:{number}"
+        if MISE_EXEC.search(line):
+            failures.append(f"{where}: mise exec; run a task instead")
+        if path == "docs/development.md" and line.startswith("| \x60"):
+            continue
+        found = {match.group(1) for match in INVOKE.finditer(line)}
+        found |= {match.group(1) for match in SPAN_WITH_ARGS.finditer(line)}
+        if fenced:
+            found |= {match.group(1) for match in FENCED_COMMAND.finditer(line)}
+        for script in sorted(found):
+            failures.append(f"{where}: calls {script} directly; {task_hint(script)}")
+
+for path in present:
+    if (
+        path == "Scripts/check-guardrails.sh"
+        or path.split("/", 1)[0] not in CODE_ROOTS
+        or pathlib.Path(path).suffix not in CODE_SUFFIXES
+    ):
+        continue
+    for number, line in enumerate(pathlib.Path(path).read_text(errors="replace").splitlines(), 1):
+        for match in RUN_HINT.finditer(line):
+            script = match.group(1)
+            failures.append(f"{path}:{number}: tells developers to run {script}; {task_hint(script)}")
+
+print("\n".join(failures))
+sys.exit(1 if failures else 0)
+PY
+)"; then
+  echo "GUARDRAIL FAILED: mise is the single developer environment (tools, env and tasks in mise.toml)" >&2
+  echo "$dev_env_report" >&2
+  fail=1
+fi
+
+# Diagnostics go through FlashLog's serial writer: the CLI's own usage text is
+# the one stdout print in the resident's sources.
+check_absent_except \
+  "diagnostics go through FlashLog (no print, NSLog or debugPrint in the resident)" \
+  "^[[:space:]]*(print|NSLog|debugPrint)\\(" \
+  '^Sources/flash/FlashCLI\.swift:' \
+  "${RUNTIME_SWIFT[@]}"
+
+# Every literal log message names its event `[area] event`
+# (docs/observability.md); values go in `fields`. The area is one snake_case
+# word (`LogAreaTests` pins the set); an interpolated area is checked there.
+if ! log_name_report="$(python3 -I - "${RUNTIME_SWIFT[@]}" <<'PY'
+import pathlib, re, sys
+
+patterns = [
+    re.compile(r'FlashLog\.(?:trace|debug|info|warn|error)\(\s*"(?!\[)'),
+    re.compile(r'FlashLog\.log\(\s*[^,()]+,\s*"(?!\[)'),
+    re.compile(r'FlashLog\.plugin\([^"]{0,200}?message:\s*"(?!\[)', re.S),
+]
+area = re.compile(r'"\[([^\]"]+)\] ')
+word = re.compile(r'[a-z][a-z0-9_]*')
+failures = []
+for root in sys.argv[1:]:
+    for file in sorted(pathlib.Path(root).rglob("*.swift")):
+        text = file.read_text(encoding="utf-8")
+        for pattern in patterns:
+            for match in pattern.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                failures.append(f"{file}:{line}: log message does not start with [area]")
+        for match in area.finditer(text):
+            name = match.group(1)
+            if "\\(" in name or word.fullmatch(name):
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            failures.append(f"{file}:{line}: [{name}] is not a snake_case area")
+print("\n".join(failures))
+sys.exit(1 if failures else 0)
+PY
+)"; then
+  echo "GUARDRAIL FAILED: log messages are named [area] event, the area one snake_case word" >&2
+  echo "$log_name_report" >&2
+  fail=1
+fi
+
+# Every GitHub Action runs at a full commit, never a movable tag or branch:
+# `uses: owner/repo@<40 hex> # vX.Y.Z` (supply-chain pinning).
+unpinned_actions="$(grep -En '^[[:space:]]*(-[[:space:]]*)?uses:' .github/workflows/*.yml |
+  grep -Ev 'uses:[[:space:]]*[^[:space:]@]+@[0-9a-f]{40}([[:space:]]+#[[:space:]]*v[0-9][^[:space:]]*)?[[:space:]]*$' || true)"
+if [[ -n "$unpinned_actions" ]]; then
+  echo "GUARDRAIL FAILED: workflow actions are pinned to a full commit with a # vX.Y.Z comment" >&2
+  echo "$unpinned_actions" >&2
+  fail=1
+fi
+
+# An unquoted heredoc runs its backticks as commands: a comment in the
+# Homebrew cask template once ran brew upgrade on a developer's Mac. Write
+# $(...) when a substitution is meant, or quote the heredoc's delimiter.
+if ! heredoc_report="$(python3 - <<'PY'
+import pathlib, re, sys
+opener = re.compile(r"<<(-?)\s*([A-Za-z_][A-Za-z0-9_]*)\b")
+failures = []
+for path in sorted(pathlib.Path("Scripts").rglob("*.sh")):
+    lines = path.read_text(errors="replace").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        match = None if line.lstrip().startswith("#") else opener.search(line)
+        if not match:
+            continue
+        strip, word = match.group(1) == "-", match.group(2)
+        while index < len(lines):
+            body = lines[index]
+            index += 1
+            if (body.lstrip("\t") if strip else body) == word:
+                break
+            if chr(96) in body:  # a backtick, spelled so bash 3.2 can parse this
+                failures.append(f"{path}:{index}: backtick in an unquoted heredoc")
+print("\n".join(failures))
+sys.exit(1 if failures else 0)
+PY
+)"; then
+  echo "GUARDRAIL FAILED: unquoted heredocs run backticks as commands" >&2
+  echo "$heredoc_report" >&2
+  fail=1
+fi
+
+# One macOS floor. Resources/Info.plist's LSMinimumSystemVersion is the
+# source: Package.swift's platform (the compiler rejects any API newer than
+# it outside an #available branch), the plugins' MACOSX_DEPLOYMENT_TARGET
+# (Scripts/_common.sh) and the fixture bundles name the same version. An
+# availability check at or below the floor is always true, and would hide
+# the fallback its branch needs once the floor moves.
+if ! floor_report="$(python3 - <<'PY'
+import pathlib, plistlib, re, sys
+failures = []
+with open("Resources/Info.plist", "rb") as stream:
+    floor = plistlib.load(stream)["LSMinimumSystemVersion"]
+match = re.fullmatch(r"(\d+)\.0", floor)
+if not match:
+    sys.exit(f"Resources/Info.plist: LSMinimumSystemVersion {floor} is not a major release")
+major = int(match.group(1))
+if f"platforms: [.macOS(.v{major})]" not in pathlib.Path("Package.swift").read_text():
+    failures.append(f"Package.swift: platforms must be [.macOS(.v{major})]")
+if f'\nMACOS_MINIMUM="{floor}"\n' not in pathlib.Path("Scripts/_common.sh").read_text():
+    failures.append(f"Scripts/_common.sh: MACOS_MINIMUM must be {floor}")
+fixture = re.compile(r"<key>LSMinimumSystemVersion</key>\s*<string>([^<]*)</string>")
+for path in sorted(pathlib.Path("Scripts").glob("test-integration-*.sh")):
+    for value in fixture.findall(path.read_text()):
+        if value != floor:
+            failures.append(f"{path}: fixture LSMinimumSystemVersion {value}, not {floor}")
+check = re.compile(r"[#@](?:un)?available\(\s*macOS\s+(\d+)((?:\.\d+)*)")
+for root in ("Sources", "Tests"):
+    for path in sorted(pathlib.Path(root).rglob("*.swift")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            for found in check.finditer(line):
+                minor = [int(part) for part in found.group(2).split(".") if part]
+                if int(found.group(1)) < major or (
+                        int(found.group(1)) == major and not any(minor)):
+                    failures.append(f"{path}:{number}: always true at the macOS {floor} floor")
+print("\n".join(failures))
+sys.exit(1 if failures else 0)
+PY
+)"; then
+  echo "GUARDRAIL FAILED: the macOS floor is one version everywhere" >&2
+  echo "$floor_report" >&2
   fail=1
 fi
 

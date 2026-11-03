@@ -29,17 +29,19 @@ enum HintKeyRoute: Equatable {
   case search
   case adjustment
   case pointer
-  /// `mouse_bigram`: the letter being searched, before its hint label.
+  /// `mouse bigram`: the letter being searched, before its hint label.
   case bigram
-  /// `confirm`: the next key answers the question on screen.
+  /// `alert confirm`: the next key answers the question on screen.
   case confirmation
+  /// `window switch`: the window list's labels and navigation keys.
+  case switcher
 
   /// Pointer mode and a cursor-following grid steer the cursor, so it stays
-  /// visible; a question has no labels to hide it behind; every other route
-  /// hides it behind the labels.
+  /// visible; a question and the window list have no labels over targets to
+  /// hide it behind; every other route hides it behind the labels.
   var showsCursor: Bool {
     switch self {
-    case .pointer, .confirmation: return true
+    case .pointer, .confirmation, .switcher: return true
     case .grid(_, let cursorFollows): return cursorFollows
     case .labels, .search, .adjustment, .bigram: return false
     }
@@ -156,7 +158,7 @@ enum HintAdjustmentCommand: Equatable {
   case cancel
 }
 
-/// One keystroke of `mouse_bigram`, before the hint label. Shift changes
+/// One keystroke of `mouse bigram`, before the hint label. Shift changes
 /// the letter (smart case); it does not ride the click. Command, Control
 /// and Option are swallowed. The label that follows is typed on the hint
 /// route, so this interpreter never commits.
@@ -284,7 +286,7 @@ enum HintSearchInterpreter {
   }
 }
 
-/// One keystroke of pointer mode (`mouse_pointer`): freestyle cursor control
+/// One keystroke of pointer mode (`mouse pointer`): freestyle cursor control
 /// with vim movement, in-place clicks, a drag toggle, and a committing click.
 enum PointerModeCommand: Equatable {
   /// Unit direction in NSScreen coordinates (+y is up); `fine` (shift held)
@@ -293,8 +295,8 @@ enum PointerModeCommand: Equatable {
   case clickLeft
   case clickMiddle
   case clickRight
-  /// Return / space: left click, then exit pointer mode with the same INSERT
-  /// handoff as a mouse-grid commit.
+  /// Return / space: left click, then exit pointer mode; NORMAL recaptures,
+  /// as after a mouse-grid commit.
   case commitClick
   /// `v`: press the primary button in place; the next toggle releases it —
   /// movement in between is a drag.
@@ -520,6 +522,7 @@ extension OverlayPanel {
 
     if inputMode == .commandLine {
       if coordinator?.overlayDidHandleMapping(event) == true { return true }
+      if handleCommandLineControlKey(event) { return true }
       if handleCommandLineEditingShortcut(event) { return true }
       return super.performKeyEquivalent(with: event)
     }
@@ -551,10 +554,14 @@ extension OverlayPanel {
       now: now,
       timeoutMs: normalModeSequenceTimeoutMs)
     {
+      // A mapping prefix expires; what Vim itself waits on (a count, a
+      // register, a mark or macro name, a character search) waits for this key.
+      let expired = NormalModeInterpreter.expiredPending(
+        normalModePending, mappings: normalModeMappings)
       FlashLog.trace(
-        "[input] normal pending_timeout pending=\(normalModePending) "
+        "[input] normal pending_timeout pending=\(normalModePending) kept=\(expired == normalModePending) "
           + "timeout_ms=\(normalModeSequenceTimeoutMs)")
-      normalModePending = ""
+      normalModePending = expired
     }
     if NormalModeInterpreter.pendingSequenceTimedOut(
       pending: normalModeRepeatAnchor ?? "",
@@ -575,7 +582,8 @@ extension OverlayPanel {
       modifierFlags: event.modifierFlags,
       characters: keys.characters,
       charactersIgnoringModifiers: keys.ignoringModifiers,
-      mappings: normalModeMappings)
+      mappings: normalModeMappings,
+      recordingMacro: normalModeRecordingMacro)
     FlashLog.trace(
       // No key codes or characters: NORMAL swallows whatever the user types,
       // and the log must never record keystrokes (hard constraint 2).
@@ -705,6 +713,17 @@ extension OverlayPanel {
           charactersIgnoringModifiers: keys.ignoringModifiers,
           modifierFlags: event.modifierFlags))
       return true
+    case .switcher:
+      // The list owns every key: no mapping fires while a window is being
+      // chosen.
+      guard let switching = coordinator as? OverlayWindowSwitching else { return true }
+      if let command = WindowSwitcherInterpreter.command(
+        keyCode: event.keyCode, typed: keys.ignoringModifiers,
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+      {
+        switching.overlayDidSwitchWindow(command)
+      }
+      return true
     }
 
     if coordinator.overlayDidHandleMapping(event) {
@@ -763,7 +782,13 @@ extension OverlayPanel {
 
   private func handleNormalModeKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator else { return false }
-    if coordinator.overlayDidHandleMapping(event) { return true }
+    // A half-typed sequence, mark, macro or register name reads the next key
+    // itself, a chord included: it continues or abandons it.
+    if !NormalModeInterpreter.pendingReadsNextKey(normalModePending),
+      coordinator.overlayDidHandleMapping(event)
+    {
+      return true
+    }
     // Anything unclaimed is interpreted or consumed by `NormalModeInterpreter`,
     // keeping NORMAL hermetic.
     processNormalModeKey(event)
@@ -771,7 +796,7 @@ extension OverlayPanel {
   }
 
   /// Handles `⌘a` / `⌘c` / `⌘x` / `⌘v` / `⌘z` / `⌘⇧z` while the
-  /// command-line is up. AppKit normally wires these via the Edit menu
+  /// command-line is up, and `⌘p`, which pins the selected clipboard row. AppKit normally wires these via the Edit menu
   /// (which translates the key equivalent into the matching action and
   /// invokes it on the responder chain), but Flash is `LSUIElement` and
   /// ships no main menu — there's nothing to do the translation, and
@@ -818,6 +843,9 @@ extension OverlayPanel {
     else { return false }
     let isShift = modifiers.contains(.shift)
     switch char {
+    case "p" where !isShift:
+      // Pin the selected clipboard history row; nothing else uses ⌘P here.
+      return coordinator?.overlayDidTogglePinOfCommandLineSelection() ?? false
     case "a" where !isShift:
       editor.selectAll(nil)
     case "c" where !isShift:

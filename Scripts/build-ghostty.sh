@@ -14,12 +14,13 @@
 # building on macOS, which drops any -Dcpu model before compilation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-revision=b3dc3d794513c11633e7c3347935693957744e83
-checksum=7534350a9782bf1f5891891316320789dd6e2c1eb4f8a9baa56aec1b0ccccac7
-zig_version=0.16.0
+revision=08a9518340e19487bd5fdf96963583fb32f0c41f
+checksum=b2df3e649d37437245a932a150d049d638a8af77d8ca03e7b8f616234b3637ce
+version="1.3.2-dev+$revision"
+zig_version=0.17.0
 mode=${1:---dev}
 [[ "$mode" == --dev || "$mode" == --release ]] || { echo "Usage: $0 [--dev|--release]" >&2; exit 2; }
-[[ "$(zig version)" == "$zig_version" ]] || { echo "Install Zig $zig_version (mise install zig)." >&2; exit 1; }
+[[ "$(zig version)" == "$zig_version" ]] || { echo "Zig $zig_version is required: run this through mise (mise run build:ghostty)." >&2; exit 1; }
 cache="$PWD/build/ghostty"
 output="$cache/ghostty-vt.xcframework"
 if [[ "$mode" == --release ]]; then
@@ -27,8 +28,9 @@ if [[ "$mode" == --release ]]; then
 else
   architectures=("$(uname -m)")
 fi
-stamp_prefix="xcframework-v3-$revision-$zig_version"
-if [[ -f "$output/.flash-build" ]]; then
+notices_checksum=$(shasum -a 256 Scripts/build-ghostty-notices.py Scripts/ghostty-notices/* | awk '{print $1}' | shasum -a 256 | cut -d ' ' -f 1)
+stamp_prefix="xcframework-v5-$version-$zig_version-$notices_checksum"
+if [[ -f "$output/.flash-build" && -s "$output/ThirdPartyNotices.txt" ]]; then
   current=$(cat "$output/.flash-build")
   if [[ "$current" == "$stamp_prefix "* ]]; then
     covered=1
@@ -40,24 +42,30 @@ if [[ -f "$output/.flash-build" ]]; then
 fi
 mkdir -p "$cache"
 source_dir="$cache/ghostty-$revision"
-if [[ ! -d "$source_dir" ]]; then
+# Only the stamp proves a complete extraction: an interrupted tar, or a
+# worktree tool copying dotfiles such as Ghostty's .envrc, leaves the directory.
+if [[ ! -f "$source_dir/.flash-source" || "$(cat "$source_dir/.flash-source")" != "$checksum" ]]; then
   archive=$(mktemp "$cache/.source.XXXXXX")
   curl -fLsS "https://github.com/ghostty-org/ghostty/archive/$revision.tar.gz" -o "$archive"
   [[ "$(shasum -a 256 "$archive" | cut -d ' ' -f 1)" == "$checksum" ]] || { rm -f "$archive"; echo 'Ghostty source checksum mismatch' >&2; exit 1; }
   # Retired revisions (and their Zig caches) are never used again.
   find "$cache" -mindepth 1 -maxdepth 1 \( -name 'ghostty-*' -o -name 'source.tar.gz' \) ! -name "ghostty-$revision" ! -name 'ghostty-vt.xcframework' -exec rm -rf {} +
+  rm -rf "$source_dir"
   tar -xzf "$archive" -C "$cache"
   rm -f "$archive"
+  echo "$checksum" >"$source_dir/.flash-source"
 fi
 zig_target() { [[ "$1" == arm64 ]] && echo aarch64 || echo "$1"; }
 build_architecture() {
   local target prefix slice_stamp
   target=$(zig_target "$1")
   prefix="$cache/$target"
-  slice_stamp="$revision-$zig_version-ReleaseFast"
+  slice_stamp="$version-$zig_version-ReleaseFast"
   [[ -f "$prefix/.flash-build" && "$(cat "$prefix/.flash-build")" == "$slice_stamp" ]] && return 0
   rm -rf "$prefix"
-  (cd "$source_dir" && zig build -Demit-lib-vt=true -Demit-exe=false -Demit-xcframework=false -Dapp-runtime=none -Doptimize=ReleaseFast -Dtarget="$target-macos" --prefix "$prefix")
+  # The archive has no .git directory: automatic version detection would read
+  # Flash's parent repository, whose release tags and revision are unrelated.
+  (cd "$source_dir" && zig build -Dversion-string="$version" -Demit-lib-vt=true -Demit-exe=false -Demit-xcframework=false -Dapp-runtime=none -Doptimize=ReleaseFast -Dtarget="$target-macos" --prefix "$prefix")
   echo "$slice_stamp" >"$prefix/.flash-build"
 }
 pids=()
@@ -122,6 +130,8 @@ with (output / "Info.plist").open("wb") as stream:
     plistlib.dump(metadata, stream)
 (output / ".flash-build").write_text(" ".join([sys.argv[4], *architectures]) + "\n")
 PYTHON
+python3 Scripts/build-ghostty-notices.py --source "$source_dir" --revision "$revision" \
+  --output "$staging/ghostty-vt.xcframework/ThirdPartyNotices.txt"
 plutil -lint "$staging/ghostty-vt.xcframework/Info.plist"
 if [[ -e "$output" ]]; then
   mv "$output" "$staging/previous.xcframework"

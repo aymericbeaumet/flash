@@ -80,7 +80,7 @@ final class TerminalLinkTests: XCTestCase {
         view.terminalFrame?.text.contains("https://example.com/path") == true
       }, evaluatedWith: nil)
     session.start()
-    wait(for: [ready], timeout: 5)
+    wait(for: [ready], timeout: terminalChildTimeout)
     XCTAssertEqual(try XCTUnwrap(view.terminalFrame).mouseTracking, mouseTracking)
     return (view, session)
   }

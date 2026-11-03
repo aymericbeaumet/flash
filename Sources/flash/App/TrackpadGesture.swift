@@ -10,11 +10,12 @@ import FlashCore
 ///   `magnify(with:)`, `rotate(with:)` and `smartMagnify(with:)` like a
 ///   trackpad's own.
 /// - Look Up and page back / forward are the focused app's actions
-///   (`look_up`, `history_back`, `history_forward`), resolved like any other.
-/// - Mission Control, App Exposé, Launchpad and Show Desktop ask the Dock
-///   (`CoreDockSendNotification`, Launchpad as the app launcher that
-///   replaced it in macOS 26);
-///   switching Spaces posts the system's Control-arrow shortcut.
+///   (`app look_up`, `history back`, `history forward`), resolved like any
+///   other.
+/// - Mission Control, App Exposé, Launchpad (the Apps view since macOS 26)
+///   and Show Desktop are toggled by `SystemSurfaceController`, as
+///   `<surface> toggle` is; switching Spaces posts the system's
+///   Control-arrow shortcut.
 /// - A two-finger tap is a secondary click.
 enum TrackpadGesture {
   enum Motion: String, CaseIterable, Hashable {
@@ -36,7 +37,8 @@ enum TrackpadGesture {
     case rotate(counterclockwise: Bool)
     case historyBack, historyForward
     case lookUp
-    case missionControl, appExpose, launchpad, showDesktop
+    /// Toggled, as `<surface> toggle` toggles it.
+    case surface(SystemSurface)
     case spaceLeft, spaceRight
   }
 
@@ -55,12 +57,12 @@ enum TrackpadGesture {
     case (2, .swipeRight): return .historyBack
     case (2, .swipeLeft): return .historyForward
     case (3, .tap): return .lookUp
-    case (3, .swipeUp), (4, .swipeUp): return .missionControl
-    case (3, .swipeDown), (4, .swipeDown): return .appExpose
+    case (3, .swipeUp), (4, .swipeUp): return .surface(.missionControl)
+    case (3, .swipeDown), (4, .swipeDown): return .surface(.appWindows)
     case (3, .swipeLeft), (4, .swipeLeft): return .spaceRight
     case (3, .swipeRight), (4, .swipeRight): return .spaceLeft
-    case (4, .pinch), (5, .pinch): return .launchpad
-    case (4, .spread), (5, .spread): return .showDesktop
+    case (4, .pinch), (5, .pinch): return .surface(.launchpad)
+    case (4, .spread), (5, .spread): return .surface(.desktop)
     default: return nil
     }
   }
@@ -156,10 +158,10 @@ enum TrackpadGesture {
     }
   }
 
-  /// Post `gesture` at `screenPoint` (NSScreen), on the dispatcher's queue so
-  /// it lands after any pointer move queued before it.
-  static func post(_ gesture: Synthesized, at screenPoint: CGPoint) {
-    let point = CGPoint(x: screenPoint.x, y: ScreenSpace.primaryHeight - screenPoint.y)
+  /// Post `gesture` at `screenPoint`, on the dispatcher's queue so it lands
+  /// after any pointer move queued before it.
+  static func post(_ gesture: Synthesized, at screenPoint: ScreenPoint<NSSpace>) {
+    let point = screenPoint.toAX(primaryHeight: ScreenSpace.primaryHeight)
     let start = DispatchTime.now()
     for spec in events(for: gesture) {
       ActionDispatcher.clickQueue.asyncAfter(deadline: start + .milliseconds(spec.delayMs)) {
@@ -182,40 +184,11 @@ enum TrackpadGesture {
         {
           event.setIntegerValueField(field, value: value)
         }
-        event.location = point
+        event.location = point.cgPoint
         event.setIntegerValueField(
           .eventSourceUserData, value: ActionDispatcher.syntheticMouseEventTag)
         event.post(tap: .cghidEventTap)
       }
     }
-  }
-
-  // MARK: The Dock
-
-  /// The app launcher that replaced Launchpad in macOS 26.
-  static let appLauncherBundleID = "com.apple.apps.launcher"
-
-  /// Ask the Dock to show App Exposé, Launchpad or the desktop (private
-  /// `CoreDockSendNotification`, resolved at run time). Launchpad opens the
-  /// system app launcher where it exists, the Dock's Launchpad before it.
-  /// False when the Dock does not offer it.
-  @discardableResult
-  static func dock(_ action: Action) -> Bool {
-    let name: String
-    switch action {
-    case .appExpose: name = "com.apple.expose.front.awake"
-    case .launchpad:
-      if let launcher = NSWorkspace.shared.urlForApplication(
-        withBundleIdentifier: appLauncherBundleID)
-      {
-        NSWorkspace.shared.openApplication(
-          at: launcher, configuration: NSWorkspace.OpenConfiguration())
-        return true
-      }
-      name = "com.apple.launchpad.toggle"
-    case .showDesktop: name = "com.apple.showdesktop.awake"
-    default: return false
-    }
-    return SystemKeyboard.sendDockNotification(name)
   }
 }

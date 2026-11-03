@@ -74,7 +74,7 @@ pub struct Harness {
 }
 
 impl Harness {
-    /// Harness with an empty `[plugin.<id>]` settings table.
+    /// Harness with an empty `[plugins.<id>]` settings table.
     pub fn new(plugin_id: &str) -> Self {
         Self::with_config(plugin_id, json!({}))
     }
@@ -197,6 +197,26 @@ impl Harness {
             })
     }
 
+    /// Drain and return every `publish` notification in emission order as
+    /// `(source, rows)`: `source` is the one source a
+    /// [`Context::publish_source`] replaced, `None` for a whole-catalog
+    /// [`Context::publish`].
+    pub fn drain_publishes(&mut self) -> Vec<(Option<String>, Vec<Candidate>)> {
+        self.drain()
+            .into_iter()
+            .filter(|frame| frame.get("method").and_then(Value::as_str) == Some("publish"))
+            .filter_map(|frame| {
+                let params = frame.get("params")?;
+                let source = params
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let rows = serde_json::from_value(params.get("rows")?.clone()).ok()?;
+                Some((source, rows))
+            })
+            .collect()
+    }
+
     /// Drain and return every `status` notification's segment map, in
     /// emission order, as the rendered wire strings.
     pub fn drain_status(&mut self) -> Vec<BTreeMap<String, String>> {
@@ -236,7 +256,7 @@ impl WireHarness {
         Self::with_config(plugin, json!({}))
     }
 
-    /// Serve `plugin` with `config` as its `[plugin.<id>]` settings table.
+    /// Serve `plugin` with `config` as its `[plugins.<id>]` settings table.
     pub fn with_config<P: Plugin>(plugin: P, config: Value) -> Self {
         let (host, child) = tokio::io::duplex(WIRE_BUFFER_BYTES);
         let (input, output) = tokio::io::split(child);
@@ -404,21 +424,94 @@ mod tests {
         let mut harness = Harness::new("harness-host");
         let ctx = harness.context();
         ctx.log("info", "before the call");
-        let call = tokio::spawn(async move { ctx.storage_get("k").await });
+        let call = tokio::spawn(async move { ctx.wifi_ssid(false).await });
 
         let (id, method, params) = harness.next_host_request().await.unwrap();
         assert_eq!(
             (method.as_str(), params),
-            ("host.storage_get", json!({ "key": "k" }))
+            ("host.wifi_info", json!({ "request_authorization": false }))
         );
-        assert!(harness.reply_host(id, json!({ "ok": true, "value": "v" })));
+        assert!(harness.reply_host(
+            id,
+            json!({ "ok": true, "present": true, "ssid": "Atelier" })
+        ));
         assert!(
             !harness.reply_host(id, json!({ "ok": true })),
             "each call resolves once"
         );
-        assert_eq!(call.await.unwrap().as_deref(), Some("v"));
+        assert_eq!(call.await.unwrap().as_deref(), Some("Atelier"));
 
         assert_eq!(harness.drain()[0]["params"]["message"], "before the call");
+        assert!(harness.next_host_request().await.is_none());
+    }
+
+    /// `ctx.applescript` is one `host.applescript` call carrying the script
+    /// and its deadline in milliseconds, clamped to the contract's maximum;
+    /// the host's `result` is the answer and its `error` the failure, logged
+    /// by number alone. A script over the cap never reaches the host.
+    #[tokio::test]
+    async fn applescript_runs_through_the_host() {
+        let mut harness = Harness::new("harness-script");
+        let ctx = harness.context();
+        let call = tokio::spawn(async move {
+            ctx.applescript(
+                &crate::AppleScriptOperation::ShortcutsList,
+                Duration::from_secs(90),
+            )
+            .await
+        });
+        let (id, method, params) = harness.next_host_request().await.unwrap();
+        assert_eq!(method, "host.applescript");
+        assert_eq!(
+            params,
+            json!({ "operation": "shortcuts_list", "timeout_ms": 30_000 })
+        );
+        assert!(harness.reply_host(id, json!({ "ok": true, "result": "a\n" })));
+        assert_eq!(call.await.unwrap(), Ok("a\n".to_string()));
+
+        let ctx = harness.context();
+        let call = tokio::spawn(async move {
+            ctx.applescript(
+                &crate::AppleScriptOperation::ShortcutsList,
+                Duration::from_millis(1_500),
+            )
+            .await
+        });
+        let (id, _, params) = harness.next_host_request().await.unwrap();
+        assert_eq!(params["timeout_ms"], 1_500);
+        assert!(harness.reply_host(
+            id,
+            json!({ "ok": false, "error": "execution error: Not authorized to send Apple events to Safari. (-1743)", "status": 1 })
+        ));
+        assert_eq!(
+            call.await.unwrap(),
+            Err(
+                "execution error: Not authorized to send Apple events to Safari. (-1743)"
+                    .to_string()
+            )
+        );
+        let logged = harness.drain();
+        let failure = logged
+            .iter()
+            .find(|frame| frame["params"]["message"] == "[plugin] applescript failed")
+            .expect("the failure is logged");
+        assert_eq!(failure["params"]["fields"]["error_code"], "-1743");
+        assert_eq!(failure["params"]["fields"]["status"], "1");
+        assert!(
+            !serde_json::to_string(&logged).unwrap().contains("Safari"),
+            "the message stays out of the log"
+        );
+
+        let ctx = harness.context();
+        let oversized = "x".repeat(crate::context::APPLESCRIPT_SCRIPT_BYTES + 1);
+        assert_eq!(
+            ctx.applescript(
+                &crate::AppleScriptOperation::ShortcutRun { name: oversized },
+                Duration::from_secs(1)
+            )
+            .await,
+            Err("operation exceeds the 65536 byte host.applescript cap".to_string())
+        );
         assert!(harness.next_host_request().await.is_none());
     }
 }

@@ -46,7 +46,8 @@ cp -R "$STAGING_PATH" "$INSTALL_PATH"
 # Re-sign the installed copy so the on-disk signature is unambiguous.
 sign_app "$INSTALL_PATH" "$SIGN_IDENTITY"
 
-# Force Launch Services to refresh routing for the URL scheme + bundle id.
+# Refresh Launch Services' record of the bundle, which the CLI opens when no
+# resident runs.
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
   -f "$INSTALL_PATH" >/dev/null 2>&1 || true
 
@@ -59,9 +60,9 @@ rm -f "$LOGIN_AGENT_PATH"
 
 echo "==> Installing CLI symlink"
 mkdir -p "$CLI_LINK_DIR"
-# The `flash` binary is fat: argv-less it runs the resident app, with argv
-# it AppleEvents the verb to the resident and exits. There's only one
-# Mach-O to symlink.
+# The `flash` binary is both: argv-less it runs the resident app, with argv
+# it sends the words to the resident over its socket and exits. There's only
+# one Mach-O to symlink.
 ln -sf "$INSTALL_PATH/Contents/MacOS/flash" "$CLI_LINK_PATH"
 
 echo "==> Starting fresh resident process"
@@ -107,18 +108,18 @@ if [[ "$TAP_STATUS" != "ok" && -n "${NEW_PIDS:-}" ]]; then
       echo "  Accessibility:  ✓ keyboard-capture tap installed — Flash is ready."
     else
       echo "  Accessibility:  still '$TAP_STATUS'. Enable $APP_NAME, then re-run:"
-      echo "                  ./Scripts/install.sh --$MODE"
+      echo "                  mise run install:$MODE"
     fi
   else
-    echo "    Then re-run: ./Scripts/install.sh --$MODE"
+    echo "    Then re-run: mise run install:$MODE"
   fi
 fi
 
 echo
 echo "Installed: $INSTALL_PATH"
 echo "Triggers:"
-echo "  flash mouse_target"
-echo "  flash mouse_target --secondary"
-echo "  flash hints_dismiss"
-echo "  flash quit"
-echo "  flash help_show"
+echo "  flash mouse target"
+echo "  flash mouse target --secondary"
+echo "  flash hints dismiss"
+echo "  flash resident quit"
+echo "  flash help show"

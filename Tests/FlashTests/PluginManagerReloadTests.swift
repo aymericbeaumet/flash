@@ -125,11 +125,204 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(fixture.spawnCount(), 1)
   }
 
-  // MARK: - action bindings
+  // MARK: - prewarm
+
+  /// Once startup settles, the manager spawns the on-demand plugins whose
+  /// command a configured mapping runs, and only those; a reconcile that maps
+  /// another command warms that plugin too.
+  func testReconcileWarmsMappedCommandPluginsOnceStartupSettles() throws {
+    let previousDelay = PluginManager.prewarmDelayMs
+    PluginManager.prewarmDelayMs = 100
+    defer { PluginManager.prewarmDelayMs = previousDelay }
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-mgr-prewarm-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: base) }
+    func commandFixture(_ id: String) throws -> PluginFixtureKit.Fixture {
+      try PluginFixtureKit.make(
+        id: id,
+        manifest: PluginFixtureKit.manifest(
+          id: id,
+          extra: #""commands": [{ "command": ""# + id
+            + #"", "subcommand": "go", "description": "x" }]"#),
+        script: PluginFixtureKit.script(),
+        baseDataDir: base)
+    }
+    let mapped = try commandFixture("mgrmapped")
+    let unmapped = try commandFixture("mgrunmapped")
+    defer {
+      mapped.cleanup()
+      unmapped.cleanup()
+    }
+    func mapping(_ key: String, _ command: String) -> ModeMapping {
+      ModeMapping(
+        key: key,
+        action: .flashCommand(.pluginCommand(command: command, subcommand: "go", args: [])))
+    }
+    let manager = PluginManager(baseDataDir: base)
+    defer { manager.stop() }
+    var config = testConfig(
+      thirdParty: ["file:\(mapped.root.path)", "file:\(unmapped.root.path)"])
+    config.mode.normal.append(mapping("<leader>m", "mgrmapped"))
+    manager.start(config: config)
+    waitUntilTrue("mapped plugin warmed without a command") {
+      self.status(manager, "mgrmapped")?.state == "running"
+    }
+    XCTAssertEqual(status(manager, "mgrmapped")?.activation, "on_demand")
+    settleRunLoop(0.3)
+    XCTAssertEqual(unmapped.spawnCount(), 0, "nothing maps it: it waits for its first command")
+    XCTAssertEqual(status(manager, "mgrunmapped")?.state, "stopped")
+
+    config.mode.hyper.append(mapping("u", "mgrunmapped"))
+    manager.updateConfig(config)
+    waitUntilTrue("newly mapped plugin warmed") {
+      self.status(manager, "mgrunmapped")?.state == "running"
+    }
+    XCTAssertEqual(mapped.spawnCount(), 1)
+    XCTAssertEqual(unmapped.spawnCount(), 1)
+  }
+
+  // MARK: - bangs
+
+  /// A bang is typed in the flashlight, whatever app is focused: an owner
+  /// scoped to its apps (browsers' `!fh`) still lists, resolves and swaps
+  /// the pool to its named source from Terminal.
+  func testBangsOfAnAppScopedPluginResolveInAnyApp() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "scopedbang",
+      manifest: PluginFixtureKit.manifest(
+        id: "scopedbang",
+        extra: """
+          "only_bundle_ids": ["org.mozilla.firefox"],
+          "sources": [{ "name": "scopedbang.rows", "type": "rows", "kind": "default", "priority": "normal" }],
+          "bangs": [{ "token": "sb", "description": "scoped bang", "source": "scopedbang.rows" }]
+          """),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    let terminal = PluginSelectorContext(bundleID: "com.apple.Terminal")
+    waitUntilTrue("bang published") {
+      manager.shebangCandidates(in: terminal).contains { $0.title == "!sb" }
+    }
+    XCTAssertEqual(manager.shebangCandidateSource(token: "sb", in: terminal), "scopedbang.rows")
+    let performed = expectation(description: "bang dispatched to its owner")
+    XCTAssertTrue(
+      manager.invokeShebang(token: "sb", query: "hello", in: terminal) { ok, _, _, _ in
+        XCTAssertTrue(ok)
+        performed.fulfill()
+      })
+    wait(for: [performed], timeout: 10)
+  }
+
+  /// A command or bang perform carries the command, its subcommand and the
+  /// whitespace-split args, and nothing else.
+  func testCommandAndBangPerformsCarryOnlyTheirWordsAndArgs() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "wireperform",
+      manifest: PluginFixtureKit.manifest(
+        id: "wireperform",
+        extra: Self.residentSurfaces
+          + """
+          ,
+          "commands": [{ "command": "wired", "subcommand": "echo", "description": "test" }],
+          "bangs": [{ "token": "wb", "description": "test bang" }]
+          """),
+      script: PluginFixtureKit.script(
+        onPerform: #"printf '%s\n' "$line" >> "$D/performs"; "#
+          + PluginFixtureKit.performOK))
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("plugin running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let performed = expectation(description: "both performs answered")
+    performed.expectedFulfillmentCount = 2
+    XCTAssertTrue(
+      manager.invoke(command: "wired", subcommand: "echo", args: ["a", "b"]) { ok, _, _, _ in
+        XCTAssertTrue(ok)
+        performed.fulfill()
+      })
+    XCTAssertTrue(
+      manager.invokeShebang(token: "wb", query: "hello  world") { ok, _, _, _ in
+        XCTAssertTrue(ok)
+        performed.fulfill()
+      })
+    wait(for: [performed], timeout: 15)
+    let lines = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("performs"), encoding: .utf8
+    ).split(separator: "\n")
+    let params = try lines.map { line -> [String: Any] in
+      let frame = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+      return try XCTUnwrap(frame["params"] as? [String: Any])
+    }
+    XCTAssertEqual(params.count, 2)
+    for perform in params {
+      XCTAssertEqual(Set(perform.keys), ["kind", "command", "subcommand", "args"])
+    }
+    let command = try XCTUnwrap(params.first { $0["subcommand"] as? String == "echo" })
+    XCTAssertEqual(command["command"] as? String, "wired")
+    XCTAssertEqual(command["args"] as? [String], ["a", "b"])
+    let bang = try XCTUnwrap(params.first { $0["subcommand"] as? String == "wb" })
+    XCTAssertEqual(bang["command"] as? String, fixture.pluginID)
+    XCTAssertEqual(bang["args"] as? [String], ["hello", "world"])
+  }
+
+  // MARK: - bindings
+
+  func testOwnTextEditingChangesNotifyOnceAfterPublication() throws {
+    let previous = OwnTextEditingApps.declared.all
+    OwnTextEditingApps.declared.declare([])
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-mgr-text-policy-\(UUID().uuidString)")
+    let root = base.appendingPathComponent("editing")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: base) }
+    try """
+    {
+      "id": "editing", "name": "Editing", "version": "1.0.0",
+      "description": "Text policy fixture",
+      "own_text_editing": ["com.example.editor"]
+    }
+    """.write(to: root.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+    let manager = PluginManager(baseDataDir: base)
+    defer {
+      manager.onOwnTextEditingAppsChanged = nil
+      manager.stop()
+      OwnTextEditingApps.declared.declare(previous)
+    }
+    var snapshots: [Set<String>] = []
+    var publications = 0
+    manager.onOwnTextEditingAppsChanged = {
+      XCTAssertTrue(Thread.isMainThread)
+      snapshots.append(OwnTextEditingApps.declared.all)
+    }
+    manager.onStateChanged = { publications += 1 }
+    let config = testConfig(thirdParty: ["file:\(root.path)"])
+    manager.start(config: config)
+    waitUntilTrue("first publication") { publications >= 1 }
+    XCTAssertEqual(snapshots, [["com.example.editor"]])
+
+    manager.updateConfig(config)
+    waitUntilTrue("unchanged publication") { publications >= 2 }
+    XCTAssertEqual(snapshots, [["com.example.editor"]], "unchanged declarations do not notify")
+
+    var disabled = config
+    disabled.plugins.disabled.insert("editing")
+    manager.updateConfig(disabled)
+    waitUntilTrue("removed publication") { publications >= 3 }
+    XCTAssertEqual(snapshots, [["com.example.editor"], []])
+  }
 
   /// A bundle's own binding beats a plugin-wide one across plugins; an
-  /// app-specific chord marks the emulator as binding it.
-  func testActionBindingsResolvePerAppFromManifestOnlyPlugins() throws {
+  /// app-specific chord marks the emulator as binding it. The emulator
+  /// declarations come from an on-demand fixture (the bundled terminals
+  /// plugin runs tmux, which no reconcile here may spawn).
+  func testCommandBindingsResolvePerAppAcrossPlugins() throws {
     let base = FileManager.default.temporaryDirectory
       .appendingPathComponent("flash-mgr-bindings-\(UUID().uuidString)")
     let root = base.appendingPathComponent("wide")
@@ -142,54 +335,115 @@ final class PluginManagerReloadTests: XCTestCase {
       "version": "1.0.0",
       "description": "Plugin-wide chords",
       "only_bundle_ids": ["com.example.app", "com.apple.MobileSMS"],
-      "action_bindings": { "tab_next": { "": "cmd+option+right" } }
+      "bindings": { "tab next": { "": "cmd+option+right" } }
     }
     """.write(
       to: root.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+    let emulators = try PluginFixtureKit.make(
+      id: "emulators",
+      manifest: PluginFixtureKit.manifest(
+        id: "emulators",
+        extra: """
+          "terminal_emulators": ["com.mitchellh.ghostty", "org.alacritty"],
+          "own_text_editing": ["com.example.editor"],
+          "bindings": {
+            "pane next": { "com.mitchellh.ghostty": "cmd+]" },
+            "pane previous": { "com.mitchellh.ghostty": "cmd+[" }
+          }
+          """),
+      script: PluginFixtureKit.script(),
+      baseDataDir: base)
+    defer { emulators.cleanup() }
     let manager = PluginManager(baseDataDir: base)
     defer { manager.stop() }
-    var config = testConfig(thirdParty: ["file:\(root.path)"])
-    config.plugins.disabled.subtract(["defaults", "terminals"])
+    var config = testConfig(thirdParty: ["file:\(root.path)", "file:\(emulators.root.path)"])
+    config.plugins.disabled.subtract(["defaults"])
     manager.start(config: config)
 
-    func chord(_ action: SourceActionName, _ bundle: String) -> ActionBinding? {
-      manager.actionBinding(action, in: PluginSelectorContext(bundleID: bundle))
+    func chord(_ key: String, _ bundle: String) -> CommandBinding? {
+      manager.commandBinding(
+        CommandBindingKey(key)!, in: PluginSelectorContext(bundleID: bundle))
     }
-    func parsed(_ hotkey: String) throws -> ActionBinding {
+    func parsed(_ hotkey: String) throws -> CommandBinding {
       .chords([try XCTUnwrap(HotkeySyntax.parse(hotkey: hotkey))])
     }
-    waitUntilTrue("manifests published") { chord(.tabNext, "com.example.app") != nil }
-    XCTAssertEqual(chord(.tabNext, "com.example.app"), try parsed("cmd+option+right"))
+    waitUntilTrue("manifests published") { chord("tab next", "com.example.app") != nil }
+    XCTAssertEqual(chord("tab next", "com.example.app"), try parsed("cmd+option+right"))
     XCTAssertEqual(
-      chord(.tabNext, "com.apple.MobileSMS"), try parsed("ctrl+tab"),
+      chord("tab next", "com.apple.MobileSMS"), try parsed("ctrl+tab"),
       "Messages' own entry in defaults beats the other plugin's plugin-wide chord")
     XCTAssertEqual(
-      chord(.tabNext, "com.example.elsewhere"), try parsed("cmd+shift+]"),
+      chord("tab next", "com.example.elsewhere"), try parsed("cmd+shift+]"),
       "outside its selector, the defaults convention applies")
-    XCTAssertNil(chord(.tabLast, "com.example.app"))
+    XCTAssertNil(chord("tab last", "com.example.app"))
     XCTAssertEqual(
-      chord(.historyBack, "com.todesktop.230313mzl4w4u92"), try parsed("ctrl+-"),
+      chord("history back", "com.todesktop.230313mzl4w4u92"), try parsed("ctrl+-"),
       "editors go back with their own chord, not the outdenting Cmd-[")
-    XCTAssertEqual(chord(.historyForward, "com.apple.dt.Xcode"), try parsed("ctrl+cmd+right"))
+    XCTAssertEqual(chord("history forward", "com.apple.dt.Xcode"), try parsed("ctrl+cmd+right"))
     XCTAssertEqual(
-      chord(.historyBack, "com.apple.Notes"), ActionBinding.unbound,
+      chord("history back", "com.apple.Notes"), CommandBinding.unbound,
       "apps without history send nothing")
     XCTAssertEqual(
-      chord(.historyBack, "com.apple.Safari"), try parsed("cmd+["), "the defaults convention")
+      chord("history back", "com.apple.Safari"), try parsed("cmd+["), "the defaults convention")
 
     let bracket = try XCTUnwrap(HotkeySyntax.parse(hotkey: "cmd+]"))
     XCTAssertTrue(
-      manager.declaresActionBinding(
+      manager.declaresBinding(
         key: bracket.keyCode, flags: bracket.eventFlags,
         in: PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
     XCTAssertFalse(
-      manager.declaresActionBinding(
+      manager.declaresBinding(
         key: bracket.keyCode, flags: bracket.eventFlags,
         in: PluginSelectorContext(bundleID: "org.alacritty")))
     XCTAssertTrue(
       TerminalEmulators.contains("org.alacritty"), "publishing declares the terminals plugin's list"
     )
     XCTAssertFalse(TerminalEmulators.contains("com.example.app"))
+    XCTAssertTrue(
+      OwnTextEditingApps.contains("com.example.editor")
+        && OwnTextEditingApps.contains(
+          "com.microsoft.VSCode"),
+      "own_text_editing is the union of every plugin's list, the defaults plugin's included")
+    XCTAssertFalse(OwnTextEditingApps.contains("com.example.app"))
+  }
+
+  /// A core-topic `commands[]` entry is a claim on the source chain, never a
+  /// plugin command: it registers for neither dispatch nor completion, and
+  /// a mapping running it warms nothing.
+  func testCoreCommandEntriesNeverEnterDispatchOrCompletion() throws {
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-mgr-core-commands-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let fixture = try PluginFixtureKit.make(
+      id: "split",
+      manifest: PluginFixtureKit.manifest(
+        id: "split",
+        extra: """
+          "commands": [
+            { "command": "split", "subcommand": "run", "description": "Run" },
+            { "command": "tab", "subcommand": "close" }
+          ]
+          """),
+      script: PluginFixtureKit.script(),
+      baseDataDir: base)
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: base)
+    defer { manager.stop() }
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("manifest published") {
+      manager.commandRegistrations().contains { $0.command == "split" }
+    }
+    let registered = manager.commandRegistrations().map { "\($0.command) \($0.subcommand)" }
+    XCTAssertTrue(registered.contains("split run"))
+    XCTAssertFalse(registered.contains("tab close"), "\(registered)")
+    XCTAssertFalse(manager.invoke(command: "tab", subcommand: "close", args: []))
+    XCTAssertEqual(
+      manager.pluginStatuses().first { $0.id == "split" }?.commands.map(\.subcommand), ["run"])
+    XCTAssertEqual(
+      PluginWarmPolicy.warmPluginIDs(
+        references: [.init(command: "tab", subcommand: "close")],
+        commands: ["split": manager.pluginStatuses().first { $0.id == "split" }?.commands ?? []]),
+      [])
   }
 
   // MARK: - reloadAll
@@ -306,7 +560,7 @@ final class PluginManagerReloadTests: XCTestCase {
     let answered = expectation(description: "command answered")
     var handled: Bool?
     XCTAssertTrue(
-      manager.invoke(command: "routed", subcommand: "ping", args: [], raw: "routed ping") {
+      manager.invoke(command: "routed", subcommand: "ping", args: []) {
         ok, _, _, _ in
         handled = ok
         answered.fulfill()
@@ -393,6 +647,52 @@ final class PluginManagerReloadTests: XCTestCase {
   }
 
   // MARK: - Config-generation race
+
+  func testRestartUsesTheNewestDesiredConfiguration() throws {
+    var state = PluginManager.DesiredState()
+    let initial = try XCTUnwrap(
+      state.request(.configure(testConfig(thirdParty: [], disabled: ["old"]))))
+    let changed = try XCTUnwrap(
+      state.request(.configure(testConfig(thirdParty: [], disabled: ["new"]))))
+    let restart = try XCTUnwrap(state.request(.restart(["plugin"])))
+
+    XCTAssertGreaterThan(restart.generation, changed.generation)
+    XCTAssertTrue(restart.config.plugins.disabled.contains("new"))
+    XCTAssertFalse(restart.config.plugins.disabled.contains("old"))
+    XCTAssertNil(state.takeRestarts(for: initial.generation))
+    XCTAssertNil(state.takeRestarts(for: changed.generation))
+    XCTAssertEqual(state.takeRestarts(for: restart.generation), ["plugin"])
+  }
+
+  func testStopRevokesDesiredConfigurationAndRejectsRestarts() throws {
+    var state = PluginManager.DesiredState()
+    XCTAssertNil(state.request(.restart(["before-start"])))
+    _ = state.request(.configure(testConfig(thirdParty: [])))
+    let restart = try XCTUnwrap(state.request(.restart(["before-stop"])))
+
+    state.stop()
+
+    XCTAssertNil(state.config)
+    XCTAssertFalse(state.isCurrent(restart.generation))
+    XCTAssertNil(state.request(.restart(["after-stop"])))
+    XCTAssertNil(state.takeRestarts(for: restart.generation))
+    let resumed = try XCTUnwrap(state.request(.configure(testConfig(thirdParty: []))))
+    XCTAssertGreaterThan(resumed.generation, restart.generation)
+    XCTAssertEqual(state.takeRestarts(for: resumed.generation), [])
+  }
+
+  func testSupersededReconciliationCannotConsumePendingRestarts() throws {
+    var state = PluginManager.DesiredState()
+    _ = state.request(.configure(testConfig(thirdParty: [])))
+    let first = try XCTUnwrap(state.request(.restart(["first"])))
+    _ = state.request(.configure(testConfig(thirdParty: [], disabled: ["updated"])))
+    let second = try XCTUnwrap(state.request(.restart(["second"])))
+
+    XCTAssertNil(state.takeRestarts(for: first.generation))
+    XCTAssertEqual(state.takeRestarts(for: second.generation), ["first", "second"])
+    let next = try XCTUnwrap(state.request(.restart(["next"])))
+    XCTAssertEqual(state.takeRestarts(for: next.generation), ["next"])
+  }
 
   func testStaleConfigGenerationIsDroppedWholesale() throws {
     // Two rapid reconciles: the older config is still materializing (slowed

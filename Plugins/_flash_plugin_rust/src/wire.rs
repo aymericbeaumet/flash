@@ -100,6 +100,9 @@ pub(crate) fn valid_result(method: &str, result: &Value) -> bool {
             .and_then(Value::as_array)
             .is_some_and(|targets| targets.iter().all(valid_target));
     }
+    if method == "text_grid" {
+        return valid_text_grid(result);
+    }
     if method == "perform" {
         return only_keys(result, &["ok", "target_pid", "navigation_url", "message"])
             && present(result, "navigation_url")
@@ -109,24 +112,78 @@ pub(crate) fn valid_result(method: &str, result: &Value) -> bool {
     true
 }
 
+/// Columns and rows of a `text_grid` reply are each at most this: tmux's own
+/// window limit, so a grid the host lays out stays bounded.
+pub(crate) const MAX_TEXT_GRID_DIMENSION: u64 = 10_000;
+
+/// The host's catalog byte quota (`quotas.catalog_bytes`): the bytes of the
+/// `rows` array as written in the publish frame, summed over the plugin's
+/// sources after a per-source merge. The SDK enforces nothing here — the
+/// host rejects an over-quota publish whole — but its publish frames are
+/// pinned to add exactly the envelope around the compact rows, so a plugin
+/// can size its catalog by the compact encoding alone.
+#[cfg(test)]
+pub(crate) const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
+
+/// A `text_grid` success: `columns` × `rows` cells and lines inside them,
+/// each captured text `{row, column, text}` or a status format laid out over
+/// `{row, column, width, format}` cells.
+fn valid_text_grid(result: &Value) -> bool {
+    let dimension = |key: &str| {
+        result
+            .get(key)
+            .and_then(Value::as_u64)
+            .filter(|value| *value <= MAX_TEXT_GRID_DIMENSION)
+    };
+    let (Some(columns), Some(rows)) = (dimension("columns"), dimension("rows")) else {
+        return false;
+    };
+    if !only_keys(result, &["ok", "columns", "rows", "lines"]) {
+        return false;
+    }
+    let Some(lines) = result.get("lines").and_then(Value::as_array) else {
+        return false;
+    };
+    lines.iter().all(|line| {
+        let cell =
+            |key: &str, bound: u64| line.get(key).and_then(Value::as_u64).filter(|v| *v < bound);
+        let (Some(_), Some(column)) = (cell("row", rows), cell("column", columns)) else {
+            return false;
+        };
+        let Some(object) = line.as_object() else {
+            return false;
+        };
+        if object.contains_key("text") {
+            return object.len() == 3 && line["text"].is_string();
+        }
+        object.len() == 4
+            && line.get("format").is_some_and(Value::is_string)
+            && line
+                .get("width")
+                .and_then(Value::as_u64)
+                .is_some_and(|width| width >= 1 && width <= columns - column)
+    })
+}
+
+/// Every key of one hint target (`protocol.json` `hint_target`): `id` and
+/// `frame` are required, the rest optional.
+const HINT_TARGET_KEYS: &[&str] = &[
+    "id",
+    "frame",
+    "role",
+    "label",
+    "url",
+    "pid",
+    "priority",
+    "context_id",
+];
+
 fn valid_target(target: &Value) -> bool {
-    if !only_keys(
-        target,
-        &[
-            "id",
-            "frame",
-            "role",
-            "label",
-            "url",
-            "context_id",
-            "pid",
-            "enters_insert_mode",
-            "priority",
-        ],
-    ) || target
-        .get("id")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
+    if !only_keys(target, HINT_TARGET_KEYS)
+        || target
+            .get("id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
     {
         return false;
     }
@@ -163,9 +220,6 @@ fn valid_target(target: &Value) -> bool {
         .iter()
         .any(|key| present(target, key).is_some_and(|value| !value.is_string()))
     {
-        return false;
-    }
-    if present(target, "enters_insert_mode").is_some_and(|value| !value.is_boolean()) {
         return false;
     }
     if present(target, "priority").is_some_and(|value| {
@@ -234,7 +288,14 @@ mod tests {
     fn shared_wire_corpus_matches_the_rust_boundary() {
         let fixture: Value =
             serde_json::from_str(include_str!("../fixtures/wire-values.fixture")).unwrap();
-        for kind in ["protocol_version", "boolean", "pid", "perform", "hints"] {
+        for kind in [
+            "protocol_version",
+            "boolean",
+            "pid",
+            "perform",
+            "hints",
+            "text_grid",
+        ] {
             for case in fixture[kind].as_array().unwrap() {
                 let value = &case["value"];
                 let valid = match kind {
@@ -300,6 +361,47 @@ mod tests {
     }
 
     #[test]
+    fn perform_kinds_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["perform_kinds"],
+            serde_json::json!(crate::runtime::PERFORM_KINDS)
+        );
+        let shape = &contract["perform_command"];
+        assert_eq!(
+            shape["required"],
+            serde_json::json!(["command", "subcommand", "args"])
+        );
+        assert_eq!(shape["optional"], serde_json::json!(["context"]));
+    }
+
+    /// The one manifest `lifecycle` value, and what a plugin declaring it
+    /// may carry, come from the contract the macro reads too.
+    #[test]
+    fn lifecycle_declarations_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let lifecycle = &contract["lifecycle"];
+        assert_eq!(
+            lifecycle["values"],
+            serde_json::json!([crate::runtime::PUBLISH_THEN_EXIT])
+        );
+        let rules = &lifecycle[crate::runtime::PUBLISH_THEN_EXIT];
+        assert_eq!(rules["requires"], serde_json::json!(["exec", "sources"]));
+        assert_eq!(
+            rules["forbids"],
+            serde_json::json!([
+                "hints",
+                "query",
+                "status",
+                "listen",
+                "commands",
+                "bangs",
+                "navigation"
+            ])
+        );
+    }
+
+    #[test]
     fn poll_bounds_match_the_shared_protocol_contract() {
         use crate::poll::{
             MAX_NAME_BYTES, MAX_REGISTRATIONS, MAX_SECONDS, MIN_EVERY, PollPriority,
@@ -312,6 +414,127 @@ mod tests {
         assert_eq!(poll["max_seconds"], MAX_SECONDS);
         assert_eq!(poll["max_registrations"], MAX_REGISTRATIONS as u64);
         assert_eq!(poll["max_name_bytes"], MAX_NAME_BYTES as u64);
+    }
+
+    /// A hint target carries exactly the contract's keys: geometry and
+    /// semantics, nothing about the mode a click leaves.
+    #[test]
+    fn hint_target_keys_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let shape = &contract["hint_target"];
+        assert_eq!(shape["required"], serde_json::json!(["id", "frame"]));
+        let mut keys: Vec<&str> = ["required", "optional"]
+            .iter()
+            .flat_map(|group| shape[*group].as_array().unwrap())
+            .map(|key| key.as_str().unwrap())
+            .collect();
+        keys.sort_unstable();
+        let mut accepted = HINT_TARGET_KEYS.to_vec();
+        accepted.sort_unstable();
+        assert_eq!(keys, accepted);
+    }
+
+    #[test]
+    fn text_grid_bounds_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["quotas"]["text_grid_dimension"],
+            MAX_TEXT_GRID_DIMENSION
+        );
+        let shapes = &contract["text_grid_line"];
+        assert_eq!(shapes["text"], serde_json::json!(["row", "column", "text"]));
+        assert_eq!(
+            shapes["format"],
+            serde_json::json!(["row", "column", "width", "format"])
+        );
+    }
+
+    /// The host counts `catalog_bytes` from the `rows` array as it lies in
+    /// the publish frame, so what the SDK writes around it must be exactly
+    /// the envelope — no whitespace, no re-ordering — and the rows must be
+    /// the compact encoding. At the 4 MiB boundary: a catalog whose compact
+    /// rows are exactly the quota yields a frame of quota plus envelope, and
+    /// a per-source publish adds exactly its `source` member.
+    #[tokio::test]
+    async fn publish_frames_add_exactly_the_envelope_around_compact_rows() {
+        use crate::context::Publish;
+        use crate::emit::Emitter;
+        use crate::types::Candidate;
+        use tokio::sync::mpsc;
+
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["quotas"]["catalog_bytes"],
+            MAX_CATALOG_BYTES as u64
+        );
+        let publish = &contract["publish"]["params"];
+        assert_eq!(publish["required"], serde_json::json!(["rows"]));
+        assert_eq!(publish["optional"], serde_json::json!(["source"]));
+
+        // `[{"source":"s","title":"<L bytes>"}]` is 27 + L bytes compact.
+        let title = "x".repeat(MAX_CATALOG_BYTES - 27);
+        let rows = vec![Candidate::new("s", title)];
+        assert_eq!(serde_json::to_vec(&rows).unwrap().len(), MAX_CATALOG_BYTES);
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let emitter = Emitter::new(tx);
+        let whole = r#"{"method":"publish","params":{"rows":"#;
+        emitter.notify_with(
+            "publish",
+            &Publish {
+                source: None,
+                rows: &rows,
+            },
+        );
+        let frame = rx.recv().await.unwrap().payload;
+        assert_eq!(frame.len(), whole.len() + MAX_CATALOG_BYTES + "}}\n".len());
+        assert!(frame.starts_with(whole.as_bytes()));
+        assert!(frame.ends_with(b"}}\n"));
+
+        let scoped = r#"{"method":"publish","params":{"source":"s","rows":"#;
+        emitter.notify_with(
+            "publish",
+            &Publish {
+                source: Some("s"),
+                rows: &rows,
+            },
+        );
+        let frame = rx.recv().await.unwrap().payload;
+        assert_eq!(frame.len(), scoped.len() + MAX_CATALOG_BYTES + "}}\n".len());
+        assert!(frame.starts_with(scoped.as_bytes()));
+    }
+
+    /// The SDK pre-checks a script's size and clamps its timeout to the
+    /// contract's bounds, so they must be the host's.
+    #[test]
+    fn applescript_bounds_match_the_shared_protocol_contract() {
+        use crate::context::{
+            APPLESCRIPT_CONCURRENCY, APPLESCRIPT_DEFAULT_TIMEOUT, APPLESCRIPT_MAX_TIMEOUT,
+            APPLESCRIPT_RESULT_BYTES, APPLESCRIPT_SCRIPT_BYTES,
+        };
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let bounds = &contract["applescript"];
+        assert_eq!(bounds["script_bytes"], APPLESCRIPT_SCRIPT_BYTES as u64);
+        assert_eq!(bounds["result_bytes"], APPLESCRIPT_RESULT_BYTES as u64);
+        assert_eq!(
+            bounds["default_timeout_ms"],
+            APPLESCRIPT_DEFAULT_TIMEOUT.as_millis() as u64
+        );
+        assert_eq!(
+            bounds["max_timeout_ms"],
+            APPLESCRIPT_MAX_TIMEOUT.as_millis() as u64
+        );
+        assert_eq!(bounds["concurrency"], APPLESCRIPT_CONCURRENCY as u64);
+        assert_eq!(
+            contract["methods"]["plugin_to_host_rpcs"]["host.applescript"],
+            "apple_events"
+        );
+        assert!(
+            contract["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::from("apple_events"))
+        );
     }
 
     #[test]

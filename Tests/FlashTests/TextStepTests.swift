@@ -4,7 +4,7 @@ import XCTest
 
 @testable import flash
 
-/// `mouse_step`: one text line or one character from the glyph under the
+/// `mouse step`: one text line or one character from the glyph under the
 /// pointer, in Accessibility's top-left coordinates.
 final class TextStepTests: XCTestCase {
   /// Three lines of 10pt-wide glyphs, 20pt apart, with a 4pt gap between
@@ -109,38 +109,42 @@ final class TextStepTests: XCTestCase {
       ["next_word", "previous_word", "word_end", "line_start", "line_end"])
   }
 
-  func testTheVerbsParseAndRoundTrip() {
-    func parse(_ verb: String, _ args: [String: String]) -> URLCommand? {
-      URLEventHandler.parse(verb: verb, args: args)
+  func testTheCommandsParseAndRoundTrip() {
+    func parse(_ topic: String, _ action: String, _ args: [String: String]) -> URLCommand? {
+      URLEventHandler.parse(topic: topic, action: action, args: args)
     }
-    XCTAssertEqual(parse("mouse_step", ["to": "word_end"]), .mouseJump(.wordEnd))
-    XCTAssertEqual(parse("mouse_step", ["direction": "up"]), .mouseStep(.up))
-    XCTAssertNil(parse("mouse_step", ["direction": "up", "to": "word_end"]), "one or the other")
-    XCTAssertNil(parse("mouse_step", [:]))
-    XCTAssertNil(parse("mouse_step", ["to": "paragraph"]))
-    XCTAssertEqual(parse("selection", ["action": "change"]), .selection(.change))
+    XCTAssertEqual(parse("mouse", "step", ["to": "word_end"]), .mouseJump(.wordEnd))
+    XCTAssertEqual(parse("mouse", "step", ["direction": "up"]), .mouseStep(.up))
+    XCTAssertNil(parse("mouse", "step", ["direction": "up", "to": "word_end"]), "one or the other")
+    XCTAssertNil(parse("mouse", "step", [:]))
+    XCTAssertNil(parse("mouse", "step", ["to": "paragraph"]))
+    XCTAssertNil(parse("selection", "cut", [:]), "Flash cuts nothing")
+    XCTAssertNil(parse("selection", "change", [:]), "no change operator")
     XCTAssertEqual(
-      parse("selection", ["action": "copy", "register": "a"]),
+      parse("selection", "copy", ["register": "a"]),
       .selection(.copy, register: "a"))
-    XCTAssertNil(parse("selection", ["action": "copy", "register": "ab"]))
-    XCTAssertNil(parse("selection", ["action": "copy", "register": "é"]))
-    XCTAssertNil(parse("selection", ["action": "copy", "register": ""]))
-    XCTAssertNil(parse("yank_selection", ["register": "ab"]))
-    XCTAssertNil(parse("paste", ["register": "é"]))
-    XCTAssertEqual(parse("yank_selection", ["register": "_"]), .yankSelection(register: "_"))
-    XCTAssertNil(parse("selection", ["action": "delete"]))
+    XCTAssertNil(parse("selection", "copy", ["register": "ab"]))
+    XCTAssertNil(parse("selection", "copy", ["register": "é"]))
+    XCTAssertNil(parse("selection", "copy", ["register": ""]))
+    XCTAssertNil(parse("selection", "copy", ["action": "copy"]), "the action is the word")
+    XCTAssertNil(parse("register", "yank", ["register": "ab"]))
+    XCTAssertNil(parse("register", "paste", ["register": "é"]))
+    XCTAssertEqual(parse("register", "yank", ["register": "_"]), .yankSelection(register: "_"))
+    XCTAssertNil(parse("selection", "delete", [:]))
     XCTAssertEqual(
-      URLCommand.mouseJump(.lineEnd).diagnosticDescription, "flash mouse_step --to=line_end")
+      URLCommand.mouseJump(.lineEnd).diagnosticDescription, "flash mouse step --to=line_end")
     XCTAssertEqual(
-      URLCommand.selection(.copy).diagnosticDescription, "flash selection --action=copy")
+      URLCommand.selection(.copy).diagnosticDescription, "flash selection copy")
     XCTAssertEqual(
       URLCommand.selection(.copy, register: "a").diagnosticDescription,
-      "flash selection --action=copy --register=a")
+      "flash selection copy --register=a")
     let drag = ConfigLoader.parse("").mode.compiledHold
     XCTAssertEqual(drag.mapping(for: "w")?.action, .flashCommand(.mouseJump(.nextWord)))
     XCTAssertEqual(drag.mapping(for: "$")?.action, .flashCommand(.mouseJump(.lineEnd)))
     XCTAssertEqual(drag.mapping(for: "y")?.action, .flashCommand(.selection(.copy)))
-    XCTAssertEqual(drag.mapping(for: "d")?.action, .flashCommand(.selection(.cut)))
-    XCTAssertFalse(drag.hasStrictPrefix("d"), "HOLD's d does not wait on NORMAL's df")
+    XCTAssertEqual(drag.mapping(for: "p")?.action, .flashCommand(.selection(.paste)))
+    XCTAssertEqual(drag.mapping(for: "s")?.action, .flashCommand(.mouseBigram(.move)))
+    XCTAssertFalse(drag.hasStrictPrefix("s"), "HOLD's s does not wait on anything")
+    XCTAssertNil(drag.mapping(for: "gw"), "the letter pick is s alone")
   }
 }

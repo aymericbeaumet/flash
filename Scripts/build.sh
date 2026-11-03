@@ -30,7 +30,7 @@ if [[ "$MODE" == "release" ]]; then
   # and the cargo target dir so nothing stale survives into a shipped bundle.
   echo "==> Cleaning (release: full rebuild)"
   swift package clean
-  rm -rf "$PROJECT_DIR/build/plugin-target"
+  rm -rf "$PROJECT_DIR/build/plugin-target" "$PROJECT_DIR/build/plugin-release"
 
   # Plugins are independent of the inspector→swift chain, so build them
   # alongside it.
@@ -100,6 +100,9 @@ else
   SIGN_IDENTITY="$DEV_SIGN_IDENTITY"
 fi
 
+if [[ "$MODE" == "release" ]]; then
+  python3 "$SCRIPTS/build-third-party-notices.py"
+fi
 assemble_app "$MODE" "$BIN_PATH" "$SIGN_IDENTITY"
 
 if [[ "$MODE" == "dev" ]]; then
@@ -132,6 +135,12 @@ if [[ "$MODE" == "release" ]]; then
   fi
   # Re-sign after editing the plist so the signature stays valid.
   sign_app "$STAGING_PATH" "$SIGN_IDENTITY"
+
+  bundle_checks=()
+  if [[ "${FLASH_HARDENED_RUNTIME:-0}" == "1" ]]; then
+    bundle_checks+=(--require-hardened-runtime)
+  fi
+  python3 "$SCRIPTS/check-app-bundle.py" "$STAGING_PATH" ${bundle_checks[@]+"${bundle_checks[@]}"}
 
   ZIP_PATH="${FLASH_ZIP_PATH:-$PROJECT_DIR/build/$APP_NAME.zip}"
   package_zip() {

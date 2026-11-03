@@ -11,11 +11,11 @@ hint tool.
 | | Alfred | Flash |
 | --- | --- | --- |
 | License, price | Closed; free core, Powerpack one-time | MIT, free |
-| Platforms | macOS 10.14+ | macOS 14+ |
-| Permissions | Accessibility (snippets, key events), Full Disk Access (file search), Contacts, Automation, sometimes Input Monitoring | Accessibility; Automation per browser for tab lists; Screen Recording only for `:screenshot` |
-| Launcher | Apps, files, web search, calculator; workflows from a gallery of hundreds | flashlight: apps, browser tabs, tmux windows, native windows, emoji, math, units, currency, plugin data |
+| Platforms | macOS 10.14+ | macOS 13+ |
+| Permissions | Accessibility (snippets, key events), Full Disk Access (file search), Contacts, Automation, sometimes Input Monitoring | Accessibility; Automation per browser for tab lists; Contacts, Reminders and Automation of Notes only once you search them; Screen Recording only for `:screenshot screen` |
+| Launcher | Apps, files, web search, calculator; workflows from a gallery of hundreds | flashlight: apps, files, browser tabs, tmux windows, emoji, math, units, currency, plugin data |
 | Hints, modes | None | Hints in every app, NORMAL mode |
-| Clipboard, snippets | Powerpack | Clipboard and snippets plugins |
+| Clipboard, snippets | Powerpack | Built-in clipboard history (`!clip`) and the snippets plugin |
 | Windows | None built in | Named positions, proportional frames, placement rules |
 | Configuration | Preferences window, visual workflow editor | One TOML file |
 | Maintenance | 5.8.1, September 2026 | 1.0.0, October 2026 |
@@ -35,8 +35,8 @@ hint tool.
 - **Acting on the screen.** Alfred has nothing like hints or a modal layer.
 - **Fewer permissions.** Alfred's own permissions page lists Accessibility,
   Full Disk Access, Contacts, Automation and sometimes Input Monitoring;
-  Flash needs Accessibility, and Automation only when a browser's tabs are
-  listed.
+  Flash needs Accessibility, Automation only when a browser's tabs are
+  listed, and Contacts, Reminders or Notes access only once you search them.
 - **Free and open, with a file** instead of preferences and a Powerpack.
 - **Tabs, tmux windows and native windows** in the same search as apps.
 - **A bar and widgets.**
@@ -45,19 +45,19 @@ hint tool.
 
 - `:flashlight` for apps, tabs and windows, with inline math and currency.
 - `@menus` runs any menu item of the frontmost app by name.
-- Clipboard history and the snippets plugin cover the everyday part of the
-  Powerpack.
-- `app_open --name=` as a hotkey, without a workflow.
+- Clipboard history (built in) and the snippets plugin cover the everyday
+  part of the Powerpack.
+- `app open --name=` as a hotkey, without a workflow.
 
 ## Moving from Alfred
 
 | Alfred | Flash |
 | --- | --- |
-| Launcher hotkey | `["flash", "enter_command_mode", "--input=:flashlight "]` |
+| Launcher hotkey | `["flash", "mode", "flashlight"]` |
 | Calculator | Type the expression in flashlight |
-| Clipboard history | Flash's built-in Clipboard page |
+| Clipboard history | `!clip` in the flashlight ([moving over](../clipboard.md#moving-from-maccy-or-clipy)) |
 | Snippets | The snippets plugin |
-| Hotkey to launch an app | `["flash", "app_open", "--name=<App>"]` |
+| Hotkey to launch an app | `["flash", "app", "open", "--name=<App>"]` |
 | File search, web search | Keep Alfred's free core |
 | Workflows | Keep Alfred, or a Flash plugin for the ones that feed search |
 

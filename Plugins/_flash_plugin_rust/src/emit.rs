@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
@@ -55,7 +56,7 @@ impl Emitter {
 
     /// The frame's bytes, serialized once; `Rejected` past the frame cap,
     /// at which point the bounded sink stops writing.
-    fn encode(value: &Value) -> Result<Vec<u8>, EmitError> {
+    fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, EmitError> {
         let mut frame = BoundedFrame(Vec::with_capacity(256));
         serde_json::to_writer(&mut frame, value).map_err(|_| EmitError::Rejected)?;
         let mut payload = frame.0;
@@ -89,7 +90,7 @@ impl Emitter {
         Ok(())
     }
 
-    fn try_send(&self, value: &Value) -> Result<(), EmitError> {
+    fn try_send<T: Serialize + ?Sized>(&self, value: &T) -> Result<(), EmitError> {
         let payload = Self::encode(value)?;
         let length = payload.len();
         let sender = self.sender().ok_or(EmitError::Closed)?;
@@ -111,8 +112,19 @@ impl Emitter {
     /// the notification with a content-free stderr diagnostic (stderr is the
     /// last-resort channel precisely because the frame itself cannot go out).
     pub(crate) fn notify(&self, method: &str, params: Value) {
-        let value = json!({ "method": method, "params": params });
-        match self.try_send(&value) {
+        self.notify_with(method, &params);
+    }
+
+    /// [`notify`](Self::notify) for params serialized straight into the
+    /// frame, without first building them as a JSON tree: a large catalog
+    /// would otherwise exist three times at once (rows, tree, bytes).
+    pub(crate) fn notify_with<T: Serialize + ?Sized>(&self, method: &str, params: &T) {
+        #[derive(Serialize)]
+        struct Notification<'a, T: ?Sized> {
+            method: &'a str,
+            params: &'a T,
+        }
+        match self.try_send(&Notification { method, params }) {
             Err(EmitError::Rejected) => {
                 eprintln!("[plugin] dropped oversized outbound {method} notification")
             }
@@ -235,6 +247,31 @@ mod tests {
 
         assert_eq!(frame(rx.recv().await.unwrap())["method"], json!("status"));
         assert_eq!(frame(rx.recv().await.unwrap())["id"], json!(7));
+    }
+
+    /// Params serialized straight into the frame read back exactly as the
+    /// JSON tree would, and an oversized one is dropped rather than sent.
+    #[tokio::test]
+    async fn serialized_notifications_match_their_tree_and_respect_the_cap() {
+        #[derive(Serialize)]
+        struct Rows<'a> {
+            rows: &'a [BTreeMap<&'a str, &'a str>],
+        }
+        let (tx, mut rx) = mpsc::channel(4);
+        let emitter = Emitter::new(tx);
+        let row = BTreeMap::from([("source", "s.items"), ("title", "é \"quoted\"")]);
+
+        emitter.notify_with("publish", &Rows { rows: &[row] });
+        assert_eq!(
+            frame(rx.recv().await.unwrap()),
+            json!({ "method": "publish", "params": { "rows": [{ "source": "s.items", "title": "é \"quoted\"" }] } })
+        );
+
+        let huge = "x".repeat(MAX_FRAME_BYTES);
+        let row = BTreeMap::from([("title", huge.as_str())]);
+        emitter.notify_with("publish", &Rows { rows: &[row] });
+        emitter.notify("log", json!({}));
+        assert_eq!(frame(rx.recv().await.unwrap())["method"], json!("log"));
     }
 
     #[tokio::test]

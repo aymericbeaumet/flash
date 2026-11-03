@@ -27,7 +27,7 @@ final class TerminalModeTests: XCTestCase {
       XCTAssertTrue(effects.contains(.hideTerminalPopup))
       XCTAssertFalse(
         effects.contains {
-          if case .activateFocusedApp = $0 { return true }
+          if case .restoreCoveredApp = $0 { return true }
           return false
         })
     }
@@ -38,10 +38,10 @@ final class TerminalModeTests: XCTestCase {
       let (mode, effects) = ModeReducer.reduce(
         .terminal(restoreTo: base.asReturnMode, returnPID: 42), .closeTerminal(restoresApp: true))
       XCTAssertEqual(mode, base)
-      XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .activateFocusedApp(pid: 42)])
-      XCTAssertEqual(effects.filter { $0 == .activateFocusedApp(pid: 42) }.count, 1)
+      XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .restoreCoveredApp(pid: 42)])
+      XCTAssertEqual(effects.filter { $0 == .restoreCoveredApp(pid: 42) }.count, 1)
       XCTAssertLessThan(
-        effects.firstIndex(of: .activateFocusedApp(pid: 42)) ?? Int.max,
+        effects.firstIndex(of: .restoreCoveredApp(pid: 42)) ?? Int.max,
         effects.firstIndex(of: .renderSurface) ?? -1)
     }
   }
@@ -58,9 +58,9 @@ final class TerminalModeTests: XCTestCase {
     let (mode, effects) = ModeReducer.reduce(
       .terminal(restoreTo: .insert, returnPID: 42), .enterNormal)
     XCTAssertEqual(mode, .normal)
-    XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .activateFocusedApp(pid: 42)])
+    XCTAssertEqual(Array(effects.prefix(2)), [.hideTerminalPopup, .restoreCoveredApp(pid: 42)])
     XCTAssertLessThan(
-      effects.firstIndex(of: .activateFocusedApp(pid: 42))!,
+      effects.firstIndex(of: .restoreCoveredApp(pid: 42))!,
       effects.firstIndex(of: .renderSurface)!)
   }
 
@@ -126,8 +126,8 @@ final class TerminalModeTests: XCTestCase {
       [mode]
       labels = { normal = "N", insert = "I", command = "C", terminal = "TTY" }
       [mode.terminal.mappings]
-      "gg" = ["flash", "enter_normal_mode"]
-      "<leader>x" = ["flash", "enter_normal_mode"]
+      "gg" = ["flash", "mode", "normal"]
+      "<leader>x" = ["flash", "mode", "normal"]
       """
     )
     XCTAssertEqual(config.mode.labels.terminal, "TTY")
@@ -165,7 +165,7 @@ final class TerminalModeTests: XCTestCase {
     let config = ConfigLoader.parse(
       """
       [mode.all.mappings]
-      "cmd+shift+[" = ["flash", "leave_mode"]
+      "cmd+shift+[" = ["flash", "mode", "leave"]
       """
     )
     XCTAssertTrue(config.loadingDiagnostics.isEmpty)
@@ -173,16 +173,17 @@ final class TerminalModeTests: XCTestCase {
     XCTAssertTrue(config.mode.containsNormalModeMapping)
     let key = try XCTUnwrap(NormalModeInterpreter.canonicalizeMappingKey("cmd+shift+["))
     let mapping = try XCTUnwrap(config.mode.compiledTerminal.mapping(for: key))
-    XCTAssertEqual(mapping.action.command, URLEventHandler.parse(verb: "leave_mode", args: [:]))
-    XCTAssertEqual(mapping.action.command?.diagnosticDescription, "flash leave_mode")
-    XCTAssertNil(URLEventHandler.parse(verb: "leave_mode", args: ["unexpected": "1"]))
+    XCTAssertEqual(
+      mapping.action.command, URLEventHandler.parse(topic: "mode", action: "leave", args: [:]))
+    XCTAssertEqual(mapping.action.command?.diagnosticDescription, "flash mode leave")
+    XCTAssertNil(URLEventHandler.parse(topic: "mode", action: "leave", args: ["unexpected": "1"]))
   }
 
   func testShiftedBracketExitReachesTerminalMapping() throws {
     let config = ConfigLoader.parse(
       """
       [mode.all.mappings]
-      "cmd+shift+[" = ["flash", "leave_mode"]
+      "cmd+shift+[" = ["flash", "mode", "leave"]
       """
     )
     var commands: [URLCommand] = []
@@ -207,9 +208,9 @@ final class TerminalModeTests: XCTestCase {
     let config = ConfigLoader.parse(
       """
       [mode.all.mappings]
-      "cmd+shift+[" = ["flash", "leave_mode"]
+      "cmd+shift+[" = ["flash", "mode", "leave"]
       [mode.terminal.mappings]
-      "cmd+shift+[" = ["flash", "popup_restart"]
+      "cmd+shift+[" = ["flash", "popup", "restart"]
       """
     )
     XCTAssertTrue(config.loadingDiagnostics.isEmpty)

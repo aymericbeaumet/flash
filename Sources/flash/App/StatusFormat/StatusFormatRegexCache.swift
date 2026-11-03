@@ -22,40 +22,20 @@ final class StatusFormatCompiledRegex {
   }
 }
 
+/// Compiled regexes by pattern and flags; a pattern that does not compile is
+/// remembered as nil.
 final class StatusFormatRegexCache {
   static let shared = StatusFormatRegexCache()
   private struct Key: Hashable {
     var pattern: String
     var flags: Int32
   }
-  private struct Entry { var regex: StatusFormatCompiledRegex? }
-  private let lock = NSLock()
-  private var entries: [Key: Entry] = [:]
-  private var order: [Key] = []
-  private var bytes = 0
+  private let cache = StatusFormatBoundedCache<Key, StatusFormatCompiledRegex?>(
+    maxEntries: 128, maxBytes: 262_144, maxEntryBytes: 65_536)
 
   func regex(pattern: String, flags: Int32) -> StatusFormatCompiledRegex? {
-    let key = Key(pattern: pattern, flags: flags)
-    lock.lock()
-    if let entry = entries[key] {
-      lock.unlock()
-      return entry.regex
+    cache.value(for: Key(pattern: pattern, flags: flags), size: pattern.utf8.count) {
+      StatusFormatCompiledRegex(pattern: pattern, flags: flags)
     }
-    lock.unlock()
-    let regex = StatusFormatCompiledRegex(pattern: pattern, flags: flags)
-    let size = pattern.utf8.count
-    guard size <= 65_536 else { return regex }
-    lock.lock()
-    defer { lock.unlock() }
-    if let entry = entries[key] { return entry.regex }
-    while !order.isEmpty, order.count >= 128 || bytes + size > 262_144 {
-      let oldest = order.removeFirst()
-      entries.removeValue(forKey: oldest)
-      bytes -= oldest.pattern.utf8.count
-    }
-    entries[key] = Entry(regex: regex)
-    order.append(key)
-    bytes += size
-    return regex
   }
 }

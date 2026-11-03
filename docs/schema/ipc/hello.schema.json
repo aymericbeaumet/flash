@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/hello.schema.json",
+  "title": "hello",
+  "description": "Client to resident, first and once: the protocol version the client speaks. The resident answers welcome, or protocol_mismatch and closes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "protocol"
+  ],
+  "properties": {
+    "type": {
+      "const": "hello"
+    },
+    "protocol": {
+      "type": "integer",
+      "const": 1,
+      "description": "The protocol version; the resident speaks exactly one."
+    },
+    "client": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "The client's name and version, for the resident's log; at most 128 bytes."
+    }
+  }
+}

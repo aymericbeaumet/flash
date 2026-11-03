@@ -24,4 +24,7 @@ test("raw HTML splits into allowed tags and text; everything else is text or dro
     { text: "alert(1)" },
   ]);
   assert.deepEqual(htmlParts("a < b"), [{ text: "a < b" }]);
+  // An HTML comment is a note to the source (`<!-- modes: assumed on -->`), never text.
+  assert.deepEqual(htmlParts("<!-- modes: assumed on -->"), []);
+  assert.deepEqual(htmlParts("a<!-- note -->b"), [{ text: "ab" }]);
 });

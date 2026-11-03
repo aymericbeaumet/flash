@@ -28,7 +28,7 @@ extension AppDelegate {
           return
         }
         // A finished report has no process left to read keys: a key press
-        // closes it instead, as leave_mode does.
+        // closes it instead, as mode leave does.
         if self.modeStore.mode.isTerminal,
           self.overlay.statusPopupController.focusedName == origin.name,
           self.overlay.statusTerminals.hasEnded(origin.name),
@@ -117,7 +117,16 @@ extension AppDelegate {
       invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)
   }
 
-  /// `enter_terminal_mode`: the named popup standalone, centred on the
+  /// The display the focused app's front window is on, else the primary:
+  /// where a standalone popup is centred.
+  func focusedAppScreen() -> (scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)?
+  {
+    let front = currentNonFlashContext()?.frontWindowFrame
+    return OverlayPanel.currentScreenSnapshot().screen(
+      around: front.map { CGPoint(x: $0.midX, y: $0.midY) })
+  }
+
+  /// `mode terminal`: the named popup standalone, centred on the
   /// focused app's screen and focused, which enters TERMINAL mode through the
   /// popup's focus; no name opens `terminal`. The popup already focused is a
   /// no-op; another one replaces it. A text popup shows the document the
@@ -125,15 +134,7 @@ extension AppDelegate {
   func enterTerminalMode(named requested: String?) {
     let name = requested ?? Config.defaultPopupName
     if modeStore.mode.isTerminal, overlay.statusPopupController.focusedName == name { return }
-    let snapshot = OverlayPanel.currentScreenSnapshot()
-    let context = currentNonFlashContext()
-    let screen =
-      snapshot.screens.first { screen in
-        context.map {
-          screen.frame.contains(CGPoint(x: $0.frontWindowFrame.midX, y: $0.frontWindowFrame.midY))
-        } ?? false
-      } ?? snapshot.screens.first { $0.frame == snapshot.mainFrame } ?? snapshot.screens.first
-    guard let screen else { return }
+    guard let screen = focusedAppScreen() else { return }
     let fields = ["popup_id": StatusFormatDocument.stableID(name)]
     let terminals = overlay.statusTerminals
     let document: [FlashStatusTextSegment]?
@@ -142,16 +143,20 @@ extension AppDelegate {
     } else if case .text? = config.popups[name] {
       guard config.statusBar.enabled, let evaluated = overlay.statusBarPopupDocuments[name] else {
         FlashLog.warn(
-          "Text popup needs the status bar: [statusbar] enabled = true evaluates its text",
-          fields: fields, source: "core:TerminalPopup.enterTerminalMode")
+          "[popup] text_needs_statusbar", fields: fields,
+          source: "core:TerminalPopup.enterTerminalMode")
         return
       }
       document = evaluated
     } else {
-      FlashLog.warn(
-        config.terminalPopups[name] == nil
-          ? "Popup not found" : "Popup starts once the login environment resolves",
-        fields: fields, source: "core:TerminalPopup.enterTerminalMode")
+      if config.terminalPopups[name] == nil {
+        FlashLog.warn(
+          "[popup] not_found", fields: fields, source: "core:TerminalPopup.enterTerminalMode")
+      } else {
+        FlashLog.debug(
+          "[popup] waits_for_login_environment", fields: fields,
+          source: "core:TerminalPopup.enterTerminalMode")
+      }
       return
     }
     dismissPopup(restoreApplication: false)

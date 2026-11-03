@@ -4,7 +4,7 @@ import FlashCore
 
 // The terminal rule: the one place NORMAL names keys of its own. It decides
 // whether a chord is safe to synthesize into a terminal emulator, never which
-// chord an action sends — that is plugin data (`action_bindings`).
+// chord a command sends — that is plugin data (manifest `bindings`).
 
 extension AppDelegate {
   /// Command chords every macOS terminal emulator binds. A terminal that does
@@ -27,8 +27,8 @@ extension AppDelegate {
   /// character instead of running a shortcut. Shift-bracket is the macOS
   /// standard tab traversal and every emulator binds it, as it binds
   /// `terminalBoundCommandChords`; any other Command chord is safe only where
-  /// a plugin binds it for that emulator in `action_bindings` (split
-  /// traversal on the bare brackets, for one). `isDeclared` is asked last.
+  /// a plugin binds it for that emulator in its `bindings` (split traversal
+  /// on the bare brackets, for one). `isDeclared` is asked last.
   static func commandChordTypesTextInTerminal(
     key: CGKeyCode,
     flags: CGEventFlags,
@@ -52,7 +52,7 @@ extension AppDelegate {
   ) -> Bool {
     guard TerminalEmulators.contains(bundleIdentifier) else { return false }
     return Self.commandChordTypesTextInTerminal(key: key, flags: flags) {
-      pluginManager.declaresActionBinding(
+      pluginManager.declaresBinding(
         key: key, flags: flags.intersection(Self.normalModeKeyModifierMask),
         in: PluginSelectorContext(bundleID: bundleIdentifier))
     }

@@ -66,6 +66,13 @@ struct FlashStatusTextSegment: Equatable {
   var isModeLabel = false
   var shrink = false
   var cycle = false
+  /// Which carousel this run shows (`StatusCycleKey`), so a scroll over it
+  /// steps that one. Host-set: the controller names the carousel when it
+  /// resolves its visible line.
+  var cycleKey: String? = nil
+  /// The line was reached by stepping back, so its push comes down from
+  /// above (`#[cycback]`, host-set like `cycleKey`).
+  var cycleBackward = false
   /// An open `#[meter=…]` / `#[spark…]` region. Only parsing sees it: the
   /// document replaces the enclosed text with its drawing and clears it.
   var gauge: StatusFormatGauge? = nil
@@ -118,12 +125,23 @@ struct FlashStatusPopupRun: Equatable {
 }
 
 enum FlashStatusBarSDKValue: Equatable {
-  case activeAppName
-  case activeBundleIdentifier
+  case focusedAppName
+  case focusedAppBundleID
   case modeLabel
   case secureInput
+  case caffeinate
+  /// `flash.workspace` and `flash.workspaces`: the focused tiling workspace
+  /// and every listed one, while `[tiling]` is on.
+  case workspace
+  case workspaces
   case date
   case calendar
+  /// `flash.top_cpu`, `flash.top_mem`, `flash.focused_app_details`: sampled
+  /// by `ProcessStatusSampler` only while a surface shows them.
+  case process(ProcessStatusValue)
+  /// `flash.memory_pressure`: read from the kernel by the status controller
+  /// on the cadence of the surfaces showing it.
+  case hostValue(HostStatusValue)
   case host
   case hostShort
   case user
@@ -135,6 +153,14 @@ enum FlashStatusBarPluginValue: Equatable {
   case loadedCount
   case readyCount
   case errorCount
+  /// `flash.plugin.errors`: the ids of the plugins `error_count` counts,
+  /// sorted and comma-separated.
+  case errors
+  /// `flash.plugin.spawn_ms`: how long the latest plugin launch took to
+  /// spawn its process.
+  case spawnMs
+  /// `flash.plugin.spawn_id`: the plugin that launch started.
+  case spawnID
   case statusSegment(pluginID: String, name: String)
 }
 
@@ -146,11 +172,52 @@ enum FlashStatusBarSource: Equatable {
 
 /// Deadline-stable state for one rotating status value. Time is expressed as
 /// monotonic uptime so wall-clock corrections cannot speed up or stall a cycle.
+/// Names one carousel across the bar: the plugin segment or the named
+/// source it rotates, as `#[cyc=<key>]` carries it to the drawn run and a
+/// scroll carries it back to `FlashStatusBarController.stepCycle`.
+///
+/// A source is any TOML key, so names are percent-encoded down to
+/// `[A-Za-z0-9._-]`: no comma, space or bracket can split the marker. The
+/// marker keeps the key's case (`StatusFormatStyleState.apply`).
+enum StatusCycleKey {
+  private static let unreserved = CharacterSet(
+    charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+  static func plugin(_ id: String, segment: String) -> String {
+    "plugin:" + encoded("\(id).\(segment)")
+  }
+  static func source(_ name: String) -> String { "source:" + encoded(name) }
+
+  /// The `<plugin>.<segment>` the controller keys its plugin cycles by.
+  static func pluginSegment(_ key: String) -> String? { decoded(key, prefix: "plugin:") }
+
+  static func sourceName(_ key: String) -> String? { decoded(key, prefix: "source:") }
+
+  /// `line` as the visible line of carousel `key`: carousel content for the
+  /// push, named for a scroll, and arriving from above when it was stepped
+  /// back to.
+  static func wrap(_ line: String, key: String, backward: Bool = false) -> String {
+    "#[cyc=" + key + (backward ? ",cycback" : "") + "]" + line + "#[nocyc]"
+  }
+
+  private static func encoded(_ name: String) -> String {
+    name.addingPercentEncoding(withAllowedCharacters: unreserved) ?? name
+  }
+
+  private static func decoded(_ key: String, prefix: String) -> String? {
+    guard key.hasPrefix(prefix) else { return nil }
+    return String(key.dropFirst(prefix.count)).removingPercentEncoding
+  }
+}
+
 struct FlashStatusBarCycleState: Equatable {
   private(set) var lines: [String]
   private(set) var visibleLine: String
   private(set) var periodSeconds: TimeInterval
   private(set) var nextRotationAt: TimeInterval
+  /// The visible line was reached by stepping back, so it came down from
+  /// above; the clock's rotations and forward steps clear it.
+  private(set) var arrivedBackward = false
   private var currentIndex: Int?
 
   init(lines: [String], periodSeconds: TimeInterval, now: TimeInterval) {
@@ -192,6 +259,24 @@ struct FlashStatusBarCycleState: Equatable {
     return lines.count > 1 || currentIndex == nil
   }
 
+  /// Step `delta` lines from the visible one, as a scroll over the run asks,
+  /// and restart the dwell so the line chosen by hand keeps a full period
+  /// before the clock moves on. A visible line a refresh dropped sits just
+  /// outside the new list, so down reaches its first line as the clock
+  /// would, and up its last. Nothing to rotate is no step.
+  @discardableResult
+  mutating func step(by delta: Int, now: TimeInterval) -> Bool {
+    guard delta != 0, needsRotationTimer else { return false }
+    let count = lines.count
+    let base = currentIndex ?? (delta > 0 ? -1 : count)
+    let next = ((base + delta) % count + count) % count
+    currentIndex = next
+    visibleLine = lines[next]
+    arrivedBackward = delta < 0
+    nextRotationAt = now + TimeInterval(periodSeconds)
+    return true
+  }
+
   /// Advance by every elapsed scheduled interval. The next deadline is moved
   /// from the previous deadline, not from `now`, so delayed timer delivery
   /// does not accumulate drift.
@@ -210,6 +295,7 @@ struct FlashStatusBarCycleState: Equatable {
     let changed = nextLine != visibleLine
     currentIndex = nextIndex
     visibleLine = nextLine
+    if changed { arrivedBackward = false }
     return changed
   }
 }
@@ -247,11 +333,17 @@ struct FlashStatusBarTemplate: Equatable {
 }
 
 struct FlashStatusBarContext {
-  var activeAppName: String
-  var activeBundleIdentifier: String
+  var focusedAppName: String
+  var focusedAppBundleID: String
   var modeLabel: String
   /// Secure input was on when Flash last looked (`noteSecureInput`).
   var secureInput: Bool
+  /// `caffeinate on` holds the Mac awake (`CaffeinateController`).
+  var caffeinate: Bool
+  /// The focused tiling workspace; empty while `[tiling]` is off.
+  var workspace: String = ""
+  /// Every listed tiling workspace, space separated.
+  var workspaces: String = ""
   var now: Date
   var calendar: Calendar
   var locale: Locale
@@ -262,10 +354,11 @@ struct FlashStatusBarContext {
   var processID: Int32
 
   init(
-    activeAppName: String = "",
-    activeBundleIdentifier: String = "",
+    focusedAppName: String = "",
+    focusedAppBundleID: String = "",
     modeLabel: String = "INSERT",
     secureInput: Bool = false,
+    caffeinate: Bool = false,
     now: Date = Date(),
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX"),
@@ -275,10 +368,11 @@ struct FlashStatusBarContext {
     userID: UInt32 = getuid(),
     processID: Int32 = ProcessInfo.processInfo.processIdentifier
   ) {
-    self.activeAppName = activeAppName
-    self.activeBundleIdentifier = activeBundleIdentifier
+    self.focusedAppName = focusedAppName
+    self.focusedAppBundleID = focusedAppBundleID
     self.modeLabel = modeLabel
     self.secureInput = secureInput
+    self.caffeinate = caffeinate
     self.now = now
     self.calendar = calendar
     self.locale = locale
@@ -355,6 +449,60 @@ struct FlashStatusBarModel: Equatable {
   }
 }
 
+/// How a named source's command prints its value: Flash's own lines, or the
+/// output of a script written for another bar, so SwiftBar/xbar, i3blocks
+/// and waybar scripts run unchanged. Only the text survives; colours and
+/// menus are the template's.
+enum FlashStatusBarSourceOutput: String, Equatable, CaseIterable {
+  /// The whole output (its nonempty lines when the source cycles).
+  case text
+  /// SwiftBar, xbar, BitBar: the header lines before `---`, each without its
+  /// `| key=value` parameters. Several header lines cycle with `cycle_interval`.
+  case xbar
+  /// i3blocks: `full_text` is the first line; `short_text` and `color` follow.
+  case i3blocks
+  /// waybar's `return-type = json`: the `text` of the last JSON line, without
+  /// Pango markup.
+  case waybar
+
+  /// The text Flash keeps from `output`; empty when nothing usable came.
+  func extract(_ output: String) -> String {
+    switch self {
+    case .text:
+      return output
+    case .xbar:
+      var header: [String] = []
+      for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+        if line.trimmingCharacters(in: .whitespaces) == "---" { break }
+        let text =
+          line.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+          .first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        if !text.isEmpty { header.append(text) }
+      }
+      return header.joined(separator: "\n")
+    case .i3blocks:
+      return output.split(separator: "\n").first.map(String.init) ?? ""
+    case .waybar:
+      for line in output.split(separator: "\n").reversed() {
+        guard let data = line.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let text = object["text"] as? String
+        else { continue }
+        return Self.plainText(markup: text)
+      }
+      return ""
+    }
+  }
+
+  /// Pango markup as plain text: tags dropped, the five XML entities decoded.
+  static func plainText(markup: String) -> String {
+    let untagged = markup.replacingOccurrences(
+      of: "<[^>]*>", with: "", options: .regularExpression)
+    return [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&apos;", "'"), ("&amp;", "&")]
+      .reduce(untagged) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
+  }
+}
+
 struct FlashStatusBarSourceDefinition: Equatable {
   var command: [String]
   var workingDirectory: String?
@@ -365,12 +513,17 @@ struct FlashStatusBarSourceDefinition: Equatable {
   /// `history = N`: the last N numeric outputs, read as
   /// `#{flash.history.<name>}` (space-separated, oldest first).
   var historyLength: Int?
+  /// `output`: how the command prints its value.
+  var output: FlashStatusBarSourceOutput
+
+  /// No command: the source's only output is what `status set` pushes.
+  var isPushed: Bool { command.isEmpty }
 
   init(
     command: [String], workingDirectory: String? = nil,
     environment: [String: String] = [:], intervalSeconds: Double = 5,
     cycleIntervalSeconds: Double? = nil, timeoutSeconds: Double = 6,
-    historyLength: Int? = nil
+    historyLength: Int? = nil, output: FlashStatusBarSourceOutput = .text
   ) {
     self.command = command
     self.workingDirectory = workingDirectory
@@ -379,6 +532,7 @@ struct FlashStatusBarSourceDefinition: Equatable {
     self.cycleIntervalSeconds = cycleIntervalSeconds
     self.timeoutSeconds = timeoutSeconds
     self.historyLength = historyLength
+    self.output = output
   }
 }
 
@@ -590,11 +744,16 @@ enum FlashStatusBarTemplateEngine {
   }
 
   static func sdkValue(for token: String) -> FlashStatusBarSDKValue? {
+    if let value = ProcessStatusValue(rawValue: token) { return .process(value) }
+    if let value = HostStatusValue(rawValue: token) { return .hostValue(value) }
     switch token {
     case "flash.mode": return .modeLabel
     case "flash.secure_input": return .secureInput
-    case "flash.active_app_name": return .activeAppName
-    case "flash.active_bundle_identifier": return .activeBundleIdentifier
+    case "flash.caffeinate": return .caffeinate
+    case "flash.workspace": return .workspace
+    case "flash.workspaces": return .workspaces
+    case "flash.focused_app_name": return .focusedAppName
+    case "flash.focused_app_bundle_id": return .focusedAppBundleID
     case "flash.date": return .date
     case "flash.calendar": return .calendar
     case "host": return .host
@@ -619,9 +778,15 @@ enum FlashStatusBarTemplateEngine {
     native.values = [
       "flash.mode": context.modeLabel.trimmed,
       "flash.secure_input": context.secureInput ? "1" : "",
-      "flash.active_app_name": context.activeAppName.trimmed.isEmpty
-        ? context.activeBundleIdentifier.trimmed : context.activeAppName.trimmed,
-      "flash.active_bundle_identifier": context.activeBundleIdentifier.trimmed,
+      "flash.caffeinate": context.caffeinate ? "on" : "",
+      "flash.workspace": context.workspace,
+      "flash.workspaces": context.workspaces,
+      // An app names itself: text, never a style, a link or a click range.
+      "flash.focused_app_name": ProcessStatusFormat.escaped(
+        context.focusedAppName.trimmed.isEmpty
+          ? context.focusedAppBundleID.trimmed : context.focusedAppName.trimmed),
+      "flash.focused_app_bundle_id": ProcessStatusFormat.escaped(
+        context.focusedAppBundleID.trimmed),
       "flash.date": FlashStatusBarRenderer.dateText(
         now: context.now, calendar: context.calendar, locale: context.locale),
       "flash.calendar": FlashStatusBarRenderer.calendarText(
@@ -634,7 +799,17 @@ enum FlashStatusBarTemplateEngine {
       "flash.plugin.ready_count": String(
         context.pluginStatuses.filter { ["running", "manifest_only"].contains($0.state) }.count),
       "flash.plugin.error_count": String(context.pluginStatuses.filter(\.hasError).count),
+      "flash.plugin.errors": context.pluginStatuses.filter(\.hasError).map(\.id).sorted()
+        .joined(separator: ", "),
     ]
+    // The most recent launch across plugins; unknown until one spawned.
+    if let (id, spawn) = context.pluginStatuses
+      .compactMap({ plugin in plugin.lastSpawn.map { (plugin.id, $0) } })
+      .max(by: { $0.1.at < $1.1.at })
+    {
+      native.values["flash.plugin.spawn_ms"] = String(Int(spawn.milliseconds.rounded()))
+      native.values["flash.plugin.spawn_id"] = id
+    }
     for plugin in context.pluginStatuses {
       for (name, segment) in plugin.statusSegments {
         // The controller resolves carousels to their visible line before
@@ -643,7 +818,9 @@ enum FlashStatusBarTemplateEngine {
         switch segment {
         case .text(let text): value = text
         case .carousel(let prefix, let lines, _):
-          value = PluginStatusSegment.carouselLine(prefix: prefix, line: lines.first ?? "")
+          value = PluginStatusSegment.carouselLine(
+            key: StatusCycleKey.plugin(plugin.id, segment: name), prefix: prefix,
+            line: lines.first ?? "")
         }
         native.values["flash.plugin.\(plugin.id).\(name)"] = value
       }
@@ -662,7 +839,9 @@ enum FlashStatusBarRenderer {
   /// because every production caller sits on the controller's single serial
   /// queue.
   private static let dateFormatter = DateFormatter()
-  private static var calendarCache: (valid: DateInterval, timeZone: TimeZone, text: String)?
+  /// Keyed by the zone's identifier and UTC offset, never `TimeZone`
+  /// equality, which holds between two autoupdating zones whatever they read.
+  private static var calendarCache: (valid: DateInterval, zone: String, text: String)?
   /// `flash.date` shows minutes: one formatted string per minute, calendar
   /// and locale, so a seconds clock does not reconfigure the formatter.
   private static var dateTextCache: (minute: Int, calendar: Calendar, locale: Locale, text: String)?
@@ -670,7 +849,8 @@ enum FlashStatusBarRenderer {
   /// One calendar per local day and timezone; a daylight-saving transition
   /// inside the day ends it early, since the calendar shows the UTC offset.
   static func calendarText(now: Date, timeZone: TimeZone) -> String {
-    if let cached = calendarCache, cached.timeZone == timeZone,
+    let zone = "\(timeZone.identifier)\(timeZone.secondsFromGMT(for: now))"
+    if let cached = calendarCache, cached.zone == zone,
       now >= cached.valid.start, now < cached.valid.end
     {
       return cached.text
@@ -680,7 +860,7 @@ enum FlashStatusBarRenderer {
     guard let day = calendar.dateInterval(of: .day, for: now) else { return "" }
     let end = min(day.end, timeZone.nextDaylightSavingTimeTransition(after: now) ?? day.end)
     let text = CalendarStatusDocument.render(now: now, timeZone: timeZone)
-    calendarCache = (DateInterval(start: day.start, end: end), timeZone, text)
+    calendarCache = (DateInterval(start: day.start, end: end), zone, text)
     return text
   }
 

@@ -6,31 +6,21 @@ enabled = true
 template = """
 #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.aymericbeaumet.com]#[label]aggr#[default]#[nolink]#[nopopup] #[popup=feed-article]#{flash.plugin.feed.label}#[nopopup]
 # The centre lane is the notch: a housing at the middle of the bar.
-#[align=centre]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
-#[align=right]#{?flash.plugin.caffeinate.state,#[label]AWAKE#[default] ,}
-#[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.source.cld}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.source.cdx}#[nolink] #[link=https://grok.com/?_s=usage]#[label]Grk#[default] #{flash.source.grk}#[nolink]#[nopopup]
-#[fg=colour245] · #[popup=cpu]#[label]CPU#[default] #{p-3:flash.plugin.cpu.label}#[nopopup] #[popup=memory]#[label]MEM#[default] #{p-3:flash.plugin.memory.label}#[nopopup] #[popup=disks]#[label]DSK#[default] #{p-3:flash.plugin.disks.label}#[nopopup] #[popup=network]#[label]NET#[default] #{p-4:flash.plugin.network.label}#[nopopup] #[popup=battery]#[label]BAT#[default] #{flash.plugin.power.label}#[nopopup]
-#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
+#[align=centre]#[popup=active-app]#[shrink]#{flash.focused_app_name}#[noshrink]#[nopopup]
+#[align=right]#{?flash.caffeinate,#[label]AWAKE#[default] ,}
+#[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.plugin.aiproviders.claude}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.plugin.aiproviders.codex}#[nolink] #[link=https://grok.com/?_s=usage]#[label]Grk#[default] #{flash.plugin.aiproviders.grok}#[nolink]#[nopopup]
+#[fg=colour245] · #[popup=cpu]#[label]CPU#[default] #{p-3:flash.plugin.sysinfo.cpu_label}#[nopopup] #[popup=memory]#[label]MEM#[default] #{p-3:flash.plugin.sysinfo.memory_label}#[nopopup] #[popup=disks]#[label]DSK#[default] #{p-3:flash.plugin.sysinfo.disks_label}#[nopopup] #[popup=network]#[label]NET#[default] #{p-4:flash.plugin.sysinfo.network_label}#[nopopup] #[popup=battery]#[label]BAT#[default] #{flash.plugin.sysinfo.power_label}#[nopopup]
+#[fg=colour245] · #[popup=date]#{?flash.caffeinate,,%a %b %-d }#[default]%H:%M#[nopopup]
 """
 
-# The names and colours above are the template's. Each source prints only the
-# metric (`6%↻22h`). Replace these echoes with the commands that read your quotas.
-[statusbar.sources.cld]
-command = ["echo", "53%↻5d"]
-interval = 60
-
-[statusbar.sources.cdx]
-command = ["echo", "54%↻5d"]
-interval = 60
-
-[statusbar.sources.grk]
-command = ["echo", "9%↻1d"]
-interval = 60
+# The names and colours above are the template's. The bundled aiproviders
+# segments print only the metric (`6%↻22h`), read with the credentials Claude
+# Code, Codex and Grok already stored; no other tool is needed.
 
 [popup.active-app]
 text = """
-#[fg=#EBCB8B]#{flash.active_app_name}#[default]
-#{flash.plugin.processes.focused_app_details}
+#[fg=#EBCB8B]#{flash.focused_app_name}#[default]
+#{flash.focused_app_details}
 """
 
 # AI usage from tokscale's own TUI (https://github.com/junhoyeo/tokscale),
@@ -43,19 +33,19 @@ size = "140x40"
 persistent = true
 
 [popup.cpu]
-text = "#{flash.plugin.cpu.details}"
+text = "#{flash.plugin.sysinfo.cpu_details}"
 
 [popup.memory]
-text = "#{flash.plugin.memory.details}"
+text = "#{flash.plugin.sysinfo.memory_details}"
 
 [popup.disks]
-text = "#{flash.plugin.disks.details}"
+text = "#{flash.plugin.sysinfo.disks_details}"
 
 [popup.network]
-text = "#{flash.plugin.network.details}"
+text = "#{flash.plugin.sysinfo.network_details}"
 
 [popup.battery]
-text = "#{flash.plugin.power.details}"
+text = "#{flash.plugin.sysinfo.power_details}"
 
 [popup.date]
 text = "#{flash.calendar}"
@@ -71,7 +61,7 @@ cwd = "."
 command = ["newsboat-article", "$FLASH_STATUS_LINK"]
 cwd = "."
 
-[plugin.feed]
+[plugins.feed]
 url = "https://aggr.aymericbeaumet.com/rss.xml"
 refresh_interval = 300
 cycle_interval = 30

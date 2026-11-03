@@ -4,7 +4,7 @@
 Scripts/benchmark-hints.sh runs each class's oracle in bench mode and passes
 the time window it measured in. Every activation in a window is counted once
 (by trace id); the table reports p50, p95 and max milliseconds from the
-trigger (tap event, Carbon hotkey event or AppleEvent arrival) to the Core
+trigger (tap event, Carbon hotkey event or CLI request arrival) to the Core
 Animation commit that shows the hints, and how many activations ended with
 no hints at all (`[latency] hints_empty`), which the percentiles leave out.
 
@@ -23,7 +23,7 @@ import json
 import math
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
 PREFIX = "[latency] hints_visible "
@@ -47,6 +47,9 @@ class Sample:
     # long Flash took to give up.
     empty: bool = False
     path: str = ""
+    # Why the prepared model could not serve a miss (`-` for a hit, empty on
+    # a line from before the field existed).
+    miss_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,9 @@ class Row:
     prepared_hits: int
     other_classes: int
     empty: int = 0
+    # The shown activations the prepared model did not serve, by
+    # `miss_reason`; `?` for lines without the field.
+    misses: Dict[str, int] = field(default_factory=dict)
 
 
 def parse_record(line: str) -> Optional[Sample]:
@@ -99,6 +105,7 @@ def parse_record(line: str) -> Optional[Sample]:
                 # Status-bar segments drawn over an app with no targets: the
                 # resident counts it as empty, not as a shown activation.
                 empty=fields.get("outcome") == "empty",
+                miss_reason=fields.get("miss_reason", ""),
             )
         except (KeyError, ValueError):
             return None
@@ -161,6 +168,11 @@ def row(label: str, chosen: List[Sample], other_classes: int = 0) -> Row:
     empties counted beside them."""
     shown = [sample for sample in chosen if not sample.empty]
     values = [sample.ms for sample in shown]
+    misses: Dict[str, int] = {}
+    for sample in shown:
+        if sample.prepared != "hit":
+            reason = sample.miss_reason or "?"
+            misses[reason] = misses.get(reason, 0) + 1
     return Row(
         label=label,
         count=len(shown),
@@ -170,6 +182,7 @@ def row(label: str, chosen: List[Sample], other_classes: int = 0) -> Row:
         prepared_hits=sum(sample.prepared == "hit" for sample in shown),
         other_classes=other_classes,
         empty=len(chosen) - len(shown),
+        misses=misses,
     )
 
 
@@ -204,6 +217,12 @@ def summarize_by_bundle(samples: List[Sample], origin: Optional[str]) -> List[Ro
     return sorted(rows, key=lambda r: (-(r.count + r.empty), r.label))
 
 
+def format_misses(misses: Dict[str, int]) -> str:
+    """`expired=5 absent=2`, largest first; the unknown bucket `?` last."""
+    ordered = sorted(misses.items(), key=lambda item: (-item[1], item[0] == "?", item[0]))
+    return " ".join(f"{reason}={count}" for reason, count in ordered)
+
+
 def format_table(rows: List[Row], label: str = "class") -> str:
     def ms(value: float) -> str:
         return "-" if math.isnan(value) else f"{value:.1f}"
@@ -211,12 +230,15 @@ def format_table(rows: List[Row], label: str = "class") -> str:
     width = max([10] + [len(row.label) for row in rows])
     lines = [
         f"{label:<{width}} {'runs':>5} {'p50 ms':>8} {'p95 ms':>8} {'max ms':>8} "
-        f"{'prepared':>9} {'empty':>5}",
+        f"{'prepared':>9} {'empty':>5}  misses",
     ]
     for row in rows:
         lines.append(
-            f"{row.label:<{width}} {row.count:>5} {ms(row.p50):>8} {ms(row.p95):>8} "
-            f"{ms(row.maximum):>8} {row.prepared_hits:>4}/{row.count:<4} {row.empty:>5}"
+            (
+                f"{row.label:<{width}} {row.count:>5} {ms(row.p50):>8} {ms(row.p95):>8} "
+                f"{ms(row.maximum):>8} {row.prepared_hits:>4}/{row.count:<4} {row.empty:>5}  "
+                f"{format_misses(row.misses)}"
+            ).rstrip()
         )
     for row in rows:
         if row.other_classes:

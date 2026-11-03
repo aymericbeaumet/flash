@@ -21,6 +21,33 @@ extension AppMonitor {
     return topVisibleWindowContext(excludingBundleIdentifier: ignoredBundleIdentifier)
   }
 
+  /// The process `frontmostContext` resolves to, without its frame: a
+  /// window verb acts on an app, not on a clip rect. The frontmost app costs
+  /// no window-list read; only the fallback to the top visible window's app,
+  /// when Flash itself is frontmost, reads one.
+  func frontmostProcessID(excludingBundleIdentifier ignoredBundleIdentifier: String) -> pid_t? {
+    Self.windowVerbTargetPID(
+      frontmost: NSWorkspace.shared.frontmostApplication.map {
+        (pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier)
+      },
+      excludingBundleIdentifier: ignoredBundleIdentifier,
+      topVisible: {
+        self.topVisibleWindowContext(excludingBundleIdentifier: ignoredBundleIdentifier)?
+          .processID
+      })
+  }
+
+  static func windowVerbTargetPID(
+    frontmost: (pid: pid_t, bundleIdentifier: String?)?,
+    excludingBundleIdentifier ignoredBundleIdentifier: String,
+    topVisible: () -> pid_t?
+  ) -> pid_t? {
+    if let frontmost, frontmost.pid > 0, frontmost.bundleIdentifier != ignoredBundleIdentifier {
+      return frontmost.pid
+    }
+    return topVisible()
+  }
+
   func frontmostApplicationContext(
     excludingBundleIdentifier ignoredBundleIdentifier: String
   ) -> AppContext? {
@@ -31,10 +58,15 @@ extension AppMonitor {
   }
 
   /// What a hint activation walks, with the window list that chose it, so
-  /// the prepared-model lookup reads none of its own.
+  /// the prepared-model lookup reads none of its own. `fallback` is the app a
+  /// covering surface hides: walked instead when that surface has nothing to
+  /// press (a volume or brightness display). `refusedBy` is an
+  /// authentication prompt in front, which leaves nothing to walk.
   struct ActivationTarget {
     let context: AppContext
     let windowEntries: [WindowSnapshot.Entry]?
+    var fallback: AppContext? = nil
+    var refusedBy: String? = nil
   }
 
   /// The app a hint activation walks: the frontmost app clipped to its top
@@ -60,9 +92,14 @@ extension AppMonitor {
     }
     guard let base else { return nil }
     guard let entries else { return ActivationTarget(context: base, windowEntries: nil) }
-    return ActivationTarget(
-      context: coveringInteractionContext(inFrontOf: base, entries: entries) ?? base,
-      windowEntries: entries)
+    switch coveringInteractionContext(inFrontOf: base, entries: entries) {
+    case nil:
+      return ActivationTarget(context: base, windowEntries: entries)
+    case .surface(let covering)?:
+      return ActivationTarget(context: covering, windowEntries: entries, fallback: base)
+    case .refused(let bundleIdentifier)?:
+      return ActivationTarget(context: base, windowEntries: entries, refusedBy: bundleIdentifier)
+    }
   }
 
   func context(for pid: pid_t) -> AppContext? {
@@ -240,17 +277,61 @@ extension AppMonitor {
   /// (it takes a Dock icon while it is verifying), so policy alone would
   /// treat its card as the app-switch lag `WindowSnapshot` repairs.
   static let systemDialogBundleIdentifiers: Set<String> = [
-    "com.apple.coreservices.uiagent",
+    "com.apple.coreservices.uiagent"
+  ]
+
+  /// Processes that ask for a password or Touch ID. Their prompt refuses
+  /// hints: Flash walks and clicks neither it nor the window behind it, so no
+  /// command — a mapping, or the CLI any local program can run — can answer
+  /// an authentication prompt for the user.
+  static let authenticationBundleIdentifiers: Set<String> = [
     "com.apple.SecurityAgent",
     "com.apple.LocalAuthentication.UIAgent",
   ]
 
+  /// System processes whose windows draw above apps at levels of their own
+  /// (Notification Center's panel at 21, the Dock's stacks and views at
+  /// 17–20, Control Center's modules, Spotlight), and which of their windows
+  /// is the surface `f` walks.
+  enum SystemOverlay: Equatable {
+    /// Notification Center: its panel, widgets and notifications included.
+    /// A banner is transient and stays with `mouse notifications`.
+    case notificationPanel
+    /// The Dock: a stack, a menu or a view, never the bar itself.
+    case dock
+    /// Control Center's panel and modules, SystemUIServer's menus,
+    /// Spotlight and the Apps view, the screenshot toolbar.
+    case panel
+  }
+
+  static let systemOverlays: [String: SystemOverlay] = [
+    "com.apple.notificationcenterui": .notificationPanel,
+    "com.apple.dock": .dock,
+    "com.apple.controlcenter": .panel,
+    "com.apple.systemuiserver": .panel,
+    "com.apple.Spotlight": .panel,
+    "com.apple.screencaptureui": .panel,
+  ]
+
+  /// Smaller than a dialog and still the surface: the screenshot toolbar.
+  static let minimumCoveringSizes: [String: CGSize] = [
+    "com.apple.screencaptureui": CGSize(width: 200, height: 28)
+  ]
+
+  /// A Notification Center window this tall is its panel; banners are short.
+  static let notificationPanelMinimumHeightFraction: CGFloat = 0.4
+  /// A status-level window this short is a menu-bar strip or a status item;
+  /// taller, it is a menu extra's popover.
+  static let statusStripMaximumHeight: CGFloat = 50
+
   /// A window in front of `front` that is the thing the user is looking at
   /// but whose process did not become the frontmost app: Gatekeeper's card,
-  /// an authentication panel, a modal sheet owned by an agent. `f` walks it.
-  /// Picture in Picture, Stage Manager, menu-bar strips, and another regular
-  /// app's ordinary window are not that surface.
-  func coveringInteractionContext(inFrontOf front: AppContext?) -> AppContext? {
+  /// a modal sheet owned by an agent, Notification Center's or Control
+  /// Center's panel, a menu extra's popover, a Dock stack. `f` walks it.
+  /// Picture in Picture, Stage Manager, menu-bar strips, notification
+  /// banners, and another regular app's ordinary window are not that
+  /// surface; an authentication prompt refuses hints altogether.
+  func coveringInteractionContext(inFrontOf front: AppContext?) -> CoveringContext? {
     guard let front else { return nil }
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = WindowSnapshot.windowList(opts) else { return nil }
@@ -260,42 +341,79 @@ extension AppMonitor {
     )
   }
 
+  /// What a text or word activation walks over `base`: the covering surface,
+  /// else `base`; nil while an authentication prompt is in front.
+  func hintContext(inFrontOf base: AppContext) -> AppContext? {
+    switch coveringInteractionContext(inFrontOf: base) {
+    case nil: return base
+    case .surface(let covering)?: return covering
+    case .refused?: return nil
+    }
+  }
+
   func coveringInteractionContext(
     inFrontOf front: AppContext, entries: [WindowSnapshot.Entry]
-  ) -> AppContext? {
+  ) -> CoveringContext? {
     var screen: CGRect = .null
     for candidate in NSScreen.screens where candidate.frame.intersects(front.frontWindowFrame) {
       screen = candidate.frame
       break
     }
     if screen.isNull { screen = NSScreen.main?.frame ?? front.allScreensFrame }
-    guard
-      let entry = Self.coveringInteractionWindow(
-        entries: entries,
-        frontPid: front.processID,
-        screen: screen,
-        ignoringPids: [getpid()],
-        owner: { pid in
-          guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
-            let bundleIdentifier = app.bundleIdentifier
-          else { return nil }
-          return CoveringInteractionOwner(
-            bundleIdentifier: bundleIdentifier, isRegularApp: app.activationPolicy == .regular)
-        }
-      )
-    else { return nil }
+    let surface = Self.coveringInteractionWindow(
+      entries: entries,
+      frontPid: front.processID,
+      screen: screen,
+      ignoringPids: [getpid()],
+      owner: { pid in
+        guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+          let bundleIdentifier = app.bundleIdentifier
+        else { return nil }
+        return CoveringInteractionOwner(
+          bundleIdentifier: bundleIdentifier, isRegularApp: app.activationPolicy == .regular)
+      }
+    )
+    let entry: WindowSnapshot.Entry
+    switch surface {
+    case nil: return nil
+    case .refused(let bundleIdentifier)?:
+      FlashLog.debug("[activation] covering_refused bundle=\(bundleIdentifier)")
+      return .refused(bundleIdentifier: bundleIdentifier)
+    case .window(let window)?: entry = window
+    }
     guard let app = NSRunningApplication(processIdentifier: entry.pid), !app.isTerminated
     else { return nil }
     FlashLog.debug(
       "[activation] covering_window pid=\(entry.pid) "
         + "bundle=\(app.bundleIdentifier ?? "") layer=\(entry.layer)")
-    return AppContext(
-      bundleIdentifier: app.bundleIdentifier ?? "",
-      processID: entry.pid,
-      runningApp: app,
-      frontWindowFrame: entry.nsBounds,
-      allScreensFrame: front.allScreensFrame,
-      walkRoot: .elementsInFrame)
+    return .surface(
+      AppContext(
+        bundleIdentifier: app.bundleIdentifier ?? "",
+        processID: entry.pid,
+        runningApp: app,
+        frontWindowFrame: entry.nsBounds,
+        allScreensFrame: front.allScreensFrame,
+        walkRoot: .elementsInFrame))
+  }
+}
+
+/// What `f` walks when something covers the front app.
+enum CoveringContext {
+  case surface(AppContext)
+  /// An authentication prompt is in front: nothing is walked or clicked.
+  case refused(bundleIdentifier: String)
+}
+
+/// The covering decision over the window list alone.
+enum CoveringSurface: Equatable {
+  case window(WindowSnapshot.Entry)
+  /// SecurityAgent's or LocalAuthentication's prompt: a password or Touch ID
+  /// is asked for. Flash neither hints nor clicks it, nor the window behind.
+  case refused(bundleIdentifier: String)
+
+  var window: WindowSnapshot.Entry? {
+    if case .window(let entry) = self { return entry }
+    return nil
   }
 }
 
@@ -329,20 +447,50 @@ extension AppMonitor {
     screen: CGRect,
     ignoringPids: Set<pid_t> = [],
     owner ownerOf: (pid_t) -> CoveringInteractionOwner?
-  ) -> WindowSnapshot.Entry? {
+  ) -> CoveringSurface? {
     let statusLayer = Int(CGWindowLevelForKey(.statusWindow))
     let floatingLayer = Int(CGWindowLevelForKey(.floatingWindow))
+    // Lock and login shields draw at and above the screen saver.
+    let overlayLayers = 0..<Int(CGWindowLevelForKey(.screenSaverWindow))
     let screenArea = screen.width * screen.height
     for entry in entries {
-      guard WindowSnapshot.isInteractionSurfaceLayer(entry.layer), entry.occludes,
-        entry.pid > 0, !ignoringPids.contains(entry.pid)
-      else { continue }
-      if entry.pid == frontPid { return nil }
-      if entry.layer == statusLayer { continue }
+      guard entry.occludes, entry.pid > 0, !ignoringPids.contains(entry.pid) else { continue }
+      let interactionLayer = WindowSnapshot.isInteractionSurfaceLayer(entry.layer)
+      if entry.pid == frontPid {
+        if interactionLayer { return nil }
+        continue
+      }
+      if entry.layer == statusLayer, entry.nsBounds.height <= statusStripMaximumHeight {
+        continue
+      }
       guard let owner = ownerOf(entry.pid) else { continue }
-      if systemChromeBundleIdentifiers.contains(owner.bundleIdentifier) { continue }
-      if owner.bundleIdentifier == ScreenScopeSurfaces.pictureInPictureBundleID
-        || owner.bundleIdentifier == ScreenScopeSurfaces.stageManagerBundleID
+      let bundle = owner.bundleIdentifier
+      let minimum =
+        minimumCoveringSizes[bundle]
+        ?? CGSize(width: minimumCoveringWidth, height: minimumCoveringHeight)
+      let dialogSized =
+        entry.nsBounds.width >= minimum.width && entry.nsBounds.height >= minimum.height
+      if authenticationBundleIdentifiers.contains(bundle) {
+        guard overlayLayers.contains(entry.layer), dialogSized else { continue }
+        return .refused(bundleIdentifier: bundle)
+      }
+      if let overlay = systemOverlays[bundle] {
+        guard overlayLayers.contains(entry.layer), entry.nsBounds.intersects(screen), dialogSized
+        else { continue }
+        switch overlay {
+        case .notificationPanel:
+          guard entry.nsBounds.height >= screen.height * notificationPanelMinimumHeightFraction
+          else { continue }
+        case .dock:
+          guard !isDockBar(entry.nsBounds, screen: screen) else { continue }
+        case .panel:
+          break
+        }
+        return .window(entry)
+      }
+      guard interactionLayer else { continue }
+      if bundle == ScreenScopeSurfaces.pictureInPictureBundleID
+        || bundle == ScreenScopeSurfaces.stageManagerBundleID
       {
         continue
       }
@@ -351,18 +499,28 @@ extension AppMonitor {
       {
         continue
       }
-      let dialogSized =
-        entry.nsBounds.width >= minimumCoveringWidth
-        && entry.nsBounds.height >= minimumCoveringHeight
       if entry.layer == 0 {
-        let systemDialog = systemDialogBundleIdentifiers.contains(owner.bundleIdentifier)
+        let systemDialog = systemDialogBundleIdentifiers.contains(bundle)
         if owner.isRegularApp, !systemDialog { return nil }
-        if dialogSized { return entry }
+        if dialogSized { return .window(entry) }
         continue
       }
-      if dialogSized { return entry }
+      if dialogSized { return .window(entry) }
     }
     return nil
+  }
+
+  /// The Dock's bar: a thin window along a screen edge, at least a third of
+  /// that edge long. Its stacks, menus and views are none of that.
+  static func isDockBar(_ frame: CGRect, screen: CGRect) -> Bool {
+    let slack: CGFloat = 8
+    let horizontal =
+      frame.height <= 160 && frame.width >= screen.width / 3
+      && (abs(frame.minY - screen.minY) <= slack || abs(frame.maxY - screen.maxY) <= slack)
+    let vertical =
+      frame.width <= 160 && frame.height >= screen.height / 3
+      && (abs(frame.minX - screen.minX) <= slack || abs(frame.maxX - screen.maxX) <= slack)
+    return horizontal || vertical
   }
 
   /// A regular app's small floating window is a Picture in Picture player

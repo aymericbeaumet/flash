@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/server-message.schema.json",
+  "title": "Server message",
+  "description": "Any line the resident sends a client.",
+  "oneOf": [
+    {
+      "$ref": "welcome.schema.json"
+    },
+    {
+      "$ref": "result.schema.json"
+    },
+    {
+      "$ref": "subscribed.schema.json"
+    },
+    {
+      "$ref": "event.schema.json"
+    },
+    {
+      "$ref": "error.schema.json"
+    }
+  ]
+}
