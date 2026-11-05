@@ -638,6 +638,13 @@ have LaunchServices run it outside the sandbox.
 The AX broker exists because `AXUIElement` cannot
 cross a process boundary: `host.ax_snapshot` BFS-walks an app's windows
 (default cap 3000 nodes) and returns flat nodes with opaque handles.
+Snapshots have a host-side five-second budget including queue admission.
+Expiry, a revoked child, or an unresponsive AX batch fails the whole snapshot;
+it never returns partial nodes or leaves their handles actionable. The budget
+is checked between AX reads and after acquiring Gecko's process lock; it cannot
+preempt synchronous AX calls or an operation already holding that lock.
+An AX timeout is not retried once per requested attribute: the broker shares Gecko's process
+lock with hint discovery, and abandoned snapshots must release it promptly.
 `host.ax_set` takes `{handle, attribute, value}` and sets a boolean
 attribute such as `AXFocused`; a non-boolean value is rejected.
 `capabilities` also includes `network` (composes

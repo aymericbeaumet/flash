@@ -5,6 +5,157 @@ import XCTest
 @testable import flash
 
 final class AXBrokerTests: XCTestCase {
+  private final class SnapshotClock {
+    private let lock = NSLock()
+    private var nanoseconds: UInt64 = 1
+
+    func read() -> DispatchTime {
+      lock.lock()
+      defer { lock.unlock() }
+      return DispatchTime(uptimeNanoseconds: nanoseconds)
+    }
+
+    func expire() {
+      lock.lock()
+      nanoseconds += 5_000_000_000
+      lock.unlock()
+    }
+  }
+
+  func testSnapshotFailsAnUnreadableBatchWithoutReturningPartialNodes() {
+    let second = AXUIElementCreateApplication(123_456)
+    var reads = 0
+    let broker = AXBroker(
+      roots: { [$0, second] },
+      readAttributes: { _, _ in
+        reads += 1
+        return reads == 1 ? (.success, ["AXGroup", []] as CFArray) : (.cannotComplete, nil)
+      })
+    let reply = brokerReply(
+      broker, "host.ax_snapshot",
+      ["pid": Int(getpid()), "collect": ["AXRole"], "follow": ["FlashNoSuchChildren"]],
+      pluginID: "a")
+
+    XCTAssertEqual(reply["ok"] as? Bool, false)
+    XCTAssertEqual(reply["error"] as? String, "accessibility snapshot failed")
+    XCTAssertNil(reply["nodes"])
+    XCTAssertEqual(reads, 2)
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": 1], pluginID: "a")["error"]
+        as? String,
+      "stale ax handle", "an unreadable batch must discard earlier nodes' handles")
+  }
+
+  func testSnapshotRevokedDuringReadDiscardsPartialNodesAndHandles() {
+    let second = AXUIElementCreateApplication(123_456)
+    let third = AXUIElementCreateApplication(123_457)
+    let scopeLock = NSLock()
+    var current = true
+    var reads = 0
+    let scope = PluginHostRequestScope {
+      scopeLock.lock()
+      defer { scopeLock.unlock() }
+      return current
+    }
+    let broker = AXBroker(
+      roots: { [$0, second, third] },
+      readAttributes: { _, _ in
+        reads += 1
+        if reads == 2 {
+          scopeLock.lock()
+          current = false
+          scopeLock.unlock()
+        }
+        return (.success, ["AXGroup", []] as CFArray)
+      })
+    let reply = brokerReply(
+      broker, "host.ax_snapshot",
+      ["pid": Int(getpid()), "collect": ["AXRole"], "follow": ["FlashNoSuchChildren"]],
+      pluginID: "a", scope: scope)
+
+    XCTAssertEqual(reply["ok"] as? Bool, false)
+    XCTAssertNil(reply["nodes"])
+    XCTAssertEqual(reads, 2, "a revoked walk must not read another root")
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": 1], pluginID: "a")["error"]
+        as? String,
+      "stale ax handle", "a revoked snapshot must discard earlier nodes' handles")
+  }
+
+  func testSnapshotDeadlineDiscardsPartialNodesAndHandles() {
+    let clock = SnapshotClock()
+    let second = AXUIElementCreateApplication(123_456)
+    let third = AXUIElementCreateApplication(123_457)
+    var reads = 0
+    let broker = AXBroker(
+      roots: { [$0, second, third] }, now: clock.read,
+      readAttributes: { _, _ in
+        reads += 1
+        if reads == 2 { clock.expire() }
+        return (.success, ["AXGroup", []] as CFArray)
+      })
+    let reply = brokerReply(
+      broker, "host.ax_snapshot",
+      ["pid": Int(getpid()), "collect": ["AXRole"], "follow": ["FlashNoSuchChildren"]],
+      pluginID: "a")
+
+    XCTAssertEqual(reply["ok"] as? Bool, false)
+    XCTAssertEqual(reply["error"] as? String, "accessibility snapshot timed out")
+    XCTAssertNil(reply["nodes"])
+    XCTAssertEqual(reads, 2, "an expired walk must not read another root")
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": 1], pluginID: "a")["error"]
+        as? String,
+      "stale ax handle", "a failed snapshot must not leave actionable partial handles")
+
+    let recovered = brokerReply(
+      broker, "host.ax_snapshot",
+      ["pid": Int(getpid()), "collect": ["AXRole"], "follow": ["FlashNoSuchChildren"]],
+      pluginID: "a")
+    XCTAssertEqual(recovered["ok"] as? Bool, true)
+    XCTAssertEqual((recovered["nodes"] as? [[String: Any]])?.count, 3)
+  }
+
+  func testQueuedSnapshotDeadlineIncludesTimeWaitingForTheBroker() {
+    let clock = SnapshotClock()
+    let entered = expectation(description: "first snapshot entered")
+    let firstReply = expectation(description: "first snapshot replied")
+    let secondReply = expectation(description: "queued snapshot replied")
+    let release = DispatchSemaphore(value: 0)
+    var rootReads = 0
+    let broker = AXBroker(
+      roots: { app in
+        rootReads += 1
+        if rootReads == 1 {
+          entered.fulfill()
+          _ = release.wait(timeout: .now() + 5)
+        }
+        return [app]
+      }, now: clock.read,
+      readAttributes: { _, _ in (.success, ["AXGroup", []] as CFArray) })
+    let params: [String: Any] = [
+      "pid": Int(getpid()), "collect": ["AXRole"], "follow": ["FlashNoSuchChildren"],
+    ]
+    broker.handle(
+      method: "host.ax_snapshot", params: params, pluginID: "a",
+      scope: PluginHostRequestScope(isCurrent: { true })
+    ) { _ in firstReply.fulfill() }
+    wait(for: [entered], timeout: 2)
+    broker.handle(
+      method: "host.ax_snapshot", params: params, pluginID: "b",
+      scope: PluginHostRequestScope(isCurrent: { true })
+    ) { reply in
+      XCTAssertEqual(reply["error"] as? String, "accessibility snapshot timed out")
+      XCTAssertNil(reply["nodes"])
+      secondReply.fulfill()
+    }
+    clock.expire()
+    release.signal()
+    wait(for: [firstReply, secondReply], timeout: 2)
+
+    XCTAssertEqual(rootReads, 1, "expired queued work must not touch an AX root")
+  }
+
   func testElementIdentityDeduplicatesEquivalentAXHandles() {
     let first = AXUIElementCreateApplication(getpid())
     let equivalent = AXUIElementCreateApplication(getpid())
@@ -16,15 +167,16 @@ final class AXBrokerTests: XCTestCase {
 
   // MARK: - Headless broker plumbing (handle registry, error shapes)
   //
-  // These tests stay off real AX trees: a broker rooted at the application
-  // element registers it without needing a granted AX permission, and bogus
-  // collect/follow attribute names keep the walk from descending, so node
-  // counts are deterministic on any machine. Anything that needs a real tree
-  // (attribute values) is deliberately out of scope here.
+  // Injected batch responses keep snapshots independent of real AX trees and
+  // permission grants. Action tests use invalid attributes and actions only.
 
   /// A broker whose snapshots start at the application element.
   private func headlessBroker() -> AXBroker {
-    AXBroker(roots: { [$0] })
+    AXBroker(
+      roots: { [$0] },
+      readAttributes: { _, names in
+        (.success, names.map { _ in NSNull() } as CFArray)
+      })
   }
 
   /// Synchronously collect one broker reply (the broker replies on its own
@@ -33,14 +185,15 @@ final class AXBrokerTests: XCTestCase {
     _ broker: AXBroker,
     _ method: String,
     _ params: [String: Any],
-    pluginID: String
+    pluginID: String,
+    scope: PluginHostRequestScope = PluginHostRequestScope(isCurrent: { true })
   ) -> [String: Any] {
     let lock = NSLock()
     var reply: [String: Any] = [:]
     let replied = expectation(description: method)
     broker.handle(
       method: method, params: params, pluginID: pluginID,
-      scope: PluginHostRequestScope(isCurrent: { true })
+      scope: scope
     ) { result in
       lock.lock()
       reply = result

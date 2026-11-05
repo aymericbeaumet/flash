@@ -29,6 +29,16 @@ struct AXElementIdentitySet {
 /// handle via `host.ax_perform` / `host.ax_set`. The registry keeps the real elements
 /// resident between the snapshot and those follow-up calls.
 final class AXBroker {
+  /// A snapshot must release the tree even after its plugin stopped waiting.
+  /// Match the SDK's default host-call budget; queue admission counts too.
+  static let snapshotTimeoutMs = 5_000
+
+  private enum SnapshotFailure: String, Error {
+    case timedOut = "accessibility snapshot timed out"
+    case failed = "accessibility snapshot failed"
+    case cancelled = "accessibility snapshot cancelled"
+  }
+
   private struct Entry {
     /// Owning plugin id. Handles are integers a plugin could guess; scoping
     /// every lookup and purge to the owner keeps two accessibility-capable
@@ -54,9 +64,18 @@ final class AXBroker {
   /// The elements a snapshot walks from: the app's windows. Tests substitute
   /// the application element itself, which registers without an AX grant.
   private let roots: (AXUIElement) -> [AXUIElement]
+  private let now: () -> DispatchTime
+  private let readAttributes: (AXUIElement, [String]) -> (AXError, CFArray?)
 
-  init(roots: @escaping (AXUIElement) -> [AXUIElement] = AXBroker.windows(of:)) {
+  init(
+    roots: @escaping (AXUIElement) -> [AXUIElement] = AXBroker.windows(of:),
+    now: @escaping () -> DispatchTime = DispatchTime.now,
+    readAttributes: @escaping (AXUIElement, [String]) -> (AXError, CFArray?) = AXBroker
+      .readAttributes
+  ) {
     self.roots = roots
+    self.now = now
+    self.readAttributes = readAttributes
   }
 
   /// An app's `AXWindows`, where every production snapshot starts.
@@ -113,6 +132,7 @@ final class AXBroker {
       return
     }
     let maxNodes = PluginJSON.integer(params["max_nodes"]) ?? 3_000
+    let deadline = now() + .milliseconds(Self.snapshotTimeoutMs)
 
     scope.enqueue(on: queue) { [weak self] in
       guard let self else {
@@ -121,32 +141,50 @@ final class AXBroker {
       }
       self.dropTerminatedApps()
       self.purge(owner: owner, pid: pid)
-      let app = AXApp.make(pid: pid)
-      let response = self.withAccessibilityTree(pid: pid, app: app) { app -> [String: Any] in
-        var nodes: [[String: Any]] = []
-        var seen = AXElementIdentitySet()
-        for (rootIndex, root) in self.roots(app).enumerated() {
-          var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
-          var index = 0
-          while index < bfs.count, nodes.count < maxNodes {
-            let item = bfs[index]
-            let element = item.element
-            index += 1
-            guard seen.insert(element) else { continue }
-            let handle = self.register(owner: owner, pid: pid, element: element)
-            let (attrs, children) = self.readNode(element, collect: collect, follow: follow)
-            var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
-            if let parent = item.parent { node["parent"] = parent }
-            nodes.append(node)
-            if let role = attrs[kAXRoleAttribute as String], pruneRoles.contains(role) {
-              continue
-            }
-            bfs.append(contentsOf: children.map { ($0, handle) })
-          }
-        }
-        return ["ok": true, "nodes": nodes]
+      let checkCurrent = {
+        guard scope.isCurrent() else { throw SnapshotFailure.cancelled }
+        guard self.now() < deadline else { throw SnapshotFailure.timedOut }
       }
-      reply(response)
+      do {
+        try checkCurrent()
+        let app = AXApp.make(pid: pid)
+        let response = try self.withAccessibilityTree(pid: pid, app: app) { app -> [String: Any] in
+          // Waiting for Gecko's process lock may have consumed the budget.
+          try checkCurrent()
+          var nodes: [[String: Any]] = []
+          var seen = AXElementIdentitySet()
+          let roots = self.roots(app)
+          try checkCurrent()
+          for (rootIndex, root) in roots.enumerated() {
+            var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
+            var index = 0
+            while index < bfs.count, nodes.count < maxNodes {
+              try checkCurrent()
+              let item = bfs[index]
+              let element = item.element
+              index += 1
+              guard seen.insert(element) else { continue }
+              let (attrs, children) = try self.readNode(
+                element, collect: collect, follow: follow, checkCurrent: checkCurrent)
+              let handle = self.register(owner: owner, pid: pid, element: element)
+              var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
+              if let parent = item.parent { node["parent"] = parent }
+              nodes.append(node)
+              if let role = attrs[kAXRoleAttribute as String], pruneRoles.contains(role) {
+                continue
+              }
+              bfs.append(contentsOf: children.map { ($0, handle) })
+            }
+          }
+          try checkCurrent()
+          return ["ok": true, "nodes": nodes]
+        }
+        reply(response)
+      } catch {
+        self.purge(owner: owner, pid: pid)
+        let failure = error as? SnapshotFailure ?? .failed
+        reply(["ok": false, "error": failure.rawValue])
+      }
     }
   }
 
@@ -240,9 +278,9 @@ final class AXBroker {
   private func withAccessibilityTree<T>(
     pid: pid_t,
     app: AXUIElement? = nil,
-    _ operation: (AXUIElement) -> T
-  ) -> T {
-    GeckoAccessibility.withTree(
+    _ operation: (AXUIElement) throws -> T
+  ) rethrows -> T {
+    try GeckoAccessibility.withTree(
       pid: pid,
       bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
       app: app,
@@ -299,22 +337,31 @@ final class AXBroker {
   /// than aborting the batch; those slots coerce to "absent", preserving the
   /// prior per-attribute semantics.
   private func readNode(
-    _ element: AXUIElement, collect: [String], follow: [String]
-  ) -> (attrs: [String: String], children: [AXUIElement]) {
+    _ element: AXUIElement, collect: [String], follow: [String],
+    checkCurrent: () throws -> Void
+  ) throws -> (attrs: [String: String], children: [AXUIElement]) {
     let names = collect + follow
     guard !names.isEmpty else { return ([:], []) }
-    var raw: CFArray?
-    let status = AXUIElementCopyMultipleAttributeValues(
-      element, names as CFArray, AXCopyMultipleAttributeOptions(), &raw)
+    let (status, raw) = readAttributes(element, names)
+    try checkCurrent()
+    // Retrying every attribute after a timeout multiplies the same unresponsive
+    // app's wait while holding the Gecko lock that hint discovery also needs.
+    guard status != .cannotComplete else { throw SnapshotFailure.failed }
     guard status == .success, let values = raw as? [Any], values.count == names.count else {
       // Wholesale failure (rare — a bad element). Fall back to per-attribute
       // copies so one unreadable attribute can't blank the whole node.
       var attrs: [String: String] = [:]
       for name in collect {
+        try checkCurrent()
         if let text = attribute(element, name) { attrs[name] = text }
+        try checkCurrent()
       }
       var children: [AXUIElement] = []
-      for name in follow { children.append(contentsOf: Self.elementArray(element, name)) }
+      for name in follow {
+        try checkCurrent()
+        children.append(contentsOf: Self.elementArray(element, name))
+        try checkCurrent()
+      }
       return (attrs, children)
     }
     var attrs: [String: String] = [:]
@@ -337,6 +384,13 @@ final class AXBroker {
       let values = raw as? [AXUIElement]
     else { return [] }
     return values
+  }
+
+  static func readAttributes(_ element: AXUIElement, _ names: [String]) -> (AXError, CFArray?) {
+    var raw: CFArray?
+    let status = AXUIElementCopyMultipleAttributeValues(
+      element, names as CFArray, AXCopyMultipleAttributeOptions(), &raw)
+    return (status, raw)
   }
 
   /// Reads `name` and coerces it to a string. Used only on the rare batched-read
