@@ -4,7 +4,7 @@ use chrono::DateTime;
 use reqwest::Url;
 use roxmltree::{Document, Node, ParsingOptions};
 
-pub(crate) const MAX_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ITEMS: usize = 2000;
 pub(crate) const WINDOW_SECONDS: i64 = 24 * 60 * 60;
 

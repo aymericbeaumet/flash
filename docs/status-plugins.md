@@ -285,7 +285,8 @@ cwd = "."
 
 Set `[plugins.feed] url` to an RSS feed URL; without one, the plugin makes no
 network requests. `refresh_interval` defaults to 300 seconds and `cycle_interval`
-to 30 seconds. The plugin publishes every article in the window as one
+to 30 seconds. RSS responses are limited to 32 MiB, including streamed responses
+without a declared content length. The plugin publishes every article in the window as one
 host-rotated carousel; Flash rotates the headline, keeps the visible line until
 its scheduled rotation across refreshes, and slides the title and domain
 through the full bar height. A name written in the template stays still,
