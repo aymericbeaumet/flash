@@ -148,6 +148,32 @@ final class AppleScriptRunnerTests: XCTestCase {
     }
   }
 
+  func testLateResultsBufferedBeforeTheWaitStillTimeOut() {
+    for output in [
+      AppleScriptOutput(status: 0, stdout: "late\n", stderr: ""),
+      AppleScriptOutput(
+        status: 1, stdout: "", stderr: "0:17: execution error: User canceled. (-128)\n"),
+    ] {
+      let result = ScriptResult(deadline: .now())
+      result.finish(output)
+      XCTAssertNil(result.wait())
+    }
+  }
+
+  func testTimelyResultsKeepTheirSuccessOrScriptErrorWhenWaiterResumesLate() {
+    for output in [
+      AppleScriptOutput(status: 0, stdout: "ok\n", stderr: ""),
+      AppleScriptOutput(
+        status: 1, stdout: "", stderr: "0:17: execution error: User canceled. (-128)\n"),
+    ] {
+      let deadline = DispatchTime.now()
+      let completedAt = deadline - .milliseconds(1)
+      let result = ScriptResult(deadline: deadline)
+      result.finish(output, at: completedAt)
+      XCTAssertEqual(result.wait(), output)
+    }
+  }
+
   func testRunawayScriptStopsAtItsDeadline() {
     let started = Date()
     let output = AppleScriptRunner.execute(

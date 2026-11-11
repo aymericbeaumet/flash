@@ -75,7 +75,7 @@ enum AppleScriptRunner {
     guard slots.wait(timeout: control.deadline) == .success else {
       return timedOut(timeout)
     }
-    let result = ScriptResult()
+    let result = ScriptResult(deadline: control.deadline)
     let thread = Thread {
       defer { slots.signal() }
       result.finish(execute(source, control: control))
@@ -84,7 +84,7 @@ enum AppleScriptRunner {
     thread.stackSize = scriptStackBytes
     thread.qualityOfService = .userInitiated
     thread.start()
-    guard let output = result.wait(until: control.deadline) else {
+    guard let output = result.wait() else {
       // The script stops at its next Apple Event or active-procedure call.
       control.abandon()
       return timedOut(timeout)
@@ -313,19 +313,28 @@ final class ScriptControl {
 }
 
 /// One script's output, handed from its thread to the waiting caller.
-private final class ScriptResult {
+final class ScriptResult {
   private let lock = NSLock()
   private let done = DispatchSemaphore(value: 0)
+  private let deadline: DispatchTime
   private var output: AppleScriptOutput?
 
-  func finish(_ output: AppleScriptOutput) {
+  init(deadline: DispatchTime) {
+    self.deadline = deadline
+  }
+
+  func finish(_ output: AppleScriptOutput, at completedAt: DispatchTime = .now()) {
     lock.lock()
-    self.output = output
+    // A buffered semaphore signal can win even after the wait's deadline.
+    // Judge completion time, not when the caller gets scheduled again.
+    if completedAt.uptimeNanoseconds < deadline.uptimeNanoseconds {
+      self.output = output
+    }
     lock.unlock()
     done.signal()
   }
 
-  func wait(until deadline: DispatchTime) -> AppleScriptOutput? {
+  func wait() -> AppleScriptOutput? {
     guard done.wait(timeout: deadline) == .success else { return nil }
     lock.lock()
     defer { lock.unlock() }

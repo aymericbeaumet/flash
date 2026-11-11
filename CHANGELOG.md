@@ -12,6 +12,8 @@ command it most likely meant, and the upgrade notes below say what to write.
 - Preserve a flashlight pick while returning focus refreshes the app's mappings,
   so emoji insertion reaches the original input field.
 - Parse Inspector HTML comments without joining surrounding text into new tags.
+- Report timed-out AppleScript execution consistently when cancellation races
+  with result delivery.
 
 ### Development and getting started
 

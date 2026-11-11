@@ -65,12 +65,16 @@ final class InspectorStatePushTests: XCTestCase {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
   }
 
-  private func waitForSnapshot(after count: Int, timeout: TimeInterval = 2) -> Bool {
+  private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
-    while snapshots == count && Date() < deadline {
+    while !condition() && Date() < deadline {
       spin(for: 0.02)
     }
-    return snapshots > count
+    return condition()
+  }
+
+  private func waitForSnapshot(after count: Int, timeout: TimeInterval = 2) -> Bool {
+    waitUntil(timeout: timeout) { snapshots > count }
   }
 
   /// `change` pushes exactly one snapshot once its window has passed.
@@ -187,7 +191,7 @@ final class InspectorStatePushTests: XCTestCase {
     let server = DebugServer(
       host: delegate.config.debug.httpInspectorHost,
       port: delegate.config.debug.httpInspectorPort, accessToken: HelpAccess.newToken(),
-      coalescingWindowMs: 20,
+      coalescingWindowMs: 200,
       sectionsProvider: { [unowned delegate] sections in
         scoped.append(sections)
         return delegate.debugStateJSON(sections: sections)
@@ -202,19 +206,19 @@ final class InspectorStatePushTests: XCTestCase {
     self.server = server
     // The first snapshot is whole: there is nothing to rebuild over.
     delegate.applyModeOverlay()
-    let deadline = Date().addingTimeInterval(2)
-    while full == 0 && Date() < deadline { spin(for: 0.02) }
+    XCTAssertTrue(waitUntil { full > 0 }, "the initial snapshot did not publish")
     XCTAssertEqual(full, 1)
 
-    // What the bar, its popups and the widgets report, as they report it.
+    // Wait for each burst to publish before starting the next. The shared
+    // scheduler may deliver later than its coalescing window under load.
     delegate.overlay.statusBarDidChange?()
     delegate.overlay.statusPopupController.didChange?()
-    spin(for: 0.15)
+    XCTAssertTrue(waitUntil { !scoped.isEmpty }, "the status bar snapshot did not publish")
     XCTAssertEqual(full, 1, "a status bar change takes no whole snapshot")
     XCTAssertEqual(scoped, [AppDelegate.statusBarSections], "one rebuild of the burst's sections")
     delegate.widgetController?.didChange?()
-    spin(for: 0.15)
-    XCTAssertEqual(scoped.last, ["widgets"])
+    XCTAssertTrue(waitUntil { scoped.count > 1 }, "the widget snapshot did not publish")
+    XCTAssertEqual(scoped, [AppDelegate.statusBarSections, ["widgets"]])
     XCTAssertEqual(full, 1)
 
     XCTAssertEqual(
@@ -225,7 +229,7 @@ final class InspectorStatePushTests: XCTestCase {
       Set(delegate.debugStateJSON().keys), "a section the scoped build lacks rebuilds everything")
 
     delegate.applyModeOverlay()
-    spin(for: 0.15)
+    XCTAssertTrue(waitUntil { full > 1 }, "the mode snapshot did not publish")
     XCTAssertEqual(full, 2, "a mode change rebuilds everything")
   }
 
