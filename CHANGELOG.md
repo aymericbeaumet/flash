@@ -7,6 +7,12 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ## Unreleased
 
+### Fixes
+
+- Preserve a flashlight pick while returning focus refreshes the app's mappings,
+  so emoji insertion reaches the original input field.
+- Parse Inspector HTML comments without joining surrounding text into new tags.
+
 ### Development and getting started
 
 - Refresh the Rust and browser-tooling dependencies, including SQLite through

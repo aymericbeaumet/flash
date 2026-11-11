@@ -1955,12 +1955,26 @@ extension AppDelegate {
     else { return }
     normalModeTargetPID = pid
     RunningApplicationActivation.activate(target, options: [], restoringMinimizedWindows: false)
-    let token = normalModePendingCommandToken
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-      guard let self, self.normalModePendingCommandToken == token,
-        !target.isTerminated, target.isActive
+    scheduleCommandTargetDelivery(
+      targetIsActive: { !target.isTerminated && target.isActive },
+      deliver: { deliver(pid, target) })
+  }
+
+  func scheduleCommandTargetDelivery(
+    targetIsActive: @escaping () -> Bool,
+    schedule: (@escaping () -> Void) -> Void = {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50), execute: $0)
+    },
+    deliver: @escaping () -> Void
+  ) {
+    // Returning focus refreshes the app's mapping table and drops its pending
+    // key sequence. Only a closed or replaced picker disowns this delivery.
+    let generation = finder.sessionGeneration
+    schedule { [weak self] in
+      guard let self, self.finder.sessionGeneration == generation,
+        targetIsActive()
       else { return }
-      deliver(pid, target)
+      deliver()
     }
   }
 

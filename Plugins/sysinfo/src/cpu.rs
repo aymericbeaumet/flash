@@ -846,6 +846,47 @@ mod tests {
     }
 
     #[test]
+    fn paravirtual_gpu_memory_counters_are_not_utilization() {
+        let virtual_gpu = accelerator(
+            "AppleParavirtGPU",
+            None,
+            &[
+                ("Alloc system memory", 96_649_216.0),
+                ("In use system memory", 31_526_656.0),
+                ("In use system memory (driver)", 0.0),
+                ("lastRecoveryTime", 0.0),
+                ("recoveryCount", 0.0),
+            ],
+        );
+        let Collection::Fresh(gpu) = gpu_collection(std::slice::from_ref(&virtual_gpu)) else {
+            panic!("missing utilization is unavailable, not a failed registry read");
+        };
+        assert!(gpu.is_none());
+        let cpu = cpu_snapshot(10.0, 5.0, 85.0, [1.0, 2.0, 3.0]).expect("CPU snapshot");
+        let report = render_report(&cpu, gpu.as_ref(), &CpuHistory::new(), SummaryMode::Full);
+        assert!(!report.summary.as_str().contains("GPU"));
+        assert!(
+            report
+                .preview
+                .render_plain()
+                .contains("GPU                 —")
+        );
+
+        let measurable_gpu = accelerator(
+            "AGXAcceleratorG16X",
+            Some("Apple M4 Pro"),
+            &[("Device Utilization %", 42.0)],
+        );
+        assert!(matches!(
+            gpu_collection(&[virtual_gpu, measurable_gpu]),
+            Collection::Fresh(Some(GpuSnapshot {
+                utilization: 42.0,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
     fn history_keeps_the_newest_twenty_samples() {
         let history = history((0..25).map(|value| f64::from(value) * 4.0));
         assert_eq!(history.len(), HISTORY_SAMPLES);

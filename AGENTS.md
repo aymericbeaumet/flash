@@ -152,6 +152,9 @@ Surface requests that would violate these constraints before implementing them.
 - Mode entry preserves the focused external app. Mode events and base-mode
   effects carry no activation target; clicks and app commands own focus changes.
   A dismissed Flash surface yields activation only while Flash still owns it.
+  A captured picker delivery belongs to the finder session generation, not
+  the pending mapping sequence: returning focus refreshes mappings without
+  cancelling the pick; closing or replacing the session still cancels it.
   Command dispatch resolves current app identity before a captured PID; CLI
   and Carbon entrypoints cannot depend on key-tap focus reconciliation.
 - Which-key follows the effective interpreter, including built-in selectors and

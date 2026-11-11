@@ -274,6 +274,8 @@ pub struct GpuStatistics {
     pub model: Option<String>,
     /// Every numeric `PerformanceStatistics` entry, keyed as the driver
     /// publishes it (`Device Utilization %`, `Renderer Utilization %`, …).
+    /// Utilization counters are optional: virtual GPUs may expose only memory
+    /// and recovery statistics, regardless of the host CPU architecture.
     pub performance: BTreeMap<String, f64>,
 }
 
@@ -593,15 +595,6 @@ mod tests {
             if let Some(utilization) = accelerator.performance.get("Device Utilization %") {
                 assert!((0.0..=100.0).contains(utilization), "{accelerator:?}");
             }
-        }
-        // Every Apple silicon GPU publishes its utilization.
-        if cfg!(target_arch = "aarch64") {
-            assert!(
-                accelerators.iter().any(|accelerator| accelerator
-                    .performance
-                    .contains_key("Device Utilization %")),
-                "{accelerators:?}"
-            );
         }
     }
 
