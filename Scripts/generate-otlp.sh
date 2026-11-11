@@ -15,12 +15,13 @@ proto_tag=v1.11.1
 proto_commit=b3f75588eb23c5fca62264edd05d382de49beb1a
 command -v protoc >/dev/null || { echo "error: protoc is not on PATH" >&2; exit 1; }
 
-swift_protobuf_version=$(python3 - <<'PY'
+read -r swift_protobuf_version swift_protobuf_revision <<< "$(python3 - <<'PY'
 import json
 pins = json.load(open("Package.resolved"))["pins"]
-print(next(pin["state"]["version"] for pin in pins if pin["identity"] == "swift-protobuf"))
+state = next(pin["state"] for pin in pins if pin["identity"] == "swift-protobuf")
+print(state["version"], state["revision"])
 PY
-)
+)"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -35,6 +36,11 @@ actual=$(git -C "$work/proto" rev-parse HEAD)
 
 git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$swift_protobuf_version" \
   https://github.com/apple/swift-protobuf "$work/swift-protobuf"
+actual=$(git -C "$work/swift-protobuf" rev-parse HEAD)
+[[ "$actual" == "$swift_protobuf_revision" ]] || {
+  echo "error: swift-protobuf $swift_protobuf_version is $actual, expected $swift_protobuf_revision" >&2
+  exit 1
+}
 swift build --package-path "$work/swift-protobuf" --scratch-path "$work/plugin-build" \
   -c release --product protoc-gen-swift
 plugin="$work/plugin-build/release/protoc-gen-swift"

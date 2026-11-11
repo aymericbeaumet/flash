@@ -31,8 +31,9 @@ Compare them with the live [runtime](/state), [mappings](/mappings),
 - **`flash: command not found`.** Homebrew links the command; a download
   leaves it inside the app. Run `/Applications/Flash.app/Contents/MacOS/flash`
   or link it onto your `PATH` ([the `flash` command](install.md#the-flash-command)).
-  `Flash is not running` means the app is not open: open it first;
-  `flash config check` works without it.
+  Current commands start the installed app if needed, except
+  `flash resident quit`. `flash config check` works without starting it.
+  If automatic launch fails, open Flash from Finder to see the macOS prompt.
 - **NORMAL captures typing and Escape does not exit it.** Press `i`, or use
   your configured INSERT shortcut (⌘⌃I in the starter example), to enter
   INSERT; a click keeps NORMAL. Escape cancels hints; it does not leave NORMAL. Enable both entry

@@ -642,12 +642,37 @@ for path in tracked:
         failures.append(f"{path}: a second mise configuration; tools, env and tasks live in mise.toml")
 
 try:
-    tasks = tomllib.loads(pathlib.Path("mise.toml").read_text()).get("tasks", {})
+    config = tomllib.loads(pathlib.Path("mise.toml").read_text())
+    tasks = config.get("tasks", {})
 except (OSError, tomllib.TOMLDecodeError) as error:
     print(f"mise.toml: {error}")
     sys.exit(1)
 if not tasks:
     failures.append("mise.toml: no tasks")
+
+# A tool pin without its platform downloads silently loses reproducibility.
+try:
+    locked_tools = tomllib.loads(pathlib.Path("mise.lock").read_text())["tools"]
+except (OSError, KeyError, tomllib.TOMLDecodeError) as error:
+    failures.append(f"mise.lock: {error}")
+    locked_tools = {}
+requests = dict(config.get("tools", {}))
+for task in tasks.values():
+    if isinstance(task, dict):
+        requests.update(task.get("tools", {}))
+for name, request in requests.items():
+    version = request.get("version", "") if isinstance(request, dict) else request
+    pattern = r"[0-9]+\.[0-9]+" if name == "protoc" else r"[0-9]+(?:\.[0-9]+){2}"
+    if not re.fullmatch(pattern, str(version)):
+        failures.append(f"mise.toml: {name} needs an exact version")
+    entries = [entry for entry in locked_tools.get(name, []) if entry.get("version") == version]
+    if len(entries) != 1:
+        failures.append(f"mise.lock: {name}@{version} is missing or ambiguous; run mise lock")
+    elif name not in {"rust", "cargo:cargo-about"}:
+        for platform in config.get("settings", {}).get("lockfile_platforms", []):
+            download = entries[0].get(f"platforms.{platform}", {})
+            if not download.get("url") or not download.get("checksum"):
+                failures.append(f"mise.lock: {name}@{version} lacks {platform} download integrity")
 
 runs = {}
 for name, task in tasks.items():

@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 fend-core = "=1.5.9"
 flash_plugin = { path = "../_flash_plugin_rust" }
-jiff = { version = "0.2", default-features = false, features = [
+jiff = { version = "0.2.42", default-features = false, features = [
   "std",
   "tz-system",
   "tz-fat",
@@ -19,9 +19,9 @@ jiff = { version = "0.2", default-features = false, features = [
   "perf-inline",
 ] }
 quick-xml = "0.42.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", default-features = false, features = [
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", default-features = false, features = [
   "rt",
   "macros",
   "io-std",

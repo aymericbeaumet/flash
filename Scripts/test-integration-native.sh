@@ -59,9 +59,9 @@ bundle_app() {
   local install_app="/Applications/$app_name.app"
 
   echo "==> Building $product (release)"
-  swift build -c release --product "$product"
+  swift build --force-resolved-versions -c release --product "$product"
   local bin_path
-  bin_path="$(swift build -c release --show-bin-path)/$product"
+  bin_path="$(swift build --force-resolved-versions -c release --show-bin-path)/$product"
   if [[ ! -f "$bin_path" ]]; then
     echo "ERROR: built binary not found at $bin_path" >&2
     exit 1

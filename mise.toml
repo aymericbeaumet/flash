@@ -6,6 +6,8 @@
 # enforce it). Task arguments follow `--`: `mise run test:plugins -- --lane units`.
 
 [settings]
+lockfile = true
+lockfile_platforms = ["macos-arm64", "macos-x64", "linux-x64"]
 # Every task works from a fresh checkout or right after a pin bump: `mise run`
 # installs the pinned tools a task is missing, even where a global
 # configuration turned auto-install off. CI opts out per job
@@ -23,7 +25,7 @@ PNPM_CONFIG_UPDATE_NOTIFIER = "false"
 
 [tasks.setup]
 description = "Bootstrap a fresh checkout: install the pinned tools, then build libghostty-vt"
-run = ["mise install", { task = "build:ghostty" }]
+run = ["mise install --locked python rust node pnpm zig cargo:cargo-about gh", { task = "build:ghostty" }]
 
 [tasks.fmt]
 description = "Format the Swift sources in place (swift format)"
@@ -52,7 +54,7 @@ run = [
 [tasks.build]
 description = "Build the Swift package (debug) after bootstrapping libghostty-vt"
 depends = ["build:ghostty"]
-run = "swift build"
+run = "swift build --force-resolved-versions"
 
 [tasks."build:ghostty"]
 description = "Build the pinned libghostty-vt XCFramework for this Mac (-- --release: universal)"
@@ -118,7 +120,7 @@ run = "./Scripts/install-firefox-fixture-collector.sh"
 description = "Run the Swift test suite against real plugin binaries (-- <swift test args>)"
 depends = ["build:ghostty", "build:plugins"]
 env = { FLASH_REQUIRE_PLUGIN_BINARIES = "1" }
-run = "swift test"
+run = "swift test --force-resolved-versions"
 
 [tasks."test:plugins"]
 description = "Run the plugin gate: Rust lint, units and dev builds (-- --lane lint|units|build|all)"
@@ -146,7 +148,8 @@ run = "bash Scripts/test-build-ghostty.sh"
 
 [tasks."build:schema"]
 description = "Regenerate docs/schema/flash.schema.json, flash.toml's JSON Schema"
-run = "FLASH_WRITE_SCHEMA=1 swift test --filter ConfigSchemaTests"
+depends = ["build:ghostty"]
+run = "FLASH_WRITE_SCHEMA=1 swift test --force-resolved-versions --filter ConfigSchemaTests"
 
 [tasks."test:app-bundle"]
 description = "Test the release bundle validator against signed universal fixtures"
@@ -247,10 +250,11 @@ run = "./Scripts/update-homebrew-cask.sh"
 # the official plugins; Node and pnpm build the inspector, the published
 # manual (Scripts/build-site.sh) and the Electron fixture.
 [tools]
-python = "3.15.1"
-rust = { version = "1.99.1", components = ["rustfmt", "clippy"] }
-node = "26.12.1"
-pnpm = "12.15.0"
-zig = "0.17.0"
+python = "3.15.2"
+rust = { version = "1.99.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"] }
+node = "26.13.0"
+pnpm = "12.18.0"
+zig = "0.17.1"
+gh = "2.103.3"
 # License notices for the Rust dependencies shipped inside bundled plugins.
-"cargo:cargo-about" = { version = "0.9.2", features = ["cli"] }
+"cargo:cargo-about" = { version = "0.9.3", features = ["cli"] }

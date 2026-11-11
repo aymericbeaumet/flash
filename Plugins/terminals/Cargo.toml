@@ -10,12 +10,12 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
-nix = { version = "0.31", default-features = false, features = ["event", "hostname", "user"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-regex = "1"
-unicode-width = "0.2"
-tokio = { version = "1", default-features = false, features = [
+nix = { version = "0.31.3", default-features = false, features = ["event", "hostname", "user"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+regex = "1.13.1"
+unicode-width = "0.2.3"
+tokio = { version = "1.54.1", default-features = false, features = [
   "rt",
   "macros",
   "io-std",
@@ -26,9 +26,9 @@ tokio = { version = "1", default-features = false, features = [
   "time",
   "sync",
 ] }
-objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSFont", "objc2-core-foundation"] }
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSFont", "objc2-core-foundation"] }
 
 # Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
 # (fully-unoptimized tokio is visibly slow under the plugin latency contracts),

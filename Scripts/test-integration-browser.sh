@@ -173,9 +173,9 @@ EOF
 
 # -- 3. build + bundle + codesign ----------------------------------------
 echo "==> Building $BIN_NAME (release)"
-swift build -c release --product "$BIN_NAME"
+swift build --force-resolved-versions -c release --product "$BIN_NAME"
 
-BIN_PATH="$(swift build -c release --show-bin-path)/$BIN_NAME"
+BIN_PATH="$(swift build --force-resolved-versions -c release --show-bin-path)/$BIN_NAME"
 if [[ ! -f "$BIN_PATH" ]]; then
   echo "ERROR: built binary not at expected path: $BIN_PATH" >&2
   exit 1

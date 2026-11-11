@@ -28,7 +28,7 @@ enum StarterConfig {
     # "cmd+ctrl+alt+space" = ["flash", "mode", "flashlight"]
     #
     # Vim-like normal mode. While it is on, unmapped keys are captured instead of
-    # typed until you press i (or cmd+ctrl+i) or click into a text field.
+    # typed until you press i (or enable cmd+ctrl+i below). Clicking keeps NORMAL.
     # "cmd+ctrl+[" = ["flash", "mode", "normal"]
     # "cmd+ctrl+i" = ["flash", "mode", "insert"]
 

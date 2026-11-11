@@ -32,11 +32,6 @@ export CARGO_TARGET_DIR="$TARGET_DIR"
 export MACOSX_DEPLOYMENT_TARGET="$MACOS_MINIMUM"
 mkdir -p "$TARGET_DIR"
 
-if [[ "$MODE" == "release" ]]; then
-  # Make sure both Apple targets are available; harmless if already added.
-  rustup target add x86_64-apple-darwin aarch64-apple-darwin >/dev/null 2>&1 || true
-fi
-
 # A real plugin is defined by its manifest.json; support crates such as the
 # shared SDK at Plugins/_flash_plugin_rust have none and are built only as
 # dependencies.

@@ -7,6 +7,18 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ## Unreleased
 
+### Development and getting started
+
+- Refresh the Rust and browser-tooling dependencies, including SQLite through
+  rusqlite 0.42, the pinned Ghostty terminal library and the Electron 45
+  integration fixture. TypeScript stays on
+  6.0.3 until the Svelte checker supports the native compiler without a second
+  compiler installation.
+- Lock the mise development tools across macOS and Linux, and use the same
+  pinned environment and frozen dependency resolution locally and in CI.
+- Separate released installation instructions from the development manual,
+  with a short first-hint walkthrough and explicit Accessibility limitations.
+
 ### Upgrading from 1.1
 
 Run `flash config check` after updating: every renamed command or key below

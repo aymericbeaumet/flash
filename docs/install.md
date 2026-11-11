@@ -5,6 +5,14 @@ Flash is one app, `/Applications/Flash.app`, whose executable is also the
 Once it runs, [getting started](getting-started.md#1-one-hotkey) continues
 with the first hotkey.
 
+This page describes the current source. **The latest stable release is
+1.1.0**, whose commands and configuration differ; follow its
+[getting-started guide](https://github.com/aymericbeaumet/flash/blob/1.1.0/docs/getting-started.md)
+when installing that version. The nightly follows `main`, so it does not
+include changes that exist only on a feature branch. To try this checkout,
+follow [development setup](development.md). Prebuilt releases need none of
+the development tools.
+
 ## Requirements
 
 - **macOS 13 (Ventura) or later.** The app and the Homebrew cask both refuse
@@ -120,9 +128,11 @@ completions and `flash cli manpage` the man page; see
 [shell queries](commands.md#status-doctor-config-events-and-shell-queries) for
 loading them.
 
-Commands need Flash running and fail with `Flash is not running` otherwise.
-`flash config check`, `flash config schema` and the `cli` queries read files
-and work without it.
+Commands start the installed app when it is not running, then wait for its
+local socket. `flash resident quit` never starts an app just to quit it.
+`flash config check`, `flash config schema` and the `cli` queries work
+without starting it. If launch fails, open the app from Finder to see the
+macOS prompt; see [troubleshooting](troubleshooting.md).
 
 ## Update
 

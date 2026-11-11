@@ -4,13 +4,28 @@ Thanks for helping. Bug reports, plugins, bar and widget setups, and
 documentation fixes are all welcome.
 Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
+You do not need to build Flash to help:
+
+- **Test an app you use.** Report a control that has no hint, including the
+  app version and steps to reach it. Accessibility coverage varies by app.
+- **Improve a first-run instruction.** Say what you expected, where you got
+  stuck, and which release you installed. The source documentation can be
+  ahead of the latest release.
+- **Share a small configuration.** One useful shortcut or popup with its
+  dependencies explained is enough; see [sharing a setup](#sharing-a-setup).
+- **Record a real demonstration.** The [media guide](docs/assets/README.md)
+  lists short workflows to capture. Include the build version and use
+  non-sensitive example data; show the keys as well as the result.
+
 ## Reporting a bug
 
 Check [troubleshooting](docs/troubleshooting.md) first: it starts with
 `flash resident doctor` and ends with the known limitations, which are not
 bugs. Then open an [issue](https://github.com/aymericbeaumet/flash/issues/new/choose) with:
 
-- the output of `flash resident doctor` and `flash resident status`;
+- the Flash version and channel (stable, nightly or development), plus the
+  output of `flash resident doctor` and `flash resident status` on current
+  builds; for an older release, use the diagnostic commands in its help;
 - the macOS version and CPU architecture (`sw_vers -productVersion`, `uname -m`);
 - the app name and version where it happened (`Finder 15.0`, `Firefox 142`);
 - the relevant part of `~/.config/flash/flash.toml`;
@@ -31,7 +46,10 @@ See [privacy](docs/privacy.md) for what each diagnostic can contain.
 
 Send a pull request adding your bar, widget or popup configuration to
 [`docs/examples`](docs/examples), with a short README that names every external
-tool it runs.
+tool it runs. Include the Flash version you tested, the exact configuration,
+how to activate it and how to undo it. Screenshots are welcome, with private
+window titles, account names, paths and tokens removed. A setup should work
+without copying the rest of your dotfiles.
 
 ## Changing code
 

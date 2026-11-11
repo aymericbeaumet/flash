@@ -47,10 +47,10 @@ if [[ "$MODE" == "release" ]]; then
   # CFlashTerminal. Build each architecture separately, then combine the app.
   for architecture in arm64 x86_64; do
     echo "==> Building flash (release, $architecture)"
-    swift build -c release --arch "$architecture" --product flash
+    swift build --force-resolved-versions -c release --arch "$architecture" --product flash
   done
-  arm_bin="$(swift build -c release --arch arm64 --show-bin-path)"
-  x86_bin="$(swift build -c release --arch x86_64 --show-bin-path)"
+  arm_bin="$(swift build --force-resolved-versions -c release --arch arm64 --show-bin-path)"
+  x86_bin="$(swift build --force-resolved-versions -c release --arch x86_64 --show-bin-path)"
   BIN_PATH="$PROJECT_DIR/build/flash-universal"
   rm -rf "$BIN_PATH"
   mkdir -p "$BIN_PATH"
@@ -73,7 +73,7 @@ else
   echo "==> Building plugins + flash + inspector in parallel (dev)"
   DEV_PLUGIN_SIGN_IDENTITY="$DEV_SIGN_IDENTITY" "$SCRIPTS/build-plugins.sh" dev &
   plugins_pid=$!
-  swift build --product flash &
+  swift build --force-resolved-versions --product flash &
   flash_pid=$!
   "$SCRIPTS/build-inspector.sh" --dev &
   inspector_pid=$!
@@ -96,7 +96,7 @@ else
   # `--show-bin-path` is a cheap metadata query against the build we just
   # finished (no recompile), and runs after the background build exited so the
   # two swift invocations never overlap.
-  BIN_PATH="$(swift build --show-bin-path)"
+  BIN_PATH="$(swift build --force-resolved-versions --show-bin-path)"
   SIGN_IDENTITY="$DEV_SIGN_IDENTITY"
 fi
 

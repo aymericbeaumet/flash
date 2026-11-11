@@ -5,6 +5,31 @@ import XCTest
 @testable import FlashTerminal
 
 final class TerminalTests: XCTestCase {
+  func testTextAttributesAndUnderlineStylesRemainIndependent() throws {
+    let buffer = TerminalBuffer(columns: 16, rows: 1, scrollbackLines: 0)
+    let attributes = [1, 3, 2, 5, 7, 8, 9, 53]
+    let text =
+      attributes.map { "\u{1B}[0;\($0)mX" }.joined()
+      + (1...5).map { "\u{1B}[0;4:\($0);58:2::7:8:9mU" }.joined()
+      + "\u{1B}[0mN"
+    buffer.write(Data(text.utf8))
+    let cells = try XCTUnwrap(buffer.snapshot()).cells
+    for index in attributes.indices {
+      XCTAssertEqual(cells[index].flags, UInt16(1 << index))
+      XCTAssertEqual(cells[index].underline, 0)
+    }
+    for underline in 1...5 {
+      let cell = cells[attributes.count + underline - 1]
+      XCTAssertEqual(cell.flags, 0)
+      XCTAssertEqual(cell.underline, underline)
+      XCTAssertEqual(
+        [cell.underlineColor.red, cell.underlineColor.green, cell.underlineColor.blue], [7, 8, 9])
+    }
+    XCTAssertEqual(cells[13].flags, 0)
+    XCTAssertEqual(cells[13].underline, 0)
+    XCTAssertEqual(cells[13].underlineColor, cells[13].foreground)
+  }
+
   func testANSIIndexedAndTruecolorForegroundsAndBackgroundsReachFrames() throws {
     let cells = try frameFromPTY(
       "\u{1B}[31;44mR\u{1B}[32mG"

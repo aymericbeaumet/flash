@@ -68,8 +68,8 @@ EOF
 fi
 
 echo "==> Building $ORACLE_PRODUCT (release)"
-swift build -c release --product "$ORACLE_PRODUCT"
-BIN_PATH="$(swift build -c release --show-bin-path)/$ORACLE_PRODUCT"
+swift build --force-resolved-versions -c release --product "$ORACLE_PRODUCT"
+BIN_PATH="$(swift build --force-resolved-versions -c release --show-bin-path)/$ORACLE_PRODUCT"
 if [[ ! -f "$BIN_PATH" ]]; then
   echo "ERROR: built binary not found at $BIN_PATH" >&2
   exit 1

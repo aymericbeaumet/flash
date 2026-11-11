@@ -35,6 +35,7 @@ class GhosttyNoticeTests(unittest.TestCase):
                           'https://github.com/endorno/pytorch/fixture\n'
                           'Copyright Facebook\nRedistribution BSD fixture\n*/\n')
         self.files = {
+            "translate-c": {"LICENSE": "Copyright Zig contributors / MIT fixture"},
             "highway": {"LICENSE": "Apache License fixture", "LICENSE-BSD3": "The Highway Project Authors",
                         "hwy/base.h": "// Copyright Google LLC\n"},
             "wuffs": {"LICENSE": "The Wuffs Authors / MIT fixture",
@@ -64,7 +65,7 @@ class GhosttyNoticeTests(unittest.TestCase):
     def test_every_linked_dependency_has_original_author_notices(self):
         text = notices.collect(self.source, self.cache, self.support)
         for author in ["simdutf authors", "Facebook", "Highway Project Authors", "Wuffs Authors",
-                       "Jacob Sandlund", "UNICODE LICENSE V3", "2026 Unicode"]:
+                       "Jacob Sandlund", "Zig contributors", "UNICODE LICENSE V3", "2026 Unicode"]:
             self.assertIn(author, text)
 
     def test_missing_dependency_license_fails_closed(self):

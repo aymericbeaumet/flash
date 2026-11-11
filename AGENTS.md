@@ -506,6 +506,10 @@ OTLP/HTTP requires protobuf, a versioned binary schema Foundation cannot decode.
 
 ## Build, verify and deploy
 
+Keep exact tool pins and the cross-platform `mise.lock` together. Rust target
+installation belongs in `mise.toml`; application builds must retain frozen
+lockfile flags. Xcode and browser GUI fixtures are the system prerequisites.
+
 Run inside the current bonsai worktree. Prefix shell commands with `rtk`.
 mise is the single developer environment: `mise.toml` pins the tools, sets the
 shared environment and defines every entry point as a described task, and

@@ -32,9 +32,10 @@ documents is this documentation.
 Development is verified on macOS 26 with Xcode 26.6 and mise; the built app
 targets macOS 13+ ([the macOS floor](release.md#the-macos-floor)). mise is
 the single developer environment: the repository's
-`mise.toml` pins Python, Rust with rustfmt and clippy, Node, pnpm, Zig and
-cargo-about, sets the shared environment, and defines every entry point as a
-task. `mise run <task>` runs a task from the repository root with the pinned
+`mise.toml` pins Python, Rust with rustfmt, clippy and both macOS targets,
+Node, pnpm, Zig and cargo-about (plus gh for release publication), sets the
+shared environment, and defines every entry point as a task.
+`mise run <task>` runs a task from the repository root with the pinned
 tools first on PATH, whatever the shell's PATH holds, so a different Zig or
 Node installed elsewhere never leaks into a build. `mise tasks ls` lists the
 tasks; arguments follow `--`.
@@ -52,15 +53,26 @@ mise trust
 mise run install:dev
 ```
 
+Commit `mise.lock` alongside tool pin changes. It records versions, download
+URLs and checksums for Apple Silicon, Intel macOS and Linux CI. `mise run
+setup` installs the project tools with `--locked`; CI also requires this
+lockfile. Other tasks use its recorded downloads during automatic installation.
+Refresh it with `mise lock` after changing `mise.toml`. Swift builds require
+`Package.resolved`, Rust builds use `--locked`, and frontend builds use
+`pnpm install --frozen-lockfile`. Xcode and browsers used by GUI fixtures
+and benchmarks are system applications; mise owns the other development tools. CI selects
+Xcode 26.6 explicitly.
+
 Before the first build: install Xcode (the Swift toolchain and `swift
 format` come from it; Xcode 26.6 is the verified version, older ones are
-untested) and [mise](https://mise.jdx.dev). A task downloads the pinned
-tools it needs (Python, Rust, Node, pnpm, Zig, cargo-about) on first use; the
+untested) and [mise](https://mise.jdx.dev) (CI uses 2026.11.6). A task downloads
+the pinned tools (Python, Rust, Node, pnpm, Zig, cargo-about, gh) on first use; the
 first build compiles libghostty-vt from Ghostty's pinned revision with Zig,
 which takes several minutes and keeps a few hundred megabytes of sources and
 per-architecture outputs under `build/ghostty`. Plugin crates build into
-`build/plugin-target`. Nothing is installed outside the checkout and mise's
-own tool directory. `mise run setup` does both ahead of time.
+`build/plugin-target`. mise manages tool installations; its Rust backend uses
+rustup's toolchain directory. Build outputs stay in the checkout.
+`mise run setup` installs project tools and builds libghostty-vt ahead of time.
 
 The installer builds and signs the app, installs it as
 `/Applications/Flash 🧪.app`, starts the resident process, and walks through
@@ -77,7 +89,7 @@ else.
 
 | Task | Runs | When |
 | --- | --- | --- |
-| `setup` | `mise install`, then `build:ghostty` | Optional: fetch every tool and build libghostty-vt ahead of time |
+| `setup` | Locked installation of project tools, then `build:ghostty` | Optional: fetch every tool and build libghostty-vt ahead of time |
 | `check` | `fmt`, `lint`, `guardrails`, `test:plugins`, `test`, in order | Before every commit: the required checks |
 | `fmt` | `swift format format --in-place` over `Sources`, `Tests` and `Package.swift` | Format Swift sources |
 | `lint` | `swift format lint --strict` over the same paths | Lint Swift sources |
@@ -133,6 +145,20 @@ the tools its `jdx/mise-action` step installs. Every workflow action is
 pinned to a full commit with its release in a comment
 (`uses: actions/checkout@<sha> # v7.0.1`); the guardrails reject a tag or a
 branch.
+
+## Dependency updates
+
+Update exact tool pins in `mise.toml`, run `mise lock`, and commit application
+lockfiles with dependency changes. Source-built Ghostty, tmux and its Unicode
+and event libraries use pinned revisions or releases and verified SHA-256
+archives. Ghostty upgrades also require reviewing the linked-license inventory.
+The OTLP generator verifies both its protocol revision and the SwiftProtobuf
+revision from `Package.resolved`.
+
+The inspector currently uses TypeScript 6.0.3. TypeScript 7 uses a native
+compiler and does not expose the JavaScript API required by svelte-check
+4.7.8; its experimental support still needs a second TypeScript 6 install.
+Keep the single supported compiler until [svelte-check supports it directly](https://github.com/sveltejs/language-tools/issues/3063).
 
 ## Verification
 

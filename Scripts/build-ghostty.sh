@@ -14,10 +14,10 @@
 # building on macOS, which drops any -Dcpu model before compilation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-revision=08a9518340e19487bd5fdf96963583fb32f0c41f
-checksum=b2df3e649d37437245a932a150d049d638a8af77d8ca03e7b8f616234b3637ce
-version="1.3.2-dev+$revision"
-zig_version=0.17.0
+revision=a622196c930138f312884382ab784e45b9ab653b
+checksum=290826a8acf3e7c261be80e713df590a63c27d5fe4cdacac156c6615c6518739
+version="1.4.1-dev+$revision"
+zig_version=0.17.1
 mode=${1:---dev}
 [[ "$mode" == --dev || "$mode" == --release ]] || { echo "Usage: $0 [--dev|--release]" >&2; exit 2; }
 [[ "$(zig version)" == "$zig_version" ]] || { echo "Zig $zig_version is required: run this through mise (mise run build:ghostty)." >&2; exit 1; }

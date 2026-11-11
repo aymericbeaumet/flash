@@ -3,6 +3,11 @@
 Flash starts with one hotkey and grows one table at a time. Everything here
 is also in the browser help (`flash help show`), with your own mappings filled in.
 
+These instructions describe the current source. If you installed stable
+1.1.0, use its [getting-started guide](https://github.com/aymericbeaumet/flash/blob/1.1.0/docs/getting-started.md):
+command and configuration names have changed since that release. A nightly
+tracks `main`; a feature branch requires a [development build](development.md).
+
 ## Install
 
 ```sh
@@ -23,8 +28,20 @@ On first launch Flash creates `~/.config/flash/flash.toml` with one mapping:
 "cmd+shift+space" = ["flash", "mouse", "target"]
 ```
 
-Press **⌘⇧Space**, then type the letters on the control you want. Press Escape
-to cancel. From a terminal, `flash mouse target` does the same job. Open the
+Try it in Finder first:
+
+1. Open a Finder window and leave it focused.
+2. Press **⌘⇧Space**. Labels appear on accessible controls.
+3. Type the label on a sidebar folder. Flash clicks it and the folder opens.
+4. Press the shortcut again, then Escape to dismiss the labels without clicking.
+
+Your regular typing still works: NORMAL is opt-in. You can keep just this
+hotkey and stop here. If nothing appears, check Accessibility and hotkey
+conflicts in [troubleshooting](troubleshooting.md); a control the app does
+not expose needs the [grid](mouse-grid.md) instead.
+
+From a terminal, `flash mouse target` does the same job in the focused app.
+Open the
 file from the menu-bar icon (**Open Configuration**); changes apply as soon as
 you save. The live [key mappings](/mappings) page lists every binding in
 effect, including the ones plugins and your file add. [Hints](hints.md)
@@ -72,7 +89,7 @@ first, in a browser:
 
 | Key | Does |
 | --- | --- |
-| `f` | Labels every control; type a label to click it, Escape cancels |
+| `f` | Labels accessible controls; type a label to click it, Escape cancels |
 | `F` | The keyboard grid, for a spot no label covers |
 | `s` then a letter | Labels every visible occurrence of that letter (EasyMotion) |
 | `h` `j` `k` `l`, `ctrl+d` / `ctrl+u`, `gg` / `G` | The arrow keys (a page scrolls on them, a list moves its selection, a text field you clicked its caret); half a page; the top or bottom |

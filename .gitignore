@@ -18,6 +18,7 @@ Plugins/*/target/
 Plugins/*/flash-plugin-*
 # The global gitignore drops *.lock; hermetic plugin crates commit theirs.
 !Plugins/*/Cargo.lock
+!/mise.lock
 
 ## Python bytecode (interpreted plugins + Scripts tooling)
 __pycache__/

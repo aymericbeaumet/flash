@@ -13,6 +13,7 @@ env:
   # Every step runs a mise task (mise.toml). Each job's mise-action installs
   # only the tools its tasks need; `mise run` must not install the rest.
   MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_LOCKED: "true"
 
 jobs:
   docs:
@@ -20,9 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install_args: node pnpm
       - name: Build the published manual and check every link
         # The same build the Docs workflow deploys: every page of docs/,
@@ -38,9 +39,9 @@ jobs:
       - name: Show swift-format version
         run: swift format --version
       # swift-format ships with Xcode: the tasks need mise but no tools.
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install: false
       - name: Check formatting
         # Run the formatter in-place, then require a clean working tree.
@@ -58,9 +59,9 @@ jobs:
       - name: Show swift-format version
         run: swift format --version
       # swift-format ships with Xcode: the tasks need mise but no tools.
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install: false
       - name: Lint
         run: mise run lint
@@ -70,9 +71,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install_args: python
       - name: Check hard-rule guardrails
         run: mise run guardrails
@@ -97,12 +98,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/plugin-target
-          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('mise.lock', 'Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install_args: python rust
       - name: Plugin gate
         # `mise run test:plugins -- --lane all` is the whole Rust gate: `lint`
@@ -120,9 +121,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install_args: python zig
       - name: Test Ghostty bootstrap in a tagged repository
         run: mise run test:ghostty
@@ -132,9 +133,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install_args: python zig
       - name: Cache libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -143,7 +144,7 @@ jobs:
           # per-architecture Zig outputs (~400 MB) are rebuilt on a miss. The
           # script pins the Ghostty revision and the Zig version it accepts.
           path: build/ghostty/ghostty-vt.xcframework
-          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('mise.lock', 'Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
       - name: Build libghostty-vt
         run: mise run build:ghostty
       - name: Show Swift version
@@ -152,7 +153,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .build
-          key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          key: ${{ runner.os }}-spm-build-${{ hashFiles('mise.lock', 'Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-build-
       - name: Build
@@ -167,9 +168,9 @@ jobs:
       FLASH_REQUIRE_TMUX_ORACLE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install_args: python rust zig
       - name: Cache pinned tmux oracle
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -189,7 +190,7 @@ jobs:
           # per-architecture Zig outputs (~400 MB) are rebuilt on a miss. The
           # script pins the Ghostty revision and the Zig version it accepts.
           path: build/ghostty/ghostty-vt.xcframework
-          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('mise.lock', 'Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
       - name: Build libghostty-vt
         run: mise run build:ghostty
       - name: Show Swift version
@@ -198,7 +199,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .build
-          key: ${{ runner.os }}-spm-test-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          key: ${{ runner.os }}-spm-test-${{ hashFiles('mise.lock', 'Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-test-
       - name: Cache Cargo registry + plugin target
@@ -208,7 +209,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/plugin-target
-          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('mise.lock', 'Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
       - name: Build plugin binaries
@@ -226,9 +227,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
+          version: 2026.11.6
           install_args: node pnpm
       - name: Type-check and unit-test the inspector
         run: mise run test:inspector
@@ -247,24 +248,24 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
-          install_args: python rust zig node pnpm cargo:cargo-about
+          version: 2026.11.6
+          install_args: python rust zig node pnpm cargo:cargo-about gh
       - name: Cache Cargo sources
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-release-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('mise.lock', 'Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-release-cargo-
       - name: Cache universal libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/ghostty/ghostty-vt.xcframework
-          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-release-${{ hashFiles('Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-release-${{ hashFiles('mise.lock', 'Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
       - name: Build and validate universal release bundle
         run: mise run build:release
 
@@ -329,10 +330,10 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.17
-          install_args: python rust zig node pnpm cargo:cargo-about
+          version: 2026.11.6
+          install_args: python rust zig node pnpm cargo:cargo-about gh
 
       # Developer ID signing and notarization are opt-in through repository
       # secrets (docs/release.md names them). Without them the build is

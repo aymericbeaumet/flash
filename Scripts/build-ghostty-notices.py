@@ -10,11 +10,12 @@ import subprocess
 import tarfile
 
 
-REVISION = "08a9518340e19487bd5fdf96963583fb32f0c41f"
+REVISION = "a622196c930138f312884382ab784e45b9ab653b"
 PACKAGES = {
+    "translate-c": "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5",
     "highway": "N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE",
     "wuffs": "N-V-__8AAP5JWgCGP_AD0teWpa4krRvE9VPZzvviGdbmN4jI",
-    "uucode": "uucode-0.2.0-ZZjBPoGFVgCiflJNFc6Io8xzC67B6PA5bUkk4LT0kCxg",
+    "uucode": "uucode-0.2.0-ZZjBPm6FVgBcY-79AHV8ckQj86z0JwOyVyj89VeZrEiv",
 }
 SUPPLEMENTAL = {
     "simdutf-LICENSE-MIT": (
@@ -22,7 +23,7 @@ SUPPLEMENTAL = {
         "https://github.com/simdutf/simdutf/blob/v9.0.0/LICENSE-MIT"),
     "uucode-LICENSE_unicode": (
         "1eda5a3b026870c737b22e8bcd4954338612c790db688242e003f41a4fa95175",
-        "https://github.com/jacobsandlund/uucode/blob/ea62149739404a73c202b48a33bf6dd2af4bd9b0/licenses/LICENSE_unicode"),
+        "https://github.com/jacobsandlund/uucode/blob/1fb73433bba5d93366c57f23ff2e9d7939746500/licenses/LICENSE_unicode"),
 }
 
 
@@ -68,6 +69,10 @@ def collect(source, cache, support):
                     f"Ghostty {REVISION}: pkg/simdutf/vendor/simdutf.h",
                     block.group()[3:-2].strip()))
 
+    entries.append(("translate-c",
+                    "https://github.com/ziglang/translate-c/tree/02ff0c523fb92a38939b04d0145c4a9602a74d56",
+                    cached_text(cache, "translate-c", "LICENSE")))
+
     highway_header = cached_text(cache, "highway", "hwy/base.h", prefix=1024)
     highway_copyrights = "\n".join(re.findall(r"^// (Copyright[^\n]+)", highway_header, re.MULTILINE))
     for filename in ["LICENSE", "LICENSE-BSD3"]:
@@ -78,7 +83,7 @@ def collect(source, cache, support):
     wuffs_copyrights = "\n".join(re.findall(r"^// (Copyright[^\n]+)", wuffs_header, re.MULTILINE))
     entries.append(("Wuffs", "https://github.com/google/wuffs/tree/7411f488fe2e2c205c3d3b3d28638b7356522930",
                     wuffs_copyrights + "\n\n" + cached_text(cache, "wuffs", "LICENSE")))
-    entries.append(("uucode", "https://github.com/jacobsandlund/uucode/tree/ea62149739404a73c202b48a33bf6dd2af4bd9b0",
+    entries.append(("uucode", "https://github.com/jacobsandlund/uucode/tree/1fb73433bba5d93366c57f23ff2e9d7939746500",
                     cached_text(cache, "uucode", "LICENSE.md")))
     data_header = cached_text(cache, "uucode", "ucd/auxiliary/GraphemeBreakProperty.txt", prefix=1024)
     data_copyrights = "\n".join(re.findall(r"^# (©[^\n]+)", data_header, re.MULTILINE))

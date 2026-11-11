@@ -2,11 +2,18 @@
 
 **Your keyboard, all of macOS.**
 
-What Vimium does in the browser, Flash does in every app: press a hotkey, type
-the label on the thing you want, and it is clicked. Then keep going: a Vim-like
-normal mode over all of macOS, a mouse grid, a tmux-style status bar, desktop
-widgets and terminal popups, all from one TOML file. Flash never reads your
-screen.
+Click macOS controls from your keyboard: press **⌘⇧Space**, type the label on
+a button or link, and Flash clicks it. Like Vimium, across apps that expose
+their controls to Accessibility. For a canvas or other unlabeled spot, use
+the keyboard grid. No OCR or browser extension is needed.
+
+Start with that one shortcut. Add a Vim-like normal mode, window controls,
+a tmux-style status bar, desktop widgets or terminal popups when you want
+them, all from one TOML file.
+
+[Get started](docs/getting-started.md) · [Manual](https://aymericbeaumet.github.io/flash/) ·
+[Compare tools](docs/comparison.md) · [Privacy](docs/privacy.md) ·
+[Report a bug](https://github.com/aymericbeaumet/flash/issues/new/choose)
 
 <!-- Recorded media, listed in docs/assets/README.md, goes here.
 ![Hints in Safari, System Settings and the Dock](docs/assets/hero.gif)
@@ -20,6 +27,12 @@ needs macOS 13 or later on Intel or Apple Silicon and the Accessibility permissi
 
 ## Install
 
+> **This checkout documents the next release.** The latest stable release,
+> 1.1.0, uses different command and configuration names. Installing it?
+> Follow the [1.1.0 getting-started guide](https://github.com/aymericbeaumet/flash/blob/1.1.0/docs/getting-started.md).
+> Building this branch? Use the [development setup](docs/development.md).
+> [Upgrade notes](CHANGELOG.md#upgrading-from-11) explain the changes.
+
 ```sh
 brew install --cask aymericbeaumet/tap/flash
 ```
@@ -27,8 +40,9 @@ brew install --cask aymericbeaumet/tap/flash
 The cask opens Flash once it is installed. Releases are not notarized yet,
 so macOS first asks you to allow it: **System Settings → Privacy & Security →
 Open Anyway**. Flash then opens the **Accessibility** pane; turn Flash on.
-Press **⌘⇧Space** in any app and type the letters on the control you want.
-Escape cancels.
+Open a Finder window, press **⌘⇧Space**, and type the label on a sidebar
+folder to open it. Escape cancels the hints. Regular typing continues as
+usual; normal mode is opt-in.
 
 [Install and update](docs/install.md) covers the direct download from GitHub
 Releases, the nightly cask, the `flash` command without Homebrew, updates and
@@ -36,6 +50,12 @@ uninstalling. Current builds are ad-hoc signed, so an update asks for
 Accessibility again ([permissions after an update](docs/install.md#permissions-after-an-update)).
 
 ## First five minutes
+
+**Only want keyboard clicks? You are already set.** Keep the starter hotkey
+and skip the rest. If a control has no label, the [keyboard grid](docs/mouse-grid.md)
+reaches its screen position; Flash can only label what an app exposes to
+Accessibility. [Troubleshooting](docs/troubleshooting.md) covers missing
+hints, shortcut conflicts and permissions after updates.
 
 Flash wrote `~/.config/flash/flash.toml` with one mapping and, commented out,
 the next three: the keyboard grid, search, and normal mode. Open it from the
@@ -72,7 +92,7 @@ NORMAL, and [How Flash works](docs/concepts.md) names the pieces.
 scrolls, `/` opens Find and `i` switches to INSERT while you type.*
 -->
 
-- **Hints.** Label every visible button, link, tab, and field, then click,
+- **Hints.** Label accessible buttons, links, tabs, and fields, then click,
   right-click, double-click, drag, or move the pointer to it. Menu bars, the
   Dock, and Notification Center too.
 - **Normal mode.** A persistent, Vim-like layer over all of macOS. Keys map to

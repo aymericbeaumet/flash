@@ -36,7 +36,7 @@ bash "$test_dir/Scripts/build-ghostty.sh" --dev
 test -s "$test_dir/build/ghostty/ghostty-vt.xcframework/Info.plist"
 test -s "$test_dir/build/ghostty/ghostty-vt.xcframework/.flash-build"
 notices="$test_dir/build/ghostty/ghostty-vt.xcframework/ThirdPartyNotices.txt"
-for author in 'simdutf authors' 'Facebook' 'Highway Project Authors' 'Wuffs Authors' 'Jacob Sandlund' 'UNICODE LICENSE V3'; do
+for author in 'simdutf authors' 'Facebook' 'Highway Project Authors' 'Wuffs Authors' 'Jacob Sandlund' 'Zig contributors' 'UNICODE LICENSE V3'; do
   grep -Fq "$author" "$notices"
 done
 # A cache missing its notices must repair itself, reusing completed slices.
