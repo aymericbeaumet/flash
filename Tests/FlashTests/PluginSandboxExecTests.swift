@@ -15,6 +15,8 @@ import XCTest
 /// sandbox-exec exit codes, pinned empirically: 65 = profile failed to
 /// compile, 71 = compiled but exec of the target denied, 0 = ran.
 final class PluginSandboxExecTests: XCTestCase {
+  private static let browserBookmarkURL = "https://example.invalid/sandbox-bookmark"
+
   /// We append a narrow allowance for `/usr/bin/true` to the profile under
   /// test (append-only rules can only widen, so the original text still has
   /// to compile) and require a clean 0.
@@ -137,14 +139,28 @@ final class PluginSandboxExecTests: XCTestCase {
     process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
     process.arguments = ["-p", profile, executablePath] + execTail
     process.currentDirectoryURL = root
+    var environment = [
+      "FLASH_PLUGIN_ID": manifest.id,
+      "FLASH_PLUGIN_VERSION": manifest.version,
+      "FLASH_PLUGIN_DATA_DIR": canonicalDataDir.path,
+      "FLASH_PLUGIN_CONFIG": "{}",
+    ]
+    if manifest.id == "browsers" {
+      // Empty profiles correctly publish nothing. Seed one known row so this
+      // proves sandboxed discovery without depending on the user's history.
+      let home = canonicalDataDir.appendingPathComponent("fixture-home")
+      let profile = home.appendingPathComponent("Library/Application Support/Google/Chrome/Default")
+      try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+      let bookmarks = """
+        {"roots":{"bookmark_bar":{"children":[
+          {"type":"url","name":"Sandbox bookmark","url":"\(Self.browserBookmarkURL)"}
+        ]}}}
+        """
+      try Data(bookmarks.utf8).write(to: profile.appendingPathComponent("Bookmarks"))
+      environment["HOME"] = home.path
+    }
     process.environment = PluginProcess.sanitizedPluginEnvironment(
-      base: ProcessInfo.processInfo.environment,
-      overrides: [
-        "FLASH_PLUGIN_ID": manifest.id,
-        "FLASH_PLUGIN_VERSION": manifest.version,
-        "FLASH_PLUGIN_DATA_DIR": canonicalDataDir.path,
-        "FLASH_PLUGIN_CONFIG": "{}",
-      ])
+      base: ProcessInfo.processInfo.environment, overrides: environment)
     let stdin = Pipe()
     let stdout = Pipe()
     let stderr = Pipe()
@@ -188,6 +204,12 @@ final class PluginSandboxExecTests: XCTestCase {
         \(manifest.id): warm sources must publish under the profile — \
         logs: \(driver.logText()) stderr: \(driver.stderrText())
         """)
+    }
+    if manifest.id == "browsers" {
+      XCTAssertTrue(
+        driver.waitForPublishedRow(
+          source: "chrome.bookmarks", url: Self.browserBookmarkURL, timeout: 10),
+        "browsers: seeded bookmark must publish under the profile — \(driver.logText())")
     }
 
     // Shutdown is stdin EOF, nothing else.
@@ -294,6 +316,19 @@ private final class SandboxBootDriver {
   func waitForNotification(method: String, timeout: TimeInterval) -> Bool {
     wait(timeout: timeout) { frames in
       frames.contains { $0["id"] == nil && $0["method"] as? String == method } ? true : nil
+    } ?? false
+  }
+
+  func waitForPublishedRow(source: String, url: String, timeout: TimeInterval) -> Bool {
+    wait(timeout: timeout) { frames in
+      let published = frames.contains { frame in
+        guard frame["id"] == nil, frame["method"] as? String == "publish",
+          let params = frame["params"] as? [String: Any], params["source"] as? String == source,
+          let rows = params["rows"] as? [[String: Any]]
+        else { return false }
+        return rows.contains { $0["url"] as? String == url }
+      }
+      return published ? true : nil
     } ?? false
   }
 
