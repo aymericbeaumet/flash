@@ -141,6 +141,24 @@ text popup:
 ```text
 Wednesday, September 30, 2026  10:08                           Europe/Paris
 
+                                ....12.....
+                            11..           ..1.
+                          ...                 ...
+                        ..                       ..
+                      10.                     +   .2
+                      .                     ++      .
+                     ..       ###         ++        ..
+                     .           ###   +++           .
+                     9              #o+              3
+                     .             ..                .
+                     ..          ..                 ..
+                      .        ..                   .
+                       8.     .                   .4
+                        ..  ..                   ..
+                          ...                 ...
+                            .7..           ..5.
+                                .....6.....
+
        August 2026              September 2026             October 2026
 Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su
 31                 1  2   36     1  2  3  4  5  6   40           1  2  3  4
@@ -150,25 +168,21 @@ Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su
 35 24 25 26 27 28 29 30   40 28 29 30               44 26 27 28 29 30 31
 36 31
 
-Week 40     ████████▋                 3/7              ....12.....
-            4 days left                             11.           .1.
-September   ████████████████████    30/30         ..                 ..
-            last day                           10.                     .2
-Q3          ████████████████████    92/92      ..                  ++   ..
-            last day                          ..      ##        +++      ..
-2026        ███████████████       273/365     .         ###   ++          .
-            92 days left                      9            #o+            3
-                                              .          ..               .
-                                              ..        .                ..
-                                               ..     ..                ..
-                                                8.  ..                 .4
-                                                  ..                 ..
-                                                    .7.           .5.
-                                                       .....6.....
+Week 40                                Time zone
+████████▋                 3/7          UTC+02:00 · Central European Summer
+4 days left                            Time
 
-Time zone   UTC+02:00 · Central European Summer Time
-DST         Ends Sun Oct 25 · 03:00 → 02:00 · in 25 days
-Moon        Waning gibbous · 83% lit · new Oct 10 · full Oct 26
+September                              DST
+████████████████████    30/30          Ends Sun Oct 25 · 03:00 → 02:00 · in
+last day                               25 days
+
+Q3                                     Moon
+████████████████████    92/92          Waning gibbous · 83% lit · new Oct
+last day                               10 · full Oct 26
+
+2026
+███████████████       273/365
+92 days left
 ```
 
 ```toml
@@ -181,7 +195,7 @@ open it with `mode terminal --name=date`. Existing calendar files and
 appointment/task data are untouched.
 
 - **Header**: today's date, local 24-hour `HH:MM`, and the timezone identifier.
-- **Clock**: a 29-by-15 ASCII face beside the progress bars, labelled with all
+- **Clock**: a centred 33-by-17 ASCII face above the three months, labelled with all
   twelve hours. The short `#` hour hand and longer `+` minute hand move between
   hour/minute marks; the longest `.` seconds hand advances each second. The
   numeric header stays `HH:MM`, without seconds or milliseconds.
@@ -191,8 +205,11 @@ appointment/task data are untouched.
   Weekends are dimmed. The rows follow the tallest of the three months.
 - **Progress**: today's place in its ISO week, month, quarter and year,
   counting today, with the days left after it. The bars are status-format
-  meters on a grey track, with the remaining days on the row below each bar.
-- **Time zone**: the current UTC offset and the zone's English name.
+  meters on a grey track. The footer’s left column groups each period under
+  its heading, with the meter/count and remaining days on separate rows.
+- **Time zone**: the current UTC offset and the zone's English name. This,
+  DST and Moon occupy the footer’s right column, with complete values wrapped
+  below their headings.
 - **DST**: the next daylight-saving transition as the wall clock sees it, or
   `Not observed` for a zone without one.
 - **Moon**: today's phase, the lit fraction at local noon, and the next new
@@ -203,7 +220,8 @@ appointment/task data are untouched.
 
 Dates use a Monday-first Gregorian calendar with ISO week numbers,
 English labels, and the current local timezone. The view is 75 content
-columns and at most 30 rows. Text popups size to their widest line between
+columns and at most 44 rows. The footer uses two 36-column groups with a
+three-column gap. Text popups size to their widest line between
 `[popup] min_width` and `max_width`: the default 750-point `max_width` fits it
 at the 13-point font with 10-point padding (697 points wide). A smaller
 `max_width` or screen wraps it, and smaller screens scroll in the pager, which

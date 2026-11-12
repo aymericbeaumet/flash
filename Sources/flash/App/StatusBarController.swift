@@ -466,6 +466,25 @@ final class FlashStatusBarController {
     }
   }
 
+  /// An explicit pager refresh reads wall time now, even when a frozen
+  /// popup is the only clock consumer and therefore schedules no ticks.
+  func refreshPopupDocument(
+    named name: String, completion: @escaping ([FlashStatusTextSegment]?) -> Void
+  ) {
+    queue.async { [weak self] in
+      guard let self, self.schedule != nil, self.bar != nil,
+        self.popupTemplates[name] != nil
+      else {
+        DispatchQueue.main.async { completion(nil) }
+        return
+      }
+      self.bar?.memo = nil
+      self.publishCurrentModel()
+      let document = self.lastPublishedModel?.popupDocuments[name]
+      DispatchQueue.main.async { completion(document) }
+    }
+  }
+
   /// The enabled widgets. A widget whose spec changed evaluates afresh; one
   /// that disappeared releases what only it required.
   func updateWidgets(_ specs: [String: StatusWidgetSpec]) {

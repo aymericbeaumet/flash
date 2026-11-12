@@ -304,8 +304,9 @@ restores the previous mode and application. The default mappings are:
 | `popup restart [--name=N]` | Restart the focused or named popup's process now |
 | `popup quit [--name=N]` | End the focused or named popup's process |
 
-`popup restart` works for every kind: a text popup rereads the latest collected
-values. `popup quit` ends a persistent process, which then restarts
+`popup restart` works for every kind: a text popup reevaluates its format at
+the current time with the latest collected values. `popup quit` ends a
+persistent process, which then restarts
 automatically; a fresh popup or a pager closes. Only effective INSERT mappings
 for `mode normal` or `mode leave` are inherited as terminal exit
 mappings; explicit terminal mappings override them. Exiting through an

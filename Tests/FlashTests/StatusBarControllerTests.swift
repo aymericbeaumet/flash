@@ -155,6 +155,127 @@ final class StatusBarControllerTests: XCTestCase {
       harness.queue.sync { harness.controller.lastPublishedModel?.popupDocuments["clock"] })
   }
 
+  private func focusedCalendar(_ harness: Harness) -> AppDelegate {
+    _ = NSApplication.shared
+    let delegate = AppDelegate()
+    delegate.overlay = OverlayPanel()
+    delegate.statusBarController = harness.controller
+    let popup = StatusPopupController(
+      terminals: delegate.overlay.statusTerminals, windowActionsEnabled: false)
+    delegate.overlay.statusPopupController = popup
+    delegate.wireInspectorChangeSources()
+    let document = harness.queue.sync {
+      harness.controller.lastPublishedModel!.popupDocuments["clock"]!
+    }
+    popup.show(
+      name: "clock", document: document,
+      visibleFrame: CGRect(x: 0, y: 0, width: 1600, height: 1000), style: .init(),
+      font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    return delegate
+  }
+
+  func testExplicitCalendarRestartReadsCurrentTimeWithoutArmingAClock() throws {
+    let harness = Harness("#[popup=clock]Clock", popups: ["clock": "#{flash.calendar}"])
+    let delegate = focusedCalendar(harness)
+    let registry = delegate.overlay.statusTerminals
+    defer {
+      delegate.overlay.statusPopupController.dismiss()
+      registry.shutdown()
+      harness.controller.stop()
+    }
+    let session = try XCTUnwrap(registry.session(named: "clock"))
+    let firstFrame = expectation(
+      for: NSPredicate { _, _ in session.frame?.text.contains("Moon") == true },
+      evaluatedWith: nil)
+    wait(for: [firstFrame], timeout: 5)
+    let original = try XCTUnwrap(session.frame?.text)
+    harness.queue.sync {
+      harness.now += 75
+      harness.wall += 75
+    }
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+    XCTAssertEqual(session.frame?.text, original, "focused content stays frozen between refreshes")
+
+    delegate.restartPopup(named: "clock")
+    let refreshed = expectation(
+      for: NSPredicate { _, _ in
+        guard let text = session.frame?.text, text.contains("Moon") else { return false }
+        return text.components(separatedBy: "\n").first
+          != original.components(separatedBy: "\n").first
+      }, evaluatedWith: nil)
+    wait(for: [refreshed], timeout: 5)
+    XCTAssertTrue(registry.session(named: "clock") === session)
+    XCTAssertEqual(delegate.overlay.statusPopupController.focusedName, "clock")
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+  }
+
+  func testPendingCalendarRefreshCannotRestartAClosedOrReplacedSession() throws {
+    for change in ["close", "replace", "restart"] {
+      let harness = Harness("#[popup=clock]Clock", popups: ["clock": "#{flash.calendar}"])
+      let delegate = focusedCalendar(harness)
+      let registry = delegate.overlay.statusTerminals
+      defer {
+        delegate.overlay.statusPopupController.dismiss()
+        registry.shutdown()
+        harness.controller.stop()
+      }
+      delegate.restartPopup(named: "clock")
+      if change == "restart" {
+        registry.restart(name: "clock")
+      } else {
+        delegate.overlay.statusPopupController.dismiss()
+        if change == "replace" {
+          _ = registry.preparePager(
+            name: "clock", data: Data("replacement".utf8), columns: 20, rows: 5)
+        }
+      }
+      let session = registry.session(named: "clock")
+      let generation = registry.inputGenerations["clock"]
+      harness.drain()
+      let completed = expectation(description: "queued refresh callback delivered")
+      DispatchQueue.main.async { completed.fulfill() }
+      wait(for: [completed], timeout: 5)
+      XCTAssertTrue(registry.session(named: "clock") === session, change)
+      XCTAssertEqual(registry.inputGenerations["clock"], generation, change)
+    }
+  }
+
+  func testInlinePagerRestartUsesStagedContentWithOrWithoutAStatusController() throws {
+    for hasController in [true, false] {
+      _ = NSApplication.shared
+      let harness = Harness("Static bar")
+      let delegate = AppDelegate()
+      delegate.overlay = OverlayPanel()
+      delegate.statusBarController = hasController ? harness.controller : nil
+      let registry = delegate.overlay.statusTerminals
+      let popup = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+      delegate.overlay.statusPopupController = popup
+      defer {
+        popup.dismiss()
+        registry.shutdown()
+        harness.controller.stop()
+      }
+      popup.show(
+        name: "inline", document: [.init(text: "original", foreground: .defaultForeground)],
+        visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800), style: .init(),
+        font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+      let session = try XCTUnwrap(registry.session(named: "inline"))
+      let firstFrame = expectation(
+        for: NSPredicate { _, _ in session.frame?.text.contains("original") == true },
+        evaluatedWith: nil)
+      wait(for: [firstFrame], timeout: 5)
+      registry.stagePopup(name: "inline", data: Data("updated inline content".utf8))
+
+      delegate.restartPopup(named: "inline")
+      let refreshed = expectation(
+        for: NSPredicate { _, _ in session.frame?.text.contains("updated inline content") == true },
+        evaluatedWith: nil)
+      wait(for: [refreshed], timeout: 5)
+      XCTAssertTrue(registry.session(named: "inline") === session)
+      XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+    }
+  }
+
   func testShowingAndHidingAClockPreviewReplansWithoutWaitingForAnotherInput() {
     let harness = Harness("#[popup=clock]%H:%M", popups: ["clock": "#{flash.calendar}"])
     defer { harness.controller.stop() }

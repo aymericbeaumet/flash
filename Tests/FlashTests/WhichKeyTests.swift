@@ -360,6 +360,70 @@ final class WhichKeyTests: XCTestCase {
     delegate.hideWhichKey()
   }
 
+  func testTheMappingPaletteKeepsTheActiveWindowBorderBehindItsRows() throws {
+    _ = NSApplication.shared
+    let delegate = AppDelegate()
+    delegate.monitor = AppMonitor(
+      registry: SourceRegistry(descriptors: [], runningApplications: []), config: .default)
+    delegate.overlay = OverlayPanel()
+    let panel = delegate.overlay!
+    defer {
+      delegate.whichKeyDeadline.cancel()
+      panel.setActiveWindowBorder(around: nil)
+      panel.hide()
+      panel.orderOut(nil)
+    }
+    delegate.modeStore.dispatch(.startup(advancedEnabled: true))
+    delegate.modeStore.perform = { _, _, _ in }
+    panel.inputMode = .normal
+    panel.normalModeMappings = mappings
+    let window = CGRect(x: 100, y: 100, width: 800, height: 500)
+    panel.setActiveWindowBorder(around: window)
+    let border = panel.activeWindowBorderLayer
+
+    for prefix in ["g", "gs"] {
+      panel.normalModePending = key(prefix)
+      delegate.showWhichKey(for: key(prefix), mode: .normal)
+      XCTAssertTrue(delegate.whichKeyShown)
+      XCTAssertEqual(panel.inputMode, .normal)
+      XCTAssertFalse(delegate.hintSession.isActive, "the palette does not become a hint session")
+      XCTAssertEqual(panel.normalModePending, key(prefix))
+      XCTAssertEqual(panel.activeWindowBorderFrame, window)
+      XCTAssertNotNil(border.path)
+      let layers = try XCTUnwrap(panel.contentLayer.sublayers)
+      XCTAssertTrue(layers.first === border, "the focus border stays behind the mapping palette")
+      XCTAssertEqual(layers.filter { $0 === border }.count, 1)
+      XCTAssertNotNil(layers.first { $0.cornerRadius == 10 }, "the mapping palette still draws")
+    }
+    panel.hide()
+    XCTAssertFalse(panel.transientContentVisible)
+    XCTAssertTrue(
+      panel.contentLayer.sublayers?.first === border, "closing the palette keeps the border")
+    panel.setActiveWindowBorder(around: nil)
+    delegate.showWhichKey(for: key("gs"), mode: .normal)
+    XCTAssertFalse(
+      panel.contentLayer.sublayers?.contains { $0 === border } ?? false,
+      "a hidden border is never restored by the palette")
+  }
+
+  func testAWindowSelectionListDoesNotRestoreTheActiveWindowBorder() {
+    _ = NSApplication.shared
+    let panel = OverlayPanel()
+    defer {
+      panel.setActiveWindowBorder(around: nil)
+      panel.hide()
+      panel.orderOut(nil)
+    }
+    panel.inputMode = .passive
+    panel.setActiveWindowBorder(around: CGRect(x: 100, y: 100, width: 800, height: 500))
+    panel.displayWindowSwitcher(
+      .init(
+        rows: [.init(label: "A", app: "App", title: "Window", badge: nil, icon: nil)],
+        selection: 0, typed: "", anchor: nil))
+    XCTAssertFalse(
+      panel.contentLayer.sublayers?.contains { $0 === panel.activeWindowBorderLayer } ?? false)
+  }
+
   func testThePauseIsConfigurableAndZeroTurnsItOff() {
     XCTAssertEqual(Config.default.mode.whichKeyMs, 500)
     XCTAssertEqual(ConfigLoader.parse("[mode]\nwhich_key_ms = 0").mode.whichKeyMs, 0)

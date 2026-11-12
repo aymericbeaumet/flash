@@ -169,6 +169,10 @@ extension OverlayPanel {
         windowSwitcherBox(
           display, screen: screen.visibleFrame, scale: screen.scale, panelFrame: panelFrame))
     }
+    // Which-key describes mappings for the window that still owns focus.
+    if !display.highlightsSelection {
+      appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
+    }
     appendToastLayerIfNeeded(to: &sublayers)
     contentLayer.sublayers = sublayers
   }

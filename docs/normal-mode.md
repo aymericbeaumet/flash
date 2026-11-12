@@ -47,7 +47,8 @@ lists the keys that can follow it and what each runs, as Neovim's which-key
 does; a key that starts longer mappings shows how many. Each row shows the
 whole sequence with the keys you already typed faded, a count and register
 included (`3]t`), as a hint label fades its typed letters, so you see exactly
-where you are. While it is up the sequence waits for your key instead of
+where you are. The active-window border stays visible behind the palette.
+While it is up the sequence waits for your key instead of
 timing out, a mapping it already completes (`g` beside `gt`) included. Any
 key takes it down: one that continues nothing drops the half-typed sequence
 and itself, as Vim does, so `gx` closes no tab and `z.` repeats nothing, and

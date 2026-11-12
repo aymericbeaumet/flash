@@ -41,14 +41,17 @@ final class CalendarStatusDocumentTests: XCTestCase {
   }
 
   private func line(_ label: String, in lines: [String]) throws -> String {
-    try XCTUnwrap(lines.first { $0.hasPrefix(label + " ") }, label)
+    let right = lines.map { String($0.dropFirst(39)).trimmingCharacters(in: .whitespaces) }
+    let index = try XCTUnwrap(right.firstIndex(of: label), label)
+    let value = right.dropFirst(index + 1).prefix { !$0.isEmpty }.joined(separator: " ")
+    return label.padding(toLength: 12, withPad: " ", startingAt: 0) + value
   }
 
   private func progressLine(_ label: String, in lines: [String]) throws -> String {
-    let index = try XCTUnwrap(lines.firstIndex { $0.hasPrefix(label + " ") })
-    let meter = String(lines[index].prefix(46)).trimmingCharacters(in: .whitespaces)
-    let remaining = String(lines[index + 1].prefix(46)).trimmingCharacters(in: .whitespaces)
-    return meter + "  " + remaining
+    let left = lines.map { String($0.prefix(36)).trimmingCharacters(in: .whitespaces) }
+    let index = try XCTUnwrap(left.firstIndex(of: label))
+    return label.padding(toLength: 12, withPad: " ", startingAt: 0)
+      + left[index + 1] + "  " + left[index + 2]
   }
 
   /// The month titles line and the week rows under the weekday header.
@@ -69,34 +72,72 @@ final class CalendarStatusDocumentTests: XCTestCase {
 
   private func clockFace(at now: Date, in timeZone: TimeZone? = nil) throws -> [[Character]] {
     let document = lines(at: now, in: timeZone)
-    let start = try XCTUnwrap(document.firstIndex { $0.hasPrefix("Week ") })
-    let rows = Array(document.dropFirst(start).prefix(15))
-    XCTAssertEqual(rows.count, 15)
-    return (0..<15).map { row in
-      let face = row < rows.count ? String(rows[row].dropFirst(46)) : ""
-      XCTAssertLessThanOrEqual(face.count, 29)
-      return Array(face.padding(toLength: 29, withPad: " ", startingAt: 0))
+    let rows = Array(document.dropFirst(2).prefix(17))
+    XCTAssertEqual(rows.count, 17)
+    return (0..<17).map { row in
+      let face = row < rows.count ? String(rows[row].dropFirst(21)) : ""
+      XCTAssertLessThanOrEqual(face.count, 33)
+      return Array(face.padding(toLength: 33, withPad: " ", startingAt: 0))
+    }
+  }
+
+  func testClockIsCenteredBetweenHeaderAndThreeMonths() throws {
+    let document = lines(at: date(2026, 9, 30))
+    XCTAssertTrue(document[0].contains("  12:00"))
+    XCTAssertTrue(document[1].isEmpty)
+    let weekdays = try XCTUnwrap(document.firstIndex { $0.hasPrefix("Wk Mo") })
+    XCTAssertEqual(weekdays, 21, "seventeen clock rows, then a gap and the month titles")
+    XCTAssertEqual(
+      document[10],
+      String(repeating: " ", count: 21) + "9"
+        + String(repeating: " ", count: 15) + "o"
+        + String(repeating: " ", count: 15) + "3")
+    XCTAssertTrue(document[19].isEmpty)
+  }
+
+  func testFooterKeepsCompleteFactsInTwoBoundedColumns() throws {
+    let runs = popup(at: date(2026, 9, 30, in: paris), timeZone: paris)
+    let document = text(runs).components(separatedBy: "\n")
+    let start = try XCTUnwrap(document.firstIndex { $0.hasPrefix("Week 40") })
+    let footer = Array(document.dropFirst(start))
+    XCTAssertEqual(footer.count, 15)
+    let left = footer.map { String($0.prefix(36)).trimmingCharacters(in: .whitespaces) }
+    let right = footer.map { String($0.dropFirst(39)).trimmingCharacters(in: .whitespaces) }
+    XCTAssertEqual([0, 4, 8, 12].map { left[$0] }, ["Week 40", "September", "Q3", "2026"])
+    XCTAssertEqual(left[1], "████████▋                 3/7")
+    XCTAssertEqual(left[2], "4 days left")
+    for row in footer {
+      XCTAssertEqual(String(row.dropFirst(36).prefix(3)).trimmingCharacters(in: .whitespaces), "")
+      XCTAssertLessThanOrEqual(row.count, 75)
+    }
+    XCTAssertTrue(right.joined(separator: " ").contains("UTC+02:00 · Central European Summer Time"))
+    XCTAssertTrue(
+      right.joined(separator: " ").contains("Ends Sun Oct 25 · 03:00 → 02:00 · in 25 days"))
+    XCTAssertTrue(
+      right.joined(separator: " ").contains("Waning gibbous · 83% lit · new Oct 10 · full Oct 26"))
+    for label in ["Week 40", "September", "Q3", "2026", "Time zone", "DST", "Moon"] {
+      XCTAssertTrue(runs.contains { $0.text == label && $0.bold }, label)
     }
   }
 
   func testClockHandsPointToTheCorrectHoursAndMinutes() throws {
-    for (hour, x, y) in [(0, 14, 3), (3, 21, 7), (6, 14, 11), (9, 7, 7)] {
+    for (hour, x, y) in [(0, 16, 4), (3, 24, 8), (6, 16, 12), (9, 8, 8)] {
       let face = try clockFace(at: date(2026, 9, 30, hour: hour))
       XCTAssertEqual(face[y][x], "#", "hour \(hour)")
-      XCTAssertEqual(face[2][14], "+", "minute hand points to twelve")
-      XCTAssertEqual(face[1][14], ".", "second hand extends past the minute hand")
-      XCTAssertEqual(face[7][14], "o", "hands share one centre")
-      XCTAssertEqual(face[7][0], "9")
-      XCTAssertEqual(face[7][28], "3")
+      XCTAssertEqual(face[2][16], "+", "minute hand points to twelve")
+      XCTAssertEqual(face[1][16], ".", "second hand extends past the minute hand")
+      XCTAssertEqual(face[8][16], "o", "hands share one centre")
+      XCTAssertEqual(face[8][0], "9")
+      XCTAssertEqual(face[8][32], "3")
       XCTAssertTrue(face.flatMap { $0 }.allSatisfy { $0.isASCII })
     }
-    for (minute, x, y) in [(15, 24, 7), (30, 14, 12), (45, 4, 7)] {
+    for (minute, x, y) in [(15, 28, 8), (30, 16, 14), (45, 4, 8)] {
       let face = try clockFace(at: date(2026, 9, 30, hour: 0, minute: minute))
       XCTAssertEqual(face[y][x], "+", "minute \(minute)")
     }
     let halfPastThree = try clockFace(at: date(2026, 9, 30, hour: 3, minute: 30))
-    XCTAssertEqual(halfPastThree[8][21], "#", "hour hand moves between hour marks")
-    XCTAssertNotEqual(halfPastThree[7][21], "#")
+    XCTAssertEqual(halfPastThree[9][24], "#", "hour hand moves between hour marks")
+    XCTAssertNotEqual(halfPastThree[8][24], "#")
   }
 
   func testLargeClockLabelsEveryHourAndMovesThroughoutTheMinute() throws {
@@ -123,7 +164,7 @@ final class CalendarStatusDocumentTests: XCTestCase {
     XCTAssertEqual(try clockFace(at: midnight), try clockFace(at: noon))
     let tokyo = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
     XCTAssertTrue(lines(at: midnight, in: tokyo)[0].contains("  09:00"))
-    XCTAssertEqual(try clockFace(at: midnight, in: tokyo)[7][7], "#")
+    XCTAssertEqual(try clockFace(at: midnight, in: tokyo)[8][8], "#")
     let halfHourZone = try XCTUnwrap(TimeZone(identifier: "Asia/Kolkata"))
     XCTAssertTrue(lines(at: midnight, in: halfHourZone)[0].contains("  05:30"))
   }
@@ -157,7 +198,7 @@ final class CalendarStatusDocumentTests: XCTestCase {
     XCTAssertEqual(
       rows.titles, "       August 2026              September 2026             October 2026")
     XCTAssertEqual(
-      lines[3],
+      lines[21],
       "Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su")
     XCTAssertEqual(
       rows.weeks,
@@ -173,7 +214,8 @@ final class CalendarStatusDocumentTests: XCTestCase {
     XCTAssertTrue(runs.filter(\.reverse).allSatisfy(\.bold))
     XCTAssertEqual(
       runs.filter { $0.bold && $0.text.hasSuffix("2026") }.map(\.text),
-      ["Wednesday, September 30, 2026", "September 2026"], "only the centre month is bold")
+      ["Wednesday, September 30, 2026", "September 2026", "2026"],
+      "the centre month and footer headings are bold")
     XCTAssertEqual(
       runs.filter { $0.bold && !$0.dim && $0.text == "40" }.count, 1,
       "today's week number stands out once")
@@ -321,7 +363,7 @@ final class CalendarStatusDocumentTests: XCTestCase {
     }
   }
 
-  func testCalendarSwitchesItsOffsetAtTheDaylightSavingTransition() {
+  func testCalendarSwitchesItsOffsetAtTheDaylightSavingTransition() throws {
     let transition = date(2026, 10, 25, hour: 1)
     let before = FlashStatusBarRenderer.calendarText(now: transition - 1, timeZone: paris)
     let after = FlashStatusBarRenderer.calendarText(now: transition, timeZone: paris)
@@ -331,7 +373,9 @@ final class CalendarStatusDocumentTests: XCTestCase {
     XCTAssertTrue(before.contains("Ends today · 03:00 → 02:00"))
     XCTAssertTrue(after.hasPrefix("#[bold]Sunday, October 25, 2026"))
     XCTAssertTrue(after.contains("UTC+01:00"))
-    XCTAssertTrue(after.contains("Starts Sun Mar 28 · 02:00 → 03:00 · in 154 days"))
+    XCTAssertEqual(
+      try line("DST", in: lines(at: transition, in: paris)),
+      "DST         Starts Sun Mar 28 · 02:00 → 03:00 · in 154 days")
     XCTAssertEqual(
       FlashStatusBarRenderer.calendarText(now: transition + 0.5, timeZone: paris), after)
     let nextHour = FlashStatusBarRenderer.calendarText(now: transition + 3_600, timeZone: paris)
@@ -364,12 +408,8 @@ final class CalendarStatusDocumentTests: XCTestCase {
     var phases: [String] = []
     for day in 0..<365 {
       let now = date(2026, 1, 1).addingTimeInterval(Double(day) * 86_400)
-      let moon = try XCTUnwrap(
-        CalendarStatusDocument.render(now: now, timeZone: utc).components(separatedBy: "\n")
-          .last)
-      let phase = try XCTUnwrap(
-        moon.components(separatedBy: "#[default]").last?.components(separatedBy: " · ").first?
-          .trimmingCharacters(in: .whitespaces))
+      let moon = try line("Moon", in: lines(at: now))
+      let phase = try XCTUnwrap(String(moon.dropFirst(12)).components(separatedBy: " · ").first)
       if let last = phases.last, last == phase {
         XCTAssertFalse(cycle.firstIndex(of: phase)! % 2 == 0, "\(phase) lasts one day")
         continue
@@ -439,8 +479,8 @@ final class CalendarStatusDocumentTests: XCTestCase {
           let plain = text(runs)
           let lines = plain.components(separatedBy: "\n")
           let grid = StatusPopupController.documentGrid(
-            text: plain, availableColumns: availableColumns, maximumRows: 40)
-          XCTAssertLessThanOrEqual(lines.count, 30)
+            text: plain, availableColumns: availableColumns, maximumRows: 50)
+          XCTAssertLessThanOrEqual(lines.count, 44)
           XCTAssertEqual(lines.map(\.count).max(), CalendarStatusDocument.columns)
           XCTAssertEqual(grid.columns, CalendarStatusDocument.columns, "\(year)-\(month)")
           XCTAssertEqual(grid.rows, lines.count, "\(year)-\(month) must not wrap")

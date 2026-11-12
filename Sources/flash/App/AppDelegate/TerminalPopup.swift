@@ -184,7 +184,30 @@ extension AppDelegate {
   func restartPopup(named name: String?) {
     guard let key = popupSessionName(name) else { return }
     terminalInputMappings?.flush()
-    overlay.statusTerminals.restart(name: key)
+    let registry = overlay.statusTerminals
+    guard registry.isPager(key), let controller = statusBarController else {
+      registry.restart(name: key)
+      return
+    }
+    guard let session = registry.session(named: key),
+      let generation = registry.inputGenerations[key]
+    else { return }
+    controller.refreshPopupDocument(named: key) {
+      [weak self, weak controller, weak registry, weak session] document in
+      // A close, configuration reload or another restart may win while the
+      // status queue evaluates. Only the original run may consume the reply.
+      guard let self, let controller, self.statusBarController === controller,
+        let registry, self.overlay.statusTerminals === registry,
+        let session, registry.session(named: key) === session,
+        registry.inputGenerations[key] == generation
+      else { return }
+      // Inline popups have no named template; their latest staged bytes are
+      // already the source of truth, as when the status controller is absent.
+      if let document {
+        registry.stagePopup(name: key, data: StatusPopupController.documentVT(document))
+      }
+      registry.restart(name: key)
+    }
   }
 
   func quitPopup(named name: String?) {
