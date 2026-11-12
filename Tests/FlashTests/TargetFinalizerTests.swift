@@ -153,7 +153,7 @@ final class TargetFinalizerTests: XCTestCase {
     let overlay = candidate(id: "overlay", frame: frame, role: "AXButton")
     let search = TargetCandidate(
       target: JumpTarget(
-        id: "search", frame: frame, role: "AXStaticText", entersInsertMode: true,
+        id: "search", frame: frame, role: "AXStaticText", isTextInput: true,
         providerID: "test"),
       priority: 10, providerOrder: 0, ordinal: 1)
     XCTAssertFalse(search.target.isGenericContainer)

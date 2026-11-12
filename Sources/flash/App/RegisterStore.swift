@@ -1,8 +1,10 @@
 import AppKit
 
-/// Text registers shared by NORMAL and HOLD yank/paste commands.
-/// Flash uses Vim's `unnamedplus` clipboard behavior: the unnamed register
-/// reads the macOS pasteboard, while an explicit named yank also updates it.
+/// Text registers shared by NORMAL, VISUAL and HOLD yank/paste commands.
+/// Flash uses Vim's `unnamedplus` clipboard behavior: the unnamed register is
+/// the macOS pasteboard, which a bare yank writes; a named yank writes its
+/// register alone and leaves the pasteboard as it was (`"ay` never touches
+/// `"+`).
 final class RegisterStore {
   struct Entry: Equatable {
     let name: String
@@ -23,9 +25,11 @@ final class RegisterStore {
     return register == "+" || register == "*" || register == "\""
   }
 
-  /// A bare yank updates register 0. Explicit destinations update the unnamed
-  /// register too, but leave 0 alone, as in Vim. Uppercase letters append and
-  /// make the accumulated value the unnamed register. The black hole discards.
+  /// A bare yank updates register 0 and the clipboard. A clipboard name
+  /// (`+`, `*`, `"`) writes the clipboard, `"` register 0 too. A named
+  /// register is written alone, the clipboard and 0 left as they were, as in
+  /// Vim with `unnamedplus`; an uppercase letter appends. The black hole
+  /// discards.
   func write(_ text: String, register: String?) {
     guard !text.isEmpty else { return }
     guard let register else {
@@ -49,7 +53,6 @@ final class RegisterStore {
       value = text
     }
     named[key] = value
-    writeClipboard(value)
   }
 
   func read(register: String?) -> String? {
@@ -69,6 +72,13 @@ final class RegisterStore {
       entries.append(Self.entry(name: "\"", text: clipboard, kind: "unnamed"))
     }
     entries.append(Self.entry(name: "+", text: clipboard, kind: "clipboard"))
+    return entries + namedSnapshot()
+  }
+
+  /// The registers Flash holds itself — the yank register `0`, then `a`–`z`
+  /// and `1`–`9` — without reading the pasteboard.
+  func namedSnapshot() -> [Entry] {
+    var entries: [Entry] = []
     if let yank = named["0"] {
       entries.append(Self.entry(name: "0", text: yank, kind: "yank"))
     }

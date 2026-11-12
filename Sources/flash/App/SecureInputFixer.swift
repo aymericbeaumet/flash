@@ -183,13 +183,31 @@ final class SecureInputFixer {
         let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
         !app.isTerminated
       else { return }
-      if NSApp.isActive { NSApp.yieldActivation(to: app) }
-      _ = app.activate(from: .current, options: [])
+      RunningApplicationActivation.handOff(to: app, yielding: NSApp.isActive)
     }
   }
 
+  /// The snapshot a tick decides on. The poll runs every two seconds for the
+  /// life of the resident and the flag is almost always off, which decides
+  /// nothing (`SecureInputRelease.decide`), so `gather` — the IORegistry
+  /// walk, a main-thread pass over every running app and an Accessibility
+  /// read — runs only while it is on.
+  static func observe(
+    enabled: () -> Bool = { IsSecureEventInputEnabled() },
+    ownPID: pid_t = ProcessInfo.processInfo.processIdentifier,
+    gather: () -> SecureInputRelease.Snapshot = gather
+  ) -> SecureInputRelease.Snapshot {
+    guard enabled() else {
+      return SecureInputRelease.Snapshot(
+        enabled: false, holders: [], frontmostPID: nil, frontmostBundleID: nil,
+        focused: SecureInputRelease.Focus(role: nil, subrole: nil), runningBundleIDs: [],
+        ownPID: ownPID)
+    }
+    return gather()
+  }
+
   /// Role and subrole of the focused element only. The value is never read.
-  private static func observe() -> SecureInputRelease.Snapshot {
+  private static func gather() -> SecureInputRelease.Snapshot {
     let processes = DoctorProbe.secureInputHolders()
     let apps = appSnapshot(pids: processes.map(\.pid))
     return SecureInputRelease.Snapshot(
@@ -236,8 +254,7 @@ final class SecureInputFixer {
   }
 
   private static func focusedElement() -> SecureInputRelease.Focus {
-    let system = AXUIElementCreateSystemWide()
-    AXUIElementSetMessagingTimeout(system, AXApp.defaultMessagingTimeout)
+    let system = AXApp.systemWide()
     guard let focused = AXAttribute.element(system, kAXFocusedUIElementAttribute as String) else {
       return SecureInputRelease.Focus(role: nil, subrole: nil)
     }
@@ -248,29 +265,8 @@ final class SecureInputFixer {
   }
 
   private static func runAppleScript(_ source: String) -> Bool {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", source]
-    let stderr = Pipe()
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = stderr
-    process.qualityOfService = .utility
-    do {
-      try process.run()
-    } catch {
-      FlashLog.warn("[input] secure_input applescript launch failed: \(error.localizedDescription)")
-      return false
-    }
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      let errorText =
-        String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-      let clipped = errorText.count > 180 ? String(errorText.prefix(180)) : errorText
-      FlashLog.warn(
-        "[input] secure_input applescript status=\(process.terminationStatus) \(clipped)")
-      return false
-    }
-    return true
+    guard let failure = AppleScriptRunner.run(source, timeout: 10).failure else { return true }
+    FlashLog.warn("[input] secure_input applescript \(failure)")
+    return false
   }
 }

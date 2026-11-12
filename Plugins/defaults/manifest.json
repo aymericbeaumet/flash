@@ -2,25 +2,26 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Flash's default app knowledge: the macOS conventions apps share for Flash's actions (Cmd-T opens a tab, Cmd-Z undoes, Cmd-S saves, Cmd-C copies…), the apps that bind them differently, such as editors' new tab and back/forward or Messages' conversation switching, or not at all; and the apps whose accessibility tree is walked only on demand.",
-  "action_bindings": {
-    "tab_select": {
+  "description": "Flash's default app knowledge: the macOS conventions apps share for Flash's commands (Cmd-T opens a tab, Cmd-Z undoes, Cmd-S saves, Cmd-C copies, Cmd-Right ends the line, the arrows move a caret or a list's selection…), the apps that bind them differently, such as editors' new tab and back/forward or Messages' conversation switching, or not at all; the apps whose accessibility tree is walked only on demand; and the editors with their own modal editing or partial Accessibility text, where NORMAL never engages a field.",
+  "bindings": {
+    "tab select": {
       "": "cmd+{index}"
     },
-    "tab_next": {
+    "tab next": {
       "": "cmd+shift+]",
       "com.apple.MobileSMS": "ctrl+tab"
     },
-    "tab_previous": {
+    "tab previous": {
       "": "cmd+shift+[",
       "com.apple.MobileSMS": "ctrl+shift+tab"
     },
-    "tab_first": {
+    "tab first": {
       "": "cmd+1"
     },
-    "tab_new": {
+    "tab new": {
       "": "cmd+t",
       "com.todesktop.230313mzl4w4u92": "cmd+n",
+      "com.microsoft.VSCode": "cmd+n",
       "com.microsoft.VSCodeInsiders": "cmd+n",
       "com.vscodium": "cmd+n",
       "com.exafunction.windsurf": "cmd+n",
@@ -32,12 +33,18 @@
       "com.apple.iWork.Pages": false,
       "com.apple.mail": false
     },
-    "tab_close": {
-      "": "cmd+w"
+    "tab close": {
+      "": "cmd+w",
+      "com.apple.MobileSMS": false,
+      "com.apple.Notes": false,
+      "com.apple.TextEdit": false,
+      "com.apple.iWork.Pages": false,
+      "com.apple.mail": false
     },
-    "history_back": {
+    "history back": {
       "": "cmd+[",
       "com.todesktop.230313mzl4w4u92": "ctrl+-",
+      "com.microsoft.VSCode": "ctrl+-",
       "com.microsoft.VSCodeInsiders": "ctrl+-",
       "com.vscodium": "ctrl+-",
       "com.exafunction.windsurf": "ctrl+-",
@@ -50,9 +57,10 @@
       "com.apple.iWork.Pages": false,
       "com.apple.mail": false
     },
-    "history_forward": {
+    "history forward": {
       "": "cmd+]",
       "com.todesktop.230313mzl4w4u92": "ctrl+shift+-",
+      "com.microsoft.VSCode": "ctrl+shift+-",
       "com.microsoft.VSCodeInsiders": "ctrl+shift+-",
       "com.vscodium": "ctrl+shift+-",
       "com.exafunction.windsurf": "ctrl+shift+-",
@@ -65,62 +73,305 @@
       "com.apple.iWork.Pages": false,
       "com.apple.mail": false
     },
-    "app_undo": {
+    "app undo": {
       "": "cmd+z"
     },
-    "app_redo": {
+    "app redo": {
       "": "cmd+shift+z"
     },
-    "app_find": {
+    "app find": {
       "": "cmd+f"
     },
-    "app_save": {
+    "app find_next": {
+      "": "cmd+g",
+      "com.apple.finder": false
+    },
+    "app find_previous": {
+      "": "cmd+shift+g",
+      "com.apple.finder": false
+    },
+    "app save": {
       "": "cmd+s"
     },
-    "app_print": {
+    "app print": {
       "": "cmd+p"
     },
-    "document_open": {
+    "document open": {
       "": "cmd+o"
     },
-    "window_new": {
+    "window new": {
       "": "cmd+n"
     },
-    "window_close": {
+    "window close": {
       "": "cmd+w"
     },
-    "clipboard_copy": {
+    "clipboard copy": {
       "": "cmd+c"
     },
-    "clipboard_cut": {
-      "": "cmd+x"
-    },
-    "clipboard_paste": {
+    "clipboard paste": {
       "": "cmd+v"
     },
-    "look_up": {
+    "app look_up": {
       "": "ctrl+cmd+d"
     },
-    "tab_reopen": {
+    "app zoom_in": {
+      "": "cmd+="
+    },
+    "app zoom_out": {
+      "": "cmd+-"
+    },
+    "app zoom_reset": {
+      "": "cmd+0"
+    },
+    "input line_start": {
+      "": "cmd+left"
+    },
+    "input line_end": {
+      "": "cmd+right"
+    },
+    "input char_left": {
+      "": "left"
+    },
+    "input char_right": {
+      "": "right"
+    },
+    "input line_up": {
+      "": "up"
+    },
+    "input line_down": {
+      "": "down"
+    },
+    "input document_start": {
+      "": "cmd+up"
+    },
+    "input document_end": {
+      "": "cmd+down"
+    },
+    "input select_left": {
+      "": "shift+left"
+    },
+    "input select_right": {
+      "": "shift+right"
+    },
+    "input select_up": {
+      "": "shift+up"
+    },
+    "input select_down": {
+      "": "shift+down"
+    },
+    "input select_word_left": {
+      "": "shift+alt+left"
+    },
+    "input select_word_right": {
+      "": "shift+alt+right"
+    },
+    "input select_line_start": {
+      "": "shift+cmd+left"
+    },
+    "input select_line_end": {
+      "": "shift+cmd+right"
+    },
+    "input select_document_start": {
+      "": "shift+cmd+up"
+    },
+    "input select_document_end": {
+      "": "shift+cmd+down"
+    },
+    "cursor previous_word": {
+      "": "alt+left"
+    },
+    "cursor previous_big_word": {
+      "": "alt+left"
+    },
+    "cursor word_end": {
+      "": "alt+right"
+    },
+    "cursor big_word_end": {
+      "": "alt+right"
+    },
+    "cursor line_start": {
+      "": "cmd+left"
+    },
+    "cursor line_end": {
+      "": "cmd+right"
+    },
+    "cursor first_line": {
+      "": "cmd+up"
+    },
+    "cursor last_line": {
+      "": "cmd+down"
+    },
+    "move down": {
+      "": "down"
+    },
+    "move up": {
+      "": "up"
+    },
+    "move left": {
+      "": "left"
+    },
+    "move right": {
+      "": "right"
+    },
+    "tab reopen": {
       "com.todesktop.230313mzl4w4u92": "cmd+shift+t",
+      "com.microsoft.VSCode": "cmd+shift+t",
       "com.microsoft.VSCodeInsiders": "cmd+shift+t",
       "com.vscodium": "cmd+shift+t",
       "com.exafunction.windsurf": "cmd+shift+t",
       "dev.zed.Zed": "cmd+shift+t",
       "dev.zed.Zed-Preview": "cmd+shift+t",
       "com.sublimetext.4": "cmd+shift+t"
+    },
+    "document save_as": {
+      "": "cmd+shift+s",
+      "com.apple.TextEdit": "cmd+alt+shift+s",
+      "com.apple.Preview": "cmd+alt+shift+s",
+      "com.apple.iWork.Pages": "cmd+alt+shift+s",
+      "com.apple.iWork.Numbers": "cmd+alt+shift+s",
+      "com.apple.iWork.Keynote": "cmd+alt+shift+s",
+      "com.apple.dt.Xcode": "cmd+alt+shift+s"
+    },
+    "document duplicate": {
+      "com.apple.TextEdit": "cmd+shift+s",
+      "com.apple.Preview": "cmd+shift+s",
+      "com.apple.iWork.Pages": "cmd+shift+s",
+      "com.apple.iWork.Numbers": "cmd+shift+s",
+      "com.apple.iWork.Keynote": "cmd+shift+s",
+      "com.apple.dt.Xcode": "cmd+shift+s"
+    },
+    "document export_pdf": {
+      "": {
+        "menu": [
+          "File",
+          "Export as PDF…"
+        ]
+      },
+      "com.apple.iWork.Pages": false,
+      "com.apple.iWork.Numbers": false,
+      "com.apple.iWork.Keynote": false
+    },
+    "document revert": {
+      "": {
+        "menu": [
+          "File",
+          "Revert To",
+          "Last Saved"
+        ]
+      },
+      "com.apple.dt.Xcode": {
+        "menu": [
+          "File",
+          "Revert to Saved…"
+        ]
+      },
+      "com.microsoft.VSCode": {
+        "menu": [
+          "File",
+          "Revert File"
+        ]
+      },
+      "com.microsoft.VSCodeInsiders": {
+        "menu": [
+          "File",
+          "Revert File"
+        ]
+      },
+      "com.vscodium": {
+        "menu": [
+          "File",
+          "Revert File"
+        ]
+      },
+      "com.todesktop.230313mzl4w4u92": false,
+      "com.exafunction.windsurf": false
+    },
+    "document rename": {
+      "": {
+        "menu": [
+          "File",
+          "Rename…"
+        ]
+      },
+      "com.apple.dt.Xcode": false
+    },
+    "document page_setup": {
+      "": {
+        "menu": [
+          "File",
+          "Page Setup…"
+        ]
+      }
+    },
+    "app settings": {
+      "": "cmd+,"
+    },
+    "app select_all": {
+      "": "cmd+a"
+    },
+    "app help": {
+      "": "cmd+shift+/"
+    },
+    "app cancel": {
+      "": "escape"
+    },
+    "window close_all": {
+      "": "cmd+alt+w",
+      "com.microsoft.VSCode": [
+        "cmd+k",
+        "cmd+w"
+      ],
+      "com.microsoft.VSCodeInsiders": [
+        "cmd+k",
+        "cmd+w"
+      ],
+      "com.vscodium": [
+        "cmd+k",
+        "cmd+w"
+      ],
+      "com.todesktop.230313mzl4w4u92": false,
+      "com.exafunction.windsurf": false
+    },
+    "window zoom": {
+      "": {
+        "menu": [
+          "Window",
+          "Zoom"
+        ]
+      }
     }
   },
   "on_demand_hints": [
     "com.apple.Notes"
+  ],
+  "own_text_editing": [
+    "com.microsoft.VSCode",
+    "com.microsoft.VSCodeInsiders",
+    "com.vscodium",
+    "com.todesktop.230313mzl4w4u92",
+    "com.exafunction.windsurf",
+    "com.jetbrains.intellij",
+    "com.jetbrains.intellij.ce",
+    "com.jetbrains.pycharm",
+    "com.jetbrains.pycharm.ce",
+    "com.jetbrains.WebStorm",
+    "com.jetbrains.goland",
+    "com.jetbrains.rider",
+    "com.jetbrains.CLion",
+    "com.jetbrains.rubymine",
+    "com.jetbrains.PhpStorm",
+    "com.jetbrains.datagrip",
+    "dev.zed.Zed",
+    "dev.zed.Zed-Preview",
+    "com.sublimetext.4"
   ],
   "help": {
     "topics": [
       {
         "name": "defaults",
         "title": "Defaults",
-        "summary": "Bundled plugin-layer defaults, including canonical app shortcut verbs.",
-        "body": "# Defaults\n\nThis bundled plugin is Flash's default app knowledge. Flash itself knows no chord: every action it asks the focused app to perform (`tab_new`, `app_undo`, `app_save`, `clipboard_copy`, …) runs the binding a plugin declares for that app in `action_bindings`, unless a source such as tmux or the browsers plugin performs it first.\n\n`defaults` declares the macOS conventions for every app — Cmd-T opens a tab, Cmd-W closes it, Cmd-1…Cmd-9 select one, Cmd-[ / Cmd-] go back and forward, Cmd-Z / Cmd-Shift-Z undo and redo, Cmd-F finds, Cmd-S saves, Cmd-P prints, Cmd-O opens, Cmd-N opens a window, Cmd-C / Cmd-X / Cmd-V use the clipboard — and the apps that differ: editors open a tab with Cmd-N, reopen one with Cmd-Shift-T and go back with Control-Minus, Messages switches conversations with Control-Tab, and Notes, TextEdit, Pages and Mail have no tabs or history at all. It also names the apps whose accessibility tree is walked only on demand.\n\nAnother plugin overrides any of these for its apps (an app-specific entry, then a matching selector, then a higher `priority` wins). Disable it with `[plugins] disabled = [\"defaults\"]` and those actions do nothing.\n"
+        "summary": "Bundled plugin-layer defaults, including the canonical app bindings.",
+        "body": "# Defaults\n\nThis bundled plugin is Flash's default app knowledge. Flash itself knows no chord: every command it asks the focused app to perform (`tab new`, `app undo`, `app save`, `clipboard copy`, …) runs the binding a plugin declares for that app in `bindings`, keyed by the command line (`\"tab new\"`, `\"app reload --force\"`), unless a source such as tmux or the browsers plugin performs it first.\n\n`defaults` declares the macOS conventions for every app — Cmd-T opens a tab, Cmd-W closes it, Cmd-1…Cmd-9 select one, Cmd-[ / Cmd-] go back and forward, Cmd-Z / Cmd-Shift-Z undo and redo, Cmd-F finds and Cmd-G / Cmd-Shift-G step through the matches, Cmd-S saves, Cmd-P prints, Cmd-O opens, Cmd-N opens a window, Cmd-C / Cmd-V copy and paste, and in editable text Cmd-Left / Cmd-Right go to the line's start and end, Left / Right a character, Up / Down a line and Cmd-Up / Cmd-Down to the text's start and end (the `input` commands NORMAL's `h`, `j`, `k`, `l`, `gg` and `G` are made of; Flash never edits text, so none deletes, breaks a line or cuts), and where an app gives no text to measure Vim's motions fall back to Option-Left / Option-Right for `b` and `e`, Cmd-Left / Cmd-Right for `0` and `$` and Cmd-Up / Cmd-Down for `gg` and `G` (the `cursor` commands); VISUAL extends a selection there with Shift and those keys (the `input select_*` commands), and in a list, table, outline or column browser the arrows move the selection (`move down`, `up`, `left`, `right`, NORMAL's `h` `j` `k` `l` there) — and the apps that differ: editors open a tab with Cmd-N, reopen one with Cmd-Shift-T and go back with Control-Minus, Messages switches conversations with Control-Tab, and Notes, TextEdit, Pages and Mail have no tabs or history at all; none of the five has a tab to close (`tab close` is `false`), so `app close`, vim's `:q`, closes their window instead, and quits them with their last one. It also carries the everyday operations of an app's menus: Cmd-Shift-S saves as (Option-Cmd-Shift-S in TextEdit, Preview, Pages, Numbers, Keynote and Xcode, where Cmd-Shift-S duplicates: `document duplicate`), Cmd-Comma opens the settings, Cmd-A selects all, Cmd-Shift-/ opens the Help menu, Option-Cmd-W closes every window (Cmd-K Cmd-W in VS Code), Escape cancels (`app cancel`, NORMAL's Escape), and the File menu's Export as PDF…, Revert To › Last Saved (Revert File in VS Code, Revert to Saved… in Xcode), Rename… and Page Setup… and the Window menu's Zoom are pressed by title. Finder's Cmd-Shift-G is Go to Folder, so `app find_next` and `app find_previous` do nothing there. It also names the apps whose accessibility tree is walked only on demand (`on_demand_hints`), and the editors with their own modal editing or partial Accessibility text (`own_text_editing`: VS Code and its forks, the JetBrains IDEs, Zed and Sublime Text), where NORMAL never engages a field: every key keeps its page meaning, `v` / `V` do nothing and the text table never applies, unless `[mode.apps.\"<bundle id>\".text] enabled = true` forces it.\n\nAnother plugin overrides any of these for its apps (an app-specific entry, then a matching selector, then a higher `priority` wins). Disable it with `[plugins] disabled = [\"defaults\"]` and those commands do nothing.\n"
       }
     ]
   }

@@ -11,7 +11,8 @@ extension AppDelegate {
     repeatCount: Int = 1
   ) {
     if let lines = NormalModeDispatcher.scrollLineDelta(for: kind, repeatCount: repeatCount) {
-      guard NormalModeDispatcher.synthesizeLineScroll(lines: lines) else { return }
+      guard NormalModeDispatcher.synthesizeLineScroll(lines: lines, at: lineScrollLocation())
+      else { return }
       extendHeldSelection(after: kind)
       if let pid = observedFocusedAppPID ?? normalModeTargetPID {
         monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
@@ -21,20 +22,32 @@ extension AppDelegate {
     // Whatever a smooth line scroll still has to post would move the page
     // after this scroll lands.
     if FlashTunables.scrollSmoothMs > 0 { ActionDispatcher.cancelWheelSteps() }
-    // gg/G run the source-action policy: a source such as tmux scrolls inside
-    // its own buffer, else an app's declared chord (a browser's Cmd-Up), else
-    // the focused-window scroller.
+    // gg/G run the source-command policy: a source such as tmux scrolls
+    // inside its own buffer, else an app's declared chord (a browser's
+    // Cmd-Up), else the focused-window scroller.
     if kind == .top || kind == .bottom {
-      performSourceAction(kind == .top ? .scrollTop : .scrollBottom)
+      performSourceCommand(URLCommand.scroll(kind).requiredSourceCommand)
       extendHeldSelection(after: kind)
       return
     }
     guard let context = normalModeDispatchContext() else {
-      FlashLog.debug("[normal_mode] no target app for \(kind)")
+      FlashLog.debug("[normal] no target app for \(kind)")
       applyModeOverlay()
       return
     }
     scrollViaScroller(kind, context: context, repeats: normalizedRepeatCount(repeatCount))
+  }
+
+  /// Where a line scroll lands (`lineScrollPoint`), from what main already
+  /// holds: the pointer, the focused window's frame the border strokes, and
+  /// the scroll area the focus-region read found. No IPC.
+  func lineScrollLocation() -> CGPoint? {
+    let pid = lastFocusedApplicationPID ?? normalModeTargetPID
+    let window =
+      overlay?.activeWindowBorderFrame ?? pid.flatMap { activeWindowBorderFrameCache[$0] }
+    let area = pid.flatMap { focusRegionTracker.cachedReading(for: $0)?.scrollFrame }
+    return NormalModeDispatcher.lineScrollPoint(
+      pointer: NSEvent.mouseLocation, window: window, scrollArea: area)
   }
 
   /// The focused-window scroller walks the AX tree (up to ~600 nodes) for the
@@ -82,8 +95,9 @@ extension AppDelegate {
       let window = normalModeContext()?.frontWindowFrame, !window.isNull, !window.isEmpty
     {
       ActionDispatcher.moveCursor(
-        to: HoldSelection.edgePoint(
-          top: kind == .top, pointer: NSEvent.mouseLocation, window: window))
+        to: ScreenPoint<NSSpace>(
+          HoldSelection.edgePoint(
+            top: kind == .top, pointer: NSEvent.mouseLocation, window: window)))
     }
     ActionDispatcher.catchUpHeldSelection(afterScrollMs: FlashTunables.scrollSmoothMs)
     FlashLog.trace("[drag] selection_follows scroll=\(kind)")

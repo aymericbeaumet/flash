@@ -111,6 +111,47 @@ final class StatusPopupControllerTests: XCTestCase {
     controller.dismiss()
   }
 
+  /// An open popup stays where it opened while its label only changes width:
+  /// a carousel line or a metric growing or shrinking must not slide it
+  /// sideways. A label that moved hangs it afresh, even a short move still
+  /// under the popup, and every new showing is centred.
+  func testAnOpenPopupStaysPutWhileItsLabelChangesWidthUnderIt() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    let screen = CGRect(x: 0, y: 0, width: 1600, height: 900)
+    var label = region(text: String(repeating: "x", count: 60))
+    label.rect = CGRect(x: 400, y: 874, width: 600, height: 26)
+    preview(controller, region: label, screen: screen)
+    let opened = controller.frame
+    XCTAssertEqual(opened.midX, label.rect.midX, accuracy: 0.5)
+
+    var shorter = label
+    shorter.rect.size.width = 260
+    controller.refresh([shorter])
+    XCTAssertEqual(controller.frame.minX, opened.minX, "the label's centre is still over it")
+    preview(controller, region: shorter, screen: screen)
+    XCTAssertEqual(controller.frame.minX, opened.minX, "a hover re-test keeps it too")
+
+    var nudged = shorter
+    nudged.rect.origin.x += 40
+    controller.refresh([nudged])
+    XCTAssertEqual(controller.frame.midX, nudged.rect.midX, accuracy: 0.5, "the label moved")
+
+    var moved = label
+    moved.rect.origin.x = 1300
+    moved.rect.size.width = 200
+    controller.refresh([moved])
+    XCTAssertEqual(
+      controller.frame.midX, min(moved.rect.midX, screen.maxX - opened.width / 2), accuracy: 0.5)
+
+    controller.dismiss()
+    preview(controller, region: shorter, screen: screen)
+    XCTAssertEqual(
+      controller.frame.midX, shorter.rect.midX, accuracy: 0.5, "a new showing is centred")
+    controller.dismiss()
+  }
+
   func testTextPopupGrowsFromMinWidthToItsWidestLineAndWrapsPastMaxWidth() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }
@@ -559,6 +600,189 @@ final class StatusPopupControllerTests: XCTestCase {
     }
   }
 
+  func testHoverCreatesASeparatePagerWithoutReplacingTheFocusedTerminal() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    registry.apply(
+      style: .init(), terminals: ["bonsai": terminal(["/bin/sleep", "30"], persistent: true)])
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    defer { controller.dismiss() }
+    show(controller, "bonsai")
+    let session = try XCTUnwrap(registry.session(named: "bonsai"))
+    let focusedView = controller.terminalView
+    let focusedFrame = controller.frame
+    var focusedTransitions = 0
+    controller.willFocus = { focusedTransitions += 1 }
+    controller.didDismissFocus = { _ in focusedTransitions += 1 }
+
+    preview(controller, region: region("details", text: "Hover details"))
+
+    XCTAssertNotNil(registry.session(named: "details"), "the hover has its own rendered pager")
+    XCTAssertEqual(controller.focusedName, "bonsai")
+    XCTAssertTrue(controller.terminalView === focusedView)
+    XCTAssertEqual(controller.frame, focusedFrame)
+    XCTAssertTrue(registry.session(named: "bonsai") === session)
+    controller.leaveAnchor()
+    XCTAssertNil(registry.session(named: "details"))
+    XCTAssertEqual(controller.focusedName, "bonsai")
+    XCTAssertTrue(registry.session(named: "bonsai") === session)
+    XCTAssertEqual(focusedTransitions, 0)
+  }
+
+  func testCalendarHoverRepaintsItsSecondHandWithoutReplacingEitherSession() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    registry.apply(
+      style: .init(), terminals: ["bonsai": terminal(["/bin/sleep", "30"], persistent: true)])
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    defer { controller.dismiss() }
+    show(controller, "bonsai")
+    let focusedSession = try XCTUnwrap(registry.session(named: "bonsai"))
+    let focusedFrame = controller.frame
+    let now = Date(timeIntervalSince1970: 1_800_000_020)
+    let utc = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+    func calendar(at date: Date) -> StatusBarPopupRegion {
+      let markup = FlashStatusBarRenderer.calendarText(now: date, timeZone: utc)
+      var popup = region("date", text: markup)
+      popup.document = FlashStatusBarRenderer.segments(from: markup)
+      return popup
+    }
+    let screen = CGRect(x: 0, y: 0, width: 1600, height: 1000)
+    preview(controller, region: calendar(at: now), screen: screen)
+    let clockSession = try XCTUnwrap(registry.session(named: "date"))
+    waitUntil("calendar pager first complete frame") {
+      clockSession.frame?.text.contains("Moon") == true
+    }
+    let original = try XCTUnwrap(clockSession.frame?.text)
+    let originalPID = clockSession.state
+    controller.refresh([calendar(at: now + 1)])
+    waitUntil("calendar's second hand repaints in the existing pager") {
+      guard let text = clockSession.frame?.text else { return false }
+      return text != original
+    }
+    XCTAssertEqual(
+      clockSession.frame?.text.components(separatedBy: "\n").first,
+      original.components(separatedBy: "\n").first, "numeric HH:MM stays unchanged")
+    XCTAssertEqual(clockSession.state, originalPID)
+    XCTAssertTrue(registry.session(named: "date") === clockSession)
+    XCTAssertTrue(registry.session(named: "bonsai") === focusedSession)
+    XCTAssertEqual(controller.focusedName, "bonsai")
+    XCTAssertEqual(controller.frame, focusedFrame)
+  }
+
+  func testAnInvalidStandaloneDocumentCannotDisplaceEitherPresentation() {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    defer { controller.dismiss() }
+    show(
+      controller, "focused",
+      document: [FlashStatusTextSegment(text: "Focused", foreground: .defaultForeground)])
+    preview(controller, region: region("details", text: "Details"))
+    show(controller, "details")
+    XCTAssertEqual(controller.focusedName, "focused")
+    XCTAssertEqual(controller.previewName, "details")
+    XCTAssertEqual(controller.visibleNames, ["focused", "details"])
+  }
+
+  func testSameNameHoverNeverDuplicatesOrMovesTheFocusedSession() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    registry.apply(
+      style: .init(), terminals: ["bonsai": terminal(["/bin/sleep", "30"], persistent: true)])
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    defer { controller.dismiss() }
+    show(controller, "bonsai")
+    let session = try XCTUnwrap(registry.session(named: "bonsai"))
+    let frame = controller.frame
+    let view = controller.terminalView
+    var dismissed: [String] = []
+    controller.didDismiss = { dismissed.append($0) }
+    preview(controller, region: region("details", text: "Details"))
+    XCTAssertEqual(controller.visibleNames, ["bonsai", "details"])
+    XCTAssertEqual(controller.previewName, "details")
+
+    preview(controller, region: region("bonsai", text: "Must not replace the terminal"))
+    XCTAssertEqual(controller.visibleNames, ["bonsai"])
+    XCTAssertNil(controller.previewName)
+    XCTAssertEqual(controller.presentation, .standalone(name: "bonsai"))
+    XCTAssertEqual(controller.frame, frame)
+    XCTAssertTrue(controller.terminalView === view)
+    XCTAssertTrue(registry.session(named: "bonsai") === session)
+    XCTAssertEqual(dismissed, ["details"])
+  }
+
+  func testClickingPreviewTransfersFocusWithoutRecreatingEitherSessionOrLeavingTerminal() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    registry.apply(
+      style: .init(),
+      terminals: [
+        "bonsai": terminal(["/bin/sleep", "30"], persistent: true),
+        "other": terminal(["/bin/sleep", "30"]),
+      ])
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    defer { controller.dismiss() }
+    // Capture the hover surface before the standalone terminal occupies the other slot.
+    let previewView = controller.terminalView
+    show(controller, "bonsai")
+    let bonsai = try XCTUnwrap(registry.session(named: "bonsai"))
+    let focusedView = controller.terminalView
+    let other = try XCTUnwrap(registry.open("other"))
+    preview(controller, region: region("other", text: ""))
+    XCTAssertFalse(try XCTUnwrap(previewView.window).canBecomeKey)
+    XCTAssertTrue(try XCTUnwrap(focusedView.window).canBecomeKey)
+    var callbacks: [String] = []
+    controller.willDismissFocus = { callbacks.append("flush") }
+    controller.didDismissFocus = { _ in callbacks.append("leave") }
+    controller.willFocus = { callbacks.append("focus") }
+    controller.didDismiss = { callbacks.append("hide:" + $0) }
+
+    previewView.onFocusRequested?()
+
+    XCTAssertEqual(controller.focusedName, "other")
+    XCTAssertNil(controller.previewName)
+    XCTAssertTrue(controller.terminalView === previewView)
+    XCTAssertTrue(controller.terminalView.window?.canBecomeKey == true)
+    XCTAssertFalse(focusedView.isRenderingEnabled)
+    XCTAssertTrue(registry.session(named: "other") === other)
+    XCTAssertTrue(registry.session(named: "bonsai") === bonsai)
+    XCTAssertEqual(callbacks, ["flush", "hide:bonsai", "focus"])
+    controller.dismiss()
+    XCTAssertEqual(callbacks, ["flush", "hide:bonsai", "focus", "flush", "leave", "hide:other"])
+    XCTAssertNil(registry.session(named: "other"))
+    XCTAssertTrue(registry.session(named: "bonsai") === bonsai)
+  }
+
+  func testRegistryRemovalAndDismissalReleaseEachPresentationExactlyOnce() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let bonsai = terminal(["/bin/sleep", "30"], persistent: true)
+    registry.apply(
+      style: .init(), terminals: ["bonsai": bonsai, "other": terminal(["/bin/sleep", "30"])])
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    defer { controller.dismiss() }
+    show(controller, "bonsai")
+    _ = try XCTUnwrap(registry.open("other"))
+    preview(controller, region: region("other", text: ""))
+    var dismissed: [String] = []
+    var focusLosses = 0
+    controller.didDismiss = { dismissed.append($0) }
+    controller.didDismissFocus = { _ in focusLosses += 1 }
+
+    registry.apply(style: .init(), terminals: ["bonsai": bonsai])
+    XCTAssertEqual(controller.visibleNames, ["bonsai"])
+    XCTAssertEqual(controller.focusedName, "bonsai")
+    XCTAssertEqual(dismissed, ["other"])
+    XCTAssertEqual(focusLosses, 0)
+    preview(controller, region: region("details", text: "Details"))
+    controller.dismiss()
+    controller.dismiss()
+    XCTAssertEqual(dismissed, ["other", "details", "bonsai"])
+    XCTAssertEqual(focusLosses, 1)
+    XCTAssertFalse(controller.isVisible)
+  }
+
   func testStandaloneTerminalCentersClampsAndSurvivesStatusBarChanges() {
     let registry = StatusTerminalRegistry()
     let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
@@ -575,7 +799,10 @@ final class StatusPopupControllerTests: XCTestCase {
     controller.willFocus = { callbacks.append("focus") }
     controller.willDismissFocus = { callbacks.append("flush") }
     controller.didDismissFocus = { _ in callbacks.append("restore") }
+    var dismissed: [String] = []
     controller.didDismiss = { name in
+      dismissed.append(name)
+      guard name == "shell" else { return }
       XCTAssertEqual(name, "shell")
       XCTAssertNil(controller.focusedName)
       XCTAssertEqual(controller.presentation, .hidden)
@@ -606,6 +833,7 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(callbacks, ["focus", "flush", "restore", "release"])
     controller.dismiss()
     XCTAssertEqual(callbacks, ["focus", "flush", "restore", "release"])
+    XCTAssertEqual(dismissed, ["other", "shell"])
   }
 
   func testStandaloneRepositionPreservesSessionAndFocusOnSmallerScreen() {

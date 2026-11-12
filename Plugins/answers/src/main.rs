@@ -67,9 +67,6 @@ impl FlashPlugin for Answers {
     }
 
     fn evaluate(&self, request: EvaluateRequest) -> EvaluateResponse {
-        if request.surface != "flashlight" {
-            return EvaluateResponse::default();
-        }
         EvaluateResponse::answers(self.answers(&request.query))
     }
 }
@@ -81,14 +78,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn request(surface: &str, query: &str) -> EvaluateRequest {
-        EvaluateRequest {
-            surface: surface.to_string(),
-            query: query.to_string(),
-            ..EvaluateRequest::default()
-        }
-    }
 
     fn titles(answers: &[QueryAnswer]) -> Vec<&str> {
         answers.iter().map(|answer| answer.title.as_str()).collect()
@@ -119,14 +108,12 @@ mod tests {
     }
 
     #[test]
-    fn non_flashlight_surfaces_are_never_claimed() {
+    fn evaluate_answers_the_query() {
         let answers = Answers::new();
-        for query in ["1+1", "#ff8800", "time tokyo"] {
-            assert!(answers.evaluate(request("other", query)).answers.is_empty());
-        }
-        assert_eq!(
-            titles(&answers.evaluate(request("flashlight", "1+1")).answers),
-            ["2"]
-        );
+        let request = |query: &str| EvaluateRequest {
+            query: query.to_string(),
+        };
+        assert_eq!(titles(&answers.evaluate(request("1+1")).answers), ["2"]);
+        assert!(answers.evaluate(request("Safari")).answers.is_empty());
     }
 }

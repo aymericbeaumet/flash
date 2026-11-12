@@ -1,4 +1,4 @@
-/// Which popup shows and in which state. Where a label's popup shows is its
+/// Which popup one surface shows and in which state. Where a label's popup shows is its
 /// span's business (`OverlayPanel.statusBarPopupFrame`), never the pointer's,
 /// so the state carries no position.
 enum StatusPopupPresentation: Equatable {
@@ -7,7 +7,7 @@ enum StatusPopupPresentation: Equatable {
   case preview(name: String)
   /// Pinned by a click: focused, still hanging below its label.
   case focused(name: String)
-  /// Shown by `enter_terminal_mode`: centred on a screen, focused, tied to no
+  /// Shown by `mode terminal`: centred on a screen, focused, tied to no
   /// label.
   case standalone(name: String)
 

@@ -14,13 +14,13 @@ final class PluginDoctorTests: XCTestCase {
 
   func testHealthyBundledPluginReportsOkWithSandboxMode() throws {
     let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-      .appendingPathComponent("Plugins/media")
+      .appendingPathComponent("Plugins/answers")
     try XCTSkipUnless(
       FileManager.default.fileExists(atPath: root.appendingPathComponent("manifest.json").path),
       "run from the repo root")
-    let report = PluginDoctor.run(statuses: [status(id: "media", root: root.path)])
+    let report = PluginDoctor.run(statuses: [status(id: "answers", root: root.path)])
     XCTAssertEqual(report.issues, 0, report.lines.joined(separator: "\n"))
-    let line = try XCTUnwrap(report.lines.first { $0.contains("media") })
+    let line = try XCTUnwrap(report.lines.first { $0.contains("answers") })
     XCTAssertTrue(line.hasPrefix("ok "), line)
     XCTAssertTrue(line.contains("sandbox="), line)
   }

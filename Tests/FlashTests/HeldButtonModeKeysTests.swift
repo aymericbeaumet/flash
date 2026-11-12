@@ -30,6 +30,18 @@ final class HeldButtonModeKeysTests: XCTestCase {
       .mouseButton(.init(state: .cancel, button: .primary, hold: .hold)))
   }
 
+  /// HOLD's operators end the hold and keep NORMAL: no default binds an
+  /// INSERT entry, `c` (Vim's change) is unbound, and `selection` copies or
+  /// pastes, never cuts or changes (VISUAL's `swap_ends` only moves its
+  /// selection's end).
+  func testHoldOperatorsNeverEnterInsert() {
+    let drag = Config.default.mode.hold
+    XCTAssertFalse(drag.contains { $0.action.command == .insertMode })
+    XCTAssertNil(command(keyCode: kVK_ANSI_C, characters: "c", mappings: drag))
+    XCTAssertEqual(SelectionAction.allCases, [.copy, .paste, .swapEnds])
+    XCTAssertNil(URLEventHandler.parse(topic: "selection", action: "change", args: [:]))
+  }
+
   func testYankEndsHeldSelectionInHoldMode() {
     XCTAssertEqual(
       command(keyCode: kVK_ANSI_Y, characters: "y", mappings: Config.default.mode.hold),

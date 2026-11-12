@@ -1,12 +1,14 @@
+import type { SearchSection } from "./docsite.ts";
+import { renderUncached, sectionsOf } from "./markdown.ts";
 import { paths } from "./routes.ts";
 import type { CommandInfo, DocTopic, MappingRow, PluginInfo } from "./types.ts";
 
 export interface SearchResult {
   title: string;
   summary: string;
-  /** The heading the match sits under, for guides. */
+  /** The heading the match sits under, for guides and manual pages. */
   section?: string;
-  kind: "Guide" | "Command" | "Mapping" | "Plugin";
+  kind: "Docs" | "Guide" | "Command" | "Mapping" | "Plugin";
   icon: string;
   href: string;
   score: number;
@@ -27,54 +29,24 @@ export interface SearchIndex {
   entries: Entry[];
 }
 
-const slug = (text: string) => text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s+/g, "-") || "section";
-
-/** Plain words from Markdown: no links' URLs, code fences, emphasis or table pipes. */
-export function plainText(markdown: string): string {
-  return markdown
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/[`*_>|#]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/** Splits a guide at its headings, so a match can land on the section. */
+/** A guide split at its headings, so a match can land on the section; ids are the rendered ones. */
 export function sections(doc: DocTopic): { heading?: string; id?: string; text: string }[] {
-  const out: { heading?: string; id?: string; text: string }[] = [];
-  const ids = new Set<string>();
-  let heading: string | undefined;
-  let id: string | undefined;
-  let buffer: string[] = [];
-  const flush = () => {
-    const text = plainText(buffer.join("\n"));
-    if (text || heading) out.push({ heading, id, text });
-    buffer = [];
-  };
-  for (const line of doc.body.split("\n")) {
-    const match = line.match(/^(#{2,4})\s+(.*)$/);
-    if (match) {
-      flush();
-      heading = plainText(match[2]);
-      let candidate = slug(heading);
-      for (let suffix = 1; ids.has(candidate); suffix += 1) candidate = `${slug(heading)}-${suffix}`;
-      ids.add(candidate);
-      id = candidate;
-      continue;
-    }
-    if (/^#\s/.test(line)) continue;
-    buffer.push(line);
-  }
-  flush();
-  return out;
+  const rendered = renderUncached(doc.body, { hasFile: () => false, href: () => undefined, siteURL: "" });
+  return sectionsOf(rendered.nodes);
 }
 
-export function buildIndex(docs: DocTopic[], commands: CommandInfo[], rows: MappingRow[], plugins: PluginInfo[]): SearchIndex {
+/**
+ * Manual sections (from `search.json`), then the plugins' guides, commands,
+ * mappings and plugins. The published site has only the manual.
+ */
+export function buildIndex(docs: DocTopic[], commands: CommandInfo[], rows: MappingRow[], plugins: PluginInfo[], manual: SearchSection[] = []): SearchIndex {
   const entries: Entry[] = [];
+  for (const section of manual) {
+    const text = `${section.heading ?? section.title} ${section.text}`;
+    entries.push({ title: section.title, section: section.heading, text: (section.heading ? text : `${section.title} ${text}`).toLowerCase(), summary: section.text.slice(0, 220), kind: "Docs", icon: "docs", href: paths.docs(section.path, section.id) });
+  }
   for (const doc of docs) {
-    const names = [doc.title, doc.name, ...(doc.aliases ?? [])].join(" ");
+    const names = `${doc.title} ${doc.name}`;
     entries.push({ title: doc.title, text: `${names} ${doc.summary}`.toLowerCase(), summary: doc.summary, kind: "Guide", icon: "docs", href: paths.docs(doc.name) });
     for (const section of sections(doc)) {
       if (!section.text && !section.heading) continue;
@@ -85,7 +57,7 @@ export function buildIndex(docs: DocTopic[], commands: CommandInfo[], rows: Mapp
         summary: section.text.slice(0, 220),
         kind: "Guide",
         icon: "docs",
-        href: paths.docs(doc.name) + (section.id ? `#${section.id}` : ""),
+        href: paths.docs(doc.name) + (section.id ? `#${encodeURIComponent(section.id)}` : ""),
       });
     }
   }
@@ -113,7 +85,7 @@ export function search(index: SearchIndex, query: string, limit = 80): SearchRes
     const title = entry.title.toLowerCase().replace(/^:/, "");
     const heading = (entry.section ?? "").toLowerCase();
     let score = title === needle ? 0 : title.startsWith(needle) ? 1 : title.includes(needle) ? 2 : heading.includes(needle) ? 3 : words.every((word) => title.includes(word) || heading.includes(word)) ? 4 : 5;
-    if (entry.kind !== "Guide") score += 0.5;
+    if (entry.kind !== "Guide" && entry.kind !== "Docs") score += 0.5;
     const key = entry.href;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -123,7 +95,7 @@ export function search(index: SearchIndex, query: string, limit = 80): SearchRes
 }
 
 function snippet(entry: Entry, words: string[]): string {
-  if (entry.kind !== "Guide" || !entry.section) return entry.summary;
+  if ((entry.kind !== "Guide" && entry.kind !== "Docs") || !entry.section) return entry.summary;
   const text = entry.summary;
   const lower = text.toLowerCase();
   const at = Math.min(...words.map((word) => lower.indexOf(word)).filter((index) => index >= 0));

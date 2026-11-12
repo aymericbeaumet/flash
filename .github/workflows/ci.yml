@@ -8,72 +8,108 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  # Every step runs a mise task (mise.toml). Each job's mise-action installs
+  # only the tools its tasks need; `mise run` must not install the rest.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_LOCKED: "true"
 
 jobs:
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.6
+          install_args: node pnpm
+      - name: Build the published manual and check every link
+        # The same build the Docs workflow deploys: every page of docs/,
+        # prerendered through the help's docs view; a broken link or anchor
+        # fails it.
+        run: mise run build:site
+
   format:
     name: Format
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show swift-format version
         run: swift format --version
+      # swift-format ships with Xcode: the tasks need mise but no tools.
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.6
+          install: false
       - name: Check formatting
         # Run the formatter in-place, then require a clean working tree.
         # No `.swift-format` config in the repo — Apple's default rules
         # are the source of truth.
         run: |
-          swift format format --in-place --recursive Sources Tests Package.swift
+          mise run fmt
           git diff --exit-code
 
   lint:
     name: Lint
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show swift-format version
         run: swift format --version
+      # swift-format ships with Xcode: the tasks need mise but no tools.
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.6
+          install: false
       - name: Lint
-        run: swift format lint --strict --recursive Sources Tests Package.swift
+        run: mise run lint
 
   guardrails:
     name: Guardrails
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5.1.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.11
+          version: 2026.11.6
           install_args: python
       - name: Check hard-rule guardrails
-        run: ./Scripts/check-guardrails.sh
+        run: mise run guardrails
       - name: Test release publication
-        run: bash Scripts/test-publish-github-release.sh
+        run: mise run test:publish
+      - name: Test the Homebrew cask
+        run: mise run test:cask
+      - name: Test release bundle completeness
+        run: mise run test:app-bundle
+      - name: Test third-party and libghostty-vt notice inventories
+        run: mise run test:notices
 
   plugin-gate:
     name: Plugins (gate)
     runs-on: macos-26
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cache Cargo registry + plugin target
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             build/plugin-target
-          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('mise.lock', 'Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - uses: jdx/mise-action@v5.1.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.11
+          version: 2026.11.6
           install_args: python rust
       - name: Plugin gate
-        # Scripts/test-plugins.sh --lane all is the whole Rust gate: `lint`
+        # `mise run test:plugins -- --lane all` is the whole Rust gate: `lint`
         # (fmt --check + clippy -D warnings) and `units` (the plugin-publication
         # test plus per-crate `cargo test --locked`, where the SDK's
         # wire/runtime suites and its probe member are the protocol conformance
@@ -81,144 +117,171 @@ jobs:
         # (a dev build of every executable plugin). `--locked` doubles as the
         # committed-Cargo.lock freshness gate. Coverage is by glob: a new plugin
         # crate is exercised by construction, never by editing this file.
-        run: ./Scripts/test-plugins.sh --lane all
+        run: mise run test:plugins -- --lane all
+
+  ghostty-bootstrap:
+    name: Ghostty bootstrap (tagged host, cold cache)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.6
+          install_args: python zig
+      - name: Test Ghostty bootstrap in a tagged repository
+        run: mise run test:ghostty
 
   build:
     name: Build
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5.1.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.11
+          version: 2026.11.6
           install_args: python zig
       - name: Cache libghostty-vt
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Only the stamped XCFramework is read on a hit; the source tree and
           # per-architecture Zig outputs (~400 MB) are rebuilt on a miss. The
           # script pins the Ghostty revision and the Zig version it accepts.
           path: build/ghostty/ghostty-vt.xcframework
-          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('mise.lock', 'Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
       - name: Build libghostty-vt
-        run: ./Scripts/build-ghostty.sh --dev
+        run: mise run build:ghostty
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .build
-          key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          key: ${{ runner.os }}-spm-build-${{ hashFiles('mise.lock', 'Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-build-
       - name: Build
-        run: swift build
+        run: mise run build
 
   test:
     name: Test
     runs-on: macos-26
     env:
-      TMUX_ORACLE: ${{ github.workspace }}/build/tmux-oracle/bin/tmux
+      # CI requires the pinned tmux oracle the Swift suite skips without;
+      # `mise run test` itself requires real plugin binaries.
       FLASH_REQUIRE_TMUX_ORACLE: '1'
-      FLASH_REQUIRE_PLUGIN_BINARIES: '1'
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5.1.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.11
+          version: 2026.11.6
           install_args: python rust zig
-      - name: Install tmux oracle build dependencies
-        run: brew install libevent ncurses pkg-config
       - name: Cache pinned tmux oracle
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/tmux-oracle
           key: ${{ runner.os }}-${{ runner.arch }}-tmux-oracle-${{ hashFiles('Scripts/build-tmux-oracle.sh') }}
       - name: Build pinned tmux oracle
         run: |
-          ./Scripts/build-tmux-oracle.sh
+          mise run build:tmux-oracle
           echo "$GITHUB_WORKSPACE/build/tmux-oracle/bin" >> "$GITHUB_PATH"
       - name: Check native format expansion oracle
-        run: python3 Scripts/test-status-format-oracle.py
+        run: mise run test:status-format
       - name: Cache libghostty-vt
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Only the stamped XCFramework is read on a hit; the source tree and
           # per-architecture Zig outputs (~400 MB) are rebuilt on a miss. The
           # script pins the Ghostty revision and the Zig version it accepts.
           path: build/ghostty/ghostty-vt.xcframework
-          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('Scripts/build-ghostty.sh') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('mise.lock', 'Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
       - name: Build libghostty-vt
-        run: ./Scripts/build-ghostty.sh --dev
+        run: mise run build:ghostty
       - name: Show Swift version
         run: swift --version
       - name: Cache SwiftPM build
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .build
-          key: ${{ runner.os }}-spm-test-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          key: ${{ runner.os }}-spm-test-${{ hashFiles('mise.lock', 'Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-test-
       - name: Cache Cargo registry + plugin target
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             build/plugin-target
-          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('mise.lock', 'Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
       - name: Build plugin binaries
         # Every executable plugin: the sandbox boot test launches each one
         # under its generated profile, and FLASH_REQUIRE_PLUGIN_BINARIES turns
         # an unbuilt plugin into a failure instead of a skip. The subprocess
-        # smoke tests drive spotify (mocked CLI) and answers (stdin EOF), and
-        # doctor inspects media.
-        run: ./Scripts/build-plugins.sh dev
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
+        # smoke tests drive screenshot (an undeclared subcommand, refused in
+        # process) and answers (stdin EOF), and doctor inspects answers.
+        run: mise run build:plugins
       - name: Test
-        run: swift test
+        run: mise run test
 
   inspector:
     name: Inspector
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5.1.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.11
+          version: 2026.11.6
           install_args: node pnpm
-      - name: Install inspector deps
-        working-directory: Inspector
-        run: pnpm install --frozen-lockfile
-      - name: Type-check inspector
-        working-directory: Inspector
-        run: pnpm check
-      - name: Run inspector unit tests
-        working-directory: Inspector
-        run: node --test *.test.ts
-      - name: Build inspector bundle
-        working-directory: Inspector
-        run: pnpm build
-      - name: Stage bundle as SwiftPM resource
-        run: cp Inspector/dist/index.html Sources/flash/Resources/inspector.html
+      - name: Type-check and unit-test the inspector
+        run: mise run test:inspector
+      - name: Build the inspector bundle and stage it as the SwiftPM resource
+        run: mise run build:inspector
       - name: Require committed bundle to be up to date
         # The committed resource must match a fresh build of Inspector/.
-        # If this fails, run Scripts/build-inspector.sh and commit the result.
+        # If this fails, run `mise run build:inspector` and commit the result.
         run: git diff --exit-code Sources/flash/Resources/inspector.html
+
+  release-package:
+    name: Release package (universal)
+    runs-on: macos-26
+    # Push publication already builds and validates the universal release.
+    # PRs and manual runs exercise the same package without publishing it.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.6
+          install_args: python rust zig node pnpm cargo:cargo-about gh
+      - name: Cache Cargo sources
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('mise.lock', 'Plugins/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-
+      - name: Cache universal libghostty-vt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/ghostty/ghostty-vt.xcframework
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-release-${{ hashFiles('mise.lock', 'Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
+      - name: Build and validate universal release bundle
+        run: mise run build:release
 
   homebrew:
     name: Homebrew
     runs-on: macos-26
     # plugin-gate is REQUIRED: a failed plugin gate must never ship a release.
-    needs: [format, lint, guardrails, build, test, inspector, plugin-gate]
+    needs: [docs, format, lint, guardrails, ghostty-bootstrap, build, test, inspector, plugin-gate]
     if: github.event_name == 'push'
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -270,9 +333,10 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: jdx/mise-action@v5.1.2
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.11
+          version: 2026.11.6
+          install_args: python rust zig node pnpm cargo:cargo-about gh
 
       # Developer ID signing and notarization are opt-in through repository
       # secrets (docs/release.md names them). Without them the build is
@@ -346,22 +410,23 @@ jobs:
           fi
           export FLASH_BUNDLE_VERSION="${{ github.run_number }}"
           export FLASH_ZIP_PATH="$zip_path"
-          bash Scripts/build.sh --release
+          mise run build:release
           echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"
-          echo "sha256=$(cat "$zip_path.sha256")" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release asset
+        id: publication
         if: steps.meta.outputs.deploy == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          bash Scripts/publish-github-release.sh \
+          mise run release:publish -- \
             "${{ steps.meta.outputs.release_tag }}" \
             "${{ steps.package.outputs.zip_path }}" \
             "${{ steps.meta.outputs.asset_name }}" \
             "Flash ${{ steps.meta.outputs.version }}" \
             "${{ steps.meta.outputs.prerelease }}" \
             "$GITHUB_SHA"
+          echo "sha256=$(cat '${{ steps.package.outputs.zip_path }}.sha256')" >> "$GITHUB_OUTPUT"
 
       - name: Check Homebrew tap token
         if: steps.meta.outputs.deploy == 'true'
@@ -375,7 +440,7 @@ jobs:
 
       - name: Checkout Homebrew tap
         if: steps.meta.outputs.deploy == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: aymericbeaumet/homebrew-tap
           path: homebrew-tap
@@ -385,12 +450,12 @@ jobs:
         if: steps.meta.outputs.deploy == 'true'
         run: |
           url="https://github.com/aymericbeaumet/flash/releases/download/${{ steps.meta.outputs.release_tag }}/${{ steps.meta.outputs.asset_name }}"
-          bash Scripts/update-homebrew-cask.sh \
+          mise run release:cask -- \
             --tap-dir homebrew-tap \
             --token "${{ steps.meta.outputs.cask_token }}" \
             --version "${{ steps.meta.outputs.version }}" \
             --url "$url" \
-            --sha256 "${{ steps.package.outputs.sha256 }}"
+            --sha256 "${{ steps.publication.outputs.sha256 }}"
           ruby -c "homebrew-tap/Casks/${{ steps.meta.outputs.cask_token }}.rb"
 
       - name: Push Homebrew tap update

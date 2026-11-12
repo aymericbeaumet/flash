@@ -5,6 +5,31 @@ import XCTest
 @testable import FlashTerminal
 
 final class TerminalTests: XCTestCase {
+  func testTextAttributesAndUnderlineStylesRemainIndependent() throws {
+    let buffer = TerminalBuffer(columns: 16, rows: 1, scrollbackLines: 0)
+    let attributes = [1, 3, 2, 5, 7, 8, 9, 53]
+    let text =
+      attributes.map { "\u{1B}[0;\($0)mX" }.joined()
+      + (1...5).map { "\u{1B}[0;4:\($0);58:2::7:8:9mU" }.joined()
+      + "\u{1B}[0mN"
+    buffer.write(Data(text.utf8))
+    let cells = try XCTUnwrap(buffer.snapshot()).cells
+    for index in attributes.indices {
+      XCTAssertEqual(cells[index].flags, UInt16(1 << index))
+      XCTAssertEqual(cells[index].underline, 0)
+    }
+    for underline in 1...5 {
+      let cell = cells[attributes.count + underline - 1]
+      XCTAssertEqual(cell.flags, 0)
+      XCTAssertEqual(cell.underline, underline)
+      XCTAssertEqual(
+        [cell.underlineColor.red, cell.underlineColor.green, cell.underlineColor.blue], [7, 8, 9])
+    }
+    XCTAssertEqual(cells[13].flags, 0)
+    XCTAssertEqual(cells[13].underline, 0)
+    XCTAssertEqual(cells[13].underlineColor, cells[13].foreground)
+  }
+
   func testANSIIndexedAndTruecolorForegroundsAndBackgroundsReachFrames() throws {
     let cells = try frameFromPTY(
       "\u{1B}[31;44mR\u{1B}[32mG"
@@ -128,7 +153,7 @@ final class TerminalTests: XCTestCase {
     let first = expectation(
       for: NSPredicate { _, _ in session.frame?.text == "界é long\n" }, evaluatedWith: nil)
     session.start()
-    wait(for: [first], timeout: 5)
+    wait(for: [first], timeout: terminalChildTimeout)
     let frame = try XCTUnwrap(session.frame)
     XCTAssertEqual(frame.cells[0].text, "界")
     XCTAssertEqual(frame.cells[0].width, 2)
@@ -138,7 +163,7 @@ final class TerminalTests: XCTestCase {
     let replacement = expectation(
       for: NSPredicate { _, _ in session.frame?.text == "x\n" }, evaluatedWith: nil)
     session.send(Data("go\n".utf8))
-    wait(for: [replacement], timeout: 5)
+    wait(for: [replacement], timeout: terminalChildTimeout)
   }
 
   func testTerminalTextSanitizesLiteralControlSequencesAndLineEndings() {
@@ -169,7 +194,7 @@ final class TerminalTests: XCTestCase {
       let ready = expectation(
         for: NSPredicate { _, _ in view.terminalFrame?.text.contains(text) == true },
         evaluatedWith: nil)
-      wait(for: [ready], timeout: 5)
+      wait(for: [ready], timeout: terminalChildTimeout)
     }
     waitForText("READY")
     let event = try XCTUnwrap(
@@ -197,7 +222,7 @@ final class TerminalTests: XCTestCase {
       }
     }
     session.start()
-    wait(for: [exited], timeout: 5)
+    wait(for: [exited], timeout: terminalChildTimeout)
     XCTAssertTrue(session.frame?.text.contains("PTY:xterm-256color:8 40") == true)
     let retained = session.frame
     RunLoop.current.run(until: Date().addingTimeInterval(0.1))
@@ -217,7 +242,7 @@ final class TerminalTests: XCTestCase {
     let ready = expectation(
       for: NSPredicate { _, _ in view.terminalFrame?.text.contains("READY") == true },
       evaluatedWith: nil)
-    wait(for: [ready], timeout: 5)
+    wait(for: [ready], timeout: terminalChildTimeout)
     let replacement = TerminalSession(
       configuration: TerminalConfiguration(
         command: ["/bin/sh", "-c", "printf OTHER; read line"], columns: 20, rows: 3))
@@ -227,12 +252,12 @@ final class TerminalTests: XCTestCase {
     let replaced = expectation(
       for: NSPredicate { _, _ in view.terminalFrame?.text.contains("OTHER") == true },
       evaluatedWith: nil)
-    wait(for: [replaced], timeout: 5)
+    wait(for: [replaced], timeout: terminalChildTimeout)
     let hiddenFrame = session.frame
     session.send(Data("go\n".utf8))
     let exited = expectation(
       for: NSPredicate { _, _ in session.state == .exited(code: 0) }, evaluatedWith: nil)
-    wait(for: [exited], timeout: 5)
+    wait(for: [exited], timeout: terminalChildTimeout)
     XCTAssertEqual(session.frame?.generation, hiddenFrame?.generation)
     XCTAssertTrue(view.terminalFrame?.text.contains("OTHER") == true)
     XCTAssertFalse(view.terminalFrame?.text.contains("LATEST") == true)
@@ -241,7 +266,7 @@ final class TerminalTests: XCTestCase {
     let latest = expectation(
       for: NSPredicate { _, _ in view.terminalFrame?.text.contains("LATEST") == true },
       evaluatedWith: nil)
-    wait(for: [latest], timeout: 5)
+    wait(for: [latest], timeout: terminalChildTimeout)
   }
 
   func testInputResizeAndExplicitRestart() {
@@ -261,7 +286,7 @@ final class TerminalTests: XCTestCase {
       }
     }
     session.start()
-    wait(for: [ready], timeout: 5)
+    wait(for: [ready], timeout: terminalChildTimeout)
     guard case .running(let firstPID) = session.state else { return XCTFail("No running PTY") }
     let received = expectation(description: "received resized input")
     var didReceive = false
@@ -273,7 +298,7 @@ final class TerminalTests: XCTestCase {
     }
     session.resize(columns: 60, rows: 9)
     session.send(Data("hello\n".utf8))
-    wait(for: [received], timeout: 5)
+    wait(for: [received], timeout: terminalChildTimeout)
     XCTAssertEqual(session.state, .running(pid: firstPID))
     let restarted = expectation(description: "restarted")
     session.onStateChange = { state in
@@ -283,7 +308,7 @@ final class TerminalTests: XCTestCase {
       }
     }
     session.restart()
-    wait(for: [restarted], timeout: 5)
+    wait(for: [restarted], timeout: terminalChildTimeout)
   }
 
   func testShutdownKillsForegroundJobAndReapsChild() {
@@ -299,7 +324,7 @@ final class TerminalTests: XCTestCase {
       }
     }
     session.start()
-    wait(for: [started], timeout: 5)
+    wait(for: [started], timeout: terminalChildTimeout)
     let before = Date()
     session.shutdown()
     XCTAssertLessThan(Date().timeIntervalSince(before), 1)
@@ -318,7 +343,7 @@ final class TerminalTests: XCTestCase {
       }
     }
     session.start()
-    wait(for: [started], timeout: 5)
+    wait(for: [started], timeout: terminalChildTimeout)
     let stopped = expectation(description: "stopped and reaped")
     session.stop {
       XCTAssertTrue(Thread.isMainThread)
@@ -347,7 +372,7 @@ final class TerminalTests: XCTestCase {
     let started = Date()
     let completed = expectation(description: "deferred child reaped")
     TerminalChildReaping.reapLater(pid: pid) { completed.fulfill() }
-    wait(for: [completed], timeout: 5)
+    wait(for: [completed], timeout: terminalChildTimeout)
     XCTAssertGreaterThan(Date().timeIntervalSince(started), 0.2, "reaped only after it exited")
     XCTAssertEqual(waitpid(pid, nil, WNOHANG), -1)
     XCTAssertEqual(errno, ECHILD)
@@ -443,7 +468,7 @@ final class TerminalTests: XCTestCase {
       }
       session.start()
     }
-    wait(for: [started], timeout: 5)
+    wait(for: [started], timeout: terminalChildTimeout)
     let before = Date()
     TerminalSession.shutdown(sessions)
     // Each child ignores hangup and termination, so each waits out its 200 ms
@@ -489,7 +514,7 @@ final class TerminalTests: XCTestCase {
     }
     session.setColors(foreground: .white, background: .black)
     session.start()
-    wait(for: [ready], timeout: 5)
+    wait(for: [ready], timeout: terminalChildTimeout)
     let published = frames.count
     for _ in 0..<5 { session.setColors(foreground: .white, background: .black) }
     RunLoop.current.run(until: Date().addingTimeInterval(0.1))
@@ -500,7 +525,7 @@ final class TerminalTests: XCTestCase {
     }
     session.setColors(
       foreground: NSColor(srgbRed: 0x12 / 255, green: 0, blue: 0, alpha: 1), background: .black)
-    wait(for: [recolored], timeout: 5)
+    wait(for: [recolored], timeout: terminalChildTimeout)
   }
 
   func testScrollBurstsShareFrameCoalescing() {
@@ -515,7 +540,7 @@ final class TerminalTests: XCTestCase {
       for: NSPredicate { _, _ in session.frame?.text.contains("line199") == true },
       evaluatedWith: nil)
     session.start()
-    wait(for: [ready], timeout: 5)
+    wait(for: [ready], timeout: terminalChildTimeout)
     var published = 0
     session.onFrame = { _ in published += 1 }
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
@@ -523,7 +548,7 @@ final class TerminalTests: XCTestCase {
     let settled = expectation(
       for: NSPredicate { _, _ in session.frame?.text.contains("line157") == true },
       evaluatedWith: nil)
-    wait(for: [settled], timeout: 5)
+    wait(for: [settled], timeout: terminalChildTimeout)
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     XCTAssertTrue(session.frame?.text.hasPrefix("line157") == true, session.frame?.text ?? "")
     // The leading scroll publishes at once and the rest of the burst settles
@@ -538,7 +563,7 @@ final class TerminalTests: XCTestCase {
     let failed = expectation(description: "failed")
     session.onStateChange = { state in if case .failed = state { failed.fulfill() } }
     session.start()
-    wait(for: [failed], timeout: 5)
+    wait(for: [failed], timeout: terminalChildTimeout)
   }
 
   /// A popup whose process ends by itself keeps its screen unless the user
@@ -553,7 +578,7 @@ final class TerminalTests: XCTestCase {
     func waitUntil(_ description: String, _ condition: @escaping () -> Bool) {
       let met = expectation(for: NSPredicate { _, _ in condition() }, evaluatedWith: nil)
       met.expectationDescription = description
-      wait(for: [met], timeout: 5)
+      wait(for: [met], timeout: terminalChildTimeout)
     }
     session.start()
     waitUntil("ready") { session.frame?.text.contains("READY") == true }
@@ -682,7 +707,7 @@ final class TerminalSnapshotTests: XCTestCase {
       if frame.text.contains("READY") { ready.fulfill() }
     }
     session.start()
-    wait(for: [ready], timeout: 5)
+    wait(for: [ready], timeout: terminalChildTimeout)
     // Let the interval elapse so the reply is the first output after idle.
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     let echoed = expectation(description: "echo")
@@ -695,7 +720,7 @@ final class TerminalSnapshotTests: XCTestCase {
       }
     }
     session.send(Data("go\n".utf8))
-    wait(for: [echoed], timeout: 5)
+    wait(for: [echoed], timeout: terminalChildTimeout)
     XCTAssertLessThan(latency, 0.030, "a leading-edge frame must not wait a coalescing window")
   }
 }

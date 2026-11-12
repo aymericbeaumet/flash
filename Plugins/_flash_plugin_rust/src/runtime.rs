@@ -1,8 +1,8 @@
 //! The plugin runtime: the [`Plugin`] trait, the [`run`] entry point, and the
 //! serve loop speaking protocol v1 — immediate initialize reply, `ping`,
-//! `event` notifications, `evaluate`/`search`/`hints`, the unified `perform`,
-//! and stdin-EOF shutdown. Parent liveness is stdin EOF: the host owns the
-//! pipe, so a dead host ends the loop.
+//! `event` notifications, `evaluate`/`hints`/`text_grid`, the unified
+//! `perform`, and stdin-EOF shutdown. Parent liveness is stdin EOF: the host
+//! owns the pipe, so a dead host ends the loop.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -21,9 +21,9 @@ use crate::emit::{Emitter, MAX_FRAME_BYTES, OUTBOUND_QUEUE_CAPACITY, OutboundFra
 use crate::events::EventMailbox;
 use crate::framing::{FrameReader, Record};
 use crate::types::{
-    ActionRequest, CommandRequest, EvaluateRequest, EvaluateResponse, Event, Frame, HintsRequest,
-    HintsResponse, NavigateRequest, Perform, PerformResponse, RunningApplication, SearchRequest,
-    SearchResponse,
+    CommandRequest, EvaluateRequest, EvaluateResponse, Event, HintsRequest, HintsResponse,
+    NavigateRequest, Perform, PerformResponse, RunningApplication, TextGridRequest,
+    TextGridResponse,
 };
 
 pub(crate) const REQUEST_CAPACITY: usize = 16;
@@ -37,6 +37,12 @@ const PROTOCOL_VERSION: u64 = 1;
 
 /// Canonical protocol error strings (pinned in `protocol.json`).
 const INITIALIZE_REPEATED_ERROR: &str = "initialize may only be called once";
+
+/// The one manifest `lifecycle` value (`protocol.json` `lifecycle.values`):
+/// a catalog-only plugin whose run is `on_start`. The `plugin!` macro turns
+/// it into [`Plugin::exits_after_start`].
+#[cfg(test)]
+pub(crate) const PUBLISH_THEN_EXIT: &str = "publish_then_exit";
 
 /// After stdin EOF, shutdown callbacks and output draining share this one
 /// deadline; a hung `on_shutdown` cannot keep the process alive past it.
@@ -69,17 +75,6 @@ pub trait Plugin: Send + Sync + 'static {
         EvaluateResponse::default()
     }
 
-    /// Live-source pull for `live: true` sources; may do real work. Late
-    /// replies are dropped host-side, not fatal.
-    fn on_search(
-        &self,
-        ctx: Context,
-        request: SearchRequest,
-    ) -> impl Future<Output = SearchResponse> + Send {
-        let _ = (ctx, request);
-        async { SearchResponse::default() }
-    }
-
     /// Produce hint targets for the focused app. Always live.
     fn on_hints(
         &self,
@@ -88,6 +83,18 @@ pub trait Plugin: Send + Sync + 'static {
     ) -> impl Future<Output = HintsResponse> + Send {
         let _ = (ctx, request);
         async { HintsResponse::default() }
+    }
+
+    /// The focused app's visible text as a cell grid, for a letter search
+    /// in an app that publishes no Accessibility text. Always live; the
+    /// empty default means no grid.
+    fn on_text_grid(
+        &self,
+        ctx: Context,
+        request: TextGridRequest,
+    ) -> impl Future<Output = TextGridResponse> + Send {
+        let _ = (ctx, request);
+        async { TextGridResponse::default() }
     }
 
     /// Dispatch one decoded `perform` request. Unregistered kinds answer
@@ -105,6 +112,16 @@ pub trait Plugin: Send + Sync + 'static {
     fn on_shutdown(&self, ctx: Context) -> impl Future<Output = ()> + Send {
         let _ = ctx;
         async {}
+    }
+
+    /// Whether `on_start` is the whole run (manifest `lifecycle:
+    /// publish_then_exit`): once it returns, the runtime stops reading
+    /// stdin, runs `on_shutdown`, writes every frame the run emitted and
+    /// exits 0 without waiting for the host to close stdin. The host keeps
+    /// the published catalog and spawns the plugin again only when its data
+    /// can have changed.
+    fn exits_after_start(&self) -> bool {
+        false
     }
 }
 
@@ -147,10 +164,6 @@ struct EventPayload {
     #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pid: Option<i64>,
     #[serde(default)]
-    front_window_frame: Option<Frame>,
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
     notification: Option<String>,
     #[serde(default)]
     running_applications: Vec<RunningApplication>,
@@ -188,8 +201,6 @@ pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
                 name: wire.name,
                 bundle_id: wire.payload.bundle_id,
                 pid: wire.payload.pid,
-                front_window_frame: wire.payload.front_window_frame,
-                text: wire.payload.text,
                 notification: wire.payload.notification,
                 segments: wire.payload.segments,
             },
@@ -205,6 +216,12 @@ pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
 fn decode<T: DeserializeOwned>(params: Value, method: &str) -> Result<T, String> {
     serde_json::from_value::<T>(params).map_err(|_| format!("invalid {method} params"))
 }
+
+/// The `perform` kinds, as `protocol.json` pins them: a published row, a
+/// command (core, own or bang) and a route. `wire.rs` asserts the parity
+/// with the contract and the tests below that `decode_perform` knows each.
+#[cfg(test)]
+pub(crate) const PERFORM_KINDS: [&str; 3] = ["resolve", "command", "navigate"];
 
 /// Decode a `perform` payload into its kind-specific request. An unknown kind
 /// is an error reply (never `unhandled`): the host and plugin disagree about
@@ -223,7 +240,6 @@ fn decode_perform(params: Value) -> Result<Perform, String> {
             .and_then(|row| decode(row, "perform"))
             .map(Perform::Resolve),
         "command" => decode::<CommandRequest>(params, "perform").map(Perform::Command),
-        "action" => decode::<ActionRequest>(params, "perform").map(Perform::Action),
         "navigate" => decode::<NavigateRequest>(params, "perform").map(Perform::Navigate),
         other => Err(format!("unknown perform kind: {other}")),
     }
@@ -251,11 +267,23 @@ async fn run_event_worker<P: Plugin>(plugin: Arc<P>, ctx: Context, events: Arc<E
     }
 }
 
+/// Resolves when a self-ending run's `on_start` has returned; pending
+/// forever while no such run exists, so the serve loop's `select!` ignores it.
+async fn run_completed(run: &mut Option<tokio::task::JoinHandle<()>>) {
+    match run {
+        Some(handle) => {
+            let _ = handle.await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
 /// Run the plugin on one async executor and serve NDJSON protocol v1 until
-/// stdin closes. Events preserve wire order, while startup and request
-/// callbacks run as independent tasks and may overlap. Async I/O and
-/// `spawn_blocking` still make progress without paying for two resident worker
-/// threads in every plugin process.
+/// stdin closes, or until `on_start` returns for a plugin whose run ends
+/// with it ([`Plugin::exits_after_start`]). Events preserve wire order,
+/// while startup and request callbacks run as independent tasks and may
+/// overlap. Async I/O and `spawn_blocking` still make progress without
+/// paying for two resident worker threads in every plugin process.
 pub fn run<P: Plugin>(plugin: P) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -321,6 +349,9 @@ where
     let mut initialized = false;
     let mut mismatch_exit = false;
     let mut writer_finished = false;
+    // The `on_start` of a plugin whose run ends with it; its completion
+    // ends the loop as stdin EOF would.
+    let mut run: Option<tokio::task::JoinHandle<()>> = None;
     'frames: loop {
         // Buffered input can contain hundreds of complete frames. Give the
         // writer/workers a turn without ever waiting for their progress.
@@ -329,6 +360,7 @@ where
         let record = tokio::select! {
             record = stdin.next() => record,
             _ = &mut writer => { writer_finished = true; break; }
+            _ = run_completed(&mut run) => break,
         };
         let line = match record {
             Ok(Record::Frame(line)) => line,
@@ -406,7 +438,10 @@ where
         if id.as_u64().is_none_or(|id| id == 0) {
             continue;
         }
-        let permits = if matches!(method.as_str(), "evaluate" | "search" | "hints" | "perform") {
+        let permits = if matches!(
+            method.as_str(),
+            "evaluate" | "hints" | "text_grid" | "perform"
+        ) {
             match (
                 slots.clone().try_acquire_owned(),
                 request_bytes
@@ -459,9 +494,14 @@ where
                     id,
                     json!({ "ok": true, "protocol_version": PROTOCOL_VERSION }),
                 );
-                let plugin = plugin.clone();
-                let ctx = ctx.clone();
-                tasks.spawn(async move { plugin.on_start(ctx).await });
+                let started = plugin.clone();
+                let start_ctx = ctx.clone();
+                let on_start = async move { started.on_start(start_ctx).await };
+                if plugin.exits_after_start() {
+                    run = Some(tokio::spawn(on_start));
+                } else {
+                    tasks.spawn(on_start);
+                }
             }
             "ping" => reply!(id, json!({ "ok": true })),
             "evaluate" => match decode::<EvaluateRequest>(params, "evaluate") {
@@ -475,29 +515,6 @@ where
                             serde_json::to_value(&response.answers).unwrap_or_else(|_| json!([]));
                         ctx.emit
                             .respond(id, json!({ "ok": true, "answers": answers }))
-                            .await;
-                    }));
-                }
-                Err(error) => {
-                    reply!(id, json!({ "ok": false, "error": error }));
-                }
-            },
-            "search" => match decode::<SearchRequest>(params, "search") {
-                Ok(request) => {
-                    let plugin = plugin.clone();
-                    let ctx = ctx.clone();
-                    tasks.spawn(crate::trace::scope(trace, async move {
-                        let _permits = permits;
-                        let handler = plugin.on_search(ctx.clone(), request);
-                        let Some(response) = crate::deadline::within(deadline, handler).await
-                        else {
-                            deadline_exceeded(&ctx, id, "search", deadline).await;
-                            return;
-                        };
-                        let rows =
-                            serde_json::to_value(&response.rows).unwrap_or_else(|_| json!([]));
-                        ctx.emit
-                            .respond(id, json!({ "ok": true, "rows": rows }))
                             .await;
                     }));
                 }
@@ -525,6 +542,35 @@ where
                         }
                         if !crate::wire::valid_result("hints", &result) {
                             result = json!({ "ok": false, "error": "invalid hints response" });
+                        }
+                        ctx.emit.respond(id, result).await;
+                    }));
+                }
+                Err(error) => {
+                    reply!(id, json!({ "ok": false, "error": error }));
+                }
+            },
+            "text_grid" => match decode::<TextGridRequest>(params, "text_grid") {
+                Ok(request) => {
+                    let plugin = plugin.clone();
+                    let ctx = ctx.clone();
+                    tasks.spawn(crate::trace::scope(trace, async move {
+                        let _permits = permits;
+                        let handler = plugin.on_text_grid(ctx.clone(), request);
+                        let Some(response) = crate::deadline::within(deadline, handler).await
+                        else {
+                            deadline_exceeded(&ctx, id, "text_grid", deadline).await;
+                            return;
+                        };
+                        let mut result = json!({
+                            "ok": true,
+                            "columns": response.columns,
+                            "rows": response.rows,
+                            "lines": serde_json::to_value(&response.lines)
+                                .unwrap_or_else(|_| json!([])),
+                        });
+                        if !crate::wire::valid_result("text_grid", &result) {
+                            result = json!({ "ok": false, "error": "invalid text_grid response" });
                         }
                         ctx.emit.respond(id, result).await;
                     }));
@@ -588,7 +634,7 @@ mod tests {
     use crate::context::test_context;
     use crate::emit::MAX_FRAME_BYTES;
     use crate::testing::{WireHarness, test_env};
-    use crate::types::{Candidate, JumpTarget, QueryAnswer};
+    use crate::types::{Candidate, Frame, JumpTarget, QueryAnswer, TextGridLine};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -602,7 +648,7 @@ mod tests {
 
     fn command(id: u64, subcommand: &str) -> Value {
         json!({ "id": id, "method": "perform", "params": {
-            "kind": "command", "command": "test", "subcommand": subcommand, "args": [], "raw": ""
+            "kind": "command", "command": "test", "subcommand": subcommand, "args": []
         }})
     }
 
@@ -621,6 +667,7 @@ mod tests {
     #[derive(Default)]
     struct TestPlugin {
         publish_on_start: bool,
+        exits_after_start: bool,
         hang_on_shutdown: bool,
         shutdown_ran: Arc<AtomicBool>,
     }
@@ -629,7 +676,12 @@ mod tests {
         async fn on_start(&self, ctx: Context) {
             if self.publish_on_start {
                 ctx.publish(vec![Candidate::new("test.items", "warm")]);
+                ctx.log("debug", "published");
             }
+        }
+
+        fn exits_after_start(&self) -> bool {
+            self.exits_after_start
         }
 
         fn evaluate(&self, request: EvaluateRequest) -> EvaluateResponse {
@@ -637,13 +689,6 @@ mod tests {
                 return EvaluateResponse::answers(vec![QueryAnswer::copy_text("one", Some("s"))]);
             }
             EvaluateResponse::default()
-        }
-
-        async fn on_search(&self, _: Context, request: SearchRequest) -> SearchResponse {
-            if request.query == "hit" {
-                return SearchResponse::rows(vec![Candidate::new("test.items", "hit")]);
-            }
-            SearchResponse::default()
         }
 
         async fn on_hints(&self, _: Context, request: HintsRequest) -> HintsResponse {
@@ -666,6 +711,25 @@ mod tests {
             .context_pid(77)
         }
 
+        async fn on_text_grid(&self, _: Context, request: TextGridRequest) -> TextGridResponse {
+            match request.bundle_id.as_deref() {
+                Some("slow") => {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    TextGridResponse::default()
+                }
+                // A row below the grid fails the shared validation.
+                Some("invalid") => TextGridResponse::new(4, 2, vec![TextGridLine::text(2, 0, "a")]),
+                _ => TextGridResponse::new(
+                    20,
+                    6,
+                    vec![
+                        TextGridLine::format(0, 0, 20, "#[fg=colour178]za"),
+                        TextGridLine::text(2, 10, "xa"),
+                    ],
+                ),
+            }
+        }
+
         async fn perform(&self, ctx: Context, request: Perform) -> PerformResponse {
             let Perform::Command(command) = request else {
                 return PerformResponse::unhandled();
@@ -686,6 +750,11 @@ mod tests {
                         "x".repeat(MAX_FRAME_BYTES),
                     )]);
                     ctx.publish(vec![Candidate::new("test.items", "fits")]);
+                    PerformResponse::ok()
+                }
+                "publish-source" => {
+                    ctx.publish_source("test.items", vec![Candidate::new("test.items", "one")]);
+                    ctx.publish_source("test.items", Vec::new());
                     PerformResponse::ok()
                 }
                 "host-ping" => {
@@ -743,8 +812,7 @@ mod tests {
         let mut wire = serve(TestPlugin::default()).await;
         wire.send(json!({ "method": "event", "params": {
             "name": "core:window.focus.changed",
-            "payload": { "bundle_id": "dev.flash.test", "pid": 999,
-                "front_window_frame": { "x": -1912.5, "y": -140.25, "width": 1512.0, "height": 982.0 } }
+            "payload": { "bundle_id": "dev.flash.test", "pid": 999 }
         }}))
         .await;
         // A plugin that never looks at the status observation is unaffected
@@ -769,6 +837,59 @@ mod tests {
                 .iter()
                 .all(|frame| frame["method"] == "log")
         );
+    }
+
+    /// A `publish_then_exit` plugin's run is `on_start`: once it returns the
+    /// runtime stops reading stdin, runs the shutdown hook, writes every
+    /// frame the run emitted and ends with exit status 0, without waiting
+    /// for the host to close stdin. The publish lands before the exit.
+    #[tokio::test]
+    async fn a_publish_then_exit_run_ends_after_on_start_with_every_frame_written() {
+        let shutdown_ran = Arc::new(AtomicBool::new(false));
+        let mut wire = WireHarness::new(TestPlugin {
+            publish_on_start: true,
+            exits_after_start: true,
+            shutdown_ran: shutdown_ran.clone(),
+            ..TestPlugin::default()
+        });
+        wire.send(initialize()).await;
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 1, "result": { "ok": true, "protocol_version": 1 } })
+        );
+        let publish = wire.recv_notification("publish").await;
+        assert_eq!(publish["rows"][0]["title"], "warm");
+        let started = Instant::now();
+        let rest = wire.finished().await;
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the run ends on its own, not on a deadline"
+        );
+        let methods: Vec<&str> = rest
+            .iter()
+            .map(|frame| frame["method"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(methods, ["log", "log"], "{rest:?}");
+        assert_eq!(rest[0]["params"]["message"], "published");
+        assert_eq!(rest[1]["params"]["message"], "shutdown");
+        assert!(shutdown_ran.load(Ordering::SeqCst));
+    }
+
+    /// Without the declaration a plugin keeps serving after `on_start`:
+    /// the host's stdin EOF remains the only end of its run.
+    #[tokio::test]
+    async fn a_resident_plugin_keeps_serving_after_on_start() {
+        let mut wire = serve(TestPlugin {
+            publish_on_start: true,
+            ..TestPlugin::default()
+        })
+        .await;
+        wire.recv_notification("publish").await;
+        wire.send(json!({ "id": 2, "method": "ping", "params": {} }))
+            .await;
+        assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
     }
 
     #[tokio::test]
@@ -989,9 +1110,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_and_search_reply_their_arrays_even_when_empty() {
+    async fn evaluate_replies_its_array_even_when_empty() {
         let mut wire = serve(TestPlugin::default()).await;
-        wire.send(json!({ "id": 2, "method": "evaluate", "params": { "surface": "flashlight", "scope": "", "query": "one" } }))
+        wire.send(json!({ "id": 2, "method": "evaluate", "params": { "query": "one" } }))
             .await;
         assert_eq!(
             wire.recv_response(2).await,
@@ -999,27 +1120,11 @@ mod tests {
                 { "title": "one", "subtitle": "s", "effect": { "type": "copy_text", "text": "one" } }
             ]})
         );
-        wire.send(json!({ "id": 3, "method": "evaluate", "params": { "surface": "flashlight", "scope": "", "query": "zzz" } }))
+        wire.send(json!({ "id": 3, "method": "evaluate", "params": { "query": "zzz" } }))
             .await;
         assert_eq!(
             wire.recv_response(3).await,
             json!({ "ok": true, "answers": [] })
-        );
-        wire.send(
-            json!({ "id": 4, "method": "search", "params": { "query": "hit", "scope": "" } }),
-        )
-        .await;
-        assert_eq!(
-            wire.recv_response(4).await,
-            json!({ "ok": true, "rows": [{ "source": "test.items", "title": "hit" }] })
-        );
-        wire.send(
-            json!({ "id": 5, "method": "search", "params": { "query": "zzz", "scope": "" } }),
-        )
-        .await;
-        assert_eq!(
-            wire.recv_response(5).await,
-            json!({ "ok": true, "rows": [] })
         );
         wire.close_stdin().await;
         wire.finished().await;
@@ -1047,12 +1152,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn text_grid_replies_carry_the_grid_or_the_validation_error() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({ "id": 2, "method": "text_grid", "params": {
+            "bundle_id": "dev.flash.test", "pid": 999,
+            "front_window_frame": { "x": 0, "y": 0, "width": 800, "height": 400 },
+        }}))
+        .await;
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": true, "columns": 20, "rows": 6, "lines": [
+                { "row": 0, "column": 0, "width": 20, "format": "#[fg=colour178]za" },
+                { "row": 2, "column": 10, "text": "xa" },
+            ]})
+        );
+        wire.send(json!({ "id": 3, "method": "text_grid", "params": { "bundle_id": "invalid" } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(3).await,
+            json!({ "ok": false, "error": "invalid text_grid response" })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// A plugin without a grid answers the empty one, never an error.
+    #[tokio::test]
+    async fn the_default_text_grid_handler_answers_an_empty_grid() {
+        struct Gridless;
+        impl Plugin for Gridless {}
+        let mut wire = serve(Gridless).await;
+        wire.send(json!({ "id": 2, "method": "text_grid", "params": { "pid": 7 } }))
+            .await;
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": true, "columns": 0, "rows": 0, "lines": [] })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
     async fn malformed_request_params_reply_the_method_specific_error() {
         let mut wire = serve(TestPlugin::default()).await;
         for (id, method, params) in [
             (2, "evaluate", json!({ "query": 42 })),
-            (3, "search", json!({ "query": 42 })),
             (4, "hints", json!({ "pid": 2147483648_u64 })),
+            (8, "text_grid", json!({ "pid": 0 })),
             (
                 5,
                 "perform",
@@ -1106,6 +1252,26 @@ mod tests {
         let elapsed = started.elapsed();
         assert!(elapsed >= SHUTDOWN_DEADLINE, "{elapsed:?}");
         assert!(elapsed < SHUTDOWN_DEADLINE * 2, "{elapsed:?}");
+    }
+
+    /// A per-source publish is the same notification naming its source
+    /// beside the rows; an empty one empties that source alone. A
+    /// whole-catalog publish carries no `source` key at all.
+    #[tokio::test]
+    async fn a_source_publish_names_its_source_beside_its_rows() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(command(2, "publish-source")).await;
+        assert_eq!(
+            wire.recv_notification("publish").await,
+            json!({ "source": "test.items", "rows": [{ "source": "test.items", "title": "one" }] })
+        );
+        assert_eq!(
+            wire.recv_notification("publish").await,
+            json!({ "source": "test.items", "rows": [] })
+        );
+        assert_eq!(wire.recv_response(2).await, json!({ "ok": true }));
+        wire.close_stdin().await;
+        wire.finished().await;
     }
 
     #[tokio::test]
@@ -1196,6 +1362,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_text_grid_handler_past_its_deadline_answers_deadline_exceeded() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({
+            "id": 2, "method": "text_grid", "deadline_ms": 60,
+            "params": { "bundle_id": "slow", "pid": 1 }
+        }))
+        .await;
+        let log = wire.recv().await;
+        assert_eq!(
+            log["params"]["message"],
+            "[plugin] text_grid exceeded its deadline"
+        );
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": false, "error": "deadline exceeded" })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
     async fn malformed_host_responses_become_the_invalid_host_response_sentinel() {
         let mut wire = serve(TestPlugin::default()).await;
         for (id, reply) in [
@@ -1240,13 +1427,13 @@ mod tests {
     }
 
     impl Plugin for WaitingPlugin {
-        async fn on_search(&self, _: Context, _: SearchRequest) -> SearchResponse {
+        async fn on_hints(&self, _: Context, _: HintsRequest) -> HintsResponse {
             self.requests.fetch_add(1, Ordering::SeqCst);
             std::future::pending().await
         }
 
         async fn on_event(&self, ctx: Context, event: Event) {
-            if event.text.as_deref() == Some("hold") {
+            if event.bundle_id.as_deref() == Some("hold") {
                 assert_eq!(
                     ctx.call_host("host.ping", json!({})).await,
                     json!({"ok":true})
@@ -1264,7 +1451,7 @@ mod tests {
             observed_apps: observed.clone(),
         })
         .await;
-        wire.send(json!({"method":"event","params":{"name":"core:apps.changed","payload":{"text":"hold","running_applications":[{"pid":7,"bundle_id":"first"}]}}})).await;
+        wire.send(json!({"method":"event","params":{"name":"core:apps.changed","payload":{"bundle_id":"hold","running_applications":[{"pid":7,"bundle_id":"first"}]}}})).await;
         let rpc = wire.recv().await;
         assert_eq!(rpc["method"], "host.ping");
         for _ in 0..300 {
@@ -1295,7 +1482,7 @@ mod tests {
         })
         .await;
         for id in 2..=(REQUEST_CAPACITY + 2) {
-            wire.send(json!({"id":id,"method":"search","params":{"query":"wait"}}))
+            wire.send(json!({"id":id,"method":"hints","params":{}}))
                 .await;
         }
         let overload = wire.recv().await;
@@ -1315,7 +1502,7 @@ mod tests {
             observed_apps: Arc::new(Mutex::new(None)),
         })
         .await;
-        wire.send_raw(br#"{"id":2,"method":"search","params":{"query":"wait"}}"#)
+        wire.send_raw(br#"{"id":2,"method":"hints","params":{}}"#)
             .await;
         wire.close_stdin().await;
         assert!(wire.finished().await.is_empty());
@@ -1373,6 +1560,52 @@ mod tests {
             observed.event.segments,
             Some(vec!["top_cpu".to_string(), "top_mem".to_string()])
         );
+    }
+
+    /// The SDK exposes exactly what the host sends: a window focus change
+    /// names the app, a command its words and args, an evaluation its query.
+    /// The exhaustive patterns stop compiling when a type grows a field the
+    /// host never fills.
+    #[test]
+    fn requests_and_events_expose_exactly_the_fields_the_host_sends() {
+        let Event {
+            name,
+            bundle_id,
+            pid,
+            notification,
+            segments,
+        } = decode_event(json!({
+            "name": "core:window.focus.changed",
+            "payload": { "pid": 7, "bundle_id": "com.example" }
+        }))
+        .unwrap()
+        .event;
+        assert_eq!(name, "core:window.focus.changed");
+        assert_eq!(bundle_id.as_deref(), Some("com.example"));
+        assert_eq!(pid, Some(7));
+        assert_eq!((notification, segments), (None, None));
+
+        let Ok(Perform::Command(CommandRequest {
+            command,
+            subcommand,
+            args,
+            context,
+        })) = decode_perform(json!({
+            "kind": "command", "command": "tmux", "subcommand": "window", "args": ["a b", "c"]
+        }))
+        else {
+            panic!("a command perform decodes");
+        };
+        assert_eq!((command.as_str(), subcommand.as_str()), ("tmux", "window"));
+        assert_eq!(args, ["a b", "c"]);
+        assert!(
+            context.is_none(),
+            "an own command carries no focused-app context"
+        );
+
+        let EvaluateRequest { query } =
+            decode::<EvaluateRequest>(json!({ "query": "1+1" }), "evaluate").unwrap();
+        assert_eq!(query, "1+1");
     }
 
     /// Each delivered event's name and segment set.
@@ -1455,13 +1688,16 @@ mod tests {
             Ok(Perform::Command(command)) if command.subcommand == "window"
         ));
         assert!(matches!(
-            decode_perform(json!({ "kind": "action", "name": "tab_select", "args": { "index": 2 } })),
-            Ok(Perform::Action(action)) if action.index() == Some(2)
-        ));
-        assert!(matches!(
             decode_perform(json!({ "kind": "navigate", "url": "tmux://window/a:1" })),
             Ok(Perform::Navigate(request)) if request.url == "tmux://window/a:1"
         ));
+        for kind in PERFORM_KINDS {
+            let decoded = decode_perform(json!({ "kind": kind, "row": {}, "url": "x" }));
+            assert!(
+                !matches!(decoded, Err(ref error) if error.starts_with("unknown perform kind")),
+                "{kind}: {decoded:?}"
+            );
+        }
 
         assert!(matches!(
             decode_perform(json!({ "kind": "mystery" })),
@@ -1475,6 +1711,38 @@ mod tests {
         assert!(decode_perform(json!({ "kind": "resolve" })).is_err());
     }
 
+    /// A core command the manifest declares under one of Flash's topics
+    /// arrives as a `command` with the focused app's context and the argument
+    /// words a mapping wrote.
+    #[test]
+    fn perform_decodes_a_core_command_with_context_and_flag_words() {
+        let Ok(Perform::Command(command)) = decode_perform(json!({
+            "kind": "command",
+            "command": "tab",
+            "subcommand": "select",
+            "args": ["--index=2"],
+            "context": { "pid": 7, "bundle_id": "x" }
+        })) else {
+            panic!("a core command decodes as a command");
+        };
+        assert_eq!(command.name(), "tab select");
+        assert_eq!(command.index(), Some(2));
+        let context = command.context.expect("context");
+        assert_eq!(context.pid, Some(7));
+        assert_eq!(context.bundle_id.as_deref(), Some("x"));
+    }
+
+    /// Rule 7: the retired `action` kind has no dual reader. It is exactly as
+    /// unknown as any other kind the contract does not name.
+    #[test]
+    fn the_retired_action_kind_is_an_unknown_kind() {
+        assert!(matches!(
+            decode_perform(json!({ "kind": "action", "name": "tab_select", "args": { "index": 2 } })),
+            Err(error) if error == "unknown perform kind: action"
+        ));
+        assert!(!PERFORM_KINDS.contains(&"action"));
+    }
+
     struct RecordingPlugin {
         observations: Arc<Mutex<Vec<(String, String)>>>,
     }
@@ -1483,7 +1751,7 @@ mod tests {
         fn on_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
             let observations = self.observations.clone();
             async move {
-                let marker = event.text.unwrap_or_default();
+                let marker = event.bundle_id.unwrap_or_default();
                 if marker == "first" {
                     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 }
@@ -1515,7 +1783,7 @@ mod tests {
                 InboundEvent {
                     event: Event {
                         name: "core:apps.changed".to_string(),
-                        text: Some(marker.to_string()),
+                        bundle_id: Some(marker.to_string()),
                         ..Event::default()
                     },
                     running_applications: vec![RunningApplication {

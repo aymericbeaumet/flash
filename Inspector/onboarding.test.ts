@@ -36,13 +36,13 @@ const ready: InspectorState = {
   mappings: {
     normal_leader: "<space>",
     rows: [
-      row("all", "cmd+shift+space", "flash mouse_target", "config"),
-      row("all", "cmd+shift+alt+space", "flash mouse_grid", "config"),
-      row("all", "cmd+ctrl+alt+space", 'flash enter_command_mode --input=:flashlight ', "config"),
-      row("all", "cmd+ctrl+[", "flash enter_normal_mode", "config"),
-      row("all", "cmd+ctrl+i", "flash enter_insert_mode", "config"),
-      row("normal", "s", "flash mouse_bigram"),
-      row("normal", "ctrl+s", "flash mouse_bigram --secondary"),
+      row("all", "cmd+shift+space", "flash mouse target", "config"),
+      row("all", "cmd+shift+alt+space", "flash mouse grid", "config"),
+      row("all", "cmd+ctrl+alt+space", "flash mode flashlight", "config"),
+      row("all", "cmd+ctrl+[", "flash mode normal", "config"),
+      row("all", "cmd+ctrl+i", "flash mode insert", "config"),
+      row("normal", "s", "flash mouse bigram"),
+      row("normal", "ctrl+s", "flash mouse bigram --secondary"),
     ],
   },
 };
@@ -97,12 +97,12 @@ test("a starter install still needs the commented shortcuts", () => {
     },
     config: { statusbar: { enabled: false }, widgets: {}, popup: { popups: {} }, mode: { apps: {} } },
     plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
-    mappings: { normal_leader: "<space>", rows: [row("all", "cmd+shift+space", "flash mouse_target", "config")] },
+    mappings: { normal_leader: "<space>", rows: [row("all", "cmd+shift+space", "flash mouse target", "config")] },
   }, true, new Set());
   const steps = model.sections.flatMap((section) => section.steps);
   assert.equal(find(steps, "hints").status, "done");
   assert.equal(find(steps, "grid").status, "todo");
-  assert.match(find(steps, "grid").snippet ?? "", /mouse_grid/);
+  assert.match(find(steps, "grid").snippet ?? "", /"mouse", "grid"/);
   assert.equal(find(steps, "flashlight").status, "todo");
   assert.equal(find(steps, "normal").status, "todo");
   assert.match(find(steps, "normal").evidence, /No key enters NORMAL/);
@@ -150,10 +150,10 @@ test("one side of NORMAL is not enough", () => {
     plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
     mappings: {
       normal_leader: "<space>",
-      rows: [row("all", "cmd+ctrl+[", "flash enter_normal_mode")],
+      rows: [row("all", "cmd+ctrl+[", "flash mode normal")],
     },
     config: { statusbar: { enabled: false } },
-  }, true, new Set( ["getting-started", "hints", "normal-mode", "config"]));
+  }, true, new Set( ["getting-started", "hints", "normal-mode", "configuration"]));
   const normal = find(model.sections[2].steps, "normal");
   assert.equal(normal.status, "todo");
   assert.match(normal.evidence, /all cmd\+ctrl\+\[ enters NORMAL/);

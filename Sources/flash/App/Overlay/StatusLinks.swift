@@ -35,6 +35,7 @@ struct StatusBarClickSignature: Equatable {
   var bands: [CGRect]
   var links: [Link]
   var popups: [Popup]
+  var cycles: [StatusBarCycleRegion]
 }
 
 struct StatusBarPopupRegion: Equatable {
@@ -61,6 +62,98 @@ struct StatusBarPopupRegion: Equatable {
     moved.rect = rect.offsetBy(dx: dx, dy: dy)
     moved.textBounds = textBounds?.offsetBy(dx: dx, dy: dy)
     return moved
+  }
+}
+
+/// One carousel drawn on the bar: scrolling over this span steps it
+/// (`FlashStatusBarController.stepCycle`).
+struct StatusBarCycleRegion: Equatable {
+  /// The run's span, across the bar's height.
+  var rect: CGRect
+  /// Which carousel it shows (`StatusCycleKey`).
+  var key: String
+
+  func offsetBy(dx: CGFloat, dy: CGFloat) -> Self {
+    var moved = self
+    moved.rect = rect.offsetBy(dx: dx, dy: dy)
+    return moved
+  }
+}
+
+/// Scrolls over a carousel run, as the steps they ask for: one per swipe
+/// and one per wheel notch, each playing the whole push before the next.
+///
+/// The direction is the system's, as any scroll view reads it: down (a
+/// negative delta) is the next line and up the previous, so the line moves
+/// with the fingers under natural scrolling and with the wheel without it.
+/// A swipe steps once its travel reaches `pointsPerStep` and is then spent,
+/// however long it runs; the glide after it (`momentum`) is nothing. No step
+/// starts within `settleSeconds` of the last, the push's own length, so a
+/// fast wheel spin is one step and no push is cut short.
+struct StatusBarCycleScroll {
+  /// Where a scroll event sits in its gesture (`init(_:)` reads an event).
+  enum Phase: Equatable {
+    /// A wheel notch, or a device that reports no gesture phases.
+    case wheel
+    case began
+    case changed
+    case ended
+    case momentum
+  }
+
+  static let pointsPerStep: CGFloat = 20
+  static let settleSeconds = StatusRunRenderer.cycleTransitionDuration
+
+  private var travel: CGFloat = 0
+  private var swipeSpent = false
+  private var lastStepAt = -TimeInterval.infinity
+
+  /// The step this scroll asks for: 1 for the next line, -1 for the
+  /// previous, 0 for none. `time` is the event's timestamp.
+  mutating func advance(deltaY: CGFloat, phase: Phase, at time: TimeInterval) -> Int {
+    switch phase {
+    case .momentum:
+      return 0
+    case .ended:
+      travel = 0
+      swipeSpent = false
+      return 0
+    case .wheel:
+      guard deltaY != 0 else { return 0 }
+      return step(deltaY, at: time)
+    case .began, .changed:
+      if phase == .began {
+        travel = 0
+        swipeSpent = false
+      }
+      guard !swipeSpent else { return 0 }
+      travel += deltaY
+      guard abs(travel) >= Self.pointsPerStep else { return 0 }
+      swipeSpent = true
+      return step(travel, at: time)
+    }
+  }
+
+  private mutating func step(_ delta: CGFloat, at time: TimeInterval) -> Int {
+    guard time - lastStepAt >= Self.settleSeconds else { return 0 }
+    lastStepAt = time
+    return delta < 0 ? 1 : -1
+  }
+}
+
+extension StatusBarCycleScroll.Phase {
+  init(_ event: NSEvent) {
+    if !event.momentumPhase.isEmpty {
+      self = .momentum
+    } else if event.phase.isEmpty {
+      self = .wheel
+    } else if !event.phase.isDisjoint(with: [.began, .mayBegin]) {
+      self = .began
+    } else if !event.phase.isDisjoint(with: [.ended, .cancelled]) {
+      self = .ended
+    } else {
+      self = .changed
+    }
   }
 }
 
@@ -92,6 +185,8 @@ struct StatusBarScreenInteractions {
   /// The bar's hint regions (`OverlayPanel.statusBarHintRegions`), measured
   /// with the same layout as `links` and `popups`.
   var hints: [StatusBarHintRegion] = []
+  /// The carousel runs a scroll steps, measured with the same layout.
+  var cycles: [StatusBarCycleRegion] = []
 }
 
 /// One drawn status-bar run, in screen coordinates, for a letter search.
@@ -146,7 +241,7 @@ final class StatusBarClickView: NSView {
         "\(index):\(StatusFormatDocument.stableID(popup.name)):\(NSStringFromRect(popup.rect)):\(popup.content.utf8.count)"
       }.joined(separator: ";")
       FlashLog.debug(
-        "Status hover regions changed",
+        "[statusbar] hover_regions_changed",
         fields: [
           "window": String(window?.windowNumber ?? 0),
           "popup_count": String(popups.count), "regions": regions,
@@ -171,6 +266,10 @@ final class StatusBarClickView: NSView {
   /// Dispatches a named `#[range=user|<name>]` click (the `[statusbar.click]`
   /// action map). Set by the overlay from the AppDelegate's handler.
   var onStatusBarAction: ((String) -> Void)?
+  /// Follows a `#[link=…]` URL through the overlay's `StatusLinkOpener`,
+  /// the one place a status link is allowed or refused. Unset, a link opens
+  /// nothing.
+  var openLink: ((URL) -> Void)?
   /// Reports the popup under the pointer (or nil) and the pointer in screen
   /// coordinates. The popup hangs from its label, so moving along the label
   /// leaves it in place.
@@ -182,6 +281,14 @@ final class StatusBarClickView: NSView {
   /// Reports the hovered link or popup run (view coordinates, nil when the
   /// pointer is over plain text or has left) so the bar can wash it.
   var onHoverHighlight: ((CGRect?) -> Void)?
+  /// A scroll over a carousel run: step that carousel by this many items,
+  /// positive for the next one.
+  var onCycleStep: ((String, Int) -> Void)?
+
+  /// Carousel sub-rects in this view's coordinate space, with the carousel
+  /// each shows.
+  var cycles: [StatusBarCycleRegion] = []
+  private var cycleScroll = StatusBarCycleScroll()
 
   /// The wash follows the narrowest interactive span under the pointer. A
   /// whole-row popup — a feed row wraps its label, title, domain and arrow in
@@ -212,6 +319,20 @@ final class StatusBarClickView: NSView {
     return (dx * dx + dy * dy) <= dragSlop * dragSlop
   }
 
+  /// A scroll over a carousel run steps it by hand (`StatusBarCycleScroll`).
+  /// A scroll anywhere else on the band is left alone.
+  override func scrollWheel(with event: NSEvent) {
+    let local = convert(event.locationInWindow, from: nil)
+    guard let region = cycles.first(where: { $0.rect.contains(local) }) else {
+      super.scrollWheel(with: event)
+      return
+    }
+    let step = cycleScroll.advance(
+      deltaY: event.scrollingDeltaY, phase: .init(event), at: event.timestamp)
+    guard step != 0 else { return }
+    onCycleStep?(region.key, step)
+  }
+
   override func mouseDown(with event: NSEvent) {
     mouseDownLocation = event.locationInWindow
     let local = convert(event.locationInWindow, from: nil)
@@ -222,7 +343,7 @@ final class StatusBarClickView: NSView {
     mouseDownURL = links.first(where: { $0.rect.contains(local) })?.url
     FlashLog.trace(
       "[statusbar] click_down at=\(local) links=\(links.count) popups=\(popups.count) "
-        + "url=\(mouseDownURL?.absoluteString ?? "nil")")
+        + "has_link=\(mouseDownURL != nil)")
   }
 
   override func mouseUp(with event: NSEvent) {
@@ -238,7 +359,7 @@ final class StatusBarClickView: NSView {
       return
     }
     let url = mouseDownURL
-    FlashLog.trace("[statusbar] click_up url=\(url?.absoluteString ?? "nil")")
+    FlashLog.trace("[statusbar] click_up has_link=\(url != nil)")
     if let url {
       onLinkActivated?()
       activate(url: url)
@@ -249,33 +370,14 @@ final class StatusBarClickView: NSView {
   }
 
   /// Follow a status-bar link: a `#[range=…]` action goes back to Flash, and
-  /// anything else opens in the handling app.
+  /// anything else goes through the overlay's `StatusLinkOpener` (`openLink`),
+  /// which opens it in the handling app when its scheme is allowed.
   func activate(url: URL) {
     if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
       onStatusBarAction?(action)
       return
     }
-    Self.openExternally(url)
-  }
-
-  /// Hand a status-bar link to whichever app handles it.
-  ///
-  /// `activates = true` brings the handling browser to the front and gives it
-  /// keyboard focus. A plain `open(url)` opens the tab in the background — the
-  /// click panel is non-activating, so the previously focused app keeps focus
-  /// and typing lands in the old app.
-  static func openExternally(_ url: URL) {
-    let configuration = NSWorkspace.OpenConfiguration()
-    configuration.activates = true
-    NSWorkspace.shared.open(url, configuration: configuration) { app, error in
-      if let error {
-        FlashLog.warn("[statusbar] link_open_failed url=\(url.absoluteString) error=\(error)")
-      } else {
-        FlashLog.trace(
-          "[statusbar] link_opened url=\(url.absoluteString) "
-            + "app=\(app?.bundleIdentifier ?? "nil")")
-      }
-    }
+    openLink?(url)
   }
 
   override func rightMouseDown(with event: NSEvent) {
@@ -309,7 +411,7 @@ final class StatusBarClickView: NSView {
     if trackingDiagnosticBounds != bounds {
       trackingDiagnosticBounds = bounds
       FlashLog.debug(
-        "Status hover tracking updated",
+        "[statusbar] hover_tracking_updated",
         fields: ["window": String(window?.windowNumber ?? 0), "bounds": NSStringFromRect(bounds)],
         source: "core:StatusBarClickView.tracking")
     }
@@ -359,7 +461,7 @@ final class StatusBarClickView: NSView {
     guard event != "moved" || signature != hoverDiagnosticSignature else { return }
     hoverDiagnosticSignature = event == "exited" ? nil : signature
     FlashLog.debug(
-      "Status hover target changed",
+      "[statusbar] hover_target_changed",
       fields: [
         "event": event, "popup_id": popupID, "over_link": String(overLink),
         "window": String(window?.windowNumber ?? 0),
@@ -528,7 +630,7 @@ extension OverlayPanel {
     }
     var result: [(rect: CGRect, url: URL)] = []
     for run in runs {
-      guard let url = URL(string: run.url) else { continue }
+      guard let url = URLParsing.url(run.url) else { continue }
       let screenX =
         panelFrame.minX + barFrame.minX + labelFrame.minX + pad + run.xOffset
       // Span the bar's full height so the whole vertical band over the run
@@ -629,7 +731,6 @@ extension OverlayPanel {
     screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot(),
     preservingContent: Bool = false
   ) {
-    guard !statusPopupController.presentation.isFocused else { return }
     if statusPopupController.isContentSnapshot, !preservingContent {
       if statusPopupController.containsSnapshotAnchor(pointer) { return }
       statusPopupController.leaveAnchor()
@@ -668,6 +769,10 @@ extension OverlayPanel {
     screenSnapshot snapshot: ScreenSnapshot,
     preservingContent: Bool
   ) {
+    guard popup.name != statusPopupController.focusedName else {
+      hideStatusBarPreview(reason: "focused_anchor")
+      return
+    }
     statusBarHoverGate = statusBarHoverGate.hovering(popup.name)
     guard statusBarHoverGate.permits(popup.name) else { return }
     // The popup shows on the display whose bar draws its label.
@@ -676,14 +781,14 @@ extension OverlayPanel {
       let screen = snapshot.screens.first(where: { $0.frame.contains(labelCentre) })
         ?? snapshot.screens.first(where: { $0.frame.intersects(popup.rect) })
     else {
-      hideStatusBarPopup(reason: "screen_missing")
+      hideStatusBarPreview(reason: "screen_missing")
       return
     }
-    if let current = statusPopupController.presentation.name, current != popup.name {
-      hideStatusBarPopup(reason: "anchor_changed")
+    if let current = statusPopupController.previewName, current != popup.name {
+      hideStatusBarPreview(reason: "anchor_changed")
     }
     guard statusBarTerminalPrepareHandler?(popup.name, popup.link) ?? true else {
-      hideStatusBarPopup(reason: "terminal_missing")
+      hideStatusBarPreview(reason: "terminal_missing")
       return
     }
     statusPopupController.preview(
@@ -691,8 +796,8 @@ extension OverlayPanel {
       font: NSFont.monospacedSystemFont(
         ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
         weight: .medium), preservingContent: preservingContent)
-    activeStatusBarPopupName = statusPopupController.presentation.name
-    activeStatusBarPopupContent = statusPopupController.content
+    activeStatusBarPopupName = statusPopupController.anchoredName
+    activeStatusBarPopupContent = statusPopupController.anchoredContent
     activeStatusBarPopupVisibleFrame = screen.visibleFrame
   }
 
@@ -706,31 +811,24 @@ extension OverlayPanel {
   /// when any link broke, the hint silently did nothing. The hint already
   /// carries the URL the user picked, so follow it. Re-publication of the bar
   /// in the meantime cannot change it either, which is what the arming was
-  /// protecting in the first place.
+  /// protecting in the first place. A URL goes through `statusLinkOpener`,
+  /// the one place a status link is allowed or refused.
   func activateStatusBarLink(_ url: URL) {
-    FlashLog.trace("[statusbar] hint_link url=\(url.absoluteString)")
     if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
       statusBarActionHandler?(action)
       return
     }
-    StatusBarClickView.openExternally(url)
+    statusLinkOpener.follow(url)
   }
 
   func activateStatusBarPopup(
     _ popup: StatusBarPopupRegion, at pointer: CGPoint,
     screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
-    let wasFocused = statusPopupController.focusedName
-    guard wasFocused != popup.name else { return }
-    if wasFocused != nil {
-      if let statusBarPopupDismissHandler {
-        statusBarPopupDismissHandler(false)
-      } else {
-        hideStatusBarPopup(reason: "anchor_clicked")
-      }
-    }
+    guard statusPopupController.focusedName != popup.name else { return }
+    _ = statusBarSpawnDwell.cancel()
     statusBarHoverGate = .ready
-    showStatusBarPopup(popup, at: pointer, screenSnapshot: snapshot)
+    presentStatusBarPopup(popup, at: pointer, screenSnapshot: snapshot, preservingContent: false)
     statusPopupController.focus()
   }
 
@@ -739,11 +837,15 @@ extension OverlayPanel {
   /// pointer leaves its region; a pinned popup is left alone because it is no
   /// longer tied to hover.
   func dismissStatusBarPopupForClick() {
-    guard let name = statusPopupController.presentation.name,
-      !statusPopupController.presentation.isStandalone
-    else { return }
+    guard let name = statusPopupController.previewName else { return }
     statusBarHoverGate = .dismissed(name)
-    hideStatusBarPopup(reason: "link_click")
+    hideStatusBarPreview(reason: "link_click")
+  }
+
+  func hideStatusBarPreview(reason: String = "anchor_left") {
+    _ = statusBarSpawnDwell.cancel()
+    statusPopupController.dismissPreview(reason: reason)
+    activeStatusBarPopupName = statusPopupController.anchoredName
   }
 
   func hideStatusBarPopup(reason: String = "overlay_hidden") {
@@ -782,7 +884,8 @@ extension OverlayPanel {
   func syncStatusBarClickWindows(
     bandRects: [CGRect],
     links: [(rect: CGRect, url: URL)],
-    popups: [StatusBarPopupRegion] = []
+    popups: [StatusBarPopupRegion] = [],
+    cycles: [StatusBarCycleRegion] = []
   ) {
     let signature = StatusBarClickSignature(
       bands: bandRects,
@@ -793,7 +896,8 @@ extension OverlayPanel {
         .init(
           x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width, anchorX: $0.anchor.minX,
           anchorWidth: $0.anchor.width, name: $0.name, content: $0.content)
-      })
+      },
+      cycles: cycles)
     if signature == lastStatusBarClickSignature { return }
     lastStatusBarClickSignature = signature
 
@@ -802,7 +906,7 @@ extension OverlayPanel {
     }
     while statusBarClickWindows.count < bandRects.count {
       let window = StatusBarClickPanel()
-      window.sharingType = overlayConfig.screenCapture.sharingType
+      window.sharingType = CaptureSharing.sharingType(hidden: hidesFromCapture)
       statusBarClickWindows.append(window)
     }
     for (window, band) in zip(statusBarClickWindows, bandRects) {
@@ -823,27 +927,11 @@ extension OverlayPanel {
         guard band.intersects(popup.rect) else { return nil }
         return popup.offsetBy(dx: -band.minX, dy: -band.minY)
       }
-      view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
-      view.hoverPermitted = { [weak self] in self?.statusBarHover.permitsHover ?? true }
-      view.onStatusBarAction = statusBarActionHandler
-      view.onLinkActivated = { [weak self] in self?.dismissStatusBarPopupForClick() }
-      view.onPopupClick = { [weak self] popup, point in
-        self?.activateStatusBarPopup(popup.offsetBy(dx: band.minX, dy: band.minY), at: point)
+      view.cycles = cycles.compactMap { cycle in
+        guard band.intersects(cycle.rect) else { return nil }
+        return cycle.offsetBy(dx: -band.minX, dy: -band.minY)
       }
-      view.onPopupHover = { [weak self] popup, point in
-        guard let self else { return }
-        if let popup {
-          self.showStatusBarPopup(popup.offsetBy(dx: band.minX, dy: band.minY), at: point)
-        } else {
-          if self.statusPopupController.containsSnapshotAnchor(point) { return }
-          self.statusBarHoverGate = .ready
-          self.statusPopupController.leaveAnchor()
-          self.activeStatusBarPopupName = self.statusPopupController.presentation.name
-        }
-      }
-      view.onHoverHighlight = { [weak self] rect in
-        self?.setStatusBarHoverHighlight(rect?.offsetBy(dx: band.minX, dy: band.minY))
-      }
+      wireStatusBarClickView(view, band: band)
       window.orderFrontRegardless()
     }
     // A content/config refresh does not generate mouseMoved for a stationary
@@ -853,6 +941,36 @@ extension OverlayPanel {
     // in the band when the windows (re)appear no `mouseEntered` will fire —
     // catch that case here.
     if Self.pointerIsInMenuBarBand() { startMenuBarRevealTracking() }
+  }
+
+  /// Point one click window's view at this panel: its hover, popup and
+  /// action handlers, and the one `StatusLinkOpener` every `#[link]` it
+  /// follows goes through. `band` is the window's frame in screen
+  /// coordinates, which the view's popup regions are offset by.
+  func wireStatusBarClickView(_ view: StatusBarClickView, band: CGRect) {
+    view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
+    view.hoverPermitted = { [weak self] in self?.statusBarHover.permitsHover ?? true }
+    view.onStatusBarAction = statusBarActionHandler
+    view.openLink = { [weak self] url in _ = self?.statusLinkOpener.follow(url) }
+    view.onLinkActivated = { [weak self] in self?.dismissStatusBarPopupForClick() }
+    view.onPopupClick = { [weak self] popup, point in
+      self?.activateStatusBarPopup(popup.offsetBy(dx: band.minX, dy: band.minY), at: point)
+    }
+    view.onPopupHover = { [weak self] popup, point in
+      guard let self else { return }
+      if let popup {
+        self.showStatusBarPopup(popup.offsetBy(dx: band.minX, dy: band.minY), at: point)
+      } else {
+        if self.statusPopupController.containsSnapshotAnchor(point) { return }
+        self.statusBarHoverGate = .ready
+        self.statusPopupController.leaveAnchor()
+        self.activeStatusBarPopupName = self.statusPopupController.anchoredName
+      }
+    }
+    view.onHoverHighlight = { [weak self] rect in
+      self?.setStatusBarHoverHighlight(rect?.offsetBy(dx: band.minX, dy: band.minY))
+    }
+    view.onCycleStep = statusBarCycleStepHandler
   }
 
   /// Re-hit-test live status content, including the wash under a stationary
@@ -868,8 +986,8 @@ extension OverlayPanel {
       return screenSnapshot.screens.first { $0.frame.contains(centre) }?.visibleFrame
         ?? screenSnapshot.screens.first { $0.frame.intersects(anchor) }?.visibleFrame
     }
-    activeStatusBarPopupName = statusPopupController.presentation.name
-    activeStatusBarPopupContent = statusPopupController.content
+    activeStatusBarPopupName = statusPopupController.anchoredName
+    activeStatusBarPopupContent = statusPopupController.anchoredContent
     hitTestStatusBarHover(popups: popups, links: links, at: pointer, screenSnapshot: screenSnapshot)
   }
 
@@ -887,13 +1005,12 @@ extension OverlayPanel {
     let link = permitted ? links.first(where: { $0.rect.contains(pointer) }) : nil
     setStatusBarHoverHighlight(
       StatusBarClickView.hoverWashRect(link: link?.rect, popup: popup?.rect))
-    guard !statusPopupController.presentation.isFocused else { return }
     if let popup {
       showStatusBarPopup(popup, at: pointer, screenSnapshot: screenSnapshot)
     } else {
       statusBarHoverGate = .ready
       statusPopupController.leaveAnchor()
-      activeStatusBarPopupName = nil
+      activeStatusBarPopupName = statusPopupController.anchoredName
     }
   }
 
@@ -901,6 +1018,7 @@ extension OverlayPanel {
   func hideStatusBarClickWindows() {
     lastModeBadgeLayoutStamp = nil
     stopMenuBarRevealTracking()
+    hideStatusBarPreview()
     if !statusPopupController.presentation.isStandalone { hideStatusBarPopup() }
     guard !statusBarClickWindows.isEmpty || lastStatusBarClickSignature != nil else { return }
     for window in statusBarClickWindows { window.orderOut(nil) }
@@ -910,12 +1028,14 @@ extension OverlayPanel {
 
   // MARK: Reveal-aware yielding
 
-  /// Serial utility queue the reveal probe runs on. The pointer checks are
+  /// Serial queue the reveal probe runs on. The pointer checks are
   /// thread-safe C calls (`CGEvent(source:)`, `CGDisplayBounds`) and stay off
   /// the main run loop; the window-list read hops to main through
   /// `WindowSnapshot.windowList`, and only while the pointer is in the band.
+  /// `.userInitiated` to match its `system` priority: the probe's lateness
+  /// is the bar failing to step aside under the pointer.
   private static let menuBarRevealProbeQueue = DispatchQueue(
-    label: "flash.status_bar.reveal", qos: .utility)
+    label: "flash.status_bar.reveal", qos: .userInitiated)
   static let menuBarRevealClientID = "core:menu_bar_reveal"
   static let menuBarRevealIntervalMs = 80
 
@@ -929,7 +1049,8 @@ extension OverlayPanel {
   /// to main only when the state flips. Call on the main thread.
   func startMenuBarRevealTracking() {
     if !menuBarRevealProbeArmed {
-      FlashLog.debug("Status menu reveal tracking started", source: "core:StatusLinks.menuReveal")
+      FlashLog.debug(
+        "[statusbar] menu_reveal_tracking_started", source: "core:StatusLinks.menuReveal")
     }
     // Every start is a new tracking cycle: a stop a previous tick queued, or
     // a verdict it was still delivering, belongs to the old one and is
@@ -950,7 +1071,8 @@ extension OverlayPanel {
       return
     }
     if menuBarRevealProbeArmed {
-      FlashLog.debug("Status menu reveal tracking stopped", source: "core:StatusLinks.menuReveal")
+      FlashLog.debug(
+        "[statusbar] menu_reveal_tracking_stopped", source: "core:StatusLinks.menuReveal")
     }
     menuBarRevealProbeArmed = false
     PollScheduler.shared.unregister(Self.menuBarRevealClientID)
@@ -1008,7 +1130,7 @@ extension OverlayPanel {
     }
     setStatusBarYieldsToNativeMenuBar(revealed)
     FlashLog.debug(
-      "Status menu reveal changed",
+      "[statusbar] menu_reveal_changed",
       fields: [
         "revealed": String(revealed),
         "click_windows": String(statusBarClickWindows.count),
@@ -1023,8 +1145,10 @@ extension OverlayPanel {
   }
 
   func statusBarNativeMenuDidReveal() {
-    guard !statusPopupController.presentation.isStandalone else { return }
-    hideStatusBarPopup(reason: "native_menu_revealed")
+    hideStatusBarPreview(reason: "native_menu_revealed")
+    if !statusPopupController.presentation.isStandalone {
+      hideStatusBarPopup(reason: "native_menu_revealed")
+    }
   }
 
   /// True while the pointer sits in the top band of the main display — the

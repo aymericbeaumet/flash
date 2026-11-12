@@ -2,45 +2,23 @@ import XCTest
 
 @testable import flash
 
-/// The plugin network sandbox: a plugin without a `network` (or `subprocess`)
-/// capability is spawned under a seatbelt profile that denies outbound network,
-/// so a compromised or buggy plugin can't exfiltrate.
+/// Every plugin process runs under the deny-default seatbelt profile built
+/// from its manifest's `sandbox` spec (absent: the empty spec), unless the
+/// manifest declares `"sandbox": false` or the user's `[plugins.<id>]
+/// sandbox = false` kill switch disables it.
 final class PluginSandboxTests: XCTestCase {
-  private func manifest(_ capabilities: Set<PluginCapability>) -> PluginManifest {
-    PluginManifest(
-      id: "test", name: "Test", version: "1", description: "",
-      install: "true", exec: ["./flash-plugin-test"], capabilities: capabilities)
-  }
-
-  func testPluginWithoutCapabilitiesIsNetworkDenied() {
-    let profile = PluginSandbox.networkSandboxProfile(for: manifest([]))
-    XCTAssertNotNil(profile)
-    XCTAssertTrue(profile?.contains("(deny network*)") == true, profile ?? "nil")
-    XCTAssertTrue(profile?.contains("(allow default)") == true, profile ?? "nil")
-  }
-
-  func testUnrelatedCapabilityIsStillNetworkDenied() {
-    // A non-network capability (accessibility) does not grant network access.
-    XCTAssertNotNil(PluginSandbox.networkSandboxProfile(for: manifest([.accessibility])))
-  }
-
-  func testNetworkCapabilityOptsOutOfTheSandbox() {
-    XCTAssertNil(PluginSandbox.networkSandboxProfile(for: manifest([.network])))
-  }
-
-  func testSubprocessCapabilityOptsOutOfTheSandbox() {
-    // Legacy behavior for spec-less plugins (tmux execs setgid /bin/ps for
-    // its process tree): subprocess still opts out of the transitional
-    // profile until the plugin declares a deny-default spec.
-    XCTAssertNil(PluginSandbox.networkSandboxProfile(for: manifest([.subprocess])))
-  }
-
   private func specManifest(
     _ capabilities: Set<PluginCapability> = [], spec: PluginSandboxSpec = PluginSandboxSpec()
   ) -> PluginManifest {
+    manifest(capabilities, sandbox: .spec(spec))
+  }
+
+  private func manifest(
+    _ capabilities: Set<PluginCapability> = [], sandbox: PluginSandboxDeclaration?
+  ) -> PluginManifest {
     PluginManifest(
       id: "test", name: "Test", version: "1", description: "",
-      install: "true", exec: ["./flash-plugin-test"], sandbox: spec,
+      install: "true", exec: ["./flash-plugin-test"], sandbox: sandbox,
       capabilities: capabilities)
   }
 
@@ -73,14 +51,32 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertTrue(resolved.profile?.contains("(deny default)") == true)
   }
 
-  func testSandboxSpecComposesExecAllowlist() {
-    let spec = PluginSandboxSpec(exec: ["/usr/bin/osascript"])
+  /// A sandboxed plugin forks nothing and runs nothing but its own binary
+  /// (and a runtime outside its root): there is no exec allowance to widen.
+  func testTheProfileExecsOnlyThePluginItself() throws {
     let resolved = PluginSandbox.resolvedSandboxProfile(
-      manifest: specManifest(spec: spec), settings: [:], root: root, dataDir: dataDir)
-    let profile = try! XCTUnwrap(resolved.profile)
-    XCTAssertTrue(profile.contains("(allow process-exec (literal \"/usr/bin/osascript\"))"))
-    XCTAssertTrue(profile.contains("(allow process-fork)"))
-    XCTAssertFalse(profile.contains("~"), "tilde must be expanded in profile paths")
+      manifest: specManifest(), settings: [:], root: root, dataDir: dataDir)
+    let profile = try XCTUnwrap(resolved.profile)
+    XCTAssertFalse(profile.contains("(allow process-fork)"))
+    XCTAssertFalse(profile.contains("launchservicesd"))
+    XCTAssertFalse(profile.contains("appleevent"))
+    let interpreted = try XCTUnwrap(
+      PluginSandbox.resolvedSandboxProfile(
+        manifest: specManifest(), settings: [:], root: root, dataDir: dataDir,
+        executablePath: "/usr/bin/python3"
+      ).profile)
+    XCTAssertTrue(interpreted.contains("(allow process-exec (literal \"/usr/bin/python3\")"))
+    XCTAssertFalse(interpreted.contains("(allow process-fork)"))
+  }
+
+  func testSandboxSpecComposesMachAllowances() throws {
+    let spec = PluginSandboxSpec(mach: ["com.apple.PowerManagement.control"])
+    let profile = try XCTUnwrap(
+      PluginSandbox.resolvedSandboxProfile(
+        manifest: specManifest(spec: spec), settings: [:], root: root, dataDir: dataDir
+      ).profile)
+    XCTAssertTrue(
+      profile.contains("(allow mach-lookup (global-name \"com.apple.PowerManagement.control\"))"))
   }
 
   func testConfigKillSwitchDisablesSandboxLoudly() {
@@ -91,11 +87,25 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertEqual(resolved.mode, "disabled_by_config")
   }
 
-  func testLegacyProfileStillAppliesWithoutSpec() {
+  func testManifestWithoutSandboxRunsUnderTheEmptyDenyDefaultSpec() throws {
+    let absent = PluginSandbox.resolvedSandboxProfile(
+      manifest: manifest([.network], sandbox: nil), settings: [:], root: root,
+      dataDir: dataDir)
+    let empty = PluginSandbox.resolvedSandboxProfile(
+      manifest: specManifest([.network]), settings: [:], root: root, dataDir: dataDir)
+    XCTAssertEqual(absent.mode, "deny_default")
+    XCTAssertEqual(absent.profile, empty.profile)
+    let profile = try XCTUnwrap(absent.profile)
+    XCTAssertTrue(profile.contains("(deny default)"))
+    XCTAssertFalse(profile.contains("(allow default)"))
+    XCTAssertFalse(profile.contains("(allow process-exec (literal"))
+  }
+
+  func testManifestSandboxFalseRunsUnsandboxed() {
     let resolved = PluginSandbox.resolvedSandboxProfile(
-      manifest: manifest([]), settings: [:],
-      root: root, dataDir: dataDir)
-    XCTAssertEqual(resolved.mode, "network_denied")
-    XCTAssertTrue(resolved.profile?.contains("(allow default)") == true)
+      manifest: manifest([.open], sandbox: .disabled), settings: [:], root: root,
+      dataDir: dataDir)
+    XCTAssertNil(resolved.profile)
+    XCTAssertEqual(resolved.mode, "disabled_by_manifest")
   }
 }

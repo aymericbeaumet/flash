@@ -9,8 +9,10 @@ import FlashProviders
 extension AppMonitor {
   // MARK: Prepared model scheduling
 
-  func invalidatePreparedModel(for pid: pid_t) {
-    preparedModels.discardModel(pid: pid)
+  /// Drop `pid`'s model and its maintenance; `miss` is what a lookup before
+  /// the next walk will report.
+  func invalidatePreparedModel(for pid: pid_t, because miss: PreparedModelMiss) {
+    preparedModels.discardModel(pid: pid, because: miss)
     cancelMaintenance(pid: pid)
   }
 
@@ -42,7 +44,6 @@ extension AppMonitor {
     releaseMaintenanceWake(pid: pid)
     releaseRefreshWakes(pid: pid)
     pendingModelWaiters.take(pid: pid)?(nil)
-    slowAutomaticModelRefreshPIDs.remove(pid)
     readinessRewalkBudget.removeValue(forKey: pid)
   }
 
@@ -51,27 +52,34 @@ extension AppMonitor {
     releaseMaintenanceWake(pid: nil)
     releaseRefreshWakes(pid: nil)
     for waiter in pendingModelWaiters.takeAll() { waiter(nil) }
-    slowAutomaticModelRefreshPIDs.removeAll()
+    modelIntervalsMs.removeAll()
     readinessRewalkBudget.removeAll()
   }
 
   /// A gated app gets no automatic walk at all. Otherwise speculative walks
-  /// pause while the app storms, walks slow, or has a readiness ladder
-  /// pending: that ladder owes the app a walk once its tree is ready, and a
-  /// speculative walk before then reads the tree it is waiting for.
+  /// pause while the app storms or has a readiness ladder pending: that
+  /// ladder owes the app a walk once its tree is ready, and a speculative
+  /// walk before then reads the tree it is waiting for. A slow app is not
+  /// paused: its interval spaces its walks instead (`modelIntervalMs`).
   private func allowsAutomaticRefresh(pid: pid_t, reason: ModelRefreshReason) -> Bool {
     guard !backgroundWalkGate.isGated(pid) else { return false }
     guard reason.isSpeculative else { return true }
-    return !axEventStormingPIDs.contains(pid) && !slowAutomaticModelRefreshPIDs.contains(pid)
-      && !modelScheduler.hasReadiness(pid: pid)
+    return !axEventStormingPIDs.contains(pid) && !modelScheduler.hasReadiness(pid: pid)
+  }
+
+  /// The app's current maintenance interval: the floor until a walk grows it.
+  func modelIntervalMs(pid: pid_t) -> Int {
+    modelIntervalsMs[pid] ?? Self.modelFreshnessMs
   }
 
   /// New events extend one debounce wake per burst. Higher-priority requests
   /// can move it earlier; an obsolete callback never owns the replacement.
+  /// Throttled reasons keep the app's interval between walks.
   func scheduleModelRefresh(for pid: pid_t, reason: ModelRefreshReason) {
     guard allowsAutomaticRefresh(pid: pid, reason: reason),
       let arm = modelScheduler.scheduleRefresh(
-        pid: pid, reason: reason, now: DispatchTime.now().uptimeNanoseconds)
+        pid: pid, reason: reason, now: DispatchTime.now().uptimeNanoseconds,
+        minimumIntervalNs: UInt64(modelIntervalMs(pid: pid)) * 1_000_000)
     else { return }
     armRefreshTimer(arm)
   }
@@ -174,30 +182,40 @@ extension AppMonitor {
     armReadinessStep(pid: pid, step: 0, then: .readiness)
   }
 
-  /// Bookkeeping for one completed automatic walk: the slow-walk backoff and
-  /// the empty-walk gate. A degenerate walk is fast because there was nothing
-  /// to read, not because the app is cheap, so it never lifts the backoff.
-  private func noteAutomaticWalk(
+  /// Every completed walk sets the app's interval from its cost
+  /// (`nextModelIntervalMs`) and returns it: the freshness of the model it
+  /// built and the spacing of the app's next speculative walks. Logged when
+  /// it changes, so a backoff and its recovery are visible.
+  @discardableResult
+  func recordModelWalk(
     pid: pid_t, bundleIdentifier: String, reason: ModelRefreshReason, elapsedMs: Double,
-    targets: Int, degenerate: Bool, hasVolatileProvider: Bool, stillFocused: Bool
-  ) {
-    let wasSlow = slowAutomaticModelRefreshPIDs.contains(pid)
-    if Self.automaticModelRefreshIsSlow(elapsedMs: elapsedMs) {
-      slowAutomaticModelRefreshPIDs.insert(pid)
-      suppressScheduledBackgroundModelRefresh(for: pid)
-      if !wasSlow {
-        FlashLog.debug(
-          "[ax] model_refresh_backoff",
-          fields: [
-            "pid": "\(pid)",
-            "bundle": bundleIdentifier,
-            "reason": reason.logValue,
-            "elapsed_ms": String(format: "%.2f", elapsedMs),
-          ])
-      }
-    } else if !degenerate {
-      slowAutomaticModelRefreshPIDs.remove(pid)
+    unchanged: Bool, degenerate: Bool
+  ) -> Int {
+    let current = modelIntervalMs(pid: pid)
+    let next = Self.nextModelIntervalMs(
+      current: current, elapsedMs: elapsedMs, unchanged: unchanged, degenerate: degenerate)
+    modelIntervalsMs[pid] = next
+    if next != current {
+      FlashLog.debug(
+        "[ax] model_interval",
+        fields: [
+          "pid": "\(pid)",
+          "bundle": bundleIdentifier,
+          "reason": reason.logValue,
+          "elapsed_ms": String(format: "%.2f", elapsedMs),
+          "from_ms": "\(current)",
+          "to_ms": "\(next)",
+          "cause": next > current ? (unchanged ? "unchanged" : "slow") : "cheap",
+        ])
     }
+    return next
+  }
+
+  /// Bookkeeping for one completed automatic walk: the empty-walk gate.
+  private func noteAutomaticWalk(
+    pid: pid_t, bundleIdentifier: String, targets: Int, hasVolatileProvider: Bool,
+    stillFocused: Bool
+  ) {
     guard stillFocused,
       backgroundWalkGate.noteBackgroundWalk(
         pid: pid, targets: targets, hasVolatileProvider: hasVolatileProvider)
@@ -205,7 +223,7 @@ extension AppMonitor {
     modelScheduler.cancelRefresh(pid: pid)
     cancelMaintenance(pid: pid)
     modelScheduler.cancelReadiness(pid: pid)
-    FlashLog.info(
+    FlashLog.debug(
       "[ax] model_refresh_gated pid=\(pid) bundle=\(bundleIdentifier) "
         + "empty_walks=\(EmptyBackgroundWalkGate.threshold) reason=volatile_provider")
   }
@@ -305,28 +323,17 @@ extension AppMonitor {
 
   /// Seconds since the last keyboard, mouse, or scroll event in the session.
   static func userInputIsRecent(withinSeconds limit: Double) -> Bool {
-    let types: [CGEventType] = [
-      .keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel, .flagsChanged,
-    ]
-    let idle =
-      types.map {
-        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0)
-      }.min() ?? 0
-    return idle < limit
+    UserInput.secondsSinceLastInput() < limit
   }
 
-  /// A maintenance walk that reproduces the current model unchanged is
-  /// evidence the app is static: serve it longer before walking again. Any
-  /// other outcome resets to the base ceiling.
-  static func nextFreshnessMs(
-    previous: PreparedModel?, built: PreparedModel, reason: ModelRefreshReason
-  ) -> Int {
-    guard reason == .maintenance, let previous,
-      previous.dirtyToken == built.dirtyToken,
-      previous.configRevision == built.configRevision,
-      previous.fingerprint == built.fingerprint
-    else { return modelFreshnessMs }
-    return min(previous.freshnessMs * 2, modelFreshnessMaxMs)
+  /// A walk that reproduces the current model unchanged — same dirty token,
+  /// configuration revision and target geometry/role digest — is evidence
+  /// the app is static: a maintenance walk that does grows the interval.
+  static func modelReproducedUnchanged(previous: PreparedModel?, built: PreparedModel) -> Bool {
+    guard let previous else { return false }
+    return previous.dirtyToken == built.dirtyToken
+      && previous.configRevision == built.configRevision
+      && previous.fingerprint == built.fingerprint
   }
 
   func runModelRefresh(
@@ -385,7 +392,7 @@ extension AppMonitor {
       completion?(nil)
       return
     }
-    guard preparedModels.beginRebuild(pid: pid) else {
+    guard let rebuildTicket = preparedModels.beginRebuild(pid: pid) else {
       // Only the latest activation waiter matters; the one it displaces is
       // a superseded activation, told so with nil rather than left hanging.
       if let completion {
@@ -413,7 +420,10 @@ extension AppMonitor {
         Double(
           rebuildEndedAt.uptimeNanoseconds - rebuildStartedAt.uptimeNanoseconds) / 1_000_000
       DispatchQueue.main.async {
-        let shouldRunQueued = self.preparedModels.finishRebuild(pid: pid)
+        guard let shouldRunQueued = self.preparedModels.finishRebuild(rebuildTicket) else {
+          completion?(nil)
+          return
+        }
         let waiter = self.pendingModelWaiters.take(pid: pid)
         defer {
           if shouldRunQueued {
@@ -427,6 +437,7 @@ extension AppMonitor {
         // current model) nor counted — no maintenance, slow-walk backoff,
         // empty-walk gate or readiness rewalk. The next activation recomputes
         // the visible region and walks on demand.
+        // Nor does it count toward the app's interval or the empty-walk gate.
         if built.occluded {
           self.preparedModels.store(built)
           self.cancelMaintenance(pid: pid)
@@ -448,15 +459,21 @@ extension AppMonitor {
           targets: built.targets.count, lastHealthy: lastHealthy)
         if completion == nil {
           self.noteAutomaticWalk(
-            pid: pid, bundleIdentifier: context.bundleIdentifier, reason: reason,
-            elapsedMs: rebuildElapsedMs, targets: built.targets.count, degenerate: degenerate,
+            pid: pid, bundleIdentifier: context.bundleIdentifier, targets: built.targets.count,
             hasVolatileProvider: hasVolatileProvider,
             stillFocused: stillFocused && revisionStillMatches)
         }
 
+        // The walk's cost sets the app's interval, activation walks included:
+        // they measure the same tree. A degenerate walk never shrinks it.
         var built = built
-        built.freshnessMs = Self.nextFreshnessMs(
-          previous: self.preparedModels.current(pid: pid), built: built, reason: reason)
+        built.freshnessMs = self.recordModelWalk(
+          pid: pid, bundleIdentifier: context.bundleIdentifier, reason: reason,
+          elapsedMs: rebuildElapsedMs,
+          unchanged: reason == .maintenance
+            && Self.modelReproducedUnchanged(
+              previous: self.preparedModels.current(pid: pid), built: built),
+          degenerate: degenerate)
         let valid = tokenStillMatches && revisionStillMatches && stillFocused
         if valid, self.preparedModels.store(built) {
           self.scheduleMaintenanceRefresh(for: built)

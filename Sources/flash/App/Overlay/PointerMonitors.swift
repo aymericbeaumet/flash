@@ -39,7 +39,7 @@ extension OverlayPanel {
     guard pointerMonitorShouldDispatch() else { return }
     // Drop our own synthesized scroll/click events (keyboard-driven
     // normal-mode scrolling, hint clicks) so they don't bounce back
-    // through this monitor and flip Flash into insert mode.
+    // through this monitor as clicks of the user's.
     if event.cgEvent?.getIntegerValueField(.eventSourceUserData)
       == ActionDispatcher.syntheticMouseEventTag
     {
@@ -48,10 +48,10 @@ extension OverlayPanel {
     // A click on any of Flash's OWN windows (the status-bar click band, the
     // About window, …) is Flash UI, not an app interaction — the local
     // monitor sees it because the window is in this process. Never treat it
-    // as a "clicked the app" intent: that flipped NORMAL → INSERT and
-    // re-synthesized the click as a host-app click, which activated other
-    // windows over the About window (it looked "closed") and ate the
-    // button's click. Only the overlay panel itself stays in the dispatch
+    // as a "clicked the app" intent: that re-synthesized the click as a
+    // host-app click, which activated other windows over the About window
+    // (it looked "closed") and ate the button's click. Only the overlay
+    // panel itself stays in the dispatch
     // path — its pointer decisions (scroll-dismiss of hints, …) are the
     // reason this monitor exists.
     if let window = event.window, !(window is OverlayPanel) {
@@ -97,9 +97,10 @@ extension OverlayPanel {
       // an "interact with something else" signal worth closing the prompt for.
       return true
     case .normal:
-      // Idle NORMAL runs the monitor so a click on the focused app (e.g. a
-      // website text field) is recognised and enters insert — whether or not
-      // the status bar is enabled, and while capture is briefly suppressed.
+      // Idle NORMAL runs the monitor so a click into an app is delivered
+      // (again, when macOS spent it on activation) and NORMAL recaptures
+      // after it, the mode unchanged — whether or not the status bar is
+      // enabled, and while capture is briefly suppressed.
       return true
     case .passive, .hints:
       return false
@@ -110,6 +111,9 @@ extension OverlayPanel {
     let action: JumpAction
     if event?.type == .rightMouseDown {
       action = .rightClick
+    } else if event?.type == .otherMouseDown, event?.buttonNumber == 2 {
+      // A middle click is forwarded as one, never as a primary click.
+      action = .middleClick
     } else if (event?.clickCount ?? 1) >= 3 {
       action = .tripleClick
     } else if (event?.clickCount ?? 1) >= 2 {

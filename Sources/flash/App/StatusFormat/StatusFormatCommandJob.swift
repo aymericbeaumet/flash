@@ -31,53 +31,21 @@ final class StatusFormatCommandJob {
     self.queue = queue
     self.onLine = onLine
     self.onCompletion = onCompletion
-    guard let executable = argv.first, !executable.isEmpty else {
+    guard argv.first?.isEmpty == false else {
       throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
     }
     var descriptors: [Int32] = [-1, -1]
     guard pipe(&descriptors) == 0 else {
       throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
     }
-    var actions: posix_spawn_file_actions_t?
-    var attributes: posix_spawnattr_t?
-    posix_spawn_file_actions_init(&actions)
-    posix_spawnattr_init(&attributes)
-    defer {
-      posix_spawn_file_actions_destroy(&actions)
-      posix_spawnattr_destroy(&attributes)
-      close(descriptors[1])
-    }
-    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
-    posix_spawn_file_actions_adddup2(&actions, descriptors[1], STDOUT_FILENO)
-    posix_spawn_file_actions_addclose(&actions, descriptors[1])
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
-    posix_spawn_file_actions_addclose(&actions, descriptors[0])
-    if let workingDirectory {
-      flash_spawn_file_actions_addchdir(&actions, workingDirectory)
-    }
-    var mask = sigset_t()
-    var defaults = sigset_t()
-    sigemptyset(&mask)
-    sigfillset(&defaults)
-    sigdelset(&defaults, SIGKILL)
-    sigdelset(&defaults, SIGSTOP)
-    posix_spawnattr_setsigmask(&attributes, &mask)
-    posix_spawnattr_setsigdefault(&attributes, &defaults)
-    posix_spawnattr_setflags(
-      &attributes,
-      Int16(
-        POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK
-          | POSIX_SPAWN_SETSIGDEF))
-    posix_spawnattr_setpgroup(&attributes, 0)
-    let error = Self.withCStringArray(argv) { arguments in
-      Self.withCStringArray(environment.keys.sorted().map { "\($0)=\(environment[$0]!)" }) {
-        environment in
-        posix_spawn(&process, executable, &actions, &attributes, arguments, environment)
-      }
-    }
-    guard error == 0 else {
+    defer { close(descriptors[1]) }
+    do {
+      process = try ProcessGroupSpawn.spawn(
+        argv: argv, environment: environment, workingDirectory: workingDirectory,
+        stdout: .descriptor(descriptors[1]), stderr: .devNull, closeInChild: descriptors)
+    } catch {
       close(descriptors[0])
-      throw NSError(domain: NSPOSIXErrorDomain, code: Int(error))
+      throw error
     }
     descriptor = descriptors[0]
     _ = fcntl(descriptor, F_SETFL, O_NONBLOCK)
@@ -233,14 +201,6 @@ final class StatusFormatCommandJob {
       close(descriptor)
       descriptor = -1
     }
-  }
-
-  private static func withCStringArray<T>(
-    _ strings: [String], body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-  ) -> T {
-    var pointers = strings.map { strdup($0) } + [nil]
-    defer { for pointer in pointers { free(pointer) } }
-    return pointers.withUnsafeMutableBufferPointer { body($0.baseAddress!) }
   }
 
   deinit {

@@ -14,7 +14,7 @@ final class ModeStoreTests: XCTestCase {
         observed.append(store.mode)
       }
     }
-    store.dispatch(.enterInsert(targetPID: nil))
+    store.dispatch(.enterInsert(.explicitCommand))
     XCTAssertEqual(observed, [.insert, .insert, .terminal(restoreTo: .insert, returnPID: nil)])
     XCTAssertEqual(store.mode, .terminal(restoreTo: .insert, returnPID: nil))
   }

@@ -9,6 +9,9 @@ enum OverlayModeBadgeStyle {
   case command
   case hyper
   case hold
+  case visual
+  /// A user-defined layer (`[mode.layers.<name>]`).
+  case layer
 }
 
 /// What the overlay shows for the current mode, as one value. Only the mode
@@ -31,6 +34,8 @@ struct ModeSurface: Equatable {
 
 struct CandidateDisplayItem: Equatable {
   var title: String
+  /// Dimmed text after the title: what an ex command runs (`quit  tab close`).
+  var detail: String? = nil
   var highlightedRanges: [Range<Int>] = []
   var isSelected: Bool
 }
@@ -147,9 +152,15 @@ final class OverlayPanel: NSPanel {
   /// mirrored bars. Empty while the bar is hidden.
   var statusBarInteractionsByScreen: [StatusBarScreenInteractions] = []
   let statusTerminals = StatusTerminalRegistry()
+  /// The one door a status link leaves Flash through: the click windows, a
+  /// hinted link and the popup terminal's hyperlinks all follow it, under
+  /// `[statusbar] link_schemes`.
+  let statusLinkOpener = StatusLinkOpener()
   lazy var statusPopupController: StatusPopupController = {
     let controller = StatusPopupController(terminals: statusTerminals)
-    controller.sharingType = overlayConfig.screenCapture.sharingType
+    controller.sharingType = CaptureSharing.sharingType(hidden: hidesFromCapture)
+    // A hyperlink in a popup's pager or program is a status link too.
+    controller.openURL = { [weak self] url in _ = self?.statusLinkOpener.follow(url) }
     return controller
   }()
   /// `[popup]`: the chrome of every popup this panel presents.
@@ -207,8 +218,8 @@ final class OverlayPanel: NSPanel {
   /// `[statusbar.click]` action map. Set by the AppDelegate at startup;
   /// consumed by the click windows and the `f`-hint activation path.
   var statusBarActionHandler: ((String) -> Void)?
-  /// The argument requests restoring the previous app; false switches popups in place.
-  var statusBarPopupDismissHandler: ((Bool) -> Void)?
+  /// A scroll over a carousel run on the bar: step that carousel.
+  var statusBarCycleStepHandler: ((String, Int) -> Void)?
   var statusBarTerminalPrepareHandler: ((String, String?) -> Bool)?
   /// Whether hovering `name` would have to fork a terminal child (a declared
   /// terminal popup with no running session). Such popups dwell before they
@@ -281,7 +292,12 @@ final class OverlayPanel: NSPanel {
       guard overlayConfig != oldValue else { return }
       statusBarLayoutRevision &+= 1
       restyleActiveWindowBorder()
-      if overlayConfig.screenCapture != oldValue.screenCapture { applyScreenCaptureSharing() }
+    }
+  }
+  /// `[app] hide_from_capture`, set at launch and on config reload.
+  var hidesFromCapture = false {
+    didSet {
+      if hidesFromCapture != oldValue { applyCaptureSharing() }
     }
   }
   var debugConfig: Config.Debug = .init()
@@ -302,8 +318,14 @@ final class OverlayPanel: NSPanel {
   /// per key (`keyCharacters(for:)`).
   var keyboardLayout: KeyboardLayout?
   var inputMode: OverlayInputMode = .passive {
-    didSet { if inputMode != oldValue { scheduleCursorVisibilityUpdate() } }
+    didSet {
+      if inputMode != oldValue { scheduleCursorVisibilityUpdate() }
+      if inputMode != .commandLine { commandLineRegisterWait = nil }
+    }
   }
+  /// The `:` line as it was when `ctrl+r` was pressed, waiting for the
+  /// register name the next key types (`CommandLineEditing`).
+  var commandLineRegisterWait: CommandLineEditing.Line?
 
   /// Hide the mouse cursor while hint labels own the keys, so it can't obscure
   /// a chip or distract from picking one. It comes back when the pointer
@@ -352,6 +374,8 @@ final class OverlayPanel: NSPanel {
     Self.hintCursorVisibility(false)
     hintCursorHidden = false
   }
+  /// A macro is recording: a bare `q` stops it (`NormalModeInterpreter`).
+  var normalModeRecordingMacro = false
   var normalModePending: String = "" {
     didSet {
       if normalModePending.isEmpty {
@@ -441,7 +465,7 @@ final class OverlayPanel: NSPanel {
 
     /// The height of the status bar band on the display at `screenFrame`,
     /// from this snapshot alone. The bar paints exactly this band and
-    /// `window_move` reserves exactly it, so the two can never disagree about
+    /// `window move` reserves exactly it, so the two can never disagree about
     /// where a slot's top edge is, even when the live visible frame moved
     /// after the snapshot (Flash auto-hiding the native menu bar).
     func statusBarHeight(forScreenFrame screenFrame: CGRect) -> CGFloat {
@@ -449,6 +473,15 @@ final class OverlayPanel: NSPanel {
         screenFrame: screenFrame,
         visibleFrame: screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame,
         fallbackHeight: nativeStatusBarFallbackHeight(forScreenFrame: screenFrame))
+    }
+
+    /// The display around `point`, else the primary, else any: where a
+    /// surface opened for whatever the user looks at is centred.
+    func screen(around point: CGPoint?) -> (
+      scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?
+    )? {
+      point.flatMap { point in screens.first { $0.frame.contains(point) } }
+        ?? screens.first { $0.frame == mainFrame } ?? screens.first
     }
 
     /// Width of the camera housing the centre recess mimics: the connected
@@ -807,11 +840,15 @@ final class OverlayPanel: NSPanel {
 
   override func becomeKey() {
     super.becomeKey()
-    // Activation can land asynchronously on this macOS, so the window may become
-    // key *after* `captureKeyboardInput` already ran. A field editor only shows a
-    // blinking caret in a key window, so when we key while a command bar is open,
-    // (re)focus the field and restart its blink — otherwise a cancel→reopen left
-    // the caret missing until the next keystroke.
+    refocusCommandFieldOnBecomingKey()
+  }
+
+  /// Activation can land asynchronously on this macOS, so the window may become
+  /// key *after* `captureKeyboardInput` already ran. A field editor only shows a
+  /// blinking caret in a key window, so when we key while a command bar is open,
+  /// (re)focus the field and restart its blink — otherwise a cancel→reopen left
+  /// the caret missing until the next keystroke.
+  func refocusCommandFieldOnBecomingKey() {
     if commandTextFieldIsLaidOut {
       commandTextField.isHidden = false
       makeFirstResponder(commandTextField)
@@ -941,6 +978,14 @@ final class OverlayPanel: NSPanel {
   }
 }
 
+/// A modified Return in the command line. The flashlight's clipboard rows
+/// read it: Shift-Return pastes plain text, Option-Return copies without
+/// pasting. Everything else treats it as Return.
+enum CommandLineSubmitVariant: Equatable {
+  case shift
+  case option
+}
+
 protocol OverlayCoordinator: AnyObject {
   /// The app Flash last saw focused (never Flash itself), so an activation
   /// request can name a source when the workspace's frontmost pointer is stale.
@@ -956,7 +1001,7 @@ protocol OverlayCoordinator: AnyObject {
   /// One keystroke of the `--search` sub-state. Only called while
   /// `hintKeyRoute` is `.search`.
   func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
-  /// One keystroke of `mouse_bigram` while the search letter is being typed.
+  /// One keystroke of `mouse bigram` while the search letter is being typed.
   func overlayDidBigram(_ command: HintBigramCommand)
   /// Escape is left to the hint interpreters. A leader press or a mapping
   /// that enters another mode ends the EasyMotion jump and runs that mode.
@@ -981,7 +1026,16 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool
   func overlayDidInsertCommandLineSelection() -> Bool
   func overlayDidSubmitCommandLine(_ command: String)
+  /// Shift-Return or Option-Return.
+  func overlayDidSubmitCommandLine(_ command: String, variant: CommandLineSubmitVariant)
   func overlayDidForceSubmitCommandLineSelection()
+  /// Command-P: pin or unpin the selected clipboard history row. False when
+  /// no such row is selected.
+  func overlayDidTogglePinOfCommandLineSelection() -> Bool
+  /// The text of register `name` for the command line's `ctrl+r {x}`: a
+  /// named register, the clipboard (`"`, `+`, `*`), the last command line
+  /// (`:`); nil when it holds nothing.
+  func overlayRegisterText(_ name: Character) -> String?
   /// `[flashlight.aliases]` lookup hook. Returns the rewritten buffer +
   /// cursor when the latest keystroke landed on `<space>` after a
   /// registered shorthand bang (`!g ` → `!google `), `nil` otherwise.
@@ -994,4 +1048,9 @@ protocol OverlayCoordinator: AnyObject {
 
 extension OverlayCoordinator {
   func overlayEndsBigramCapture(for event: NSEvent) -> Bool { false }
+  func overlayDidSubmitCommandLine(_ command: String, variant: CommandLineSubmitVariant) {
+    overlayDidSubmitCommandLine(command)
+  }
+  func overlayDidTogglePinOfCommandLineSelection() -> Bool { false }
+  func overlayRegisterText(_ name: Character) -> String? { nil }
 }

@@ -1,33 +1,10 @@
 import FlashCore
 
+/// What a click does to the mode: nothing. A click, made with the mouse, by
+/// `f` (`mouse target`) or by `F` (`mouse grid`), never enters INSERT; only
+/// `mode insert` does (AGENTS.md hard constraint 9). These decisions say who
+/// owns the keyboard once the click is out.
 enum NormalModePointerPolicy {
-  /// What a committed click landed on. `f` knows its target's role from
-  /// discovery; `F` hit-tests the grid point before clicking. Either way
-  /// `entersInsertMode` is the same text-input judgement.
-  enum ClickTarget: Equatable {
-    case hint(entersInsertMode: Bool)
-    case grid(entersInsertMode: Bool)
-
-    var entersInsertMode: Bool {
-      switch self {
-      case .hint(let enters), .grid(let enters): return enters
-      }
-    }
-  }
-
-  /// One rule for `f` and `F`: a primary, double or triple click on a text
-  /// input enters INSERT; anything else — another target, a secondary or
-  /// middle click — keeps NORMAL.
-  static func clickShouldEnterInsert(target: ClickTarget, action: JumpAction) -> Bool {
-    guard target.entersInsertMode else { return false }
-    switch action {
-    case .leftClick, .doubleClick, .tripleClick:
-      return true
-    case .rightClick, .middleClick:
-      return false
-    }
-  }
-
   /// What a physical click in an app does to NORMAL — exactly one outcome.
   enum AppClickDecision: Equatable {
     /// NORMAL doesn't own the click (another mode, the command line).
@@ -36,8 +13,10 @@ enum NormalModePointerPolicy {
     /// NORMAL capture suspends until it closes, and transient hints showing
     /// behind it are dropped first.
     case suspendForNativeSurface(dismissHints: Bool)
-    /// A left / double click hands the keyboard to the app and enters INSERT.
-    case handOffToInsert
+    /// A primary or middle click: the app gets it, wherever it lands (a
+    /// text field, a password field, a terminal included), and NORMAL keeps
+    /// the keyboard.
+    case keepNormal
   }
 
   enum PointerDecision: Equatable {
@@ -94,16 +73,14 @@ enum NormalModePointerPolicy {
   ) -> AppClickDecision {
     guard mode == .normal, !wasCommandLine else { return .ignore }
     // Right-click opens a native context menu that runs its own modal key
-    // session — it must NEVER flip the mode (same rule as the `f`/`F` commits).
-    // Suspend normal capture so the menu owns the keyboard, then NORMAL resumes
-    // when it dismisses; drop any transient hints first so they don't linger
-    // behind the menu.
+    // session. Suspend normal capture so the menu owns the keyboard, then
+    // NORMAL resumes when it dismisses; drop any transient hints first so they
+    // don't linger behind the menu.
     if action == .rightClick {
       return .suspendForNativeSurface(dismissHints: hasHints)
     }
-    // A physical left / double click always hands the keyboard to the app and
-    // enters INSERT. Hint clicks additionally require an input target.
-    return .handOffToInsert
+    // Any other click goes to the app and NORMAL keeps the keyboard.
+    return .keepNormal
   }
 
   static func pointerScrollShouldPassThrough(
@@ -114,42 +91,18 @@ enum NormalModePointerPolicy {
   }
 }
 
-/// How a NORMAL action ended in the focused app.
-enum NormalModeActionOutcome: Equatable {
-  /// A source performed the action in the context it owns.
+/// How a command NORMAL asked of the focused app ended.
+enum NormalModeCommandOutcome: Equatable {
+  /// A source performed the command in the context it owns.
   case performed
-  /// The action's chord was posted to the focused app.
+  /// The command's chord was posted to the focused app.
   case chordSent
-  /// A source claimed the action and could not complete it.
+  /// A source claimed the command and could not complete it.
   case failed
-  /// The focused app has no such action.
+  /// The focused app has no such command.
   case unavailable
   /// There was no app to act in.
   case noTarget
   /// A terminal would have typed the chord as text, so it was not sent.
   case refused
-}
-
-/// Which NORMAL actions are INSERT intents. Opening Find (`app_find`) and a
-/// new tab (`tab_new`) ask to type next — into the find field, the new tab's
-/// address bar or shell — so once the action reached the app Flash enters
-/// INSERT. When nothing happened NORMAL stays, and every other action keeps
-/// NORMAL whatever it did.
-enum NormalModeActionInsertPolicy {
-  static func insertReason(
-    for command: URLCommand,
-    outcome: NormalModeActionOutcome
-  ) -> InsertModeTransitionReason? {
-    switch outcome {
-    case .performed, .chordSent:
-      break
-    case .failed, .unavailable, .noTarget, .refused:
-      return nil
-    }
-    switch command {
-    case .find: return .appFind
-    case .tabNew: return .tabNew
-    default: return nil
-    }
-  }
 }

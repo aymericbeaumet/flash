@@ -34,6 +34,7 @@ final class TerminalConfigTests: XCTestCase {
       command = ["btop"]
       size = "90%x85%"
       persistent = true
+      pause_hidden = true
       [popup.bonsai]
       command = ["bonsai", "hq"]
       size = "120x36"
@@ -43,6 +44,9 @@ final class TerminalConfigTests: XCTestCase {
     XCTAssertEqual(terminals["editor"]?.command, ["/bin/zsh", "-l"])
     XCTAssertEqual(terminals["editor"]?.size, .default)
     XCTAssertEqual(terminals["editor"]?.lifecycle, .fresh)
+    XCTAssertEqual(terminals["editor"]?.pauseHidden, false)
+    XCTAssertEqual(terminals["btop"]?.pauseHidden, true)
+    XCTAssertEqual(terminals["bonsai"]?.pauseHidden, false)
     XCTAssertEqual(
       terminals["btop"]?.size, Config.PopupSize(columns: .percent(90), rows: .percent(85)))
     XCTAssertEqual(terminals["btop"]?.lifecycle, .persistent)
@@ -106,6 +110,8 @@ final class TerminalConfigTests: XCTestCase {
     for body in [
       "command = []", "command = [\"btm\"]\nsize = \"0x28\"",
       "command = [\"btm\"]\npersistent = \"true\"",
+      "command = [\"btm\"]\npersistent = true\npause_hidden = \"yes\"",
+      "command = [\"btm\"]\npause_hidden = true",
       "command = [\"btm\"]\nenv = { PATH = 1 }",
       "command = [\"btm\"]\nunknown = true",
       "command = [\"btm\"]\ntext = \"both\"",
@@ -203,5 +209,24 @@ final class TerminalConfigTests: XCTestCase {
     XCTAssertFalse(config.resolvedConfigJSON.contains("private-argument"))
     XCTAssertFalse(config.resolvedConfigJSON.contains("private-secret"))
     XCTAssertTrue(config.resolvedConfigJSON.contains("persistent"))
+    XCTAssertTrue(config.resolvedConfigJSON.contains("pause_hidden"))
+  }
+
+  /// A fresh popup's process stops when it hides, so pausing it is a
+  /// contradiction the loader names rather than ignores.
+  func testPauseHiddenNeedsAPersistentPopup() {
+    let config = ConfigLoader.parse(
+      """
+      [popup.btop]
+      command = ["btop"]
+      pause_hidden = true
+      """)
+    XCTAssertEqual(
+      config.diagnostics.map(\.message),
+      [
+        "popup.btop.pause_hidden needs persistent = true: a fresh popup's process stops when it hides"
+      ])
+    XCTAssertTrue(config.invalidPopupNames.contains("btop"))
+    XCTAssertNil(config.terminalPopups["btop"])
   }
 }

@@ -92,6 +92,8 @@ enum FlashLog {
 
   private static let lock = NSLock()
   private static var minLevel: Level = .info
+  /// The last state `changed(_:to:)` saw per key.
+  private static var conditionStates: [String: String] = [:]
   private static var sinks: [UUID: SinkEntry] = [:]
   private static let pid = Int(getpid())
   /// Serial queue owning every byte of log output (stderr and file).
@@ -149,6 +151,31 @@ enum FlashLog {
     let fileID = fileID.description
     let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
     return "core:\(file).\(function)"
+  }
+
+  /// Whether `state` differs from the last one recorded under `key`, which
+  /// it then becomes. A condition that persists across many events warns
+  /// when it starts or changes and logs its repeats a level lower, so it
+  /// never storms (`docs/observability.md`); recording its cleared state
+  /// lets the next occurrence warn again.
+  static func changed(_ key: String, to state: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard conditionStates[key] != state else { return false }
+    conditionStates[key] = state
+    return true
+  }
+
+  /// A line at a level chosen at run time.
+  static func log(
+    _ level: Level,
+    _ message: @autoclosure () -> String,
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
+  ) {
+    emit(level, source: source, fileID: fileID, function: function, fields: fields, message)
   }
 
   static func debug(

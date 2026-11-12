@@ -1,8 +1,8 @@
 import AppKit
 import FlashCore
 
-/// A confirmation (`confirm`, or a plugin's `action_confirmations` entry for
-/// an action the focused app performs): the question is the status alert,
+/// A confirmation (`alert confirm`, or the `confirm` a plugin declares on a
+/// core command it performs in the focused app): the question is the status alert,
 /// and a hint-session phase owns the keyboard until one key answers it, in
 /// every base mode. `y` runs the gated command; any other key, Escape and a
 /// click included, closes the question and runs nothing.
@@ -33,10 +33,10 @@ extension AppDelegate {
       confirmation.command, repeatCount: confirmation.repeatCount, confirmed: true)
   }
 
-  /// The question a plugin declares for `action` in the focused app, or nil
-  /// when no applicable plugin gates it.
-  func sourceActionConfirmation(_ action: SourceAction, context: AppContext) -> String? {
-    pluginManager.actionConfirmation(
-      action.name, in: PluginSelectorContext(bundleID: context.bundleIdentifier))
+  /// The question a plugin declares for the command `name` in the focused
+  /// app, or nil when no applicable plugin gates it.
+  func sourceCommandConfirmation(_ name: CommandName, context: AppContext) -> String? {
+    pluginManager.commandConfirmation(
+      name, in: PluginSelectorContext(bundleID: context.bundleIdentifier))
   }
 }

@@ -19,7 +19,7 @@ import Foundation
 /// above the main window — this is how NSPopover/status-item/password-manager
 /// popups are scoped without hinting sibling windows behind them.
 struct WindowSnapshot {
-  struct Entry {
+  struct Entry: Equatable {
     let pid: pid_t
     let layer: Int
     /// NSScreen-coord bounds (origin bottom-left of primary).
@@ -122,7 +122,10 @@ struct WindowSnapshot {
       entries: entries, focusedPid: focusedPid, walkedWindowFrame: walkedWindowFrame)
     guard focusedPid == frontmostPID, snapshot.activeWindowFrame != nil,
       snapshot.visibleRegions[focusedPid]?.isEmpty ?? true
-    else { return snapshot }
+    else {
+      _ = FlashLog.changed(Self.coveredConditionKey, to: "visible")
+      return snapshot
+    }
     // The frontmost app's window sits above every other app's normal-level
     // window, so finding it fully covered by them means the window list still
     // has the previous app on top — a z-order lag that left every hint request
@@ -136,11 +139,21 @@ struct WindowSnapshot {
     }
     .filter { $0.occludes && $0.nsBounds.intersects(snapshot.activeWindowFrame ?? .null) }
     .map { "\($0.pid):\($0.layer)" }
-    FlashLog.warn(
+    // Repaired, the walk goes on as usual. Still covered, it finds nothing:
+    // a warning when that starts, then debug while the same windows (an open
+    // Notification Center panel, say) keep covering it walk after walk.
+    let wasRepaired = !(repaired.visibleRegions[focusedPid]?.isEmpty ?? true)
+    let starts =
+      !wasRepaired
+      && FlashLog.changed(Self.coveredConditionKey, to: "\(focusedPid) \(covering)")
+    FlashLog.log(
+      starts ? .warn : .debug,
       "[discover] frontmost_window_covered pid=\(focusedPid) covering=\(covering) "
-        + "repaired=\(!(repaired.visibleRegions[focusedPid]?.isEmpty ?? true))")
+        + "repaired=\(wasRepaired)")
     return repaired
   }
+
+  static let coveredConditionKey = "discover.frontmost_window_covered"
 
   // The window-list keys, bridged once rather than per window per read.
   private static let ownerPIDKey = kCGWindowOwnerPID as String
@@ -160,7 +173,7 @@ struct WindowSnapshot {
       // anything and can't host hints.
       if cgBounds.width <= 0 || cgBounds.height <= 0 { continue }
       let layer = (w[layerKey] as? Int) ?? 0
-      let ns = ScreenSpace.flip(cgBounds, height: primaryH)
+      let ns = ScreenRect<AXSpace>(cgBounds).toNS(primaryHeight: primaryH).cgRect
       let alpha = (w[alphaKey] as? Double) ?? 1
       entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns, alpha: alpha))
     }

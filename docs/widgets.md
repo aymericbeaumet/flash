@@ -18,7 +18,7 @@ Add this to `~/.config/flash/flash.toml` and save:
 [widgets.cpu]
 anchor = "top_right"
 font_size = 16
-template = "CPU #[meter=20]#{flash.plugin.cpu.percent}#[nometer] #{flash.plugin.cpu.percent}%%"
+template = "CPU #[meter=20]#{flash.plugin.sysinfo.cpu_percent}#[nometer] #{flash.plugin.sysinfo.cpu_percent}%%"
 ```
 
 ```text
@@ -28,6 +28,8 @@ CPU ███████▍             37%
 Each `[widgets.<name>]` table (names use letters, digits, `_` and `-`) is one
 widget. It appears on save; set `enabled = false` or delete the table and it
 goes away. Ready-made panels live in [`examples/widgets`](examples/widgets/README.md).
+If a metric stays empty, open the live [plugins](/plugins) page; the
+[runtime](/state) page shows the configuration Flash loaded.
 
 ## Lines
 
@@ -46,8 +48,8 @@ screen:
 
 ```toml
 template = """
-CPU #{flash.plugin.cpu.percent}%% \
- MEM #{flash.plugin.memory.percent}%%
+CPU #{flash.plugin.sysinfo.cpu_percent}%% \
+ MEM #{flash.plugin.sysinfo.memory_percent}%%
 """
 ```
 
@@ -55,7 +57,7 @@ As in the bar, write `%%` for a literal percent sign: the template is expanded
 by `strftime`, so `%H:%M` in it is the time. A conditional branch is expanded
 a second time, as in tmux, so a percent sign inside `#{?…}` is written `%%%%`.
 
-A multi-line value — a plugin table such as `processes.top_cpu`, a source that
+A multi-line value — a process table such as `flash.top_cpu`, a source that
 prints several lines, `#{flash.calendar}` — spreads over as many widget lines.
 
 ## Styling
@@ -104,7 +106,7 @@ empty part of the bar is spaces, so a `bg=` in the same marker draws the track:
 | --- | --- |
 | `[#[meter=10]37#[nometer]]` | `[███▊      ]` |
 | `[#[meter=10/8]2.5#[nometer]]` | `[███▏      ]` |
-| `#[meter=10 fg=green bg=colour236]#{flash.plugin.memory.percent}#[nometer default]` | A green bar on a grey track |
+| `#[meter=10 fg=green bg=colour236]#{flash.plugin.sysinfo.memory_percent}#[nometer default]` | A green bar on a grey track |
 
 `#[spark]` … `#[nospark]` draws **every number** of the enclosed text as one
 of `▁▂▃▄▅▆▇█`, scaled from 0 to the largest of them — the same scale as the
@@ -116,7 +118,7 @@ clamps; with a single number it is a one-cell gauge:
 | `#[spark]0 1536 48213 20000 3000 100 0#[nospark]` | `▁▁█▃▁▁▁` |
 | `#[spark=0/100]12 18 23 40 55 30 20 10 95#[nospark]` | `▁▂▂▃▄▃▂▁▇` |
 | `#[spark=0/100]85#[nospark]` | `▆` |
-| `#[spark]#{flash.plugin.network.down_history}#[nospark]` | The last 20 download rates |
+| `#[spark]#{flash.plugin.sysinfo.network_down_history}#[nospark]` | The last 20 download rates |
 
 The drawing replaces all the enclosed text, so labels and units go outside the
 markers. Text without a number is left as it was, so a meter over a value that
@@ -141,22 +143,25 @@ Everything the bar can show is available. These values suit widgets:
 
 | Value | Meaning |
 | --- | --- |
-| `#{flash.plugin.cpu.percent}` | Total CPU, integer 0–100. |
-| `#{flash.plugin.cpu.history}` | The last 20 CPU totals, oldest first, space-separated. |
-| `#{flash.plugin.cpu.load}` | One-minute load average, `3.47`. |
-| `#{flash.plugin.cpu.uptime}` | Time since boot, sleep included, `3d 4h`. |
-| `#{flash.plugin.memory.percent}`, `history` | Used memory 0–100, and its last 20 samples. |
-| `#{flash.plugin.disks.percent}` | Startup-volume usage 0–100. |
-| `#{flash.plugin.disks.read_bps}`, `write_bps` | Disk rates in whole bytes per second. |
-| `#{flash.plugin.disks.read}`, `write` | The same rates in binary units, `1.5 MiB/s`. |
-| `#{flash.plugin.network.down_bps}`, `up_bps` | Default-route rates in whole bytes per second. |
-| `#{flash.plugin.network.down_history}`, `up_history` | Their last 20 samples. |
-| `#{flash.plugin.network.address}` | First IPv4 address of the default-route interface. |
-| `#{flash.plugin.power.percent}` | Battery charge 0–100; empty without a battery. |
-| `#{flash.plugin.power.state}` | `charging`, `discharging`, `charged` or `ac`. |
-| `#{flash.plugin.processes.top_cpu}`, `top_mem` | The busiest processes by CPU or resident memory, one row each. |
-| `#{flash.plugin.tmux.session}`, `window`, `pane` | The attached local tmux client's session, window and pane; empty without one. |
+| `#{flash.plugin.sysinfo.cpu_percent}` | Total CPU, integer 0–100. |
+| `#{flash.plugin.sysinfo.cpu_history}` | The last 20 CPU totals, oldest first, space-separated. |
+| `#{flash.plugin.sysinfo.cpu_load}` | One-minute load average, `3.47`. |
+| `#{flash.plugin.sysinfo.cpu_uptime}` | Time since boot, sleep included, `3d 4h`. |
+| `#{flash.plugin.sysinfo.memory_percent}`, `history` | Used memory 0–100, and its last 20 samples. |
+| `#{flash.plugin.sysinfo.disks_percent}` | Startup-volume usage 0–100. |
+| `#{flash.plugin.sysinfo.disks_read_bps}`, `write_bps` | Disk rates in whole bytes per second. |
+| `#{flash.plugin.sysinfo.disks_read}`, `write` | The same rates in binary units, `1.5 MiB/s`. |
+| `#{flash.plugin.sysinfo.network_down_bps}`, `up_bps` | Default-route rates in whole bytes per second. |
+| `#{flash.plugin.sysinfo.network_down_history}`, `up_history` | Their last 20 samples. |
+| `#{flash.plugin.sysinfo.network_address}` | First IPv4 address of the default-route interface. |
+| `#{flash.plugin.sysinfo.power_percent}` | Battery charge 0–100; empty without a battery. |
+| `#{flash.memory_pressure}` | Memory pressure 0–100, read from the kernel on the widget's `interval`. |
+| `#{flash.plugin.sysinfo.power_state}` | `charging`, `discharging`, `charged` or `ac`. |
+| `#{flash.plugin.terminals.session}`, `window`, `pane` | The attached local tmux client's session, window and pane; empty without one. |
 | `#{flash.calendar}` | The 75-column [calendar](calendar.md): three months, the day's progress, time zone, DST and moon. |
+| `#{flash.calendar.next}`, `next_title`, `next_in`, `next_minutes`, `next_start`, `next_end`, `next_ongoing`, `next_link` | The [next meeting](calendar.md#next-meeting): `Standup in 12m`, and its parts. Reading one asks macOS for Calendars access once. |
+| `#{flash.top_cpu}`, `#{flash.top_mem}` | The busiest processes by CPU or resident memory, one row each. |
+| `#{flash.focused_app_details}` | The focused app's CPU, memory, sockets, threads, uptime and disk I/O. |
 | `#{flash.source.<name>}` | The output of a [named source](status-format.md#jobs-sources-and-flash-styles). |
 | `#{flash.history.<name>}` | The last N numeric outputs of a source with `history = N`, oldest first. |
 | `#(command)` | A tmux shell job, re-run every widget `interval`. |
@@ -165,10 +170,10 @@ Everything the bar can show is available. These values suit widgets:
 
 The plugin values are described in
 [status plugins](status-plugins.md#raw-numeric-segments); an empty value means
-unknown, not zero, so a meter over it draws nothing. `[plugin.processes]
-top_count = 5` sets the rows of each process table (1–20); the plugin samples
-processes only while a surface shows one of the tables
-([top processes](status-plugins.md#top-processes)).
+unknown, not zero, so a meter over it draws nothing. `[statusbar]
+top_count = 5` sets the rows of each process table (1–20); Flash samples
+processes only while a surface shows one of the
+[process values](status-format.md#process-values).
 
 A named source runs a command on its own cadence. `history = N` (2–512) keeps
 the last N outputs that parse as a number; it survives while nothing shows
@@ -206,7 +211,7 @@ load #[spark]#{flash.history.load}#[nospark] #{flash.source.load}
 | `corner_radius` | `8` | Points. |
 | `padding` | `8` | Points between the edge and the text. |
 | `interval` | `0` | Seconds between `#()` re-runs; `0` follows `[statusbar] interval`. Time refreshes on its own boundaries. |
-| `hide_from_capture` | `false` | Ask the window server to leave the widget out of screenshots, recordings and screen sharing. Best effort, as for `[overlay] screen_capture`, which also applies. |
+| `hide_from_capture` | `false` | Ask the window server to leave this widget out of screenshots, recordings and screen sharing. `[app] hide_from_capture` does it for every Flash window; either one hides the widget. A request most capture on macOS 15 and later ignores ([screen capture](privacy.md#screen-capture)). |
 
 The whole format is written inline in `template`; there is no
 `[widgets.<name>.options]` table.
@@ -248,17 +253,17 @@ and how to measure it are in [performance](performance.md#widgets-budget).
 | `${alignr}`, `${alignc}` | `#[align=right]`, `#[align=centre]` |
 | `${hr}` | `#{R:─,#{flash.widget.columns}}` |
 | `${time %H:%M}` | `%H:%M` in the template (it is `strftime`-expanded) |
-| `${cpu}` | `#{flash.plugin.cpu.percent}` |
-| `${cpubar}` | `#[meter=20]#{flash.plugin.cpu.percent}#[nometer]` |
-| `${cpugraph}` | `#[spark]#{flash.plugin.cpu.history}#[nospark]` |
-| `${memperc}`, `${membar}` | `#{flash.plugin.memory.percent}`, `#[meter=20]#{flash.plugin.memory.percent}#[nometer]` |
-| `${fs_used_perc /}`, `${fs_bar /}` | `#{flash.plugin.disks.percent}`, `#[meter=20]#{flash.plugin.disks.percent}#[nometer]` |
-| `${diskio_read}`, `${diskio_write}` | `#{flash.plugin.disks.read}`, `#{flash.plugin.disks.write}` |
-| `${loadavg 1}`, `${uptime_short}` | `#{flash.plugin.cpu.load}`, `#{flash.plugin.cpu.uptime}` |
-| `${downspeed}`, `${downspeedgraph}` | `#{flash.plugin.network.down_bps}`, `#[spark]#{flash.plugin.network.down_history}#[nospark]` |
-| `${addr}` | `#{flash.plugin.network.address}` |
-| `${battery_percent}`, `${battery_bar}` | `#{flash.plugin.power.percent}`, `#[meter=20]#{flash.plugin.power.percent}#[nometer]` |
-| `${top name 1}` … | `#{flash.plugin.processes.top_cpu}` (`top_mem` for `${top_mem}`), `[plugin.processes] top_count` rows |
+| `${cpu}` | `#{flash.plugin.sysinfo.cpu_percent}` |
+| `${cpubar}` | `#[meter=20]#{flash.plugin.sysinfo.cpu_percent}#[nometer]` |
+| `${cpugraph}` | `#[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]` |
+| `${memperc}`, `${membar}` | `#{flash.plugin.sysinfo.memory_percent}`, `#[meter=20]#{flash.plugin.sysinfo.memory_percent}#[nometer]` |
+| `${fs_used_perc /}`, `${fs_bar /}` | `#{flash.plugin.sysinfo.disks_percent}`, `#[meter=20]#{flash.plugin.sysinfo.disks_percent}#[nometer]` |
+| `${diskio_read}`, `${diskio_write}` | `#{flash.plugin.sysinfo.disks_read}`, `#{flash.plugin.sysinfo.disks_write}` |
+| `${loadavg 1}`, `${uptime_short}` | `#{flash.plugin.sysinfo.cpu_load}`, `#{flash.plugin.sysinfo.cpu_uptime}` |
+| `${downspeed}`, `${downspeedgraph}` | `#{flash.plugin.sysinfo.network_down_bps}`, `#[spark]#{flash.plugin.sysinfo.network_down_history}#[nospark]` |
+| `${addr}` | `#{flash.plugin.sysinfo.network_address}` |
+| `${battery_percent}`, `${battery_bar}` | `#{flash.plugin.sysinfo.power_percent}`, `#[meter=20]#{flash.plugin.sysinfo.power_percent}#[nometer]` |
+| `${top name 1}` … | `#{flash.top_cpu}` (`#{flash.top_mem}` for `${top_mem}`), `[statusbar] top_count` rows |
 | `${exec cmd}` | `#(cmd)` |
 | `${execi 60 cmd}` | `[statusbar.sources.x]` with `command = [...]` and `interval = 60`, shown as `#{flash.source.x}` |
 | `${execgraph …}` | A source with `history = N`, drawn with `#[spark]#{flash.history.x}#[nospark]` |

@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// `flash status`: the resident's state as one versioned JSON object, built
+/// `flash resident status`: the resident's state as one versioned JSON object, built
 /// for the CLI alone. It carries facts about Flash itself — never clipboard
 /// contents, typed keys, window titles or hint targets (only apps' bundle
 /// identifiers and activation counts and timings) — and its key set is
@@ -42,11 +42,12 @@ struct FlashStatusReport: Equatable {
 
   var version: String
   var build: String
-  /// `disabled`, `insert`, `normal`, `hold`, `hyper`, `command` or
-  /// `terminal`.
+  /// `disabled`, `insert`, `normal`, `hold`, `hyper`, `command`,
+  /// `terminal`, or the name of the active layer.
   var mode: String
   /// The mapping table the mode reads and whose chords are registered:
-  /// `insert`, `normal`, `hold`, `command` or `terminal`.
+  /// `insert`, `normal`, `text` (a field is engaged), `visual`, `hold`,
+  /// `command`, `terminal`, or the active layer's name.
   var mappingScope: String
   /// `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`
   /// or `bigram`.
@@ -95,6 +96,9 @@ struct FlashStatusReport: Equatable {
     case .terminal: return "terminal"
     case .hyper: return "hyper"
     case .hold: return "hold"
+    case .visual: return "visual"
+    // Reserved names keep a layer from reading as a built-in mode.
+    case .layer(let layer): return layer.name
     }
   }
 
@@ -110,13 +114,14 @@ struct FlashStatusReport: Equatable {
     case .pointer: return "pointer"
     case .bigram: return "bigram"
     case .confirmation: return "confirming"
+    case .switcher: return "window_switcher"
     }
   }
 
   /// The tap's decision for a modified chord, by name. `pass`: chords reach
   /// the app. `mapped_only`: only chords an active mapping claims are taken
-  /// (INSERT). `native_surface`: a native surface owns input and only mapped
-  /// keys are taken. `swallowed`: every chord is Flash's (NORMAL, hints).
+  /// (INSERT). `native_surface`: a native surface (a menu, About, Mission
+  /// Control over NORMAL) owns input and only mapped keys are taken. `swallowed`: every chord is Flash's (NORMAL, hints).
   /// `tap_off`: no live tap; only registered global chords are taken.
   static func chordRouting(_ decision: KeyboardCaptureTap.Decision?) -> String {
     switch decision {

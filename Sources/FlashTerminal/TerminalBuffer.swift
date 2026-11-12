@@ -1,5 +1,6 @@
 import AppKit
 import CFlashTerminal
+import FlashCore
 import Foundation
 
 public struct TerminalColor: Equatable, Hashable, Sendable {
@@ -201,7 +202,7 @@ public struct TerminalFrame: Equatable, Sendable {
         CharacterSet.whitespacesAndNewlines.contains($0)
           || CharacterSet.controlCharacters.contains($0)
       }),
-      let url = URL(string: text),
+      let url = URLParsing.url(text),
       ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
       let host = url.host, !host.isEmpty, url.user == nil, url.password == nil
     else { return nil }

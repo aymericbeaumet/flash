@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// Saved pointer positions (`mouse_position`): a bounded list, newest last,
+/// Saved pointer positions (`mouse position`): a bounded list, newest last,
 /// kept per app or shared by every app. Pure value; `AppDelegate` owns one.
 struct PositionHistory: Equatable {
   struct Entry: Equatable {
@@ -16,7 +16,7 @@ struct PositionHistory: Equatable {
 
   private(set) var entries: [Entry] = []
 
-  /// The positions `mouse_position` acts on: every one, or this app's when
+  /// The positions `mouse position` acts on: every one, or this app's when
   /// the history is per app.
   func positions(app: String?, scope: Config.PositionScope) -> [CGPoint] {
     visible(app: app, scope: scope).map(\.point)

@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/error.schema.json",
+  "title": "error",
+  "description": "Resident to client: why it refused a line, a request or the connection. invalid_request, too_many_requests, unknown_event and reply_too_large answer the id they carry and leave the connection open; every other code closes it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "code",
+    "message"
+  ],
+  "properties": {
+    "type": {
+      "const": "error"
+    },
+    "code": {
+      "enum": [
+        "malformed",
+        "frame_too_large",
+        "handshake_required",
+        "protocol_mismatch",
+        "handshake_timeout",
+        "too_many_connections",
+        "invalid_request",
+        "too_many_requests",
+        "unknown_event",
+        "reply_too_large",
+        "overflow",
+        "shutting_down"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The request or subscribe this answers; absent for an error about the connection."
+    },
+    "protocol": {
+      "type": "integer",
+      "const": 1,
+      "description": "With protocol_mismatch: the version the resident speaks."
+    }
+  }
+}

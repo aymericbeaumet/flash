@@ -38,12 +38,24 @@ final class WindowAutomationTests: XCTestCase {
 
   func testDirectionalVerbRequiresValidDirection() {
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "window_focus", "--direction=left"])?.command,
+      parseMappingCommand(argv: ["flash", "window", "focus", "--direction=left"])?.command,
       .focusWindow(.direction(.left)))
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "window_focus", "--direction=behind"])?.command,
+      parseMappingCommand(argv: ["flash", "window", "focus", "--direction=behind"])?.command,
       .focusWindow(.cycle(.behind)))
-    XCTAssertNil(parseMappingCommand(argv: ["flash", "window_focus"]))
-    XCTAssertNil(parseMappingCommand(argv: ["flash", "window_focus", "--direction=diagonal"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "window", "focus"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "window", "focus", "--direction=diagonal"]))
+  }
+
+  func testAppWindowCycleVerbsTakeNoArguments() {
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window", "next"])?.command, .focusWindow(.app(.next)))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "window", "previous"])?.command,
+      .focusWindow(.app(.previous)))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "window", "next", "--direction=left"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "window", "focus", "--direction=app"]),
+      "the app cycle is its own command, not a window focus direction")
   }
 }

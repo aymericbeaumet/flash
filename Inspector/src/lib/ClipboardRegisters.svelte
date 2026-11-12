@@ -1,10 +1,14 @@
 <script lang="ts">
+  import { paths } from "./routes";
   import Icon from "./Icon.svelte";
+  import SectionHead from "./SectionHead.svelte";
+  import { copyText } from "./toasts.svelte";
   import type { ClipboardRegister } from "./types";
 
   let { registers }: { registers: ClipboardRegister[] } = $props();
+  /** The register copied last, marked until the next copy. */
   let copied = $state<string | null>(null);
-  let copyError = $state(false);
+  let expanded = $state<string | null>(null);
 
   const order = { unnamed: 0, yank: 1, clipboard: 2, named: 3 };
   const visible = $derived(
@@ -22,38 +26,40 @@
     }
   }
 
-  function key(register: ClipboardRegister): string {
-    return `"${register.name}`;
+  function size(text: string): string {
+    if (!text) return "empty";
+    const lines = text.split("\n").length;
+    return `${text.length.toLocaleString()} ch${lines > 1 ? ` · ${lines} lines` : ""}`;
   }
 
   async function copy(register: ClipboardRegister) {
-    copyError = false;
     copied = null;
-    try {
-      await navigator.clipboard.writeText(register.text);
-      copied = register.name;
-    } catch {
-      copyError = true;
-    }
+    if (await copyText(register.text, `register ${register.name}`, "Expand it and select its text instead.")) copied = register.name;
   }
 </script>
 
 <section class="register-section" aria-labelledby="registers-heading">
-  <div class="section-heading">
-    <div><h2 id="registers-heading">Registers</h2><p>Press <kbd>"</kbd> and a register key before <kbd>y</kbd> or <kbd>p</kbd>. The unnamed register and <kbd>+</kbd> use the system clipboard; <kbd>0</kbd> holds the latest yank.</p></div>
-    <a href="/docs/normal-mode">Using registers <span aria-hidden="true">→</span></a>
-  </div>
-  {#if copyError}<p class="register-error" role="alert">The browser could not copy this register. Expand it and select its text to copy manually.</p>{/if}
-  <div class="sr-only" role="status" aria-live="polite">{copied !== null ? `Register ${copied} copied to your clipboard.` : ""}</div>
+  <SectionHead id="registers-heading" title="Registers" count={visible.length}>
+    {#snippet help()}Press <kbd>"</kbd> and a register key before <kbd>y</kbd> or <kbd>p</kbd>. The unnamed register and <kbd>+</kbd> use the system clipboard; <kbd>0</kbd> holds the latest yank. A truncated preview still pastes in full with <kbd>"</kbd><i>name</i><kbd>p</kbd>. <a href={paths.docs("clipboard")}>Using registers →</a>{/snippet}
+  </SectionHead>
   <div class="surface register-list">
     {#if visible.length}
-      {#each visible as register (`${register.kind}:${register.name}`)}
-        <article class="register-row">
-          <kbd class="register-key">{key(register)}</kbd>
-          <div class="register-body"><strong>{label(register)}</strong><p class="register-preview">{register.text || "No plain text on the clipboard"}</p>{#if register.truncated}<p class="truncated-note">Preview truncated. <kbd>"{register.name}p</kbd> still pastes the complete value.</p>{/if}{#if register.text}<details><summary>{register.truncated ? "View preview" : "View full text"}</summary><pre>{register.text}</pre></details>{/if}</div>
-          {#if register.text && !register.truncated}<button type="button" class="register-copy" onclick={() => copy(register)} aria-label={`Copy ${label(register).toLowerCase()} register`}><Icon name={copied === register.name ? "check" : "copy"} size={14} />{copied === register.name ? "Copied" : "Copy"}</button>{/if}
-        </article>
-      {/each}
+      <table class="data-table">
+        <thead><tr><th class="key-col">Reg</th><th>Contents</th><th class="type-col">Type</th><th class="size-col">Size</th><th class="act-col"><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+          {#each visible as register (`${register.kind}:${register.name}`)}
+            {@const id = `${register.kind}:${register.name}`}
+            <tr class:open={expanded === id}>
+              <td class="key-col"><kbd>"{register.name}</kbd></td>
+              <td class="contents">{#if register.text}<button type="button" class="preview" aria-expanded={expanded === id} onclick={() => (expanded = expanded === id ? null : id)} title={register.truncated ? "Preview: Flash keeps the full value for paste" : "Show the full text"}><Icon name="chevron" size={11} /><span>{register.text.split("\n")[0]}</span></button>{:else}<span class="muted none">No plain text on the clipboard</span>{/if}</td>
+              <td class="type-col">{label(register)}{#if register.truncated} <span class="badge neutral" title="The snapshot carries a preview; the resident pastes the full value">preview</span>{/if}</td>
+              <td class="size-col">{size(register.text)}</td>
+              <td class="act-col">{#if register.text && !register.truncated}<button type="button" class="icon-button" onclick={() => copy(register)} aria-label={`Copy ${label(register).toLowerCase()} register`} title="Copy"><Icon name={copied === register.name ? "check" : "copy"} size={14} /></button>{/if}</td>
+            </tr>
+            {#if expanded === id}<tr class="full"><td></td><td colspan="4"><pre class="well">{register.text}</pre></td></tr>{/if}
+          {/each}
+        </tbody>
+      </table>
     {:else}
       <p class="register-empty">No text registers yet. Yank a selection with <kbd>y</kbd> to fill the unnamed and latest-yank registers.</p>
     {/if}
@@ -61,25 +67,25 @@
 </section>
 
 <style>
-  .register-section { margin-bottom: 32px; }
-  .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
-  .section-heading h2 { margin-bottom: 5px; }
-  .section-heading p { max-width: 760px; color: var(--muted); font-size: 13px; }
-  .section-heading a { flex-shrink: 0; font-size: 12px; }
+  .register-section { margin-bottom: 20px; }
   .register-list { overflow: hidden; }
-  .register-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 15px; align-items: start; padding: 15px 18px; border-bottom: 1px solid var(--border-soft); }
-  .register-row:last-child { border-bottom: 0; }
-  .register-key { text-align: center; font-size: 14px; font-weight: 600; }
-  .register-body { min-width: 0; }
-  .register-body strong { font-size: 13px; }
-  .register-preview { margin-top: 3px; color: var(--muted); font: 12px/1.5 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .truncated-note { margin-top: 5px; color: var(--muted); font-size: 11px; }
-  details { margin-top: 7px; }
-  summary { width: fit-content; cursor: pointer; color: var(--accent); font-size: 11px; }
-  pre { max-height: 260px; margin: 9px 0 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: 7px; background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .register-copy { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 10px; color: var(--accent); font-size: 11px; }
-  .register-empty { padding: 24px 18px; color: var(--muted); font-size: 13px; }
-  .register-error { margin-bottom: 12px; color: var(--danger); font-size: 12px; }
-  @media (max-width: 640px) { .section-heading { align-items: start; flex-direction: column; gap: 8px; }.register-row { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; padding: 14px; }.register-copy { grid-column: 2; width: fit-content; } }
-  @media print { .register-copy, .section-heading a { display: none; }.register-row { grid-template-columns: 52px minmax(0, 1fr); break-inside: avoid; }.register-list { overflow: visible; } }
+  .data-table td { padding-top: 4px; padding-bottom: 4px; vertical-align: middle; }
+  .data-table tbody tr { height: 40px; }
+  .key-col { width: 64px; }
+  .key-col kbd { font-weight: 600; color: var(--accent); }
+  .type-col { width: 210px; color: var(--muted); white-space: nowrap; }
+  .size-col { width: 150px; color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+  .act-col { width: 48px; text-align: right; }
+  .contents { max-width: 0; }
+  .preview { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 4px; border: 0; background: none; text-align: left; font: 13px var(--mono); color: var(--text); }
+  .preview:hover { background: none; color: var(--accent-strong); }
+  .preview span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview :global(svg) { flex: none; color: var(--faint); transition: transform .12s; }
+  .preview[aria-expanded="true"] :global(svg) { transform: rotate(90deg); color: var(--accent); }
+  .none { font-size: 13px; }
+  tr.full td { padding-top: 0; padding-bottom: 10px; }
+  tr.full pre { margin: 0; padding: 10px 12px; max-height: 260px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+  .register-empty { padding: 18px 16px; color: var(--muted); font-size: 13px; }
+  @media (max-width: 760px) { .type-col, .size-col { display: none; } }
+  @media print { .act-col { display: none; } .register-list { overflow: visible; } .preview :global(svg) { display: none; } }
 </style>

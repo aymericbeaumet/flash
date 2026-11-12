@@ -12,8 +12,14 @@
 //!   re-walks the strip, finds the tab by URL (by title only for a tab
 //!   without one), and presses it through an AX ladder with verification.
 //!   A pick replies once the tab is confirmed selected, never before.
-//! - `tab_new`, `tab_close` and the tab moves stay unhandled: the manifest's
-//!   chords and the core's ⌘W are Firefox's own shortcuts.
+//! - **Stepping** (`tab next`, `tab previous`, `tab first`, `tab last`)
+//!   posts Firefox's own tab keys, then walks the strip to name the tab
+//!   they landed on, so the host records one movement stop per press even
+//!   in a burst the catalog's settle would fold into one listing. Firefox
+//!   owns the step itself, so vertical tabs, tab groups and the wrap at
+//!   either end behave as they do without Flash.
+//! - `tab new`, `tab close` and the tab moves stay unhandled: the manifest's
+//!   chords and `defaults`' ⌘W are Firefox's own shortcuts.
 
 mod catalog;
 #[cfg(test)]
@@ -23,7 +29,7 @@ mod strip;
 
 use std::time::Duration;
 
-use flash_plugin::{ActionRequest, Candidate, Context, PerformResponse};
+use flash_plugin::{Candidate, CommandRequest, Context, PerformResponse, PollPriority};
 use serde::{Deserialize, Serialize};
 
 use crate::ax;
@@ -32,8 +38,8 @@ use crate::session_store;
 use crate::{Browser, TabPayload, performed, tab_candidate};
 use catalog::{CatalogTab, assign_stores, catalog, collect};
 use select::{
-    activate_and_find_tab, confirm_fast_jump, nth_tab_in_front_window, post_keys, select_tab,
-    tab_key_plan,
+    TabStep, activate_and_find_tab, confirm_fast_jump, nth_tab_in_front_window, post_keys,
+    select_tab, selected_tab_in_front_window, step_keys, tab_key_plan,
 };
 use strip::{Tab, walk};
 
@@ -50,6 +56,11 @@ const HOST_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// ~2 s (the slowest AX path: a walk, a store read, the one activation
 /// retry, then three verified presses).
 const SELECT_DEADLINE: Duration = HOST_CALL_TIMEOUT.saturating_add(Duration::from_secs(1));
+
+/// A beat for Firefox's own tab key to land before the walk that names
+/// where it went. Only the movement stop waits on it: the switch is on
+/// screen as soon as the key is posted.
+const STEP_SETTLE: Duration = Duration::from_millis(120);
 
 /// Where a row's tab sits, carried in its payload for the key fast path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,7 +128,6 @@ pub async fn list_tabs(
 fn candidate(browser: &Browser, pid: i64, tab: &CatalogTab) -> Candidate {
     let payload = TabPayload {
         bundle_id: browser.bundle_id.to_string(),
-        app_name: String::new(),
         url: tab.url.clone(),
         title: String::new(),
         strip: Some(tab.position),
@@ -242,17 +252,52 @@ pub async fn restore(ctx: &Context, route: &TabRoute) -> PerformResponse {
     }
 }
 
-/// `tab_select` (the numbered-tab jump) selects the Nth tab of the focused
+/// `tab select` (the numbered-tab jump) selects the Nth tab of the focused
 /// window: an index past its strip is `unhandled` rather than a jump into
 /// another window, and a press that does not stick is an error, so the host
-/// never falls back to a ⌘<digit> that could switch the wrong tab. Every
-/// other action is `unhandled`: Firefox's own chords (manifest
-/// `action_bindings`, `defaults`' ⌘W) create, close and move tabs.
-pub async fn perform_action(ctx: &Context, pid: i64, action: &ActionRequest) -> PerformResponse {
-    if action.name != "tab_select" {
+/// never falls back to a ⌘<digit> that could switch the wrong tab. `tab
+/// next`, `tab previous`, `tab first` and `tab last` post Firefox's own tab
+/// keys ([`step_keys`]) and then walk the strip to name the tab they landed
+/// on, so the host records every step as a movement stop however fast they
+/// come, where the catalog of a burst would show only the last. The step
+/// itself stays Firefox's: no element of the strip is chosen here and none
+/// is pressed, so vertical tabs, tab groups and the wrap at either end work
+/// as they do without Flash. A key the host refuses is `unhandled`, leaving
+/// the switch to the manifest's chord; a strip that cannot be read after it
+/// is performed without a route, and the catalog records the stop once its
+/// own burst settles. Every other command is `unhandled`: Firefox's own
+/// chords (manifest `bindings`, `defaults`' ⌘W) create, close and move tabs.
+pub async fn perform_command(ctx: &Context, pid: i64, command: &CommandRequest) -> PerformResponse {
+    if command.command != "tab" {
         return PerformResponse::unhandled();
     }
-    let Some(index) = action
+    if command.subcommand == "select" {
+        return select_command(ctx, pid, command).await;
+    }
+    let Some(step) = TabStep::parse(&command.subcommand) else {
+        return PerformResponse::unhandled();
+    };
+    if !post_keys(ctx, pid, &step_keys(step)).await {
+        ctx.log(
+            "debug",
+            &format!("[browsers] firefox tab step keys refused pid={pid} step={step:?}"),
+        );
+        return PerformResponse::unhandled();
+    }
+    // Firefox has switched already; this read only names the stop, so a
+    // strip it cannot see costs the route, never the step.
+    ctx.wait(STEP_SETTLE, PollPriority::High).await;
+    let session = ax::session(pid);
+    let _ax = session.lock().await;
+    let strip = collect(ctx, pid).await;
+    match selected_tab_in_front_window(&strip) {
+        Some(tab) => performed(pid, TabRoute::new(pid, &tab.url, &tab.title)),
+        None => PerformResponse::ok().target_pid(pid),
+    }
+}
+
+async fn select_command(ctx: &Context, pid: i64, command: &CommandRequest) -> PerformResponse {
+    let Some(index) = command
         .index()
         .and_then(|index| usize::try_from(index).ok())
         .filter(|index| *index > 0)
@@ -266,7 +311,7 @@ pub async fn perform_action(ctx: &Context, pid: i64, action: &ActionRequest) -> 
         return PerformResponse::unhandled();
     };
     if select_tab(ctx, pid, &target).await {
-        PerformResponse::ok().target_pid(pid)
+        performed(pid, TabRoute::new(pid, &target.url, &target.title))
     } else {
         PerformResponse::fail("tab press did not stick")
     }
@@ -276,6 +321,7 @@ pub async fn perform_action(ctx: &Context, pid: i64, action: &ActionRequest) -> 
 mod tests {
     use super::*;
     use fixtures::{ax_reply, serve_host};
+    use flash_plugin::CommandContext;
     use flash_plugin::testing::Harness;
     use serde_json::{Value, json};
 
@@ -284,7 +330,6 @@ mod tests {
     fn pick(pid: i64, strip: bool) -> (Candidate, TabPayload) {
         let payload = TabPayload {
             bundle_id: "org.mozilla.firefox".into(),
-            app_name: String::new(),
             url: "https://b.example/".into(),
             title: String::new(),
             strip: strip.then_some(StripPosition {
@@ -309,6 +354,82 @@ mod tests {
             ("B", "https://b.example/", selected),
             ("C", "https://c.example/", false),
         ])
+    }
+
+    /// A `tab <subcommand>` step from the host, with Firefox focused.
+    fn step_command(pid: i64, subcommand: &str) -> CommandRequest {
+        CommandRequest {
+            command: "tab".into(),
+            subcommand: subcommand.into(),
+            args: vec![],
+            context: Some(CommandContext {
+                bundle_id: Some("org.mozilla.firefox".into()),
+                pid: Some(pid),
+                front_window_frame: None,
+            }),
+        }
+    }
+
+    async fn step_against(
+        pid: i64,
+        subcommand: &str,
+        snapshot: Value,
+        keys_ok: bool,
+    ) -> (PerformResponse, Vec<String>) {
+        let mut harness = Harness::new("browsers");
+        let ctx = harness.context();
+        let command = step_command(pid, subcommand);
+        let task = tokio::spawn(async move { perform_command(&ctx, pid, &command).await });
+        serve_host(&mut harness, task, |method| match method {
+            "host.ax_snapshot" => snapshot.clone(),
+            "host.post_keys" => json!({"ok": keys_ok}),
+            _ => json!({"ok": true}),
+        })
+        .await
+    }
+
+    fn route_target(response: &PerformResponse) -> TabTarget {
+        let wire = serde_json::to_value(response).unwrap();
+        TabRoute::parse(wire["navigation_url"].as_str().unwrap())
+            .unwrap()
+            .target
+    }
+
+    /// `]t` posts Firefox's own key, then reads the strip to name where the
+    /// browser landed, so the host records a stop per press. Nothing in the
+    /// strip is pressed: the sidebar's own controls stay untouched.
+    #[tokio::test]
+    async fn a_step_posts_the_browsers_key_and_names_where_it_landed() {
+        let (response, methods) = step_against(62_010, "next", landed(true), true).await;
+        assert!(response.is_ok(), "{methods:?}");
+        assert_eq!(methods, ["host.post_keys", "host.ax_snapshot"]);
+        assert!(
+            !methods.iter().any(|method| method == "host.ax_perform"),
+            "a step must press no element: {methods:?}"
+        );
+        assert_eq!(
+            route_target(&response),
+            TabTarget::Url("https://b.example/".into())
+        );
+    }
+
+    /// A key the host refuses leaves the switch to the manifest's chord.
+    #[tokio::test]
+    async fn a_step_the_host_refuses_is_unhandled() {
+        let (response, methods) = step_against(62_014, "next", landed(true), false).await;
+        assert!(response.is_unhandled(), "{methods:?}");
+        assert_eq!(methods, ["host.post_keys"]);
+    }
+
+    /// The step still happened when the strip cannot be read, so it is
+    /// performed without a route and the catalog records the stop instead.
+    #[tokio::test]
+    async fn a_step_whose_strip_cannot_be_read_keeps_the_switch() {
+        let (response, methods) = step_against(62_015, "next", json!({"ok": false}), true).await;
+        assert!(response.is_ok(), "{methods:?}");
+        let wire = serde_json::to_value(&response).unwrap();
+        assert_eq!(wire["target_pid"], json!(62_015));
+        assert!(wire.get("navigation_url").is_none(), "{wire}");
     }
 
     async fn resolve_against(

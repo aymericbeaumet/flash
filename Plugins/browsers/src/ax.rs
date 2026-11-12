@@ -66,11 +66,9 @@ pub async fn snapshot(
     let result = ctx
         .ax_snapshot(json!({
             "pid": pid,
-            "roots": "windows",
             "follow": [],
             "collect": collect,
             "max_nodes": max_nodes,
-            "geometry": false,
             "prune_roles": prune_roles,
         }))
         .await;

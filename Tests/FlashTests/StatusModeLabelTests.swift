@@ -7,8 +7,8 @@ final class StatusModeLabelTests: XCTestCase {
     let model = FlashStatusBarTemplateEngine.render(
       template: .init(
         template:
-          "#[pill]NORMAL #{flash.mode} NORMAL#[nopill] | #{flash.mode} | #{flash.active_app_name}"),
-      context: .init(activeAppName: "NORMAL", modeLabel: "NORMAL"))
+          "#[pill]NORMAL #{flash.mode} NORMAL#[nopill] | #{flash.mode} | #{flash.focused_app_name}"),
+      context: .init(focusedAppName: "NORMAL", modeLabel: "NORMAL"))
 
     let live = model.document.runs.filter(\.isModeLabel)
     XCTAssertEqual(live.map(\.text), ["NORMAL", "NORMAL"])
@@ -20,8 +20,8 @@ final class StatusModeLabelTests: XCTestCase {
 
   func testModeInterpolationSurvivesConditionalExpansion() {
     let model = FlashStatusBarTemplateEngine.render(
-      template: .init(template: "#[pill]#{?flash.active_app_name,#{flash.mode},NONE}#[nopill]"),
-      context: .init(activeAppName: "App", modeLabel: "NØRMÅL"))
+      template: .init(template: "#[pill]#{?flash.focused_app_name,#{flash.mode},NONE}#[nopill]"),
+      context: .init(focusedAppName: "App", modeLabel: "NØRMÅL"))
 
     let live = model.document.runs.filter(\.isModeLabel)
     XCTAssertEqual(live.count, 1)
@@ -64,5 +64,22 @@ final class StatusModeLabelTests: XCTestCase {
         model.document.runs.map { $0.isModeLabel ? "INSERT" : $0.text }.joined(),
         "INSERTINSERT")
     }
+  }
+
+  /// The focused app's values say "focused", as every command does; the
+  /// old `active` spellings are unknown values, never a silent blank.
+  func testTheFocusedAppValuesAreTheOnlySpelling() {
+    let config = ConfigLoader.parse(
+      """
+      [statusbar]
+      enabled = true
+      template = "#{flash.active_app_name} #{flash.active_bundle_identifier}"
+      """)
+    let messages = config.loadingDiagnostics.map(\.message).joined(separator: "\n")
+    XCTAssertTrue(messages.contains("unknown Flash value flash.active_app_name"), messages)
+    XCTAssertTrue(messages.contains("unknown Flash value flash.active_bundle_identifier"), messages)
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.sdkValue(for: "flash.focused_app_bundle_id"), .focusedAppBundleID
+    )
   }
 }

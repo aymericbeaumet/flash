@@ -3,32 +3,6 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
 
-enum InsertModeTransitionReason: Equatable {
-  case explicitCommand
-  case normalModeInput
-  case pointerClick
-  case hintCommit
-  case appFind
-  case tabNew
-
-  var logValue: String {
-    switch self {
-    case .explicitCommand:
-      return "explicit_command"
-    case .normalModeInput:
-      return "normal_mode_input"
-    case .pointerClick:
-      return "pointer_click"
-    case .hintCommit:
-      return "hint_commit"
-    case .appFind:
-      return "app_find"
-    case .tabNew:
-      return "tab_new"
-    }
-  }
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   struct MovementEntry {
     enum Kind {
@@ -75,7 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     var key: String
   }
 
-  var config = Config.default
+  var config = Config.default {
+    // What the inspector derived from the previous configuration.
+    didSet { inspectorConfigCache = nil }
+  }
+  /// The inspector snapshot's configuration-only parts, built once per
+  /// `config` (`inspectorConfigSnapshot()`).
+  var inspectorConfigCache: InspectorConfigSnapshot?
   /// When this resident started; the inspector derives uptime from it.
   let runtimeStartedAt = Date()
   let pluginManager = PluginManager()
@@ -96,17 +76,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var registry: SourceRegistry!
   var monitor: AppMonitor!
   var debugServer: DebugServer?
+  /// The help server's access token (`HelpAccess`): the private file's, or a
+  /// fresh in-memory one inside the test runner or when the file cannot be
+  /// written (the page Flash opens then still works until Flash restarts).
+  lazy var helpAccessToken: String = {
+    guard NSClassFromString("XCTestCase") == nil else { return HelpAccess.newToken() }
+    do {
+      return try HelpAccess.loadOrCreate()
+    } catch {
+      FlashLog.error("[debug] help_token_unavailable error=\(error)")
+      return HelpAccess.newToken()
+    }
+  }()
+  /// Received OpenTelemetry data; empty while the receiver is off.
+  let telemetryStore = TelemetryStore()
+  /// `[telemetry.receiver]` and `[telemetry.exporter]`, when enabled; see
+  /// `configureTelemetry`.
+  var telemetryReceiver: OTLPReceiver?
+  var telemetryExporter: TelemetryExporter?
+  var telemetryLogSink: UUID?
+  let telemetryStatePush = TelemetryStatePush()
   /// The notifications only the inspector needs; see `attachDebugServer`.
   var inspectorChangeObservers: InspectorChangeObservers?
   var overlay: OverlayPanel!
   /// Pushes the system appearance to the overlay for `[overlay.dark]`.
   var appearanceObserver: AppearanceObserver?
   var statusBarController: FlashStatusBarController?
+  /// Samples `flash.top_cpu`, `flash.top_mem` and `flash.focused_app_details`
+  /// while the status controller reports a surface showing one of them.
+  lazy var processStatusSampler = ProcessStatusSampler(publish: { [weak self] values in
+    DispatchQueue.main.async { self?.statusBarController?.updateProcessValues(values) }
+  })
   /// Desktop widget windows; the status controller evaluates their lines.
   var widgetController: WidgetController?
+  /// Every `[monitors.<name>]` as the status controller last evaluated it:
+  /// the inspector's `monitors`.
+  var monitorSnapshots: [MonitorSnapshot] = []
+  /// The enabled `[monitors]` that watch host events, from the config.
+  var eventMonitors: [String: EventMonitorSpec] = [:]
+  /// The monitors' `run`s: one at a time per monitor, steps in order,
+  /// bounded and reported; see `MonitorRunner`.
+  lazy var monitorRunner: MonitorRunner = {
+    let runner = MonitorRunner(store: MonitorRunLedger.live()) {
+      [weak self] step, extra, timeout, completion in
+      guard let self else {
+        completion(.commandFailed, "")
+        return nil
+      }
+      return self.performMonitorStep(
+        step, environment: extra, timeout: timeout, completion: completion)
+    }
+    runner.didChange = { [weak self] in self?.debugStateDidChange() }
+    runner.didFail = { [weak self] name, record in self?.monitorRunFailed(name, record) }
+    return runner
+  }()
+  /// `[startup] run`, once at launch and on `startup run`; see
+  /// `StartupRunner`.
+  lazy var startupRunner = makeStartupRunner()
+  let systemEventObservers = SystemEventObservers()
+  /// `.` and the macro registers (`MacroCommands`).
+  var macros = MacroState()
+  /// A monitor alert held while a confirmation owns the centred alert; shown
+  /// when the session ends (`clearHintSessionState`).
+  var pendingMonitorAlert: StatusAlert?
   let mainRunLoopStallObserver = MainRunLoopStallObserver()
   var terminalInputMappings: TerminalInputMappingHandler<StatusTerminalInputOrigin>?
-  var urlHandler: URLEventHandler!
+  /// The resident's socket (`IPCServer`): nil until launch reaches it, or
+  /// when it could not listen.
+  var ipcServer: IPCServer?
+  /// Which socket clients subscribe to which host events.
+  let ipcEvents = IPCEventHub()
   var configSources: [DispatchSourceFileSystemObject] = []
   /// Trailing-edge coalescer for config file events (one reload per burst).
   let configReload = PollDeadline("core:config_reload", priority: .normal, on: .main)
@@ -116,6 +155,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var autoLaunchReconciled = false
   let mappings = MappingsCoordinator()
   let windowLayoutManager = WindowLayoutManager()
+  /// `window switch`'s prepared list: window recency and every app's
+  /// windows, read on the navigation build queue.
+  lazy var windowSwitcherCatalog = WindowSwitcherCatalog(
+    queue: windowLayoutManager.navigationBuildQueue)
+  /// Bumped by every switcher opened and every window it chose, so only the
+  /// latest choice activates its app.
+  var windowSwitcherFocusGeneration: UInt64 = 0
   /// Per-focused-app effective mapping tables (config + applicable plugin
   /// mappings), keyed by bundle id ("" for none/unknown). Cleared on config
   /// reload and when a plugin's mappings change.
@@ -138,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The overlay's key routing and the focus border's visibility are
   /// projections of it, pushed here on every change so neither keeps a copy
   /// that could disagree.
-  /// The focused window's text for `mouse_bigram`. Nil until the first
+  /// The focused window's text for `mouse bigram`. Nil until the first
   /// activation; cleared by generation, not by dropping the object, so a walk
   /// already on `axQueue` cannot present after Escape.
   var bigramSearch: BigramSearch?
@@ -157,7 +203,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
     }
   }
-  /// Recent hint activations per app, for `flash status` and `flash doctor`.
+  /// Where the pointer last left each display through `mouse screens`, for
+  /// `--to=last`. Main thread only.
+  var screenPointerMemory = ScreenPointerMemory()
+  /// Recent hint activations per app, for `flash resident status` and `flash resident doctor`.
   /// Main thread only; recorded where `[latency]` lines are logged.
   var hintActivationStats = HintActivationStats()
   /// The single source of truth for the app's mode. Every UI-facing fact
@@ -167,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The coarse insert/normal axis, projected from the unified mode.
   var flashMode: FlashMode { modeStore.mode.flashMode }
   /// Advanced mode (the normal/insert system) is configured — true unless the
-  /// mode is `.disabled`, i.e. the user has an all-mode `leave_mode` or `enter_normal_mode` binding.
+  /// mode is `.disabled`, i.e. the user has an all-mode `mode leave` or `mode normal` binding.
   /// Gates capture and the active-window border, NOT the status bar's
   /// visibility.
   var modeBadgeEnabled: Bool { modeStore.mode.advancedEnabled }
@@ -179,12 +228,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Vim-style yank/paste registers. The unnamed register is the system
   /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
   let registers = RegisterStore()
-  /// Presses the menu items `action_bindings` name (`{"menu": [...]}`).
+  /// Presses the menu items a plugin's `bindings` name (`{"menu": [...]}`).
   var menuPathPresser: MenuPathPresser = AXMenuPathPresser()
   let finder = CandidateFinderSession()
-  lazy var clipboardHistoryStore = ClipboardHistoryStore(capacity: config.clipboard.historySize) {
-    [weak self] in self?.refreshClipboardDashboardCache()
-  }
+  /// Made on main (at launch, by `reconcileClipboardMonitor`); its listing
+  /// feeds the flashlight's clipboard rows from the store's queue.
+  lazy var clipboardHistoryStore: ClipboardHistoryStore = {
+    let flashlight = clipboardFlashlight
+    return ClipboardHistoryStore(
+      capacity: config.clipboard.historySize,
+      didList: { listing in flashlight.update(listing) },
+      didChange: { [weak self] in self?.refreshClipboardDashboardCache() })
+  }()
+  /// The flashlight's `@clipboard` rows: history from the store, named
+  /// registers from `registers`.
+  lazy var clipboardFlashlight: ClipboardFlashlight = {
+    let flashlight = ClipboardFlashlight { [weak self] in self?.registers.namedSnapshot() ?? [] }
+    flashlight.onChange = { [weak self] in
+      self?.refreshLiveCandidates(sourceID: ClipboardFlashlight.sourceID)
+    }
+    return flashlight
+  }()
   /// First clipboard history page mirrored for the inspector's Clipboard tab.
   var clipboardEntries: [ClipboardModalEntry] = [] {
     didSet { debugStateDidChange() }
@@ -197,27 +261,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   let pluginStateRefresh = PollDeadline("core:plugin_state_refresh", priority: .normal, on: .main)
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
-  var commandLineCompletionSelectedIndex = 0
+  /// The highlighted row; Enter applies a `chosen` one rather than
+  /// resolving the text. See `CommandLineCompletionSelection`.
+  var commandLineCompletionSelection = CommandLineCompletionSelection.none
   var commandLineCompletionQuery: String = ""
   /// Session-local immutable completion catalog. Plugin registrations and help
   /// topics do not change while one command field is open, so rebuilding these
   /// collections on every character only adds input latency.
-  var commandLineCompletionInventory: NormalModeDispatcher.CommandLineCompletionInventory?
-  /// Past executed command-line inputs (most-recent last). up/down (and
-  /// ctrl+n/p, which route to the same handler) recall these when no candidate
-  /// or completion list is active — see `recallCommandLineHistory`. Loaded from
-  /// `commandHistoryStore` at startup so recall survives restarts/reinstalls.
-  var commandLineHistory: [String] = []
+  var commandLineCompletionInventory: NormalModeDispatcher.CommandLineInventory?
+  /// Every page path and alias of the bundled manual, read once at launch:
+  /// `:help` completes them and plugin topics cannot take them.
+  var manualTopicNames: [String] = []
+  /// Past executed command-line inputs and the recall in progress. up/down
+  /// (and ctrl+n/p, which route to the same handler) recall them when no
+  /// candidate or completion list is active — see `recallCommandLineHistory`.
+  /// Loaded from `commandHistoryStore` at startup so recall survives
+  /// restarts/reinstalls.
+  var commandLineHistory = CommandLineHistory()
   /// On-disk persistence for `commandLineHistory`.
   var commandHistoryStore: CommandHistoryStore?
-  /// Index into `commandLineHistory` while recalling; nil when editing a fresh
-  /// buffer. `commandLineHistoryStash` holds that fresh buffer so stepping
-  /// `down` past the newest entry restores what the user was typing.
-  var commandLineHistoryCursor: Int?
-  var commandLineHistoryStash: String = ""
   var selectedInitialMode = false
   /// The last click Flash committed (hints, grid, or multi session), replayed
-  /// by `mouse_repeat`. Deliberately outside `hintSession`: it must survive
+  /// by `mouse repeat`. Deliberately outside `hintSession`: it must survive
   /// the session reset so a repeat works after the overlay is gone.
   struct LastCommittedClick {
     var point: CGPoint
@@ -226,7 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     var pid: pid_t?
   }
   var lastCommittedClick: LastCommittedClick?
-  /// `mouse_position`'s saved pointer positions.
+  /// `mouse position`'s saved pointer positions.
   var positionHistory = PositionHistory()
   var movementCurrent: MovementEntry?
   var movementBackStack: [MovementEntry] = []
@@ -240,24 +305,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     "core:ambient_location", priority: .normal, on: .main)
   var movementLocationResolutionGeneration: UInt64 = 0
   var sourceItemResolutionGeneration: UInt64 = 0
-  var appCurrent: pid_t?
+  /// The app MRU behind `app next` / `app previous`; see `AppNavigationHistory`.
+  var appNavigation = AppNavigationHistory()
   var observedFocusedAppPID: pid_t?
   /// The last app plugins heard focus move to; see `FocusEmissionGate`.
   var focusEmissionGate = FocusEmissionGate()
   var lastFocusedApplicationPID: pid_t? {
     observedFocusedAppPID.flatMap { $0 == getpid() ? nil : $0 }
   }
-  var appBackStack: [pid_t] = []
-  var appForwardStack: [pid_t] = []
-  var appNavigationTargetPID: pid_t?
   var workspaceTokens: [NSObjectProtocol] = []
   var localNotificationTokens: [NSObjectProtocol] = []
   var resignKeyToken: NSObjectProtocol?
   var normalModeRecaptureToken: UInt64 = 0
-  /// Consolidated recapture-suppression windows (was three parallel `Date?`
-  /// fields). The named accessors below forward to it so existing call sites and
-  /// tests keep their field names while the storage + predicate live in one
-  /// tested value.
+  /// Consolidated recapture-suppression windows. The named accessors below
+  /// forward to it so existing call sites and tests keep their field names
+  /// while the storage + predicate live in one tested value.
   var recaptureSuppression = RecaptureSuppression()
   var menuBarInteractionRecaptureSuppressedUntil: Date? {
     get { recaptureSuppression.menuBarUntil }
@@ -267,11 +329,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     get { recaptureSuppression.contextMenuUntil }
     set { recaptureSuppression.contextMenuUntil = newValue }
   }
-  var pointerInsertHandoffRecaptureSuppressedUntil: Date? {
-    get { recaptureSuppression.pointerInsertHandoffUntil }
-    set { recaptureSuppression.pointerInsertHandoffUntil = newValue }
-  }
-  var pointerInsertHandoffToken: UInt64 = 0
   /// Whether a native surface (context menu / OS popup) owns the keyboard.
   /// The sole non-base-mode input to the capture projection — begun by
   /// `suspendNormalCaptureForNativeSurface`, ended by the surface's close
@@ -289,18 +346,119 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     didSet { if oldValue != aboutWindowVisible { refreshOverlayInputRouting() } }
   }
   var normalModePendingCommandToken: UInt64 = 0
+  /// Where the focus sits in the focused app, for `move` (`FocusRegion`),
+  /// re-read after each focus change.
+  lazy var focusRegionTracker = makeFocusRegionTracker()
+  /// The field NORMAL acts on, once engaged (`TextScope`); changed only
+  /// through `updateTextScope`.
+  var textScope = TextScope()
+  /// The last `f` `F` `t` `T` search, which `;` and `,` repeat.
+  var lastCharacterSearch: TextCharacterSearch?
+  /// VISUAL's selection while VISUAL is on (`VisualSession`).
+  var visualSession: VisualSession?
+  /// The selection VISUAL last ended with, which `gv` selects again
+  /// (`mode visual --reselect`).
+  var lastVisualSession: VisualSession?
+  /// VISUAL's steps waiting their turn (`runVisualStep`).
+  var visualSteps: [(@escaping () -> Void) -> Void] = []
+  var visualStepRunning = false
+  /// The which-key palette's pause after a NORMAL prefix. `.high`: it is
+  /// what the user looks at next. Armed only while a prefix is pending.
+  lazy var whichKeyDeadline = PollDeadline("core:which-key", priority: .high, on: .main)
+  /// Whether the which-key palette is drawn.
+  var whichKeyShown = false
+  /// The next read of a Mission Control view the Dock is still building.
+  /// `.high`: the user is waiting on its labels. Armed only while an
+  /// activation over Mission Control or App Exposé waits on the tree.
+  lazy var missionControlReadyDeadline = PollDeadline(
+    "core:mission_control_ready", priority: .high, on: .main)
+  /// A click chain's walk after its app reported a change. `.high`: the
+  /// labels on screen follow it. Armed only while a `--multi` chain waits
+  /// for its next pick (`ClickChain.refreshes`).
+  lazy var clickChainRefreshDeadline = PollDeadline(
+    "core:click_chain_refresh", priority: .high, on: .main)
+  /// Numbers each chain refresh; a session change, a pick or a newer refresh
+  /// moves it, so an old walk's result is dropped.
+  var clickChainRefreshGeneration: UInt64 = 0
+  /// A change arrived while a label was half typed: refresh once the prefix
+  /// is empty again.
+  var clickChainRefreshPending = false
   /// Numbers each yank's pasteboard wait on the shared clock.
   var pasteboardWaitSerial: UInt64 = 0
+  /// Numbers each clipboard loan's give-back deadline (`borrowPasteboard`).
+  var pasteboardLoanSerial: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
+  /// `volume_*`, `audio_*` and `media status`; see `performMediaCommand`.
+  let mediaController = MediaController()
+  /// `caffeinate_*`, made by the first one; see `performCaffeinate`.
+  var caffeinateController: CaffeinateController?
+  /// `desktop`, `missioncontrol`, `appwindows`, `launchpad`,
+  /// `notificationcenter` and `controlcenter`; see `performSystemSurface`.
+  /// Lazy, so a delegate that never launches (a test) observes no Dock.
+  /// The Dock's view it reports lands in `dockViewChanged`.
+  lazy var systemSurfaces = SystemSurfaceController(dockViewChanged: { [weak self] view in
+    self?.dockViewChanged(view)
+  })
+  /// The Dock's view as the Dock last reported it (nil: unknown); see
+  /// `missionControlView`. Main-thread only.
+  var observedDockView: DockView?
+  /// `notify send` and monitors with `notify = true`; nil in the test runner,
+  /// which has no notification center. Lazy: authorization waits for a post.
+  lazy var notifications = NotificationController.live()
+  /// The tiling workspaces as last published: what `core:workspace.changed`
+  /// compares against.
+  var lastTilingStatus: TilingStatus?
+  /// `[app] updates` and the `updates` commands; see `reconcileUpdates`.
+  /// Nil in the test runner, so no test reaches GitHub or replaces a bundle.
+  lazy var updates: UpdateController? =
+    NSClassFromString("XCTestCase") == nil ? UpdateController.live() : nil
+  var updateMode: UpdateMode = .install
+  var updatesSettled = false
+  var updateCheckArmed = false
+  /// The screen-lock and display-sleep observers armed while an update
+  /// waits that may install itself.
+  var updateApplyTokens: [(NotificationCenter, NSObjectProtocol)] = []
+  /// `@notes`, `@reminders`, `@contacts` and the
+  /// `<catalog> open` / `<catalog> refresh` commands; see `AppleCatalogs`.
+  let appleCatalogs = AppleCatalogs(readers: AppleCatalogReaders.live())
+  /// `#{flash.calendar.next…}` and the `calendar` commands; see
+  /// `CalendarEvents`. Lazy, so a delegate that never launches (a test)
+  /// never reads the calendar's authorization.
+  lazy var calendarEvents = CalendarEvents(publish: { [weak self] agenda in
+    DispatchQueue.main.async { self?.statusBarController?.updateCalendarAgenda(agenda) }
+  })
+  /// The 36 app marks behind `mark set` and `mark jump`; see
+  /// `performMarkCommand`. Lazy, so a delegate that never launches (a test)
+  /// never reads or migrates the file.
+  lazy var markStore = MarkStore()
   /// `core:network.changed` and `core:volumes.changed`, each observed only
   /// while a plugin listens; see `reconcileHostEventSources`.
   lazy var hostEventSources = HostEventSources([
-    PluginProtocol.networkChangedEvent: { [weak self] in
-      NetworkChangeMonitor { self?.emitSignal(PluginProtocol.networkChangedEvent) }
+    HostEvent.networkChanged.rawValue: { [weak self] in
+      NetworkChangeMonitor { self?.emitSignal(.networkChanged) }
     },
-    PluginProtocol.volumesChangedEvent: { [weak self] in
-      VolumeChangeMonitor { self?.emitSignal(PluginProtocol.volumesChangedEvent) }
+    HostEvent.volumesChanged.rawValue: { [weak self] in
+      VolumeChangeMonitor { self?.emitSignal(.volumesChanged) }
+    },
+    // Keyed by the attach event, it serves core:usb.detached's listeners too
+    // (`reconcileHostEventSources`).
+    HostEvent.usbAttached.rawValue: { [weak self] in
+      USBDeviceMonitor { event, payload in
+        self?.emitHostEvent(PluginEvent(event, payload: payload))
+      }
+    },
+    // Keyed by the idle event, it serves core:user.active's listeners too
+    // (`reconcileHostEventSources`).
+    HostEvent.userIdle.rawValue: { [weak self] in
+      UserIdleMonitor(
+        thresholds: { self?.userIdleThresholds() ?? [] },
+        announce: { self?.announceUserIdle($0) })
+    },
+    HostEvent.clockMinute.rawValue: { [weak self] in
+      ClockMinuteMonitor(
+        wants: { self?.clockWants() ?? .init() },
+        announce: { self?.announceClockMinute($0) })
     },
   ])
   /// Captures NORMAL / hints keystrokes without taking key-window focus. nil
@@ -316,13 +474,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var activeWindowBorderUpdateGeneration: UInt64 = 0
   /// The authoritative front-window read queued for the next main turn.
   var activeWindowBorderPendingRead: ActiveWindowBorderRead?
+  /// The window-list read behind `performActiveWindowBorderRead`, on main
+  /// (see `scheduleActiveWindowBorderRead`); tests substitute a frame.
+  var activeWindowBorderFrameReader: (pid_t) -> CGRect? = {
+    AppMonitor.topApplicationWindowFrame(for: $0, primaryH: ScreenSpace.primaryHeight)
+  }
   /// Last frame observed for each app's front window, fed by the AX geometry
   /// notifications Flash already subscribes to, so an app switch paints the
-  /// right rectangle on the activation itself and the window-list read on the
-  /// next main turn corrects it.
+  /// right rectangle on the activation itself and the settle pass 80 ms
+  /// later, after the activation animation, corrects it.
   var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
+  /// Bumped by every event that can move, raise or replace an app's front
+  /// window: a border-relevant AX notification, an activation, a quit, a
+  /// Space or display change.
+  var activeWindowBorderEventEpoch: UInt64 = 0
+  /// The epoch each app's cached frame was read at: while no event has
+  /// followed, the cache is the window list's answer and a mode change
+  /// does not ask again.
+  var activeWindowBorderReadEpochs: [pid_t: UInt64] = [:]
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
-  /// The latest `focus_input` request; an older one still queued is dropped.
+  /// The latest `input focus` request; an older one still queued is dropped.
   var focusTextInputRequest: UInt64 = 0
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>() {
     didSet {
@@ -343,6 +514,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// SIGTERM (the installer's `pkill`) runs the normal quit, so owned state
   /// such as a lingering Gecko accessibility mode is restored on the way out.
   private var terminationSignal: DispatchSourceSignal?
+  /// Keeps App Nap off for the resident's life (`ResidentActivity`).
+  private var residentActivity: NSObjectProtocol?
   /// Launched without Accessibility and still waiting for the grant; see
   /// `checkAccessibilityAtLaunch`.
   var awaitingAccessibilityGrant = false
@@ -351,7 +524,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // First, so the cached primary-screen height refreshes before any other
     // screen-parameter observer reads it.
     ScreenSpace.startObserving()
+    // Before any AX work: every element without a timeout of its own is
+    // bounded from here on.
+    AXApp.configureProcessMessagingTimeout()
     mainRunLoopStallObserver.start()
+    residentActivity = ResidentActivity.begin()
     // Hint labels hide the pointer while another app stays frontmost.
     let backgroundCursor = BackgroundCursor.enable()
     FlashLog.debug("[overlay] background_cursor enabled=\(backgroundCursor)")
@@ -376,6 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     // First run: give the user a working shortcut before the first load.
     StarterConfig.seedIfNeeded(environment: ProcessInfo.processInfo.environment)
+    manualTopicNames = HelpDocs.manualNames(root: DebugServer.bundledDocs)
     config = ConfigLoader.load()
     FlashTunables.apply(config)
     frecencyStore = FrecencyStore(
@@ -383,18 +561,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         halfLifeDays: config.flashlight.frecencyHalfLifeDays,
         maxBoost: config.flashlight.frecencyMaxBoost))
     commandHistoryStore = CommandHistoryStore()
-    commandLineHistory = commandHistoryStore?.load() ?? []
+    commandLineHistory = CommandLineHistory(entries: commandHistoryStore?.load() ?? [])
     let manager = pluginManager
     registry = SourceRegistry(
       flashlight: config.flashlight,
-      pluginSourcesProvider: { manager.sources })
+      pluginSourcesProvider: { manager.sources },
+      appleCatalogs: appleCatalogs,
+      clipboard: clipboardFlashlight,
+      windows: WindowListSource(
+        rows: { [weak self] in self?.windowListRows() ?? ([], nil) },
+        focus: { [weak self] key in self?.focusWindowSwitcherChoice(key) }),
+      perform: { [weak self] command in self?.performMappedCommand(command) })
     monitor = AppMonitor(registry: registry, config: config)
     // A held mouse button enters HOLD:
     // whichever path presses or releases it, the mode follows the hold, from
-    // NORMAL or from INSERT (an all-mode `enter_hold_mode` chord).
+    // NORMAL, a layer or INSERT (an all-mode `mode hold` chord).
     ActionDispatcher.heldButtonDidChange = { [weak self] held in
       guard let self else { return }
-      if let held, self.modeStore.mode == .normal || self.modeStore.mode.isInsert {
+      let mode = self.modeStore.mode
+      if let held, mode == .normal || mode.isInsert || mode.isLayer {
         self.dispatchMode(.buttonHeld(held.purpose))
       } else if held == nil, self.modeStore.mode.buttonHold != nil {
         self.dispatchMode(.buttonReleased)
@@ -413,20 +598,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     // Every observed AX notification reaches plugins exactly once, here.
     monitor.focusedElementDidChange = { [weak self] pid, bundleID, notification in
-      if notification == kAXTitleChangedNotification as String {
-        self?.windowLayoutManager.observedTitleChanged(pid: pid)
+      if Self.windowSwitcherNotifications.contains(notification) {
+        self?.windowSwitcherCatalog.windowsMayHaveChanged(pid: pid)
       }
-      guard let self, self.pluginManager.hasListener(for: PluginProtocol.axChangedEvent) else {
+      guard let self, self.pluginManager.hasListener(for: .axChanged) else {
         return
       }
       self.pluginManager.emit(
         .axChanged(pid: pid, notification: notification, bundleID: bundleID))
     }
+    // `move` reads where the focus sits from a cache each focus change
+    // refreshes off the main loop.
+    monitor.focusedElementMayHaveChanged = { [weak self] pid in
+      guard let self else { return }
+      // Another app: the engaged field is no longer focused.
+      self.updateTextScope { $0.focusMayHaveChanged(pid: pid) }
+      self.focusRegionTracker.focusMayHaveChanged(pid: pid)
+    }
+    // A click chain waiting for its next pick follows its app's changes.
+    monitor.uiDidChange = { [weak self] pid in
+      self?.clickChainUIDidChange(pid: pid)
+    }
     monitor.activeWindowMayHaveChanged = { [weak self] pid, notification, window in
+      self?.activeWindowBorderEventEpoch &+= 1
       self?.activeWindowMayHaveChanged(
         pid: pid, notification: notification, observedWindow: window)
     }
     monitor.focusedWindowDidResolve = { [weak self] pid, window in
+      // Every app's resolution, background ones included: the switcher
+      // promotes only the frontmost app's, and remembers the rest.
+      self?.windowSwitcherCatalog.focusResolved(pid: pid, window: window)
       // Identity, not a window-list scan: resolution fires on every focus
       // swap, and the list's top window can belong to another app.
       guard let self, self.currentNonFlashRunningApplication()?.processIdentifier == pid
@@ -442,12 +643,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.updateActiveWindowBorder(reason: "focused_window_resolved")
       }
     }
+    // A relaunched Dock is observed again at once; see `SystemSurfaceController`.
+    monitor.applicationDidLaunch = { [weak self] app in
+      self?.systemSurfaces.applicationLaunched(bundleIdentifier: app.bundleIdentifier)
+    }
     monitor.start()
+    systemSurfaces.start()
     windowLayoutManager.refreshNavigationCatalog(
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: config.statusBar.monitor)
+    if let front = NSWorkspace.shared.frontmostApplication,
+      front.bundleIdentifier != Bundle.main.bundleIdentifier
+    {
+      windowSwitcherCatalog.appActivated(pid: front.processIdentifier)
+    }
+    refreshWindowSwitcherCatalog()
     pluginManager.onStateChanged = { [weak self] in
       self?.pluginStateDidChange()
+    }
+    pluginManager.onOwnTextEditingAppsChanged = { [weak self] in
+      guard let self else { return }
+      self.applyTextScopePolicy(self.config.mode, invalidatesPending: true)
     }
     pluginManager.onNormalModeTargetRequested = { [weak self] in
       guard let self,
@@ -458,12 +674,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return (
         pid: context.processID, bundleID: context.bundleIdentifier, windowID: window?.number
       )
-    }
-    pluginManager.onNotifyRequested = { [weak self] message, durationMs in
-      self?.overlay.displayBanner(message, durationMs: durationMs)
-    }
-    pluginManager.onOutputVolumeChanged = { [weak self] percent in
-      self?.overlay.displayAlert(StatusAlert.volume(percent))
     }
     pluginManager.wifiInfoProvider = wifiInfoProvider
     pluginManager.onCatalogsChanged = { [weak self] in
@@ -481,22 +691,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         }
       }
     }
-    pluginManager.onGlobalSyntheticKeyRequested = { [weak self] key, flags in
-      guard let self else { return false }
-      self.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
-      return NormalModeDispatcher.sendGlobalKey(virtualKey: key, flags: flags)
-    }
-    pluginManager.cacheRunningApplicationsSnapshot(Self.runningApplicationsSnapshot())
+    let launchApplications = Self.runningApplicationsSnapshot()
+    pluginManager.cacheRunningApplicationsSnapshot(launchApplications)
     pluginManager.start(config: config)
+    appleCatalogs.onChange = { [weak self] catalog in
+      self?.refreshLiveCandidates(sourceID: catalog.sourceID)
+    }
+    appleCatalogs.start(
+      runningBundleIDs: Set(launchApplications.compactMap { $0["bundle_id"] as? String }))
+    // Made at launch so it loads, and moves the retired plugin's file, on
+    // its queue before the first jump.
+    _ = markStore
 
     overlay = OverlayPanel()
     overlay.coordinator = self
     overlay.overlayConfig = config.overlay
+    applyCaptureSharing(hidden: config.app.hideFromCapture)
     appearanceObserver = AppearanceObserver(NSApplication.shared) { [weak self] dark in
       self?.overlay.darkAppearance = dark
     }
     overlay.debugConfig = config.debug
     overlay.popupStyle = config.popupStyle
+    overlay.statusLinkOpener.schemes = Set(config.statusBar.linkSchemes)
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.effectiveMagicModifiers)
     overlay.keyboardNavigation = Alphabet.navigation(layoutName: config.positionLayoutName)
@@ -512,6 +728,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.statusBarController?.setWidgetVisible(name: name, visible)
       self?.pluginManager.setWidgetVisible(name: name, visible)
     })
+    let processSampler = processStatusSampler
+    let calendar = calendarEvents
+    calendar.configure(config.calendar)
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
@@ -522,8 +741,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.statusBarInfos() ?? []
       },
-      widgetSink: { [weak self] name, lines in self?.widgetController?.show(name, lines: lines) })
+      widgetSink: { [weak self] name, lines in self?.widgetController?.show(name, lines: lines) },
+      processValuesObserver: { [weak processSampler] values in processSampler?.observe(values) },
+      monitorSink: { [weak self] snapshots in self?.monitorsDidChange(snapshots) },
+      monitorAlertSink: { [weak self] alert in self?.presentMonitorAlert(alert) },
+      monitorFireSink: { [weak self] fire in self?.monitorDidFire(fire) },
+      monitorNotifySink: { [weak self] name, alert in
+        self?.notifyMonitor(
+          name, title: alert.title, body: alert.value ?? "", error: alert.style == .error)
+      },
+      monitorTriggerSink: { [weak self] name, level in self?.emitMonitorTriggered(name, level) },
+      telemetry: telemetryStore,
+      calendarObserver: { [weak calendar] observed in calendar?.observe(observed) })
+    wireTelemetryStore()
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
+    if let front = NSWorkspace.shared.frontmostApplication,
+      front.processIdentifier != ProcessInfo.processInfo.processIdentifier
+    {
+      processSampler.focusChanged(
+        FocusedProcess(pid: front.processIdentifier, bundleID: front.bundleIdentifier ?? ""))
+    }
     // Once at launch; afterwards the tap, hint activations and the secure-input
     // poll refresh it. The poll is what notices a hold that starts while the
     // tap is blind.
@@ -535,21 +772,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.statusBarActionHandler = { [weak self] name in
       self?.performStatusBarClickAction(named: name)
     }
+    overlay.statusBarCycleStepHandler = { [weak self] key, delta in
+      self?.statusBarController?.stepCycle(key: key, by: delta)
+    }
     configureTerminalPopupInput()
     wireInspectorChangeSources()
+    windowLayoutManager.tilingStatusDidChange = { [weak self] status in
+      self?.tilingStatusDidChange(status)
+    }
+    statusItemController.aboutKeyDidChange = { [weak self] in
+      guard let self else { return }
+      self.refreshOverlayInputRouting()
+      // About went behind another app: NORMAL takes that app's keys again.
+      if self.aboutWindowVisible, !self.statusItemController.aboutWindowIsKey,
+        self.flashMode == .normal
+      {
+        self.scheduleNormalModeRecapture()
+      }
+    }
     statusItemController.aboutVisibilityDidChange = { [weak self] visible in
       self?.aboutWindowVisibilityDidChange(visible)
     }
 
-    urlHandler = URLEventHandler(
-      handler: { [weak self] cmd in Trace.ensure(.cli) { self?.handleURLCommand(cmd) ?? false } },
-      rejected: { [weak self] command in self?.warnUnsupportedCommand(command) },
-      queries: URLEventHandler.QueryAnswers(
-        status: { [weak self] in self?.statusReport().data ?? Data("{}".utf8) },
-        doctor: { [weak self] reply in
-          guard let self else { return reply(Data("{}".utf8)) }
-          self.runDoctor { reply($0.data) }
-        }))
+    startIPCServer()
     mappings.start(
       dispatch: { [weak self] action in
         self?.dispatchNativeMappingAction(action)
@@ -563,28 +808,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       app.bundleIdentifier != Bundle.main.bundleIdentifier
     {
       movementCurrent = .app(pid: app.processIdentifier)
-      appCurrent = app.processIdentifier
+      appNavigation = AppNavigationHistory(current: app.processIdentifier)
       observedFocusedAppPID = app.processIdentifier
     }
     watchConfigFile()
+    // After the first configuration load, once per launch; a reload never
+    // runs the list again.
+    runStartupCommandsAtLaunch()
     selectInitialModeIfNeeded()
     configureDebugServer(for: config)
+    configureTelemetry(for: config)
     checkAccessibilityAtLaunch()
     installDismissObservers()
     reconcileClipboardMonitor()
     reconcileHostEventSources()
+    activateNotificationClicks()
     startPowerSourceMonitor()
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:flash.started", payload: [:], bundleID: nil))
-    emitRunningApplicationsChanged(reason: "launch")
+    systemEventObservers.start { [weak self] event in
+      guard let self, self.hostEventHasSubscriber(event.name) else { return }
+      self.emitHostEvent(event)
+    }
+    emitRunningApplicationsChanged()
   }
 
+  /// Dispatch `cmd`. With a `completion`, it runs once with how the command
+  /// ended and any output it produced, which the caller presents; without
+  /// one, a plugin's output shows on a banner.
   @discardableResult
-  func handleURLCommand(_ cmd: URLCommand) -> Bool {
+  func handleURLCommand(
+    _ cmd: URLCommand,
+    completion: ((NormalModeCommandOutcome, String?) -> Void)? = nil
+  ) -> Bool {
     FlashLog.trace(
       "[url] command=\(cmd.diagnosticDescription) mode=\(flashMode) hints=\(hintSession.hints.count) "
         + "in_flight=\(activationInFlight) overlay=\(String(describing: overlay?.inputMode))")
+    var completesLater = false
+    defer { if !completesLater { completion?(.performed, nil) } }
     switch cmd {
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: nil)
@@ -594,8 +853,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateScreenScopeHints(command)
     case .mouseTargetWords(let command):
       activateWordHints(command, contextOverride: nil)
-    case .mouseScreens:
-      activateScreenHints()
+    case .mouseScreens(let request):
+      activateScreens(request)
     case .mouseWarp(let request):
       performMouseWarp(request)
     case .mouseStep(let direction):
@@ -639,23 +898,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .popupQuit(let name):
       quitPopup(named: name)
     case .insertMode:
-      enterInsertMode()
+      enterInsertMode(.explicitCommand)
     case .commandMode:
       enterCommandLineMode()
     case .terminalMode(let name):
       enterTerminalMode(named: name)
+    case .layerMode(let name):
+      if let rejection = enterLayer(named: name) {
+        completesLater = true
+        completion?(.failed, rejection)
+      }
     case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,
-      .tabClose, .find, .candidateFinder,
+      .tabClose, .find, .findNext, .findPrevious, .appSwitch, .flashlight,
       .enterCommand, .copyURL, .yankSelection, .paste,
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect,
       .tabMovePrev, .tabMoveNext, .tabReopen,
       .paneNext, .panePrev, .paneSplitVertical, .paneSplitHorizontal, .paneClose,
       .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
-      .quitApp, .saveAndQuit, .tabNew, .save, .print, .documentOpen, .windowNew, .windowClose,
-      .clipboardCopy, .clipboardCut, .clipboardPaste, .lookUp,
-      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow:
-      performMappedCommand(cmd)
+      .quitApp, .saveAndQuit, .appClose, .tabNew, .save, .print, .documentOpen, .windowNew,
+      .windowClose,
+      .clipboardCopy, .clipboardPaste, .lookUp, .zoomIn, .zoomOut, .zoomReset,
+      .viewSource, .inputMotion, .move, .cursor, .scrollCursor, .visualMode, .visualReselect,
+      .documentSaveAs, .documentExportPDF, .documentRevert, .documentDuplicate,
+      .documentRename, .documentPageSetup, .appSettings, .selectAll, .appHelp, .appCancel,
+      .appStop, .appDownloads, .developerTools, .windowCloseAll, .windowZoom, .urlBookmark,
+      .urlEdit, .historyShow, .tabDuplicate, .tabPin, .tabMute, .tabDetach, .appVisibility,
+      .menuPress,
+      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow, .systemAction, .processKill:
+      if let completion {
+        completesLater = true
+        performMappedCommand(cmd, completion: { completion($0, nil) })
+      } else {
+        performMappedCommand(cmd)
+      }
     case .showAlert(let alert):
       shownConfigError = nil
       overlay.displayAlert(alert.alert)
@@ -670,46 +946,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       showMappings()
     case .showPlugins:
       openDebugDashboard(.plugins(id: nil))
+    case .reloadPlugins:
+      reloadPlugins()
+    case .showLogs:
+      openDebugDashboard(.logs)
+    case .showCommands:
+      openDebugDashboard(.commands)
+    case .showMonitors:
+      openDebugDashboard(.monitors)
+    case .showTelemetry:
+      openDebugDashboard(.telemetry)
     case .showAbout:
       statusItemController.showAbout()
     case .dismissHints:
       cancelOverlay()
     case .quit:
-      NSApp.terminate(nil)
+      // The caller hears back before the resident goes away.
+      completesLater = true
+      completion?(.performed, nil)
+      DispatchQueue.main.async { NSApp.terminate(nil) }
     case .openApp(let name):
       openSourceItem(matching: name)
     case .clipboardHistory(let action, let id, let offset):
       if action == "show", offset == 0 {
         openClipboardDashboard()
       } else {
-        let args = action == "delete" ? ["id=\(id ?? "")"] : ["offset=\(offset ?? 0)"]
+        let args = action == "show" ? ["offset=\(offset ?? 0)"] : ["id=\(id ?? "")"]
+        completesLater = true
         _ = performClipboardHistoryCommand(subcommand: action, args: args) {
           [weak self] ok, output in
           if ok {
-            if action == "delete" { self?.refreshClipboardDashboardCache() }
-            self?.presentPluginResult(output)
+            if action != "show" { self?.refreshClipboardDashboardCache() }
+            if let completion {
+              completion(.performed, output)
+            } else {
+              self?.presentPluginResult(output)
+            }
           } else {
-            self?.warnCommandFailure(cmd.diagnosticDescription)
+            if let output {
+              self?.displayCommandWarning(output)
+            } else {
+              self?.warnCommandFailure(cmd.diagnosticDescription)
+            }
+            completion?(.failed, output)
           }
         }
       }
+    case .clipboardRestore(let id, let paste, let plain):
+      completesLater = true
+      restoreClipboardEntry(id: id, paste: paste, plain: plain) { [weak self] ok in
+        if ok {
+          completion?(.performed, nil)
+        } else {
+          self?.warnCommandFailure(cmd.diagnosticDescription)
+          completion?(.failed, nil)
+        }
+      }
     case .pluginCommand(let command, let subcommand, let args):
+      completesLater = true
       let dispatched = pluginManager.invoke(
         command: command,
         subcommand: subcommand,
         args: args,
-        raw: cmd.diagnosticDescription,
         in: pluginSelectorContext()
       ) { [weak self] ok, pid, stdout, navigationURL in
         guard ok else {
           self?.warnCommandFailure(cmd.diagnosticDescription)
+          completion?(.failed, nil)
           return
         }
-        self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-        self?.presentPluginResult(stdout)
-        self?.noteClipboardDelete(command: command, subcommand: subcommand, ok: true)
+        self?.activateCommandTarget(pid, navigationURL: navigationURL)
+        if let completion {
+          completion(.performed, stdout)
+        } else {
+          self?.presentPluginResult(stdout)
+        }
       }
-      if !dispatched { warnUnsupportedCommand(cmd.diagnosticDescription) }
+      if !dispatched {
+        warnUnsupportedCommand(cmd.diagnosticDescription)
+        completion?(.unavailable, nil)
+      }
       return dispatched
     case .moveWindow(let params):
       // Use the *non-Flash* frontmost app as the move target. Without
@@ -717,48 +1033,137 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // Tahoe key-window rule) makes `frontmostApplication` resolve to
       // Flash itself, and the verb cheerfully maximises the status-bar
       // panel instead of the user's actual window.
-      if let target = currentNonFlashContext() {
+      if let targetPID = currentNonFlashProcessID() {
         windowLayoutManager.move(
           params,
           statusBarReservesSpace: statusBarVisible,
           statusBarMonitor: config.statusBar.monitor,
-          targetPID: target.processID)
+          targetPID: targetPID)
       } else {
-        FlashLog.warn("[window_move] no non-flash frontmost app")
+        FlashLog.warn("[window] no non-flash frontmost app")
       }
     case .focusWindow(let request):
       if let target = currentNonFlashRunningApplication() {
         focusWindow(request, targetPID: target.processIdentifier)
       }
     case .windowState(let action):
-      if let target = currentNonFlashContext() {
-        windowLayoutManager.setWindowState(action, targetPID: target.processID)
+      if let targetPID = currentNonFlashProcessID() {
+        windowLayoutManager.setWindowState(action, targetPID: targetPID)
       } else {
-        FlashLog.warn("[window_state] no non-flash frontmost app")
+        FlashLog.warn("[window] no non-flash frontmost app")
       }
-    case .pluginVerb(let name, let args):
-      // `core:focus.changed` etc. carry the focused-app pid/bundle id, but
-      // verb dispatch is opportunistic and the verb may fire while normal
-      // mode has retained a target across a focus blip — prefer that
-      // target when present so the verb acts on the app the user was last
-      // looking at, not the app Flash happens to overlay.
-      let target = normalModeContext() ?? currentNonFlashContext()
-      let dispatched = pluginManager.invokeVerb(
-        name: name,
-        args: args,
-        in: pluginSelectorContext(for: target)
-      ) { [weak self] ok, pid, stdout, navigationURL in
-        guard ok else {
-          self?.warnCommandFailure(cmd.diagnosticDescription)
-          return
+    case .windowSwitch:
+      performWindowSwitch()
+    case .windowLast:
+      performWindowLast()
+    case .tile(let command):
+      completesLater = true
+      windowLayoutManager.performTiling(command) { [weak self] outcome in
+        self?.finishTiling(outcome, completion: completion)
+      }
+    case .workspace(let command):
+      completesLater = true
+      windowLayoutManager.performWorkspace(command) { [weak self] outcome in
+        self?.finishTiling(outcome, completion: completion)
+      }
+    case .media(let command):
+      completesLater = true
+      // A caller presents an answer itself: the CLI prints it.
+      performMediaCommand(command, presents: completion == nil) { outcome, output in
+        completion?(outcome, output)
+      }
+    case .caffeinate(let request):
+      completesLater = true
+      performCaffeinate(request, presents: completion == nil) { outcome, output in
+        completion?(outcome, output)
+      }
+    case .systemSurface(let command):
+      if let completion {
+        completesLater = true
+        performSystemSurface(command) { failure in
+          completion(failure == nil ? .performed : .failed, failure)
         }
-        self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-        self?.presentPluginResult(stdout)
+      } else {
+        performSystemSurface(command)
       }
-      if !dispatched {
-        warnUnsupportedCommand(cmd.diagnosticDescription)
+    case .statusPush(let push):
+      completesLater = true
+      // A script pushes on every event, so a wrong name is logged, not alerted;
+      // the CLI exits 1 with it.
+      pushStatusSource(push) { rejection in
+        if let rejection {
+          FlashLog.info(
+            "[statusbar] push_rejected", fields: ["reason": rejection], source: "core:Command")
+          completion?(.failed, rejection)
+        } else {
+          completion?(.performed, nil)
+        }
       }
-      return dispatched
+    case .notify(let notify):
+      completesLater = true
+      performNotify(notify) { failure in
+        completion?(failure == nil ? .performed : .failed, failure)
+      }
+    case .logWrite(let write):
+      performLogWrite(write)
+    case .metricRecord(let record):
+      performMetricRecord(record)
+    case .menuChoose(let file, let prompt):
+      completesLater = true
+      performMenuChoose(file: file, prompt: prompt) { result in
+        switch result {
+        case .success(let picked): completion?(.performed, picked)
+        case .failure(let failure): completion?(.failed, failure.description)
+        }
+      }
+    case .statusRefresh(let source):
+      completesLater = true
+      refreshStatusSource(source) { refusal in
+        if let refusal {
+          FlashLog.warn("[statusbar] refresh refused: \(refusal)", source: "core:Command")
+          completion?(.failed, refusal)
+        } else {
+          completion?(.performed, nil)
+        }
+      }
+    case .updates(let command):
+      completesLater = true
+      performUpdatesCommand(command) { [weak self] outcome, text in
+        if let completion {
+          completion(outcome, text)
+        } else if let text {
+          self?.overlay.displayBanner(text.split(separator: "\n").first.map(String.init) ?? text)
+        }
+      }
+    case .startup(let command):
+      completesLater = true
+      performStartupCommand(command) { [weak self] outcome, text in
+        if let completion {
+          completion(outcome, text)
+        } else {
+          self?.overlay.displayBanner(text.split(separator: "\n").first.map(String.init) ?? text)
+        }
+      }
+    case .appleCatalog(let command):
+      performAppleCatalogCommand(command)
+    case .calendar(let command):
+      completesLater = true
+      // A caller presents the output itself: the CLI prints it.
+      performCalendarCommand(command, presents: completion == nil) { outcome, output in
+        completion?(outcome, output)
+      }
+    case .marks(let command):
+      performMarkCommand(command)
+    case .macro(let command):
+      completesLater = true
+      performMacroCommand(command, repeatCount: 1) { outcome, message in
+        completion?(outcome, message)
+      }
+    case .configReload:
+      completesLater = true
+      completion?(.performed, reloadConfigNow())
+    case .configEdit:
+      Self.openConfigurationFile()
     }
     return true
   }
@@ -768,37 +1173,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// a toast. The log keeps the diagnostic, and the CLI still gets its
   /// rejection reply.
   func warnUnsupportedCommand(_ command: String) {
-    FlashLog.warn(URLEventHandler.rejectionMessage(command), source: "core:Command")
+    FlashLog.info(
+      "[command] unsupported", fields: ["command": command], source: "core:Command")
   }
 
   func warnCommandFailure(_ command: String) {
     displayCommandWarning("Command failed or was not handled: \(command). Check :logs for details.")
   }
 
-  /// `:clipboard delete` changes history without a toast. Refresh the
-  /// inspector cache once the plugin has finished.
-  func noteClipboardDelete(command: String, subcommand: String, ok: Bool) {
-    guard ok, command.caseInsensitiveCompare("clipboard") == .orderedSame,
-      subcommand.caseInsensitiveCompare("delete") == .orderedSame
-    else { return }
-    DispatchQueue.main.async { [weak self] in
-      self?.refreshClipboardDashboardCache()
+  private func presentPluginResult(_ stdout: String?) {
+    guard let stdout, !stdout.isEmpty else { return }
+    overlay.displayBanner(stdout)
+  }
+
+  /// `status set` / `status clear`: `completion` gets nil once the value
+  /// landed, or why it could not (no such source).
+  func pushStatusSource(_ push: StatusPush, completion: @escaping (String?) -> Void) {
+    if let rejection = StatusPush.rejection(
+      source: push.source, declared: Set(config.statusBar.sources.keys))
+    {
+      return completion(rejection)
+    }
+    guard let controller = statusBarController else { return completion(nil) }
+    controller.push(source: push.source, value: push.value) { accepted in
+      completion(
+        accepted
+          ? nil
+          : StatusPush.rejection(source: push.source, declared: []))
     }
   }
 
-  /// A caffeinate result is the same modal as the volume percent. Other
-  /// plugin output stays a banner.
-  private func presentPluginResult(_ stdout: String?) {
-    guard let stdout, !stdout.isEmpty else { return }
-    if let alert = StatusAlert.caffeinate(reported: stdout) {
-      overlay.displayAlert(alert)
-    } else {
-      overlay.displayBanner(stdout)
+  func refreshStatusSource(_ source: String, completion: @escaping (String?) -> Void) {
+    guard let controller = statusBarController else {
+      return completion(
+        StatusRefresh.refusal(
+          source: source, definition: config.statusBar.sources[source], shown: false))
     }
+    controller.refresh(source: source, completion: completion)
   }
 
   private func displayCommandWarning(_ message: String) {
-    FlashLog.warn(message, source: "core:Command")
+    FlashLog.warn("[command] failed", fields: ["message": message], source: "core:Command")
     overlay.displayAlert(.message(message, style: .error))
   }
 
@@ -818,6 +1233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
+      self.activeWindowBorderEventEpoch &+= 1
       // The inspector's `focused_app` follows every activation, Flash's own too.
       self.debugStateDidChange()
       // Ignore Flash itself activating (it shouldn't, but be safe).
@@ -833,15 +1249,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           bundleIdentifier: app.bundleIdentifier)
         self.setSessionSuspended(
           secureUI, source: .secureUI, reason: secureUI ? "secure_ui" : "secure_ui_exit")
-        self.applyFocusedApplicationChange(app, reason: "focus_changed", emitFocusEvent: true)
+        self.applyFocusedApplicationChange(app, emitFocusEvent: true)
         self.cancelOverlay(departure: .activated(app.processIdentifier))
         // Move the stroke on the activation itself rather than waiting for the
         // new app's first AX geometry notification. `app` is authoritative
-        // here; the workspace's frontmost pointer is not yet. The recovery
-        // ticks then absorb an app that reports its window geometry late.
-        self.updateActiveWindowBorder(reason: "app_activated", activated: app)
+        // here; the workspace's frontmost pointer is not yet. With a cached
+        // frame the window list is first read by the 80 ms pass, after the
+        // activation animation; the later passes run only while it still
+        // disagrees, absorbing an app that reports its geometry late.
+        self.updateActiveWindowBorder(
+          reason: "app_activated", activated: app, read: .onlyWithoutCache)
         self.scheduleActiveWindowBorderReconciliation(
-          delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "app_activated")
+          delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "app_activated",
+          endsWhenSettled: true)
         if self.shouldScheduleNormalModeRecaptureAfterWorkspaceActivation() {
           self.scheduleNormalModeRecapture()
         }
@@ -859,15 +1279,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       guard let self else { return }
-      self.reconcileFrontmostApplication(reason: "space_changed")
+      self.activeWindowBorderEventEpoch &+= 1
+      self.reconcileFrontmostApplication()
+      // Accessibility lists the active Space's windows: read them all again.
+      self.refreshWindowSwitcherCatalog()
       // Raising a commit's target can switch Spaces: that is its handoff.
       self.cancelOverlay(departure: .focusLost)
       self.overlay.reassertStatusBar(reason: "space_changed")
       self.scheduleActiveWindowBorderReconciliation(
         delaysMs: [0] + Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
-      self.pluginManager.emit(
-        PluginEvent(
-          name: "core:space.changed", payload: [:], bundleID: nil))
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -883,17 +1303,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor)
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-        self.pluginManager.emit(
+        // Its first windows, once the launch settles; later ones arrive with
+        // its focus and its AX window events.
+        if app.activationPolicy == .regular {
+          self.windowSwitcherCatalog.appLaunched(pid: app.processIdentifier)
+        }
+        self.emitHostEvent(
           PluginEvent(
-            name: "core:apps.launched",
+            .appsLaunched,
             payload: [
               "bundle_id": app.bundleIdentifier ?? "",
               "localized_name": app.localizedName ?? "",
               "pid": Int(app.processIdentifier),
             ],
             bundleID: app.bundleIdentifier))
+        self.appleCatalogs.appLaunched(bundleID: app.bundleIdentifier)
       }
-      self.emitRunningApplicationsChanged(reason: "app_launch")
+      self.emitRunningApplicationsChanged()
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -904,6 +1330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
+      self.activeWindowBorderEventEpoch &+= 1
       self.registry.scheduleRunningApplicationsRefresh()
       self.windowLayoutManager.refreshNavigationCatalog(
         statusBarReservesSpace: self.statusBarVisible,
@@ -911,20 +1338,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         let pid = app.processIdentifier
         self.windowLayoutManager.appDidTerminate(pid: pid)
+        self.windowSwitcherCatalog.appTerminated(pid: pid)
+        self.pluginManager.appTerminated(pid: pid)
         self.forgetActiveWindowBorderFrames(for: pid)
         // Cmd-Q and a last window that quits the app never pass through
-        // `app_quit`. Focus the previous app before macOS picks one.
+        // `app quit`. Focus the previous app before macOS picks one.
         self.focusAppAfterQuit(of: pid)
-        if pid == self.observedFocusedAppPID || self.appNavigationTargetPID != nil {
+        if pid == self.observedFocusedAppPID || self.appNavigation.target != nil {
           self.hideActiveWindowBorder(reason: "app_terminated")
           DispatchQueue.main.async {
-            if let aimed = self.appNavigationTargetPID,
+            if let aimed = self.appNavigation.target,
               let next = NSRunningApplication(processIdentifier: aimed), !next.isTerminated
             {
-              self.applyFocusedApplicationChange(
-                next, reason: "app_terminated", emitFocusEvent: true)
+              self.applyFocusedApplicationChange(next, emitFocusEvent: true)
             } else {
-              self.reconcileFrontmostApplication(reason: "app_terminated")
+              self.reconcileFrontmostApplication()
             }
             self.updateActiveWindowBorder(reason: "app_terminated")
             self.scheduleActiveWindowBorderReconciliation(
@@ -932,17 +1360,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
               reason: "app_terminated")
           }
         }
-        self.pluginManager.emit(
+        self.emitHostEvent(
           PluginEvent(
-            name: "core:apps.terminated",
+            .appsTerminated,
             payload: [
               "bundle_id": app.bundleIdentifier ?? "",
               "localized_name": app.localizedName ?? "",
               "pid": Int(app.processIdentifier),
             ],
             bundleID: app.bundleIdentifier))
+        self.appleCatalogs.appTerminated(bundleID: app.bundleIdentifier)
       }
-      self.emitRunningApplicationsChanged(reason: "app_terminate")
+      self.emitRunningApplicationsChanged()
     }
     let sessionResigned = nc.addObserver(
       forName: NSWorkspace.sessionDidResignActiveNotification,
@@ -1013,6 +1442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       guard let self else { return }
+      self.activeWindowBorderEventEpoch &+= 1
       self.windowLayoutManager.screenParametersDidChange(
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor,
@@ -1073,7 +1503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // to another app without `didActivateApplicationNotification`; only
       // updating the status-bar label left app-scoped plugin mappings stale,
       // so terminal chords such as tmux's `cmd+shift+[` leaked to Alacritty.
-      self.reconcileFrontmostApplication(reason: "resign_key")
+      self.reconcileFrontmostApplication()
       if !self.hintSession.hints.isEmpty {
         // A key-window session's commit raises its target, which resigns
         // the panel: that is the commit's handoff, not the user leaving.
@@ -1115,17 +1545,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     refreshEffectiveMappings(for: front.bundleIdentifier)
     DispatchQueue.main.async { [weak self] in
       guard let self, self.observedFocusedAppPID == pid else { return }
-      self.applyFocusedApplicationChange(front, reason: "key_down", emitFocusEvent: true)
+      self.applyFocusedApplicationChange(front, emitFocusEvent: true)
     }
   }
 
-  func reconcileFrontmostApplication(reason: String) {
+  func reconcileFrontmostApplication() {
     guard let front = NSWorkspace.shared.frontmostApplication,
       front.bundleIdentifier != Bundle.main.bundleIdentifier,
       !Self.activeWindowBorderSecureUISuspendsSession(bundleIdentifier: front.bundleIdentifier)
     else { return }
     let changed = observedFocusedAppPID != front.processIdentifier
-    applyFocusedApplicationChange(front, reason: reason, emitFocusEvent: changed)
+    applyFocusedApplicationChange(front, emitFocusEvent: changed)
   }
 
   func preparePendingApplicationActivation(_ app: NSRunningApplication, reason: String) {
@@ -1138,11 +1568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  func applyFocusedApplicationChange(
-    _ app: NSRunningApplication,
-    reason: String,
-    emitFocusEvent: Bool
-  ) {
+  func applyFocusedApplicationChange(_ app: NSRunningApplication, emitFocusEvent: Bool) {
     observedFocusedAppPID = app.processIdentifier
     // Another app coming forward ends any native surface of the previous one.
     nativeSurfaceOwnership.end()
@@ -1150,16 +1576,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     debugStateDidChange()
     if emitFocusEvent, focusEmissionGate.shouldEmit(pid: app.processIdentifier) {
       overlay.relinquishShownStatusPopup(reason: "focus_changed")
-      pluginManager.emit(
+      processStatusSampler.focusChanged(
+        FocusedProcess(pid: app.processIdentifier, bundleID: app.bundleIdentifier ?? ""))
+      emitHostEvent(
         PluginEvent(
-          name: "core:focus.changed",
+          .focusChanged,
           payload: [
             "bundle_id": app.bundleIdentifier ?? "",
             "localized_name": app.localizedName ?? "",
             "pid": Int(app.processIdentifier),
           ],
           bundleID: app.bundleIdentifier))
-      emitRunningApplicationsChanged(reason: reason)
+      appleCatalogs.focusChanged(bundleID: app.bundleIdentifier)
+      emitRunningApplicationsChanged()
       recordAppActivation(app.processIdentifier)
       followFocusWithPointer(pid: app.processIdentifier)
     }
@@ -1197,34 +1626,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Start or stop each host event monitor as plugins start or stop
   /// listening to its event.
   func reconcileHostEventSources() {
-    hostEventSources.reconcile { pluginManager.hasListener(for: $0) }
+    // One source serves each pair of events.
+    let partner: [String: HostEvent] = [
+      HostEvent.userIdle.rawValue: .userActive, HostEvent.usbAttached.rawValue: .usbDetached,
+    ]
+    hostEventSources.reconcile { event in
+      hostEventHasSubscriber(event)
+        || partner[event].map { hostEventHasSubscriber($0.rawValue) } == true
+    }
+    (hostEventSources.source(for: HostEvent.userIdle.rawValue) as? UserIdleMonitor)?.refresh()
+    (hostEventSources.source(for: HostEvent.clockMinute.rawValue) as? ClockMinuteMonitor)?
+      .refresh()
+  }
+
+  /// The minutes `core:clock.minute` announces: every one for a listening
+  /// plugin, each listening event monitor's `at` times.
+  func clockWants() -> ClockWatch.Wants {
+    ClockWatch.Wants(
+      everyMinute: hostEventHasClientListener(.clockMinute),
+      times: Set(eventMonitors.values.filter(\.listensToClock).flatMap(\.clockTimes)))
+  }
+
+  private func announceClockMinute(_ announcement: ClockWatch.Announcement) {
+    FlashLog.debug(
+      "[events] clock_minute",
+      fields: [
+        "time": announcement.time.description, "late_s": String(announcement.lateSeconds),
+      ])
+    emitHostEvent(PluginEvent(.clockMinute, payload: announcement.payload))
+  }
+
+  /// The idle times `core:user.idle` announces: each listening event
+  /// monitor's `idle`, and the default for a listening plugin.
+  func userIdleThresholds() -> [Int] {
+    var seconds = Set(eventMonitors.values.filter(\.listensToIdle).map(\.idleSeconds))
+    if hostEventHasClientListener(.userIdle) || hostEventHasClientListener(.userActive) {
+      seconds.insert(IdleWatch.defaultSeconds)
+    }
+    return seconds.sorted()
+  }
+
+  private func announceUserIdle(_ announcement: IdleWatch.Announcement) {
+    switch announcement {
+    case .idle(let seconds):
+      FlashLog.debug("[events] user_idle", fields: ["seconds": String(seconds)])
+      emitHostEvent(PluginEvent(.userIdle, payload: ["seconds": seconds]))
+    case .active(let idleSeconds):
+      FlashLog.debug("[events] user_active", fields: ["idle_seconds": String(idleSeconds)])
+      emitHostEvent(PluginEvent(.userActive, payload: ["idle_seconds": idleSeconds]))
+    }
   }
 
   /// A payload-free change signal: listeners re-read what they show.
-  private func emitSignal(_ name: String) {
-    pluginManager.emit(PluginEvent(name: name, payload: [:], bundleID: nil))
+  private func emitSignal(_ event: HostEvent) {
+    emitHostEvent(PluginEvent(event))
   }
 
   func reconcileClipboardMonitor() {
-    guard clipboardMonitor == nil else { return }
+    // Never in the test runner: the watcher reads the real pasteboard and
+    // the store loads the user's history, whose load then pushes inspector
+    // state at a moment no test chose.
+    guard clipboardMonitor == nil, NSClassFromString("XCTestCase") == nil else { return }
     FlashLog.debug("[clipboard] watcher started")
-    clipboardMonitor = ClipboardMonitor { [weak self] item in
-      self?.clipboardHistoryStore.record(item)
-      DispatchQueue.main.async { [weak self] in self?.debugStateDidChange() }
-    }
+    // Made here, on main, so the history loads (and lists for the
+    // flashlight) at launch rather than on the watcher's queue.
+    let store = clipboardHistoryStore
+    clipboardMonitor = ClipboardMonitor(
+      onChange: { [weak self] item in
+        store.record(item)
+        DispatchQueue.main.async { [weak self] in self?.debugStateDidChange() }
+      },
+      onRestore: { id in store.touch(id: id) })
     clipboardMonitor?.start()
   }
 
   /// Bridge macOS power-source notifications into the plugin event stream.
-  /// The power plugin samples `pmset -g batt` only when this fires, rather
-  /// than waking up every N seconds.
+  /// The sysinfo plugin reads its IOPowerSources snapshot only when this
+  /// fires, rather than waking up every N seconds.
   private func startPowerSourceMonitor() {
     powerSourceMonitor = PowerSourceMonitor { [weak self] in
-      self?.pluginManager.emit(
-        PluginEvent(
-          name: "core:power.changed",
-          payload: [:],
-          bundleID: nil))
+      self?.emitHostEvent(PluginEvent(.powerChanged))
     }
     powerSourceMonitor?.start()
   }
@@ -1271,7 +1752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     return keyDownOutcome(for: decision, event: event)
   }
 
-  /// What the tap would decide for a Command chord now: `flash status`
+  /// What the tap would decide for a Command chord now: `flash resident status`
   /// reads it to say where such a chord goes.
   func modifiedChordDecision() -> KeyboardCaptureTap.Decision {
     tapDecision(isModifiedChord: true, isBareEscape: false)
@@ -1285,9 +1766,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       isTerminal: modeStore.mode.isTerminal,
       flashMode: flashMode,
       inputMode: overlay.inputMode,
-      aboutWindowVisible: aboutWindowVisible,
+      // About in the background is no surface of the keys typed elsewhere.
+      aboutWindowVisible: aboutWindowVisible && statusItemController.aboutWindowIsKey,
       aboutWindowOwnsKeyboard: Self.aboutWindowShouldOwnNativeKeyboard(
-        visible: aboutWindowVisible,
+        visible: aboutWindowVisible, isKey: statusItemController.aboutWindowIsKey,
         hasTransientInput: hintSession.isActive,
         activationInFlight: activationInFlight),
       // This callback is the tap, so a hint session over a menu takes its keys.
@@ -1296,7 +1778,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         activationInFlight: activationInFlight, tapLive: true),
       isModifiedChord: isModifiedChord,
       isBareEscape: isBareEscape,
-      ephemeralPopupShown: overlay.statusPopupController.presentation.ephemeralName != nil)
+      ephemeralPopupShown: overlay.statusPopupController.previewName != nil,
+      dockViewShown: missionControlView != nil)
   }
 
   private func keyDownOutcome(for decision: KeyboardCaptureTap.Decision, event: CGEvent)
@@ -1328,6 +1811,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .swallowIfNativeSurfaceKeyIsMapped:
       guard !tapReadsSecureInput() else { return .pass }
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+      // The surface's own Escape closes it, as without Flash.
+      guard
+        !NormalModeInterpreter.passesToNativeSurface(
+          virtualKey: keyCode, modifierFlags: flags, mappings: overlay.normalModeMappings)
+      else { return .pass }
       return keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
         ? .swallow(route: true) : .pass
     }
@@ -1369,8 +1857,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func routeTracedKey(_ event: NSEvent) {
     // HID timestamp → this main-thread turn: the tap-side latency budget.
-    if FlashLog.wouldEmit(.debug) {
-      FlashLog.debug(
+    if FlashLog.wouldEmit(.trace) {
+      FlashLog.trace(
         "[latency] tap_to_route ms="
           + String(
             format: "%.2f", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
@@ -1388,17 +1876,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       _ = mappings.handle(event: event)
       return
     case .normal:
+      // A chord mapping fires natively, with the count typed before it,
+      // unless a half-typed sequence, mark, macro or register name reads
+      // the chord itself (`NormalModeInterpreter.pendingReadsNextKey`).
       let strict = event.modifierFlags.intersection([.command, .control, .option])
-      if !strict.isEmpty, mappings.handle(event: event) { return }
+      if !strict.isEmpty,
+        !NormalModeInterpreter.pendingReadsNextKey(overlay.normalModePending),
+        mappings.handle(event: event)
+      {
+        return
+      }
     case .hints, .commandLine:
       break
     }
     overlay.handleTapCapturedKey(event)
   }
 
-  func emitRunningApplicationsChanged(reason: String) {
-    pluginManager.emitRunningApplicationsChanged(
-      reason: reason, snapshot: Self.runningApplicationsSnapshot)
+  func emitRunningApplicationsChanged() {
+    pluginManager.emitRunningApplicationsChanged(snapshot: Self.runningApplicationsSnapshot)
   }
 
   /// Thread-safe: `NSRunningApplication` properties read atomically.
@@ -1421,7 +1916,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
+    // Windows parked for hidden workspaces come back before Flash goes.
+    windowLayoutManager.releaseTiling()
     secureInputFixer.stop()
+    caffeinateController?.shutdown()
     activationLifecycle.invalidate()
     clearHintSessionState()
     releaseHeldMouseButton(reason: "quit")
@@ -1445,6 +1943,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     powerSourceMonitor?.stop()
     powerSourceMonitor = nil
     hostEventSources.stopAll()
+    // A monitor run or startup command in progress, children included, ends
+    // with Flash; no startup command starts after this.
+    startupRunner.stop()
+    MonitorProcess.shutdown()
     statusBarController?.stopAndWait()
     statusBarController = nil
     widgetController?.stop()
@@ -1454,11 +1956,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.statusTerminals.shutdown()
     monitor?.stop()
     pluginManager.stop()
+    stopTelemetry()
     stopDebugServer()
+    stopIPCServer()
     frecencyStore?.drain()
     frecencyStore = nil
     commandHistoryStore?.drain()
     commandHistoryStore = nil
+    applyUpdateAtQuit()
   }
 
 }

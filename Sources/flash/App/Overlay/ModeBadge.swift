@@ -268,7 +268,7 @@ extension OverlayPanel {
       }
     }
     // Hidden popups sized in percentages refit to the new geometry.
-    statusTerminals.refitHidden(except: statusPopupController.presentation.name)
+    statusTerminals.refitHidden(excluding: statusPopupController.visibleNames)
   }
 
   func orderOutIfNoPersistentContent() {
@@ -359,7 +359,9 @@ extension OverlayPanel {
         panelFrame: panelFrame, popupTexts: statusBarPopupTexts,
         popupDocuments: statusBarPopupDocuments)
       interactions.append(
-        .init(screenFrame: screen, links: hits.links, popups: hits.popups, hints: hits.hints))
+        .init(
+          screenFrame: screen, links: hits.links, popups: hits.popups, hints: hits.hints,
+          cycles: hits.cycles))
     }
     configure(
       primaryStatusBarSurface, screen: mainFrame, scale: snapshot.mainScale, notch: mainNotch)
@@ -385,7 +387,7 @@ extension OverlayPanel {
       // Click windows cover exactly the bands just painted.
       syncStatusBarClickWindows(
         bandRects: bands, links: interactions.flatMap(\.links),
-        popups: interactions.flatMap(\.popups))
+        popups: interactions.flatMap(\.popups), cycles: interactions.flatMap(\.cycles))
       setStatusBarPaintedBands(bands)
     } else {
       statusBarInteractionsByScreen = []
@@ -428,7 +430,7 @@ extension OverlayPanel {
 
   /// The bar's frame in panel coordinates: `height` points along the top of
   /// `screenFrame`. `height` comes from `ScreenSnapshot.statusBarHeight`, the
-  /// one value `window_move` also reserves.
+  /// one value `window move` also reserves.
   static func statusBarFrame(screenFrame: CGRect, height: CGFloat, panelFrame: CGRect) -> CGRect {
     CGRect(
       x: screenFrame.minX - panelFrame.minX,

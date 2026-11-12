@@ -27,8 +27,8 @@ programming environment.
 
 - **Every app, and the browser chrome**: the address bar, tab strip,
   settings pages and Web Store that no extension can touch.
-- **No code to maintain.** HN users describe configuring Surfingkeys as
-  "managing a personal browser extension"; `flash.toml` is a list of keys.
+- **No code to maintain.** A Surfingkeys setup is JavaScript you keep
+  working across its releases; `flash.toml` is a list of keys.
 - **The same keys outside the browser**, and everything after the click.
 
 ## Flash features you might like

@@ -27,12 +27,13 @@ public struct JumpTarget: @unchecked Sendable {
   /// nil cancels the commit because the original target can no longer be hit.
   public let resolveClickPoint: ((CGPoint) -> CGPoint?)?
   public let providerID: String
-  /// Whether committing a click on this target should switch Flash into
-  /// insert mode. The owning provider decides: a typing surface (a text
-  /// field, or any target in a terminal emulator, tmux panes and terminal
-  /// links included) sets this true so the user lands ready to type; links
-  /// and buttons elsewhere leave it false so keyboard navigation continues.
-  public let entersInsertMode: Bool
+  /// Whether this target is a typing surface: a text, search or password
+  /// field, a text area, a combo box (`isTextInput(role:subrole:)`), and in
+  /// UIKit content only one that takes keyboard focus. Discovery ranks it
+  /// over a control laid over the same area and never counts it as a
+  /// generic container. It says nothing about the mode: a click on it keeps
+  /// the mode, as every click does.
+  public let isTextInput: Bool
   /// Source-declared salience for this target. The renderer currently paints
   /// `.important` and `.urgent` targets in the accent style; the commit path
   /// is unchanged.
@@ -47,7 +48,7 @@ public struct JumpTarget: @unchecked Sendable {
     contextID: String? = nil,
     pid: pid_t? = nil,
     resolveClickPoint: ((CGPoint) -> CGPoint?)? = nil,
-    entersInsertMode: Bool = false,
+    isTextInput: Bool = false,
     priority: FlashPriority = .normal,
     providerID: String
   ) {
@@ -59,7 +60,7 @@ public struct JumpTarget: @unchecked Sendable {
     self.contextID = contextID
     self.pid = pid
     self.resolveClickPoint = resolveClickPoint
-    self.entersInsertMode = entersInsertMode
+    self.isTextInput = isTextInput
     self.priority = priority
     self.providerID = providerID
   }
@@ -69,12 +70,11 @@ public struct JumpTarget: @unchecked Sendable {
   /// dedup ranks them below every semantic control. A typing surface is never
   /// generic, whatever its role (WhatsApp's search field is an `AXStaticText`).
   public var isGenericContainer: Bool {
-    !entersInsertMode
+    !isTextInput
       && (role == "AXGroup" || role == "AXListItem" || role == IOSContent.cellRole)
   }
 
-  /// AX roles that represent a typing surface. Committing a click on a
-  /// target with one of these roles puts the user in insert mode.
+  /// AX roles that represent a typing surface.
   public static let textInputRoles: Set<String> = [
     "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
   ]
@@ -86,13 +86,13 @@ public struct JumpTarget: @unchecked Sendable {
     (role.map(textInputRoles.contains) ?? false) || subrole == "AXSearchField"
   }
 
-  /// This target with its INSERT decision replaced, for a provider that
-  /// settles the decision after capture.
-  public func enteringInsertMode(_ entersInsertMode: Bool) -> JumpTarget {
+  /// This target with its typing-surface judgement replaced, for a provider
+  /// that settles it after capture (UIKit's read-only text).
+  public func withTextInput(_ isTextInput: Bool) -> JumpTarget {
     JumpTarget(
       id: id, frame: frame, role: role, accessibilityLabel: accessibilityLabel, url: url,
       contextID: contextID, pid: pid, resolveClickPoint: resolveClickPoint,
-      entersInsertMode: entersInsertMode, priority: priority, providerID: providerID)
+      isTextInput: isTextInput, priority: priority, providerID: providerID)
   }
 
   /// Semantic role for links discovered inside terminal content. Terminal
@@ -119,7 +119,7 @@ public struct JumpTarget: @unchecked Sendable {
         $0.providerID == providerID && $0.pid == pid && $0.role == role
           && $0.accessibilityLabel == accessibilityLabel && $0.url == url
           && $0.contextID == contextID
-          && $0.entersInsertMode == entersInsertMode
+          && $0.isTextInput == isTextInput
       }
       .map { candidate -> (target: JumpTarget, distance: CGFloat) in
         let dx = candidate.frame.midX - frame.midX

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build every executable bundled plugin as a hermetic Rust crate and drop
-# each binary next to its manifest.json as `flash-plugin-<id>`. Plugins with
-# no Cargo.toml are manifest-only and have no process to build.
+# Build every executable bundled plugin as a hermetic Rust crate. Dev binaries
+# land next to their manifests; release binaries stay in build/plugin-release
+# so packaging never changes the live plugin tree. Manifest-only plugins have
+# no process to build.
 #
 # All build artifacts land under build/plugin-target (never inside the
 # watched plugin trees, so the dev file-watcher never sees intermediate
@@ -20,17 +21,16 @@ MODE="${1:-release}"
 if [[ $# -gt 0 ]]; then shift; fi
 ONLY=("$@")
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 cd "$PROJECT_DIR"
 
 TARGET_DIR="$PROJECT_DIR/build/plugin-target"
+RELEASE_DIR="$PROJECT_DIR/build/plugin-release"
 export CARGO_TARGET_DIR="$TARGET_DIR"
+# rustc and the cc crate stamp this as each binary's minimum macOS; Rust's own
+# default is older than the app's.
+export MACOSX_DEPLOYMENT_TARGET="$MACOS_MINIMUM"
 mkdir -p "$TARGET_DIR"
-
-if [[ "$MODE" == "release" ]]; then
-  # Make sure both Apple targets are available; harmless if already added.
-  rustup target add x86_64-apple-darwin aarch64-apple-darwin >/dev/null 2>&1 || true
-fi
 
 # A real plugin is defined by its manifest.json; support crates such as the
 # shared SDK at Plugins/_flash_plugin_rust have none and are built only as
@@ -104,35 +104,21 @@ done
 # signature when it lands — TCC-gated plugins get re-prompted on every
 # cdhash change unless their designated-requirement clause matches the same
 # stable cert the host bundle uses.
-# Every `[[bin]]` a plugin crate declares is published next to its manifest,
-# not just the one the manifest `exec`s: a companion binary goes through the
-# same sign-then-atomic-rename flow as the plugin itself. A crate with no
-# explicit `[[bin]]` produces the cargo default, `flash-plugin-<id>`.
-crate_binaries() {
-  local cargo="$1" fallback="$2" names
-  names="$(awk '
-    /^\[\[bin\]\]/ { in_bin = 1; next }
-    /^\[/ { in_bin = 0 }
-    in_bin && $0 ~ /^[[:space:]]*name[[:space:]]*=/ {
-      line = $0
-      sub(/^[^"]*"/, "", line)
-      sub(/".*$/, "", line)
-      if (line != "") print line
-    }
-  ' "$cargo" 2>/dev/null)"
-  if [[ -z "$names" ]]; then
-    printf '%s\n' "$fallback"
-  else
-    printf '%s\n' "$names"
-  fi
-}
-
+# Every declared `[[bin]]`, including companions, uses the same publication
+# flow: the live manifest directory for dev, isolated build output for release.
+# A crate with no explicit `[[bin]]` produces `flash-plugin-<id>`.
 stage_dir="$(mktemp -d "$TARGET_DIR/plugin-stage.XXXXXX")"
 trap 'rm -rf "$stage_dir"' EXIT
 staged_paths=()
 destinations=()
 for dir in "${build_dirs[@]}"; do
   id="$(basename "$dir")"
+  destination_dir="$dir"
+  if [[ "$MODE" == "release" ]]; then
+    destination_dir="$RELEASE_DIR/$id"
+    rm -rf "$destination_dir"
+    mkdir -p "$destination_dir"
+  fi
   while IFS= read -r bin; do
     [[ -n "$bin" ]] || continue
     staged="$stage_dir/$bin"
@@ -146,7 +132,7 @@ for dir in "${build_dirs[@]}"; do
     fi
     chmod +x "$staged"
     staged_paths+=("$staged")
-    destinations+=("$dir/$bin")
+    destinations+=("$destination_dir/$bin")
   done < <(crate_binaries "$dir/Cargo.toml" "flash-plugin-$id")
 done
 
@@ -196,12 +182,14 @@ done
 missing=0
 for dir in "${plugin_dirs[@]}"; do
   id="$(basename "$dir")"
+  published="$dir/flash-plugin-$id"
+  [[ "$MODE" != "release" ]] || published="$RELEASE_DIR/$id/flash-plugin-$id"
   grep -q '"exec"' "$dir/manifest.json" || continue
   if [[ ! -f "$dir/Cargo.toml" ]]; then
     echo "plugin $id declares exec but has no Cargo.toml — nothing builds its binary" >&2
     missing=1
-  elif [[ ! -x "$dir/flash-plugin-$id" ]]; then
-    echo "plugin $id declares exec but $dir/flash-plugin-$id is missing after the build" >&2
+  elif [[ ! -x "$published" ]]; then
+    echo "plugin $id declares exec but $published is missing after the build" >&2
     missing=1
   fi
 done

@@ -10,7 +10,7 @@ final class PluginSystemTests: XCTestCase {
   private func decodeRow(
     from raw: [String: Any], sourceID: String, allowed: Set<String>
   ) -> Candidate? {
-    PluginWireCodec.catalogRows(from: [raw], sourceID: sourceID, allowedSources: allowed)?
+    PluginWireCodec.publishedRows([raw], sourceID: sourceID, allowedSources: allowed)?
       .rows.first
   }
 
@@ -108,8 +108,8 @@ final class PluginSystemTests: XCTestCase {
       "metadata": ["kind": "document"],
     ]
     XCTAssertEqual(
-      PluginWireCodec.catalogRows(
-        from: [valid],
+      PluginWireCodec.publishedRows(
+        [valid],
         sourceID: "plugin:safe",
         allowedSources: ["safe.items"])?.rows.count,
       1)
@@ -117,8 +117,8 @@ final class PluginSystemTests: XCTestCase {
     var unknownKey = valid
     unknownKey["command"] = "spoof"
     XCTAssertNil(
-      PluginWireCodec.catalogRows(
-        from: [valid, unknownKey],
+      PluginWireCodec.publishedRows(
+        [valid, unknownKey],
         sourceID: "plugin:safe",
         allowedSources: ["safe.items"]),
       "one malformed row rejects the complete catalog")
@@ -150,8 +150,8 @@ final class PluginSystemTests: XCTestCase {
         allowed: ["safe.items"]))
 
     XCTAssertNil(
-      PluginWireCodec.catalogRows(
-        from: Array(
+      PluginWireCodec.publishedRows(
+        Array(
           repeating: valid,
           count: PluginProtocol.maxCatalogRows + 1),
         sourceID: "plugin:safe",
@@ -322,6 +322,19 @@ final class PluginSystemTests: XCTestCase {
         allowed: ["safe.items"]))
     XCTAssertEqual(openAppRow.effect, .openApplication("com.apple.calculator"))
 
+    // A local file is never a row's effect: a sandboxed plugin could point
+    // a row at a `.command` it wrote, and opening it would run outside the
+    // sandbox.
+    for url in ["file:///tmp/x.command", "FILE:///Applications/Terminal.app"] {
+      XCTAssertNil(
+        decodeRow(
+          from: [
+            "source": "safe.items", "title": "Settings", "effect": ["type": "open", "url": url],
+          ],
+          sourceID: "plugin:safe", allowed: ["safe.items"]),
+        url)
+    }
+
     // Schemeless URLs, both-keys, and neither-key forms are rejected.
     XCTAssertNil(
       decodeRow(
@@ -395,9 +408,8 @@ final class PluginSystemTests: XCTestCase {
       repeating: ["source": "safe", "title": String(repeating: "\n", count: 3_000)], count: 1_000)
     XCTAssertGreaterThan(
       try JSONSerialization.data(withJSONObject: rows).count, PluginProtocol.maxCatalogBytes)
-    XCTAssertTrue(
-      PluginWireCodec.catalogRows(from: rows, sourceID: "plugin:safe", allowedSources: ["safe"])
-        == nil)
+    XCTAssertNil(
+      PluginWireCodec.publishedRows(rows, sourceID: "plugin:safe", allowedSources: ["safe"]))
     XCTAssertNil(
       PluginWireCodec.target(
         from: ["id": "flat", "x": 0, "y": 0, "width": 1, "height": 1], sourceID: "plugin:safe"))
@@ -451,7 +463,7 @@ final class PluginSystemTests: XCTestCase {
         "name": "Manifest only",
         "version": "1.0.0",
         "description": "fixture",
-        "action_bindings": { "app_save": { "": "cmd+s" } }
+        "bindings": { "app save": { "": "cmd+s" } }
       }
       """)
     let root = FileManager.default.temporaryDirectory
@@ -466,6 +478,39 @@ final class PluginSystemTests: XCTestCase {
       settled.fulfill()
     }
     wait(for: [settled], timeout: 1)
+  }
+
+  /// A warm catalog the user reaches by name (`@history`, `!fh`)
+  /// stays reachable while none of the plugin's apps runs; a location pool
+  /// alone stays gated on them.
+  func testAScopedPluginWithANamedCatalogIsAlwaysActive() throws {
+    func adapter(sources: String) throws -> PluginFlashSource {
+      let manifest = try decodedManifest(
+        """
+        {
+          "id": "scoped",
+          "name": "Scoped",
+          "version": "1.0.0",
+          "description": "fixture",
+          "exec": ["./p"],
+          "only_bundle_ids": ["org.mozilla.firefox"],
+          "sources": [\(sources)]
+        }
+        """)
+      let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("flash-plugin-scoped-\(UUID().uuidString)")
+      let process = PluginProcess(
+        root: root, manifest: manifest, origin: .official, baseDataDir: root, watchFiles: false)
+      return PluginFlashSource(plugin: process, store: PluginCatalogStore())
+    }
+    let tabs =
+      #"{ "name": "firefox.tabs", "type": "tabs", "kind": "locations", "priority": "high" }"#
+    let history =
+      #"{ "name": "firefox.history", "type": "history", "kind": "default", "priority": "normal" }"#
+    XCTAssertEqual(
+      try adapter(sources: tabs).activationPolicy, .bundleIDs(["org.mozilla.firefox"]))
+    XCTAssertEqual(try adapter(sources: "\(tabs), \(history)").activationPolicy, .always)
+    XCTAssertEqual(try adapter(sources: history).activationPolicy, .always)
   }
 
   func testDeferredPerformSettlesUnhandledWhenSpawnNeverCompletes() throws {
@@ -506,9 +551,9 @@ final class PluginSystemTests: XCTestCase {
   func testCatalogStoreKeepsLastGoodOnRejectedPublish() {
     let store = PluginCatalogStore()
     let good: [[String: Any]] = [["source": "safe.items", "title": "Good"]]
-    let decoded = PluginWireCodec.catalogRows(
-      from: good, sourceID: "plugin:safe", allowedSources: ["safe.items"])!
-    store.publish(pluginID: "safe", rows: decoded.rows, encodedBytes: decoded.encodedBytes)
+    let decoded = PluginWireCodec.publishedRows(
+      good, sourceID: "plugin:safe", allowedSources: ["safe.items"])!
+    store.publish(pluginID: "safe", decoded)
     XCTAssertEqual(store.rows(for: "safe").map(\.title), ["Good"])
 
     // An over-quota publish decodes to nil and never touches the store —
@@ -517,12 +562,12 @@ final class PluginSystemTests: XCTestCase {
       repeating: ["source": "safe.items", "title": "Row"] as [String: Any],
       count: PluginProtocol.maxCatalogRows + 1)
     XCTAssertNil(
-      PluginWireCodec.catalogRows(
-        from: overQuota, sourceID: "plugin:safe", allowedSources: ["safe.items"]))
+      PluginWireCodec.publishedRows(
+        overQuota, sourceID: "plugin:safe", allowedSources: ["safe.items"]))
     XCTAssertEqual(store.rows(for: "safe").map(\.title), ["Good"])
 
     // Empty rows are an authoritative empty, not a rejection.
-    store.publish(pluginID: "safe", rows: [], encodedBytes: 0)
+    store.publish(pluginID: "safe", .rows([]))
     XCTAssertTrue(store.rows(for: "safe").isEmpty)
     XCTAssertEqual(store.publishedPluginIDs(), ["safe"])
 
@@ -548,12 +593,12 @@ final class PluginSystemTests: XCTestCase {
       if ticks == 2 { second.fulfill() }
     }
     for index in 0..<10 {
-      store.publish(pluginID: "p", rows: [Candidate(title: "\(index)")], encodedBytes: 1)
+      store.publish(pluginID: "p", .rows([Candidate(title: "\(index)")]))
     }
     wait(for: [first], timeout: 2)
     XCTAssertEqual(ticks, 1, "a publish burst collapses to one tick")
     // A later publish schedules a fresh (interval-spaced) tick.
-    store.publish(pluginID: "p", rows: [Candidate(title: "later")], encodedBytes: 1)
+    store.publish(pluginID: "p", .rows([Candidate(title: "later")]))
     wait(for: [second], timeout: 2)
     XCTAssertEqual(store.rows(for: "p").map(\.title), ["later"])
   }
@@ -565,19 +610,21 @@ final class PluginSystemTests: XCTestCase {
       url: URL(string: "https://example.com"),
       metadata: ["source": "same.items"],
       effect: .copyText("Same"))
-    store.publish(pluginID: "same", rows: [first], encodedBytes: 20)
+    store.publish(pluginID: "same", .rows([first], bytesPerRow: 20))
     let generation = try XCTUnwrap(store.entry(for: "same")?.generation)
     let publishedAt = try XCTUnwrap(store.entry(for: "same")?.publishedAt)
 
     var derivedCopy = first
     derivedCopy.displayTitle = "derived"
     derivedCopy.normalizedSearchText = "same"
-    store.publish(pluginID: "same", rows: [derivedCopy], encodedBytes: 999)
+    XCTAssertEqual(
+      store.publish(pluginID: "same", .rows([derivedCopy], bytesPerRow: 999)), .unchanged)
 
     let entry = try XCTUnwrap(store.entry(for: "same"))
     XCTAssertEqual(entry.generation, generation)
     XCTAssertEqual(entry.publishedAt, publishedAt)
-    XCTAssertEqual(entry.encodedBytes, 20)
+    // One row of 20 bytes, its separator and the brackets.
+    XCTAssertEqual(entry.encodedBytes, 22)
   }
 
   // MARK: - Status segments
@@ -690,7 +737,8 @@ final class PluginSystemTests: XCTestCase {
     }
     // Resident: sources | query | hints | status | listen.
     XCTAssertEqual(
-      try activation(#", "exec": ["/usr/bin/true"], "sources": [{"name": "a.b"}]"#), .resident)
+      try activation(#", "exec": ["/usr/bin/true"], "sources": [{"name": "a.b", "type": "b"}]"#),
+      .resident)
     XCTAssertEqual(try activation(#", "exec": ["/usr/bin/true"], "query": {}"#), .resident)
     XCTAssertEqual(try activation(#", "exec": ["/usr/bin/true"], "hints": {}"#), .resident)
     XCTAssertEqual(
@@ -705,13 +753,13 @@ final class PluginSystemTests: XCTestCase {
       .onDemand)
     XCTAssertEqual(
       try activation(
-        #", "exec": ["/usr/bin/true"], "bangs": {"command": "x", "items": [{"token": "x"}]}"#),
+        #", "exec": ["/usr/bin/true"], "bangs": [{"token": "x"}]"#),
       .onDemand)
     XCTAssertEqual(
       try activation(#", "exec": ["/usr/bin/true"], "navigation": ["act"]"#), .onDemand)
     // Manifest-only: no exec at all.
     XCTAssertEqual(
-      try activation(#", "action_bindings": {"app_save": {"": "cmd+s"}}"#),
+      try activation(#", "bindings": {"app save": {"": "cmd+s"}}"#),
       .manifestOnly)
   }
 
@@ -737,7 +785,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(bound.activation(statusObserved: false), .onDemand)
     // Any other resident surface keeps the plugin resident regardless.
     for extra in [
-      #", "sources": [{"name": "a.b"}]"#, #", "query": {}"#, #", "hints": {}"#,
+      #", "sources": [{"name": "a.b", "type": "b"}]"#, #", "query": {}"#, #", "hints": {}"#,
     ] {
       let other = try manifest(#", "exec": ["/usr/bin/true"], "status": ["state"]"# + extra)
       XCTAssertFalse(other.isStatusBound, extra)
@@ -745,6 +793,82 @@ final class PluginSystemTests: XCTestCase {
     }
     let listening = try manifest(#", "exec": ["/usr/bin/true"], "listen": ["core:apps.*"]"#)
     XCTAssertEqual(listening.activation(statusObserved: false), .resident)
+  }
+
+  /// `lifecycle: publish_then_exit` declares a catalog-only plugin: `exec`
+  /// and `sources`, nothing that needs a live child. `watch_settings` names
+  /// the settings whose file the host watches to run it again, and belongs
+  /// to that lifecycle alone. Any other spelling or combination is rejected
+  /// at load, naming what to fix.
+  func testPublishThenExitLifecycleDeclaresACatalogOnlyPlugin() throws {
+    func manifest(_ extra: String) throws -> PluginManifest {
+      try decodedManifest(
+        """
+        {
+          "id": "catalog",
+          "name": "Catalog",
+          "version": "1.0.0",
+          "description": "fixture"\(extra)
+        }
+        """
+      )
+    }
+    func failure(_ extra: String) -> String {
+      do {
+        _ = try manifest(extra)
+        return ""
+      } catch {
+        return String(describing: error)
+      }
+    }
+    let sources = #", "exec": ["/usr/bin/true"], "sources": [{"name": "a.b", "type": "b"}]"#
+    let catalog = try manifest(sources + #", "lifecycle": "publish_then_exit""#)
+    XCTAssertEqual(catalog.lifecycle, .publishThenExit)
+    XCTAssertEqual(catalog.activation, .publishThenExit)
+    XCTAssertEqual(catalog.activation(statusObserved: false), .publishThenExit)
+    XCTAssertFalse(catalog.isStatusBound)
+    XCTAssertEqual(catalog.watchSettings, [])
+    let watched = try manifest(
+      sources + #", "lifecycle": "publish_then_exit", "watch_settings": [" file ", "file", ""]"#)
+    XCTAssertEqual(watched.watchSettings, ["file"], "names are trimmed, unique and nonempty")
+    XCTAssertNil(try manifest(sources).lifecycle, "absent: the surfaces decide")
+    XCTAssertEqual(try manifest(sources).activation, .resident)
+
+    XCTAssertTrue(
+      failure(sources + #", "lifecycle": "resident""#).contains(
+        "manifest.json lifecycle must be \"publish_then_exit\""),
+      "the default has no spelling")
+    XCTAssertTrue(
+      failure(sources + #", "lifecycle": true"#).contains(
+        "manifest.json lifecycle must be \"publish_then_exit\""))
+    XCTAssertTrue(
+      failure(#", "sources": [{"name": "a.b", "type": "b"}], "lifecycle": "publish_then_exit""#)
+        .contains("manifest.json lifecycle publish_then_exit needs exec"))
+    XCTAssertTrue(
+      failure(#", "exec": ["/usr/bin/true"], "lifecycle": "publish_then_exit""#).contains(
+        "manifest.json lifecycle publish_then_exit needs sources"))
+    for (surface, message) in [
+      (#""hints": {}"#, "hints"),
+      (#""query": {}"#, "query"),
+      (#""status": ["state"]"#, "status"),
+      (#""listen": ["core:config.changed"]"#, "listen"),
+      (#""commands": [{"command": "x", "subcommand": "go", "description": "x"}]"#, "commands"),
+      (#""bangs": [{"token": "x"}]"#, "bangs"),
+      (#""navigation": ["act"]"#, "navigation"),
+    ] {
+      let error = failure(sources + #", "lifecycle": "publish_then_exit", "# + surface)
+      XCTAssertTrue(
+        error.contains("manifest.json lifecycle publish_then_exit allows sources alone")
+          && error.contains(message), "\(surface): \(error)")
+    }
+    XCTAssertTrue(
+      failure(sources + #", "watch_settings": ["file"]"#).contains(
+        "manifest.json watch_settings needs lifecycle publish_then_exit"))
+    // Host-served surfaces stay allowed beside the catalog.
+    XCTAssertNoThrow(
+      try manifest(
+        sources + #", "lifecycle": "publish_then_exit", "#
+          + #""bindings": {"app save": {"": "cmd+s"}}, "help": {"topics": []}"#))
   }
 
   // MARK: - Manifest schema
@@ -818,6 +942,126 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
+  /// Surfaces no bundled plugin used left the manifest outright (no compat
+  /// shims): a manifest still declaring one fails to load with the strict
+  /// unknown-field error, like any typo.
+  func testRemovedManifestSurfacesFailAsUnknownFields() throws {
+    let fixtures: [(String, String)] = [
+      (#""verbs": [{ "name": "app_save" }]"#, "manifest.json unknown field verbs"),
+      (
+        #""commands": [{ "command": "removed", "subcommand": "go", "timeout_ms": 300000 }]"#,
+        "manifest.json commands[0] unknown field timeout_ms"
+      ),
+      (
+        #""help": { "topics": [{ "name": "removed", "aliases": ["gone"] }] }"#,
+        "manifest.json help.topics[0] unknown field aliases"
+      ),
+      (
+        #""sandbox": { "exec": ["/usr/bin/pmset"] }"#,
+        "manifest.json sandbox unknown field exec"
+      ),
+      (
+        #""bangs": [{ "token": "r", "command": "removed" }]"#,
+        "manifest.json bangs[0] unknown field command"
+      ),
+    ]
+    for (fragment, expected) in fixtures {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "removed",
+            "name": "Removed",
+            "version": "1.0.0",
+            "description": "Removed surface fixture",
+            "exec": ["/usr/bin/true"],
+            \(fragment)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root), fragment) { error in
+        XCTAssertTrue(String(describing: error).contains(expected), String(describing: error))
+      }
+    }
+  }
+
+  /// `bangs` is the list of entries itself: the old `{command, items}`
+  /// wrapper is malformed, not read.
+  func testBangsAreAPlainListOfEntries() throws {
+    func load(_ bangs: String) throws -> PluginManifest {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "banger",
+            "name": "Banger",
+            "version": "1.0.0",
+            "description": "fixture",
+            "exec": ["/usr/bin/true"],
+            "bangs": \(bangs)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      return try PluginManifest.load(from: root)
+    }
+    let manifest = try load(#"[{ "token": "b", "description": "Bang" }, { "token": "*" }]"#)
+    XCTAssertEqual(manifest.bangs.map(\.token), ["b", "*"])
+    XCTAssertEqual(manifest.bangs.first?.description, "Bang")
+    XCTAssertThrowsError(try load(#"{ "command": "banger", "items": [{ "token": "b" }] }"#))
+  }
+
+  func testManifestOnlyPluginRejectsProcessBoundSurfaces() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "no-process",
+          "name": "No process",
+          "version": "1.0.0",
+          "description": "fixture",
+          "install": "true",
+          "commands": [
+            { "command": "no-process", "subcommand": "ping", "description": "x" }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("without exec cannot declare commands"))
+    }
+  }
+
+  /// `network` only composes `network-outbound` into the deny-default
+  /// profile; an unsandboxed process has nothing for it to grant.
+  func testNetworkCapabilityRequiresTheSandbox() throws {
+    func load(_ fields: String) throws -> PluginManifest {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "networked",
+            "name": "Networked",
+            "version": "1.0.0",
+            "description": "fixture",
+            "exec": ["/usr/bin/true"],
+            "status": ["state"],
+            \(fields)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      return try PluginManifest.load(from: root)
+    }
+    XCTAssertEqual(try load(#""capabilities": ["network"]"#).capabilities, [.network])
+    XCTAssertEqual(
+      try load(#""sandbox": {}, "capabilities": ["network"]"#).capabilities, [.network])
+    XCTAssertThrowsError(try load(#""sandbox": false, "capabilities": ["network"]"#)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains(
+          "network capability only composes the sandbox profile; an unsandboxed plugin cannot "
+            + "declare it"),
+        String(describing: error))
+    }
+    XCTAssertEqual(try load(#""sandbox": false, "capabilities": ["open"]"#).capabilities, [.open])
+  }
+
   func testManifestRejectsUnknownNestedFieldsUniformly() throws {
     let fixtures: [(String, String)] = [
       (
@@ -825,12 +1069,16 @@ final class PluginSystemTests: XCTestCase {
         "manifest.json commands[0] unknown field descrption"
       ),
       (
-        #""sources": [{ "name": "demo.items", "priority": "normal", "priorty": 2 }]"#,
+        #""sources": [{ "name": "demo.items", "type": "items", "priority": "normal", "priorty": 2 }]"#,
         "manifest.json sources[0] unknown field priorty"
       ),
       (
-        #""sources": [{ "name": "demo.items", "mode": "live" }]"#,
+        #""sources": [{ "name": "demo.items", "type": "items", "mode": "live" }]"#,
         "manifest.json sources[0] unknown field mode"
+      ),
+      (
+        #""sources": [{ "name": "demo.items", "type": "items", "live": true }]"#,
+        "manifest.json sources[0] unknown field live"
       ),
       (
         #""help": { "topics": [{ "name": "demo", "title": "Demo", "summray": "typo" }] }"#,
@@ -841,16 +1089,21 @@ final class PluginSystemTests: XCTestCase {
         "manifest.json query unknown field regex"
       ),
       (
-        #""bangs": { "command": "x", "items": [{ "token": "x", "candidate_source": "y" }] }"#,
-        "manifest.json bangs.items[0] unknown field candidate_source"
-      ),
-      (
-        #""verbs": [{ "name": "v", "inline_keystrokes": { "": "cmd+s" } }]"#,
-        "manifest.json verbs[0] unknown field inline_keystrokes"
+        #""bangs": [{ "token": "x", "candidate_source": "y" }]"#,
+        "manifest.json bangs[0] unknown field candidate_source"
       ),
       (
         #""sandbox": { "read": ["~/Library"] }"#,
         "manifest.json sandbox unknown field read"
+      ),
+      (
+        #""sandbox": { "signal": true }"#,
+        "manifest.json sandbox unknown field signal"
+      ),
+      // A sandboxed sender cannot script apps: macOS refuses its Apple Events.
+      (
+        #""sandbox": { "appleevents": true }"#,
+        "manifest.json sandbox unknown field appleevents"
       ),
       (
         #""mappings": [{ "key": "R", "command": ["true"], "only_urls": ["x://*"] }]"#,
@@ -915,13 +1168,54 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(compound.matches(PluginSelectorContext(bundleID: "com.mitchellh.ghostty")))
   }
 
-  func testBundledTmuxManifestIsTerminalScoped() throws {
+  /// The terminals plugin declares the emulators and is scoped to them: its
+  /// tmux hints, sources and actions exist only in a declared terminal.
+  func testBundledTerminalsManifestIsTerminalScoped() throws {
     let root = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-      .appendingPathComponent("Plugins/tmux")
+      .appendingPathComponent("Plugins/terminals")
     let manifest = try PluginManifest.load(from: root)
     XCTAssertTrue(manifest.selector.onlyTerminals)
     XCTAssertEqual(manifest.hints?.fallbackOnEmpty, true)
+    XCTAssertEqual(manifest.activation, .resident)
+    XCTAssertNil(manifest.sandboxSpec, "tmux and ssh run outside the profile")
+    XCTAssertFalse(manifest.terminalEmulators.isEmpty)
+  }
+
+  /// `own_text_editing` is app knowledge the host serves alone, like
+  /// `terminal_emulators`: trimmed, deduplicated, open to a manifest-only
+  /// plugin, and rejected when it is not a list of strings.
+  func testManifestDeclaresOwnTextEditingLikeTerminalEmulators() throws {
+    let manifest = try decodedManifest(
+      """
+      {
+        "id": "editors",
+        "name": "Editors",
+        "version": "1.0.0",
+        "description": "fixture",
+        "own_text_editing": [" com.example.editor ", "com.example.editor", "dev.example.ide", ""]
+      }
+      """)
+    XCTAssertEqual(manifest.ownTextEditing, ["com.example.editor", "dev.example.ide"])
+    XCTAssertEqual(manifest.activation, .manifestOnly, "an app declaration needs no process")
+    for malformed in [
+      #""own_text_editing": "com.example.editor""#,
+      #""own_text_editing": [1]"#,
+      #""own_text_editing": {"com.example.editor": true}"#,
+    ] {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "editors",
+            "name": "Editors",
+            "version": "1.0.0",
+            "description": "fixture",
+            \(malformed)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root), malformed)
+    }
   }
 
   func testManifestDecodesSurfacesAcrossKinds() throws {
@@ -937,24 +1231,22 @@ final class PluginSystemTests: XCTestCase {
           "exec": ["/usr/bin/true"],
           "only_bundle_ids": ["com.example.app"],
           "sources": [
-            { "name": "multi.items" }
+            { "name": "multi.items", "type": "items" }
           ],
           "navigation": ["multi"],
-          "actions": ["resource_archive", "resource_next"],
           "status": ["battery"],
           "hints": { "fallback_on_empty": true },
           "query": { "prefixes": ["="] },
           "commands": [
-            { "command": "multi", "subcommand": "go", "description": "Go", "timeout_ms": 300000 }
+            { "command": "multi", "subcommand": "go", "description": "Go" },
+            { "command": "resource", "subcommand": "archive" },
+            { "command": "resource", "subcommand": "next" }
           ],
-          "bangs": {
-            "command": "multi",
-            "items": [
-              { "token": "m", "description": "Multi", "source": "multi.items" }
-            ]
-          },
+          "bangs": [
+            { "token": "m", "description": "Multi", "source": "multi.items" }
+          ],
           "mappings": [
-            { "key": "q", "command": ["flash", "hints_dismiss"] }
+            { "key": "q", "command": ["flash", "hints", "dismiss"] }
           ]
         }
         """)
@@ -968,14 +1260,14 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.query?.prefixes, ["="])
     XCTAssertEqual(manifest.candidateSources, ["multi.items"])
     XCTAssertEqual(manifest.navigationSchemes, ["multi"])
-    XCTAssertEqual(manifest.actions, ["resource_archive", "resource_next"])
+    XCTAssertEqual(
+      manifest.sourceCommands,
+      [CommandName("resource", "archive"), CommandName("resource", "next")])
     XCTAssertEqual(manifest.statusSegments, ["battery"])
-    XCTAssertEqual(manifest.commands.map(\.subcommand), ["go"])
-    XCTAssertEqual(manifest.commands.first?.timeoutMs, 300_000)
-    XCTAssertEqual(manifest.bangCommand, "multi")
+    XCTAssertEqual(manifest.commands.count, 3)
+    XCTAssertEqual(manifest.pluginCommands.map(\.subcommand), ["go"])
     XCTAssertEqual(manifest.bangs.map(\.token), ["m"])
     XCTAssertEqual(manifest.bangs.first?.source, "multi.items")
-    XCTAssertTrue(manifest.verbs.isEmpty)
     XCTAssertEqual(manifest.mappings.map(\.key), ["q"])
     XCTAssertEqual(manifest.activation, .resident)
   }
@@ -996,7 +1288,7 @@ final class PluginSystemTests: XCTestCase {
             {
               "key": "ctrl+k",
               "mode": "insert",
-              "command": ["flash", "hints_dismiss"],
+              "command": ["flash", "hints", "dismiss"],
               "only_bundle_ids": ["com.spotify.client"],
               "priority": 40,
               "repeat": true
@@ -1004,7 +1296,7 @@ final class PluginSystemTests: XCTestCase {
             {
               "key": "cmd+r",
               "mode": "terminal",
-              "command": ["flash", "enter_normal_mode"]
+              "command": ["flash", "mode", "normal"]
             }
           ]
         }
@@ -1031,36 +1323,41 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.mappings[2].scope, .terminal)
   }
 
-  func testManifestDecodesActionBindingsAndRejectsUnknownActionsOrChords() throws {
+  func testManifestDecodesBindingsAndRejectsUnknownCommandsOrChords() throws {
     let valid = try temporaryPluginRoot(
       manifest: """
         {
           "id": "chords",
           "name": "Chords",
           "version": "1.0.0",
-          "description": "Action bindings",
+          "description": "Bindings",
           "only_bundle_ids": ["com.example.browser", "com.example.other"],
-          "action_bindings": {
-            "tab_next": { "": "cmd+shift+]" },
-            "app_reload_force": { "": "cmd+shift+r", "com.example.other": "cmd+option+r" },
-            "history_back": { "com.example.other": false }
+          "bindings": {
+            "tab next": { "": "cmd+shift+]" },
+            "app reload --force": { "": "cmd+shift+r", "com.example.other": "cmd+option+r" },
+            "history back": { "com.example.other": false }
           }
         }
         """)
     defer { try? FileManager.default.removeItem(at: valid) }
     let manifest = try PluginManifest.load(from: valid)
-    XCTAssertEqual(manifest.activation, .manifestOnly, "action bindings need no process")
-    XCTAssertEqual(manifest.actionBindings[.tabNext], ["": .chords(["cmd+shift+]"])])
+    XCTAssertEqual(manifest.activation, .manifestOnly, "bindings need no process")
+    XCTAssertEqual(manifest.bindings[key("tab next")], ["": .chords(["cmd+shift+]"])])
     XCTAssertEqual(
-      manifest.actionBindings[.appReloadForce]?["com.example.other"], .chords(["cmd+option+r"]))
+      manifest.bindings[key("app reload --force")]?["com.example.other"],
+      .chords(["cmd+option+r"]))
     XCTAssertEqual(
-      manifest.actionBindings[.historyBack], ["com.example.other": ActionBindingSpec.unbound],
-      "false declares that the app has no such action")
+      manifest.bindings[key("history back")], ["com.example.other": CommandBindingSpec.unbound],
+      "false declares that the app has no such command")
 
     for (fragment, message) in [
-      (#""tab_sideways": { "": "cmd+k" }"#, "unknown action: tab_sideways"),
-      (#""tab_next": { "": "cmd+shift+nope" }"#, "not a chord"),
-      (#""tab_next": { "": "" }"#, "use false for none"),
+      (
+        #""tab sideways": { "": "cmd+k" }"#,
+        "tab sideways is not a command Flash asks of the focused app"
+      ),
+      (#""tab_next": { "": "cmd+k" }"#, "tab_next is not a command Flash asks of the focused app"),
+      (#""tab next": { "": "cmd+shift+nope" }"#, "not a chord"),
+      (#""tab next": { "": "" }"#, "use false for none"),
     ] {
       let root = try temporaryPluginRoot(
         manifest: """
@@ -1068,8 +1365,8 @@ final class PluginSystemTests: XCTestCase {
             "id": "badchords",
             "name": "Bad chords",
             "version": "1.0.0",
-            "description": "Invalid action bindings",
-            "action_bindings": { \(fragment) }
+            "description": "Invalid bindings",
+            "bindings": { \(fragment) }
           }
           """)
       defer { try? FileManager.default.removeItem(at: root) }
@@ -1079,31 +1376,94 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testManifestActionsMustNameSourceActions() throws {
-    for (action, valid) in [("tab_previous", true), ("tab_prev", false), ("tab_sideways", false)] {
+  /// A `commands[]` entry under one of Flash's topics is a core command the
+  /// plugin performs where its selector matches; every other entry is the
+  /// plugin's own command. Only the latter register for dispatch.
+  func testManifestSplitsOwnAndCoreCommands() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "split",
+          "name": "Split",
+          "version": "1.0.0",
+          "description": "Own and core commands",
+          "exec": ["/usr/bin/true"],
+          "only_bundle_ids": ["com.example.app"],
+          "commands": [
+            { "command": "example", "subcommand": "run", "description": "Run" },
+            { "command": "tab", "subcommand": "close" }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(manifest.pluginCommands.map(\.command), ["example"])
+    XCTAssertEqual(manifest.sourceCommands, [CommandName("tab", "close")])
+    XCTAssertEqual(manifest.confirmations, [:])
+    XCTAssertEqual(manifest.activation, .onDemand, "an own command keeps on-demand activation")
+    let tabClose = CommandName("tab", "close")
+    XCTAssertTrue(
+      manifest.performs(tabClose, in: PluginSelectorContext(bundleID: "com.example.app")))
+    XCTAssertFalse(
+      manifest.performs(tabClose, in: PluginSelectorContext(bundleID: "com.example.other")),
+      "the selector gates the claim")
+    XCTAssertFalse(
+      manifest.performs(
+        CommandName("tab", "new"), in: PluginSelectorContext(bundleID: "com.example.app")))
+    // A core entry alone is still a process-bound surface.
+    let coreOnly = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "core", "name": "Core", "version": "1.0.0", "description": "fixture",
+          "exec": ["/usr/bin/true"],
+          "commands": [{ "command": "tab", "subcommand": "close" }]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: coreOnly) }
+    let core = try PluginManifest.load(from: coreOnly)
+    XCTAssertEqual(core.pluginCommands, [])
+    XCTAssertEqual(core.activation, .onDemand)
+  }
+
+  /// A core-topic entry must name a command Flash asks of the focused app:
+  /// the wildcard, an unknown action and a command Flash performs itself
+  /// all fail the load.
+  func testManifestRejectsACoreTopicThatIsNotASourceCommand() throws {
+    for (command, subcommand) in [
+      ("tab", "*"), ("tab", "sideways"), ("mode", "insert"), ("resident", "quit"),
+      ("app", "quit"), ("scroll", "down"),
+    ] {
       let root = try temporaryPluginRoot(
         manifest: """
           {
-            "id": "acts",
-            "name": "Acts",
-            "version": "1.0.0",
-            "description": "Declared actions",
+            "id": "core", "name": "Core", "version": "1.0.0", "description": "fixture",
             "exec": ["/usr/bin/true"],
-            "actions": ["\(action)"]
+            "commands": [{ "command": "\(command)", "subcommand": "\(subcommand)" }]
           }
           """)
       defer { try? FileManager.default.removeItem(at: root) }
-      if valid {
-        XCTAssertEqual(try PluginManifest.load(from: root).actions, [action])
-      } else {
-        XCTAssertThrowsError(try PluginManifest.load(from: root), action)
+      XCTAssertThrowsError(try PluginManifest.load(from: root), "\(command) \(subcommand)") {
+        error in
+        XCTAssertTrue(
+          "\(error)".contains("is not a command Flash asks of the focused app"), "\(error)")
       }
     }
-    XCTAssertEqual(SourceAction.byWireName["tab_previous"], .tabPrev)
-    XCTAssertEqual(SourceAction.byWireName.count, 35, "one entry per action")
-    XCTAssertEqual(
-      Set(SourceAction.byWireName.values.map(\.name.rawValue)).union(["app_reload_force"]),
-      Set(SourceActionName.allCases.map(\.rawValue)), "every bindable action is claimable")
+    // The same pair declared twice is still a duplicate.
+    let twice = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "core", "name": "Core", "version": "1.0.0", "description": "fixture",
+          "exec": ["/usr/bin/true"],
+          "commands": [
+            { "command": "tab", "subcommand": "close" },
+            { "command": "tab", "subcommand": "close" }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: twice) }
+    XCTAssertThrowsError(try PluginManifest.load(from: twice)) { error in
+      XCTAssertTrue("\(error)".contains("declared more than once"), "\(error)")
+    }
   }
 
   /// App knowledge is plugin data: the browsers plugin owns the browser
@@ -1116,49 +1476,72 @@ final class PluginSystemTests: XCTestCase {
         from: try XCTUnwrap(officialPluginRoots().first { $0.lastPathComponent == id }))
     }
     let browsers = try manifest("browsers")
-    XCTAssertEqual(browsers.actionBindings[.tabNext]?[""], .chords(["cmd+shift+]"]))
-    XCTAssertEqual(browsers.actionBindings[.scrollBottom]?[""], .chords(["cmd+down"]))
+    XCTAssertEqual(browsers.bindings[key("tab next")]?[""], .chords(["cmd+shift+]"]))
+    XCTAssertEqual(browsers.bindings[key("scroll bottom")]?[""], .chords(["cmd+down"]))
     XCTAssertEqual(
-      browsers.actionBindings[.appReloadForce]?["com.apple.Safari"], .chords(["cmd+option+r"]))
+      browsers.bindings[key("app reload --force")]?["com.apple.Safari"], .chords(["cmd+option+r"]))
     XCTAssertTrue(browsers.onlyBundleIDs.contains("org.mozilla.nightly"))
-    XCTAssertEqual(browsers.actionBindings[.tabMoveNext]?[""], .chords(["ctrl+shift+pagedown"]))
+    XCTAssertEqual(browsers.bindings[key("tab move_next")]?[""], .chords(["ctrl+shift+pagedown"]))
     let defaults = try manifest("defaults")
-    XCTAssertEqual(defaults.verbs, [], "app commands are actions, not verbs")
-    XCTAssertEqual(defaults.actionBindings[.tabNext]?["com.apple.MobileSMS"], .chords(["ctrl+tab"]))
+    XCTAssertEqual(
+      defaults.bindings[key("tab next")]?["com.apple.MobileSMS"], .chords(["ctrl+tab"]))
     let cursor = "com.todesktop.230313mzl4w4u92"
-    XCTAssertEqual(defaults.actionBindings[.historyBack]?[cursor], .chords(["ctrl+-"]))
-    XCTAssertEqual(defaults.actionBindings[.historyForward]?[cursor], .chords(["ctrl+shift+-"]))
+    XCTAssertEqual(defaults.bindings[key("history back")]?[cursor], .chords(["ctrl+-"]))
+    XCTAssertEqual(defaults.bindings[key("history forward")]?[cursor], .chords(["ctrl+shift+-"]))
     XCTAssertEqual(
-      defaults.actionBindings[.historyBack]?["com.apple.dt.Xcode"], .chords(["ctrl+cmd+left"]))
+      defaults.bindings[key("history back")]?["com.apple.dt.Xcode"], .chords(["ctrl+cmd+left"]))
     XCTAssertEqual(
-      defaults.actionBindings[.historyBack]?["com.apple.Notes"], ActionBindingSpec.unbound)
-    XCTAssertEqual(defaults.actionBindings[.historyBack]?[""], .chords(["cmd+["]))
-    XCTAssertEqual(defaults.actionBindings[.tabNew]?[cursor], .chords(["cmd+n"]))
-    XCTAssertEqual(defaults.actionBindings[.tabReopen]?[cursor], .chords(["cmd+shift+t"]))
+      defaults.bindings[key("history back")]?["com.apple.Notes"], CommandBindingSpec.unbound)
+    XCTAssertEqual(defaults.bindings[key("history back")]?[""], .chords(["cmd+["]))
+    XCTAssertEqual(defaults.bindings[key("tab new")]?[cursor], .chords(["cmd+n"]))
+    XCTAssertEqual(defaults.bindings[key("tab reopen")]?[cursor], .chords(["cmd+shift+t"]))
     XCTAssertEqual(
-      defaults.actionBindings[.tabNew]?["com.apple.Notes"], ActionBindingSpec.unbound,
+      defaults.bindings[key("tab new")]?["com.apple.Notes"], CommandBindingSpec.unbound,
       "Cmd-T opens the Fonts panel, not a tab")
-    XCTAssertEqual(defaults.actionBindings[.tabNew]?[""], .chords(["cmd+t"]))
-    XCTAssertEqual(defaults.actionBindings[.tabSelect]?[""], .chords(["cmd+{index}"]))
-    let vscode = try manifest("vscode")
-    XCTAssertEqual(vscode.actionBindings[.tabNew]?[""], .chords(["cmd+n"]))
-    XCTAssertEqual(vscode.actionBindings[.tabReopen]?[""], .chords(["cmd+shift+t"]))
-    XCTAssertEqual(vscode.actionBindings[.historyBack]?[""], .chords(["ctrl+-"]))
-    XCTAssertEqual(vscode.actionBindings[.historyForward]?[""], .chords(["ctrl+shift+-"]))
+    XCTAssertEqual(defaults.bindings[key("tab new")]?[""], .chords(["cmd+t"]))
+    XCTAssertEqual(defaults.bindings[key("tab close")]?[""], .chords(["cmd+w"]))
+    for bundle in [
+      "com.apple.MobileSMS", "com.apple.Notes", "com.apple.TextEdit", "com.apple.iWork.Pages",
+      "com.apple.mail",
+    ] {
+      XCTAssertEqual(
+        defaults.bindings[key("tab close")]?[bundle], CommandBindingSpec.unbound,
+        "\(bundle) has no tab to close: `:q` closes its window, or quits it with the last")
+    }
+    XCTAssertEqual(defaults.bindings[key("tab select")]?[""], .chords(["cmd+{index}"]))
+    let vscode = "com.microsoft.VSCode"
+    XCTAssertEqual(defaults.bindings[key("tab new")]?[vscode], .chords(["cmd+n"]))
+    XCTAssertEqual(defaults.bindings[key("tab reopen")]?[vscode], .chords(["cmd+shift+t"]))
+    XCTAssertEqual(defaults.bindings[key("history back")]?[vscode], .chords(["ctrl+-"]))
+    XCTAssertEqual(defaults.bindings[key("history forward")]?[vscode], .chords(["ctrl+shift+-"]))
     XCTAssertEqual(defaults.onDemandHints, ["com.apple.Notes"])
-    XCTAssertEqual(defaults.mappings, [], "Messages' tab chord is action data, not a mapping")
+    XCTAssertTrue(
+      Set(defaults.ownTextEditing).isSuperset(of: [
+        vscode, "com.microsoft.VSCodeInsiders", "com.vscodium", cursor,
+        "com.exafunction.windsurf", "com.jetbrains.intellij", "com.jetbrains.intellij.ce",
+        "com.jetbrains.pycharm", "com.jetbrains.pycharm.ce", "com.jetbrains.WebStorm",
+        "com.jetbrains.goland", "com.jetbrains.rider", "com.jetbrains.CLion",
+        "com.jetbrains.rubymine", "com.jetbrains.PhpStorm", "com.jetbrains.datagrip",
+        "dev.zed.Zed", "dev.zed.Zed-Preview", "com.sublimetext.4",
+      ]), "editors with their own modal editing or partial Accessibility text")
+    XCTAssertEqual(defaults.mappings, [], "Messages' tab chord is binding data, not a mapping")
     let terminals = try manifest("terminals")
-    XCTAssertEqual(terminals.activation, .manifestOnly)
+    XCTAssertEqual(terminals.activation, .resident)
+    XCTAssertEqual(terminals.sourceCommands.count, 17)
+    XCTAssertTrue(terminals.sourceCommands.contains(CommandName("pane", "split_vertical")))
+    XCTAssertEqual(terminals.pluginCommands.map(\.subcommand), ["session", "window"])
+    XCTAssertEqual(browsers.sourceCommands.count, 7, "tab select, the four steps and the two moves")
+    XCTAssertEqual(browsers.pluginCommands, [])
     XCTAssertTrue(
       Set(terminals.terminalEmulators).isSuperset(of: ["org.alacritty", "com.mitchellh.ghostty"]))
     XCTAssertEqual(
-      terminals.actionBindings[.paneNext]?["com.mitchellh.ghostty"], .chords(["cmd+]"]))
+      terminals.bindings[key("pane next")]?["com.mitchellh.ghostty"], .chords(["cmd+]"]))
     for emulator in terminals.terminalEmulators {
       XCTAssertEqual(
-        terminals.actionBindings[.historyBack]?[emulator], ActionBindingSpec.unbound,
+        terminals.bindings[key("history back")]?[emulator], CommandBindingSpec.unbound,
         "\(emulator)'s Cmd-[ is a split chord, not back")
       XCTAssertEqual(
-        terminals.actionBindings[.historyForward]?[emulator], ActionBindingSpec.unbound)
+        terminals.bindings[key("history forward")]?[emulator], CommandBindingSpec.unbound)
     }
   }
 
@@ -1182,7 +1565,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains(
-          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, or hold"
+          "plugin mapping mode bogus must be all, normal, insert, terminal, command, hyper, hold, text or visual"
         ))
     }
   }
@@ -1239,7 +1622,7 @@ final class PluginSystemTests: XCTestCase {
   func testManifestRejectsMalformedCommandAndBangFields() throws {
     let fixtures = [
       #""commands": [{ "command": "demo", "description": 42 }]"#,
-      #""bangs": { "command": "demo", "items": [{ "token": 42 }] }"#,
+      #""bangs": [{ "token": 42 }]"#,
     ]
 
     for fragment in fixtures {
@@ -1269,17 +1652,34 @@ final class PluginSystemTests: XCTestCase {
           "version": "1.0.0",
           "description": "fixture",
           "exec": ["/usr/bin/true"],
-          "sources": [{ "name": "banger.items" }],
-          "bangs": {
-            "command": "banger",
-            "items": [{ "token": "b", "source": "typo.items" }]
-          }
+          "sources": [{ "name": "banger.items", "type": "items" }],
+          "bangs": [{ "token": "b", "source": "typo.items" }]
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains("must name a declared sources[] entry"),
+        String(describing: error))
+    }
+  }
+
+  func testPluginCannotClaimACoreBang() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "banger",
+          "name": "Banger",
+          "version": "1.0.0",
+          "description": "fixture",
+          "exec": ["/usr/bin/true"],
+          "bangs": [{ "token": "F" }]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("plugin bang F is one of Flash's own bangs"),
         String(describing: error))
     }
   }
@@ -1317,52 +1717,126 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testManifestOnlyPluginRejectsProcessBoundSurfaces() throws {
-    let root = try temporaryPluginRoot(
-      manifest: """
-        {
-          "id": "no-process",
-          "name": "No process",
-          "version": "1.0.0",
-          "description": "fixture",
-          "install": "true",
-          "commands": [
-            { "command": "no-process", "subcommand": "ping", "description": "x" }
-          ]
-        }
-        """)
-    defer { try? FileManager.default.removeItem(at: root) }
+  /// `sandbox` is an allowance spec for the deny-default profile (absent:
+  /// the empty spec) or an explicit `false`; nothing else, and the retired
+  /// `subprocess`, `clipboard` and `notify` capabilities are unknown.
+  func testManifestSandboxIsAnAllowanceSpecOrAnExplicitOptOut() throws {
+    func load(_ fields: String) throws -> PluginManifest {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "sandboxed",
+            "name": "Sandboxed",
+            "version": "1.0.0",
+            "description": "fixture",
+            \(fields)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      return try PluginManifest.load(from: root)
+    }
+    let process = #""exec": ["./run"], "status": ["state"]"#
 
-    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
-      XCTAssertTrue(
-        String(describing: error).contains("without exec cannot declare commands"))
+    let absent = try load(process)
+    XCTAssertNil(absent.sandbox)
+    XCTAssertEqual(absent.sandboxSpec, PluginSandboxSpec())
+    let spec = try load(
+      process + #", "sandbox": { "mach": ["com.apple.PowerManagement.control"] }"#)
+    XCTAssertEqual(
+      spec.sandboxSpec, PluginSandboxSpec(mach: ["com.apple.PowerManagement.control"]))
+    let disabled = try load(process + #", "sandbox": false"#)
+    XCTAssertEqual(disabled.sandbox, .disabled)
+    XCTAssertNil(disabled.sandboxSpec)
+
+    let rejected: [(String, String)] = [
+      (process + #", "sandbox": true"#, "manifest.json sandbox must be an object or false"),
+      (#""help": { "topics": [] }, "sandbox": false"#, "without exec cannot declare sandbox"),
+      (
+        #""apple_events_targets": ["com.apple.Safari"]"#,
+        "without exec cannot declare apple_events_targets"
+      ),
+    ]
+    for (fields, expected) in rejected {
+      XCTAssertThrowsError(try load(fields), fields) { error in
+        XCTAssertTrue(String(describing: error).contains(expected), String(describing: error))
+      }
+    }
+    for capability in ["subprocess", "clipboard", "notify"] {
+      XCTAssertThrowsError(
+        try load(process + #", "capabilities": [""# + capability + #""]"#), capability)
     }
   }
 
-  func testManifestOnlyPluginCannotDeclareVerbs() throws {
-    let root = try temporaryPluginRoot(
-      manifest: """
-        {
-          "id": "no-process",
-          "name": "No process",
-          "version": "1.0.0",
-          "description": "fixture",
-          "install": "true",
-          "verbs": [
-            { "name": "needs_rpc", "description": "served by a process" }
-          ]
+  /// Every bundled bang trigger has one owner: core bangs, then each token a
+  /// manifest declares (`aiproviders` chat bangs, `browsers`' history bangs),
+  /// then the single catch-all, `searchproviders`. That plugin's Rust tests
+  /// pin its reserved list to these tokens, so its DuckDuckGo and Kagi data
+  /// never lists or serves one of them.
+  func testEveryBundledBangTriggerHasOneOwner() throws {
+    var owners = Dictionary(uniqueKeysWithValues: CoreBangs.all.map { ($0.token, "core") })
+    var catchAll: [String] = []
+    for root in try officialPluginRoots() {
+      let manifest = try PluginManifest.load(from: root)
+      for registration in manifest.bangs {
+        let token = registration.token.lowercased()
+        if token == "*" {
+          catchAll.append(manifest.id)
+          continue
         }
-        """)
-    defer { try? FileManager.default.removeItem(at: root) }
-
-    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
-      XCTAssertTrue(
-        String(describing: error).contains("without exec cannot declare verbs"), "\(error)")
+        XCTAssertNil(owners[token], "!\(token): \(manifest.id) and \(owners[token] ?? "")")
+        owners[token] = manifest.id
+      }
+    }
+    XCTAssertEqual(catchAll, ["searchproviders"])
+    XCTAssertEqual(owners["f"], "core")
+    XCTAssertEqual(owners["fb"], "browsers")
+    for token in ["ai", "chat", "chatgpt", "claude", "perplexity", "lechat"] {
+      XCTAssertEqual(owners[token], "aiproviders", "!\(token)")
     }
   }
 
-  func testQueryNamesAreReservedAgainstPluginVerbs() throws {
-    for name in ["status", "doctor", "config_check"] {
+  /// AGENTS.md rule 8: the generic Accessibility walk and the terminals
+  /// plugin (tmux panes) are the hint providers; no other bundled plugin
+  /// declares `hints`.
+  func testTerminalsIsTheOnlyBundledHintProvider() throws {
+    let providers = try officialPluginRoots()
+      .map { try PluginManifest.load(from: $0) }
+      .filter { $0.hints != nil }
+      .map(\.id)
+    XCTAssertEqual(providers, ["terminals"])
+  }
+
+  /// powerd's power-source service is the one mach allowance in the bundled
+  /// tree: inside the sandbox IOPowerSources silently lists no battery
+  /// without it, and no other bundled plugin reads a mach service.
+  func testSysinfoIsTheOnlyBundledPluginWithAMachAllowance() throws {
+    var allowances: [String: [String]] = [:]
+    for root in try officialPluginRoots() {
+      let manifest = try PluginManifest.load(from: root)
+      if let mach = manifest.sandboxSpec?.mach, !mach.isEmpty {
+        allowances[manifest.id] = mach
+      }
+    }
+    XCTAssertEqual(allowances, ["sysinfo": ["com.apple.PowerManagement.control"]])
+  }
+
+  /// docs/privacy.md lists the bundled plugins that run unsandboxed; every
+  /// other bundled plugin that runs a process gets the deny-default profile.
+  func testOnlyTheDocumentedBundledPluginsRunUnsandboxed() throws {
+    var unsandboxed: [String] = []
+    for root in try officialPluginRoots() {
+      let manifest = try PluginManifest.load(from: root)
+      if manifest.exec != nil, manifest.sandboxSpec == nil {
+        unsandboxed.append(manifest.id)
+      }
+    }
+    XCTAssertEqual(unsandboxed, ["aiproviders", "screenshot", "terminals"])
+  }
+
+  /// The CLI queries' topics are Flash's: no plugin command can take them,
+  /// and a query is nothing a plugin performs either.
+  func testQueryTopicsAreReservedAgainstPluginCommands() throws {
+    for name in ["resident", "config"] {
       let root = try temporaryPluginRoot(
         manifest: """
           {
@@ -1377,10 +1851,11 @@ final class PluginSystemTests: XCTestCase {
       defer { try? FileManager.default.removeItem(at: root) }
       XCTAssertThrowsError(try PluginManifest.load(from: root), name) { error in
         XCTAssertTrue(
-          String(describing: error).contains("\(name) is reserved"),
+          String(describing: error).contains(
+            "\(name) show is not a command Flash asks of the focused app"),
           String(describing: error))
       }
-      XCTAssertNil(URLEventHandler.parseOrPluginVerb(verb: name, args: [:]), name)
+      XCTAssertNil(parseMappingCommand(argv: ["flash", name, "show", "x"]))
     }
   }
 
@@ -1413,6 +1888,74 @@ final class PluginSystemTests: XCTestCase {
           String(describing: error))
       }
     }
+  }
+
+  /// `apple_events` names the apps a plugin's scripts may address, so the
+  /// capability and its targets come together, and a target is a bundle id.
+  func testAppleEventsTargetsAndCapabilityMustPair() throws {
+    for manifest in [
+      """
+      {
+        "id": "scripty", "name": "Scripty", "version": "1.0.0",
+        "description": "fixture", "install": "true",
+        "exec": ["/usr/bin/true"],
+        "apple_events_targets": ["com.apple.Safari"]
+      }
+      """,
+      """
+      {
+        "id": "scripty", "name": "Scripty", "version": "1.0.0",
+        "description": "fixture", "install": "true",
+        "exec": ["/usr/bin/true"],
+        "capabilities": ["apple_events"]
+      }
+      """,
+    ] {
+      let root = try temporaryPluginRoot(manifest: manifest)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+        XCTAssertTrue(
+          String(describing: error).contains(
+            "apple_events capability and apple_events_targets must be declared together"),
+          String(describing: error))
+      }
+    }
+    for target in ["Safari", "com.apple.Safari/", "com.apple Safari", "", "com.apple.\"x\""] {
+      let encodedTargets = String(
+        decoding: try JSONSerialization.data(withJSONObject: ["com.apple.Safari", target]),
+        as: UTF8.self)
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "scripty", "name": "Scripty", "version": "1.0.0",
+            "description": "fixture", "install": "true",
+            "exec": ["/usr/bin/true"],
+            "capabilities": ["apple_events"],
+            "apple_events_targets": \(encodedTargets)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root), target) { error in
+        XCTAssertTrue(
+          String(describing: error).contains("apple_events_targets entries must be bundle ids")
+            || String(describing: error).contains("must be declared together"),
+          "\(target): \(error)")
+      }
+    }
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "scripty", "name": "Scripty", "version": "1.0.0",
+          "description": "fixture", "install": "true",
+          "exec": ["/usr/bin/true"],
+          "capabilities": ["apple_events"],
+          "apple_events_targets": [" com.apple.Safari", "com.apple.Safari", "org.chromium.Chromium"]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(manifest.capabilities, [.appleEvents])
+    XCTAssertEqual(manifest.appleEventsTargets, ["com.apple.Safari", "org.chromium.Chromium"])
   }
 
   func testFetchURLsMustBeHTTPSPrefixes() throws {
@@ -1448,55 +1991,6 @@ final class PluginSystemTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
 
     XCTAssertThrowsError(try PluginManifest.load(from: root))
-  }
-
-  func testLiveSourceFlagDecodesAndValidates() throws {
-    let live = try JSONDecoder().decode(
-      CandidateSourceDescriptor.self,
-      from: Data(#"{"name": "files.results", "live": true}"#.utf8))
-    XCTAssertTrue(live.live)
-    XCTAssertEqual(live.kind, .standard)
-    let warm = try JSONDecoder().decode(
-      CandidateSourceDescriptor.self,
-      from: Data(#"{"name": "notes.notes"}"#.utf8))
-    XCTAssertFalse(warm.live)
-    // Encoding omits the default, mirroring kind/priority.
-    let encoded =
-      try JSONSerialization.jsonObject(
-        with: JSONEncoder().encode(warm)) as? [String: Any]
-    XCTAssertNil(encoded?["live"])
-    let encodedLive =
-      try JSONSerialization.jsonObject(
-        with: JSONEncoder().encode(live)) as? [String: Any]
-    XCTAssertEqual(encodedLive?["live"] as? Bool, true)
-  }
-
-  func testManifestRejectsLiveLocationAndMixedModeSources() throws {
-    func loadManifest(sources: String) throws -> PluginManifest {
-      let root = try temporaryPluginRoot(
-        manifest: """
-          {
-            "id": "livetest",
-            "name": "Live",
-            "version": "1.0.0",
-            "description": "fixture",
-            "exec": ["/usr/bin/true"],
-            "sources": \(sources)
-          }
-          """)
-      defer { try? FileManager.default.removeItem(at: root) }
-      return try PluginManifest.load(from: root)
-    }
-    // live + locations is invalid.
-    XCTAssertThrowsError(
-      try loadManifest(sources: #"[{"name": "a.b", "kind": "locations", "live": true}]"#))
-    // Mixed warm/live in one plugin is invalid.
-    XCTAssertThrowsError(
-      try loadManifest(sources: #"[{"name": "a.b", "live": true}, {"name": "a.c"}]"#))
-    // All-live is valid.
-    let manifest = try loadManifest(
-      sources: #"[{"name": "a.b", "live": true}, {"name": "a.c", "live": true}]"#)
-    XCTAssertTrue(manifest.sources.allSatisfy(\.live))
   }
 
   func testProvidesFlagsFalseWithoutMatchingSurface() throws {
@@ -1574,7 +2068,7 @@ final class PluginSystemTests: XCTestCase {
         "install": "true",
         "exec": ["/usr/bin/true"],
         "sources": [
-          { "name": "cold.items", "kind": "locations", "priority": "normal" }
+          { "name": "cold.items", "type": "items", "kind": "locations", "priority": "normal" }
         ]
       }
       """)
@@ -1594,12 +2088,11 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(source.candidates(in: env, scope: .all).isEmpty)
 
     // A published catalog serves without the process running at all.
-    let decoded = PluginWireCodec.catalogRows(
-      from: [["source": "cold.items", "title": "Warm row"]],
+    let decoded = PluginWireCodec.publishedRows(
+      [["source": "cold.items", "title": "Warm row"]],
       sourceID: "plugin:cold-source",
       allowedSources: ["cold.items"])!
-    store.publish(
-      pluginID: "cold-source", rows: decoded.rows, encodedBytes: decoded.encodedBytes)
+    store.publish(pluginID: "cold-source", decoded)
     XCTAssertEqual(source.candidates(in: env, scope: .all).map(\.title), ["Warm row"])
   }
 
@@ -1624,30 +2117,6 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(environment["AWS_SECRET_ACCESS_KEY"])
     XCTAssertNil(environment["SLACK_API_TOKEN"])
     XCTAssertNil(environment["SSH_AUTH_SOCK"])
-  }
-
-  func testStorageEntryMergeEnforcesBounds() {
-    XCTAssertEqual(
-      PluginHostRPC.applyingStorageEntry(key: "a", value: "1", to: [:]), ["a": "1"])
-    XCTAssertEqual(
-      PluginHostRPC.applyingStorageEntry(key: "a", value: nil, to: ["a": "1", "b": "2"]),
-      ["b": "2"])
-    // Deleting an absent key is a no-op, not an error.
-    XCTAssertEqual(PluginHostRPC.applyingStorageEntry(key: "x", value: nil, to: [:]), [:])
-    // Oversized values are rejected.
-    XCTAssertNil(
-      PluginHostRPC.applyingStorageEntry(
-        key: "a",
-        value: String(repeating: "x", count: PluginHostRPC.maxStorageValueBytes + 1),
-        to: [:]))
-    // A full table rejects new keys but still allows updates and deletes.
-    var full: [String: String] = [:]
-    for index in 0..<PluginHostRPC.maxStorageEntries { full["k\(index)"] = "v" }
-    XCTAssertNil(PluginHostRPC.applyingStorageEntry(key: "new", value: "v", to: full))
-    XCTAssertNotNil(PluginHostRPC.applyingStorageEntry(key: "k0", value: "updated", to: full))
-    XCTAssertEqual(
-      PluginHostRPC.applyingStorageEntry(key: "k0", value: nil, to: full)?.count,
-      PluginHostRPC.maxStorageEntries - 1)
   }
 
   func testFetchURLAllowlistMatchesAtComponentBoundaries() {
@@ -1697,6 +2166,19 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(entries[1].html, "<p>two</p>")
     XCTAssertEqual(entries[0].files, [])
     XCTAssertNil(entries[0].mime)
+  }
+
+  func testTheLastClipboardHistoryPageEncodesANullNextOffset() throws {
+    // The help page rejects a page without `next_offset`; the last one must
+    // say `null`, not leave the key out.
+    let last = ClipboardHistoryPage(entries: [], total: 158, nextOffset: nil)
+    let object = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: JSONEncoder().encode(last)) as? [String: Any])
+    XCTAssertTrue(object.keys.contains("next_offset"))
+    XCTAssertTrue(object["next_offset"] is NSNull)
+    let next = ClipboardHistoryPage(entries: [], total: 158, nextOffset: 100)
+    XCTAssertEqual(
+      try JSONDecoder().decode(ClipboardHistoryPage.self, from: JSONEncoder().encode(next)), next)
   }
 
   func testDecodeClipboardHistoryPageAcceptsEmptyHistory() throws {
@@ -1777,6 +2259,16 @@ final class PluginSystemTests: XCTestCase {
       // Bundled plugins have no install step (`install` is third-party-only).
       XCTAssertNil(manifest.install, "\(manifest.id): official plugins declare no install step")
       XCTAssertFalse(manifest.description.isEmpty)
+      // A bundled source omits the default kind rather than spelling it out.
+      let raw = try XCTUnwrap(
+        JSONSerialization.jsonObject(
+          with: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+          as? [String: Any])
+      for source in raw["sources"] as? [[String: Any]] ?? [] {
+        XCTAssertNotEqual(
+          source["kind"] as? String, "default",
+          "\(manifest.id) \(source["name"] ?? ""): omit the default kind")
+      }
       if let exec = manifest.exec {
         XCTAssertFalse(exec.isEmpty)
         let compiled = ["Cargo.toml", "go.mod", "main.zig", "main.swift"].contains {
@@ -1800,59 +2292,70 @@ final class PluginSystemTests: XCTestCase {
     // Manifest-only: no process, no binary — only data the host serves.
     XCTAssertNil(defaults.exec)
     XCTAssertEqual(defaults.activation, .manifestOnly)
-    XCTAssertEqual(defaults.verbs, [])
-    for name in ["app_save", "app_print", "document_open", "window_new"] {
-      let action = try XCTUnwrap(SourceActionName(rawValue: name))
-      XCTAssertNotNil(defaults.actionBindings[action]?[""], name)
+    XCTAssertEqual(defaults.sourceCommands, [], "a manifest-only plugin performs nothing")
+    for name in ["app save", "app print", "document open", "window new"] {
+      XCTAssertNotNil(defaults.bindings[key(name)]?[""], name)
     }
   }
 
   func testPluginCommandNameConflictsFailEveryClaimant() {
-    func manifest(id: String, commands: [String] = [], verbs: [String] = []) -> PluginManifest {
+    func manifest(id: String, commands: [String] = []) -> PluginManifest {
       PluginManifest(
         id: id, name: id, version: "1", description: "fixture",
         exec: ["/usr/bin/true"],
-        commands: commands.map { PluginCommandRegistration(command: $0, subcommand: "go") },
-        verbs: verbs.map { PluginVerbRegistration(name: $0) })
+        commands: commands.map { PluginCommandRegistration(command: $0, subcommand: "go") })
     }
-    let builtin = PluginManifest.commandClaimFailures([manifest(id: "bad", commands: ["quit"])])
-    XCTAssertTrue(builtin["bad"]?.contains("quit") == true, "\(builtin)")
+    // A topic word is never a plugin's own command, so it never claims one:
+    // `validate()` holds it to the source commands instead.
+    let core = manifest(id: "core", commands: ["tab"])
+    XCTAssertEqual(PluginManifest.commandClaimFailures([core]), [:])
+    XCTAssertThrowsError(try core.validate()) { error in
+      XCTAssertTrue(
+        "\(error)".contains("tab go is not a command Flash asks of the focused app"), "\(error)")
+    }
 
     let shared = PluginManifest.commandClaimFailures([
-      manifest(id: "a", commands: ["media"]),
-      manifest(id: "b", commands: ["media"]),
+      manifest(id: "a", commands: ["weather"]),
+      manifest(id: "b", commands: ["weather"]),
     ])
     XCTAssertNotNil(shared["a"])
     XCTAssertNotNil(shared["b"])
 
     let distinct = PluginManifest.commandClaimFailures([
-      manifest(id: "media", commands: ["media"]),
-      manifest(id: "caffeinate", commands: ["caffeinate"]),
+      manifest(id: "weather", commands: ["weather"]),
+      manifest(id: "lamp", commands: ["lamp"]),
     ])
     XCTAssertTrue(distinct.isEmpty, "\(distinct)")
-
-    let bothKinds = PluginManifest.commandClaimFailures([
-      manifest(id: "overlap", commands: ["media"], verbs: ["media"])
-    ])
-    XCTAssertTrue(
-      bothKinds["overlap"]?.contains("both a command and a verb") == true, "\(bothKinds)")
-    XCTAssertTrue(bothKinds["overlap"]?.contains("conflicts") == true, "\(bothKinds)")
   }
 
-  func testPluginCommandNamedLikeAFlashVerbFailsToLoad() throws {
-    let root = try temporaryPluginRoot(
+  /// A plugin never takes a Flash topic as its own command: an entry under
+  /// one declares a core command the plugin performs, and must be one.
+  func testPluginCommandUnderAFlashTopicMustBeASourceCommand() throws {
+    let bad = try temporaryPluginRoot(
       manifest: """
         {
-          "id": "badquit", "name": "Bad Quit", "version": "1.0.0", "description": "fixture",
+          "id": "badtab", "name": "Bad Tab", "version": "1.0.0", "description": "fixture",
           "exec": ["/usr/bin/true"],
-          "commands": [{ "command": "quit", "subcommand": "go", "description": "x" }]
+          "commands": [{ "command": "tab", "subcommand": "go", "description": "x" }]
         }
         """)
-    defer { try? FileManager.default.removeItem(at: root) }
-    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
-      XCTAssertTrue((error as? PluginError)?.isCommandConflict == true, "\(error)")
-      XCTAssertTrue("\(error)".contains("conflicts"), "\(error)")
+    defer { try? FileManager.default.removeItem(at: bad) }
+    XCTAssertThrowsError(try PluginManifest.load(from: bad)) { error in
+      XCTAssertTrue("\(error)".contains("tab go is not a command"), "\(error)")
     }
+    let good = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "goodtab", "name": "Good Tab", "version": "1.0.0", "description": "fixture",
+          "exec": ["/usr/bin/true"],
+          "commands": [{ "command": "tab", "subcommand": "close", "description": "Close it" }]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: good) }
+    let manifest = try PluginManifest.load(from: good)
+    XCTAssertEqual(manifest.sourceCommands, [CommandName("tab", "close")])
+    XCTAssertEqual(manifest.pluginCommands, [])
+    XCTAssertEqual(PluginManifest.commandClaimFailures([manifest]), [:])
   }
 
   func testOfficialPluginsHaveDistinctFlashSubcommands() throws {
@@ -1866,22 +2369,6 @@ final class PluginSystemTests: XCTestCase {
     }
     XCTAssertFalse(manifests.isEmpty)
     XCTAssertEqual(PluginManifest.commandClaimFailures(manifests), [:])
-  }
-
-  /// A plugin verb named like one of Flash's own would never be reached.
-  func testPluginVerbsCannotShadowFlashVerbs() throws {
-    let root = try temporaryPluginRoot(
-      manifest: """
-        {
-          "id": "shadow", "name": "Shadow", "version": "1.0.0", "description": "fixture",
-          "exec": ["/usr/bin/true"], "verbs": [{ "name": "app_save" }]
-        }
-        """)
-    defer { try? FileManager.default.removeItem(at: root) }
-    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
-      XCTAssertTrue((error as? PluginError)?.isCommandConflict == true, "\(error)")
-      XCTAssertTrue("\(error)".contains("verbs are not a flash command"), "\(error)")
-    }
   }
 
   func testPluginCommandWithoutASubcommandFailsToLoad() throws {
@@ -1960,8 +2447,8 @@ final class PluginSystemTests: XCTestCase {
 
   // MARK: - Subprocess smoke tests (wire-level, host-free)
 
-  func testOfficialPluginRespondsOverNDJSONWithMockedCLI() throws {
-    try runPluginSmoke(pluginID: "spotify", binary: "spotify_player")
+  func testOfficialPluginRespondsOverNDJSON() throws {
+    try runPluginSmoke(pluginID: "screenshot")
   }
 
   func testRustPluginExitsWhenHostClosesStdin() throws {
@@ -2011,6 +2498,10 @@ final class PluginSystemTests: XCTestCase {
 
   // MARK: - Fixture helpers
 
+  private func key(_ text: String) -> CommandBindingKey {
+    CommandBindingKey(text)!
+  }
+
   private func decodedManifest(_ json: String) throws -> PluginManifest {
     let manifest = try JSONDecoder().decode(
       PluginManifest.self, from: try XCTUnwrap(json.data(using: .utf8)))
@@ -2049,25 +2540,18 @@ final class PluginSystemTests: XCTestCase {
     .sorted { $0.lastPathComponent < $1.lastPathComponent }
   }
 
-  private func runPluginSmoke(pluginID: String, binary: String) throws {
+  private func runPluginSmoke(pluginID: String) throws {
     let temp = FileManager.default.temporaryDirectory
       .appendingPathComponent("flash-plugin-smoke-\(pluginID)-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: temp) }
     let dataDir = temp.appendingPathComponent("data")
-    let binDir = dataDir.appendingPathComponent("bin")
-    try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
-    let mock = binDir.appendingPathComponent(binary)
-    try """
-    #!/bin/sh
-    printf '\(binary) %s\\n' "$*"
-    """.write(to: mock, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mock.path)
+    try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
     let pluginRoot = repositoryRoot().appendingPathComponent("Plugins/\(pluginID)")
     let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
     guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
       throw XCTSkip(
-        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the protocol smoke test"
+        "\(pluginID) binary not built — run `mise run build:plugins` before the protocol smoke test"
       )
     }
     let process = Process()
@@ -2078,7 +2562,6 @@ final class PluginSystemTests: XCTestCase {
     env["FLASH_PLUGIN_ID"] = pluginID
     env["FLASH_PLUGIN_VERSION"] = "0.1.0"
     env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
-    env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
     process.environment = env
 
     let stdin = Pipe()
@@ -2113,7 +2596,7 @@ final class PluginSystemTests: XCTestCase {
       guard !data.isEmpty else { return }
       for message in collector.ingest(data) {
         // A plugin→host request carries both `id` and `method`; the tested
-        // command should complete without host-side subprocess RPCs.
+        // command is refused in process, without any host RPC.
         if message["method"] is String {
           continue
         }
@@ -2142,15 +2625,17 @@ final class PluginSystemTests: XCTestCase {
       return
     }
     send(["id": 2, "method": "ping", "params": [:]])
+    // An undeclared subcommand: the plugin answers `ok: false` with a
+    // content-free error, which proves the perform path end to end without
+    // running the command's real side effect.
     send([
       "id": 3,
       "method": "perform",
       "params": [
         "kind": "command",
-        "args": ["--version"],
+        "args": [],
         "command": pluginID,
-        "subcommand": "run",
-        "raw": ":\(pluginID) run --version",
+        "subcommand": "nonexistent",
       ],
     ])
 
@@ -2186,7 +2671,7 @@ final class PluginSystemTests: XCTestCase {
     let messages = collector.messages()
     XCTAssertEqual(responseOK(id: 1, messages: messages), true, collector.raw())
     XCTAssertEqual(responseOK(id: 2, messages: messages), true, collector.raw())
-    XCTAssertEqual(responseOK(id: 3, messages: messages), true, collector.raw())
+    XCTAssertEqual(responseOK(id: 3, messages: messages), false, collector.raw())
   }
 
   private func runPluginStdinEOFSmoke(pluginID: String) throws {
@@ -2194,7 +2679,7 @@ final class PluginSystemTests: XCTestCase {
     let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
     guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
       throw XCTSkip(
-        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the stdin-EOF smoke test"
+        "\(pluginID) binary not built — run `mise run build:plugins` before the stdin-EOF smoke test"
       )
     }
 

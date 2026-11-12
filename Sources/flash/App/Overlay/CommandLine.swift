@@ -17,7 +17,8 @@ extension OverlayPanel {
     emptyText: String = "no matching app",
     cursorIndex: Int? = nil,
     underlineRange: NSRange? = nil,
-    underlineInvalid: Bool = false
+    underlineInvalid: Bool = false,
+    prompt: String? = nil
   ) {
     let refreshesPresentedSurface = Self.commandLineCanRefreshInPlace(
       inputMode: inputMode,
@@ -25,7 +26,7 @@ extension OverlayPanel {
       surfaceStyle: modeSurface.style,
       panelVisible: isVisible)
     FlashLog.trace(
-      "[overlay] display_command_line text=\(text) cursor=\(cursorIndex ?? text.count) "
+      "[overlay] display_command_line len=\(text.count) cursor=\(cursorIndex ?? text.count) "
         + "suggestions=\(suggestions?.count ?? 0) "
         + "underline=\(underlineRange.map(NSStringFromRange) ?? "nil")"
         + (underlineInvalid ? " invalid=true" : ""))
@@ -33,7 +34,7 @@ extension OverlayPanel {
       text, cursorIndex: cursorIndex ?? text.count, underlineRange: underlineRange,
       underlineInvalid: underlineInvalid)
     commandPromptVisible = true
-    commandPromptPrefix = ""
+    commandPromptPrefix = prompt.map { $0 + " " } ?? ""
     if let suggestions {
       setCandidateFinderResults(items: suggestions, emptyText: emptyText)
     } else {
@@ -63,7 +64,7 @@ extension OverlayPanel {
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let prompt: String
     if inputMode == .commandLine {
-      prompt = commandLineText
+      prompt = commandPromptPrefix + commandLineText
     } else {
       let cursor = min(max(commandLineCursorIndex, 0), commandLineText.count)
       let cursorStringIndex = commandLineText.index(commandLineText.startIndex, offsetBy: cursor)
@@ -111,7 +112,10 @@ extension OverlayPanel {
       configureCommandTextField(
         promptFrame: commandPromptLayer.frame,
         font: labelFont,
-        fontSize: fontSize)
+        fontSize: fontSize,
+        leadingInset: min(
+          ceil((commandPromptPrefix as NSString).size(withAttributes: [.font: labelFont]).width),
+          commandPromptLayer.frame.width / 2))
     } else {
       hideCommandTextField()
     }
@@ -127,9 +131,10 @@ extension OverlayPanel {
     commandPromptLabel.contentsScale = scale
     commandPromptLabel.alignmentMode = .left
     if inputMode == .commandLine {
-      // The editable field renders the colon + body; keep the backing
-      // label empty so the `:` isn't painted twice.
-      commandPromptLabel.string = ""
+      commandPromptLabel.frame.size.width = min(
+        ceil((commandPromptPrefix as NSString).size(withAttributes: [.font: labelFont]).width),
+        commandPromptLayer.frame.width / 2)
+      commandPromptLabel.string = commandPromptPrefix
     } else {
       commandPromptLabel.string = prompt
     }
@@ -385,6 +390,17 @@ extension OverlayPanel: NSTextFieldDelegate {
 
   func controlTextDidChange(_ obj: Notification) {
     guard !suppressCommandTextFieldChange else { return }
+    // `ctrl+r {x}`: the character just typed names the register, and its
+    // text goes in at the caret instead.
+    if let wait = commandLineRegisterWait {
+      commandLineRegisterWait = nil
+      if let name = CommandLineEditing.registerName(
+        typedInto: wait, giving: commandTextField.stringValue)
+      {
+        let text = coordinator?.overlayRegisterText(name) ?? ""
+        return applyCommandLineEdit(CommandLineEditing.insert(text, into: wait))
+      }
+    }
     var raw = commandTextField.stringValue
     // The `:` is the leading character of the buffer now; erasing it
     // (an empty field, or text that no longer starts with `:`) is the
@@ -413,7 +429,7 @@ extension OverlayPanel: NSTextFieldDelegate {
     commandLineCursorIndex = cursor
     syncCommandTextFieldSelection()
     FlashLog.trace(
-      "[input] command_line edit text=\(commandLineText) cursor=\(commandLineCursorIndex)")
+      "[input] command_line edit length=\(commandLineText.count) cursor=\(commandLineCursorIndex)")
     coordinator?.overlayDidUpdateCommandLine(
       commandLineText,
       cursorIndex: commandLineCursorIndex,
@@ -426,11 +442,40 @@ extension OverlayPanel: NSTextFieldDelegate {
     doCommandBy commandSelector: Selector
   ) -> Bool {
     guard control === commandTextField else { return false }
+    // A key AppKit has no binding for reaches here as `noop:`: Vim's
+    // `ctrl+w`, `ctrl+u` and `ctrl+r`, when no key equivalent took them.
+    if commandSelector == Self.noopSelector, let event = NSApp.currentEvent,
+      event.type == .keyDown, handleCommandLineControlKey(event)
+    {
+      return true
+    }
+    // Any other key ends a `ctrl+r` waiting for its register.
+    commandLineRegisterWait = nil
     switch commandSelector {
+    case #selector(NSResponder.deleteToBeginningOfLine(_:)),
+      #selector(NSResponder.deleteToBeginningOfParagraph(_:)):
+      // Command-Delete (what a key remapper may turn Control-U into): back
+      // to the prompt, as `ctrl+u`, never through the `:` itself.
+      applyCommandLineEdit(
+        CommandLineEditing.deleteToStart(
+          CommandLineEditing.Line(
+            text: commandTextField.stringValue, cursor: commandTextFieldCursorIndex())))
+      return true
     case #selector(NSResponder.insertNewline(_:)):
       let command = syncCommandLineStateFromFieldForCommand()
       FlashLog.trace("[input] command_line submit command=\(command)")
-      coordinator?.overlayDidSubmitCommandLine(command)
+      // Shift-Return reaches this selector too; the key event says which.
+      if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+        coordinator?.overlayDidSubmitCommandLine(command, variant: .shift)
+      } else {
+        coordinator?.overlayDidSubmitCommandLine(command)
+      }
+      return true
+    case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+      // Option-Return: a single-line command has no use for a literal newline.
+      let command = syncCommandLineStateFromFieldForCommand()
+      FlashLog.trace("[input] command_line submit variant=option command=\(command)")
+      coordinator?.overlayDidSubmitCommandLine(command, variant: .option)
       return true
     case #selector(NSResponder.deleteBackward(_:)):
       // Backspacing the lone `:` (or an already-empty field) erases the
@@ -479,6 +524,45 @@ extension OverlayPanel: NSTextFieldDelegate {
     default:
       return false
     }
+  }
+
+  private static let noopSelector = Selector(("noop:"))
+
+  /// Vim's command-line keys the field editor has no binding for, Control
+  /// alone on the letter: `ctrl+w` deletes the word before the caret,
+  /// `ctrl+u` everything back to the prompt, and `ctrl+r` waits for a
+  /// register name, whose text the next key inserts (`controlTextDidChange`).
+  func handleCommandLineControlKey(_ event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      .subtracting(.capsLock)
+    guard modifiers == .control,
+      let key = event.charactersIgnoringModifiers?.lowercased().first, "wur".contains(key),
+      commandTextField.currentEditor() != nil
+    else { return false }
+    let line = CommandLineEditing.Line(
+      text: commandTextField.stringValue, cursor: commandTextFieldCursorIndex())
+    switch key {
+    case "w": applyCommandLineEdit(CommandLineEditing.deleteWordBackward(line))
+    case "u": applyCommandLineEdit(CommandLineEditing.deleteToStart(line))
+    default:
+      commandLineRegisterWait = line
+      FlashLog.trace("[input] command_line register_wait")
+    }
+    return true
+  }
+
+  /// Puts an edited line in the field and hands it on as typing would.
+  private func applyCommandLineEdit(_ line: CommandLineEditing.Line) {
+    suppressCommandTextFieldChange = true
+    commandTextField.stringValue = line.text
+    suppressCommandTextFieldChange = false
+    commandLineText = line.text
+    commandLineCursorIndex = line.cursor
+    syncCommandTextFieldSelection()
+    FlashLog.trace(
+      "[input] command_line edit length=\(commandLineText.count) cursor=\(commandLineCursorIndex)")
+    coordinator?.overlayDidUpdateCommandLine(
+      commandLineText, cursorIndex: commandLineCursorIndex, resetSelection: true)
   }
 
   @discardableResult

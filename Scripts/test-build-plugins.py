@@ -17,6 +17,7 @@ class PluginPublicationTests(unittest.TestCase):
         scripts = self.root / "Scripts"
         scripts.mkdir()
         shutil.copy(Path(__file__).with_name("build-plugins.sh"), scripts)
+        shutil.copy(Path(__file__).with_name("_common.sh"), scripts)
         plugin = self.root / "Plugins/example"
         plugin.mkdir(parents=True)
         (plugin / "manifest.json").write_text("{}")
@@ -39,6 +40,9 @@ class PluginPublicationTests(unittest.TestCase):
         cargo = mock_bin / "cargo"
         cargo.write_text("#!/bin/sh\nexit 0\n")
         cargo.chmod(0o755)
+        rustup = mock_bin / "rustup"
+        rustup.write_text("#!/bin/sh\nexit 0\n")
+        rustup.chmod(0o755)
         # Signing must finish outside all watched plugin directories.
         codesign = mock_bin / "codesign"
         codesign.write_text(
@@ -51,8 +55,11 @@ class PluginPublicationTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{mock_bin}:{os.environ['PATH']}",
                         DEV_PLUGIN_SIGN_IDENTITY=os.environ.get("DEV_PLUGIN_SIGN_IDENTITY") or "-")
 
-    def compile(self, result, source=None):
-        subprocess.run(["cc", "-x", "c", "-", "-o", str(source or self.source)],
+    def compile(self, result, source=None, architecture=None):
+        arguments = ["cc"]
+        if architecture:
+            arguments += ["-arch", architecture]
+        subprocess.run(arguments + ["-x", "c", "-", "-o", str(source or self.source)],
                        input=f"int main(void) {{ return {result}; }}\n",
                        text=True, capture_output=True, check=True)
 
@@ -62,10 +69,32 @@ class PluginPublicationTests(unittest.TestCase):
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def run_build(self):
-        return subprocess.run(["bash", "Scripts/build-plugins.sh", "dev"],
+    def run_build(self, mode="dev"):
+        return subprocess.run(["bash", "Scripts/build-plugins.sh", mode],
                               cwd=self.root, env=self.env,
                               text=True, capture_output=True)
+
+    def test_release_publishes_universal_artifacts_without_touching_live_plugins(self):
+        self.build()
+        live_inode = self.destination.stat().st_ino
+        live_bytes = self.destination.read_bytes()
+        for target, architecture in [("aarch64", "arm64"), ("x86_64", "x86_64")]:
+            directory = self.root / f"build/plugin-target/{target}-apple-darwin/release"
+            directory.mkdir(parents=True)
+            self.compile(0, source=directory / self.source.name, architecture=architecture)
+            self.compile(0, source=directory / self.companion.name, architecture=architecture)
+
+        result = self.run_build("release")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.destination.stat().st_ino, live_inode,
+                         "release packaging must not trigger the live plugin watcher")
+        self.assertEqual(self.destination.read_bytes(), live_bytes)
+        for name in [self.source.name, self.companion.name]:
+            artifact = self.root / "build/plugin-release/example" / name
+            self.assertTrue(artifact.is_file())
+            architectures = subprocess.check_output(["lipo", "-archs", str(artifact)], text=True)
+            self.assertEqual(set(architectures.split()), {"arm64", "x86_64"})
 
     def test_manifest_declaring_exec_without_a_crate_fails_the_build(self):
         """A manifest whose binary nobody builds must not be installed.

@@ -102,7 +102,7 @@ enum PluginWireCodec {
       }
       let navigationURL: URL?
       if let raw = PluginJSON.present(result["navigation_url"]) {
-        guard let text = raw as? String, let url = URL(string: text), url.scheme != nil else {
+        guard let text = raw as? String, let url = URLParsing.url(text), url.scheme != nil else {
           return nil
         }
         navigationURL = url
@@ -146,12 +146,15 @@ enum PluginWireCodec {
     return targets
   }
 
+  /// Every key of one hint target (`protocol.json` `hint_target`): geometry
+  /// and semantics. A target carries nothing about the mode; a click keeps it.
+  static let targetKeys: Set<String> = [
+    "id", "frame", "role", "label", "url", "pid", "priority", "context_id",
+  ]
+
   static func target(from raw: [String: Any], sourceID: String) -> PluginWireTarget? {
     guard
-      Set(raw.keys).isSubset(of: [
-        "id", "frame", "role", "label", "url", "context_id", "pid", "enters_insert_mode",
-        "priority",
-      ]),
+      Set(raw.keys).isSubset(of: targetKeys),
       let id = raw["id"] as? String, !id.isEmpty,
       let frameRaw = raw["frame"] as? [String: Any],
       frameRaw.count == 4, keys(of: frameRaw, within: frameKeys),
@@ -170,13 +173,6 @@ enum PluginWireCodec {
       contextID = text
     } else {
       contextID = nil
-    }
-    let entersInsertMode: Bool
-    if let value = PluginJSON.present(raw["enters_insert_mode"]) {
-      guard let decoded = PluginJSON.boolean(value) else { return nil }
-      entersInsertMode = decoded
-    } else {
-      entersInsertMode = JumpTarget.textInputRoles.contains(role ?? "")
     }
     let priority: FlashPriority
     if let value = PluginJSON.present(raw["priority"]) {
@@ -199,23 +195,121 @@ enum PluginWireCodec {
       label: PluginJSON.present(raw["label"]) as? String,
       url: PluginJSON.present(raw["url"]) as? String,
       contextID: contextID,
-      pid: pid, entersInsertMode: entersInsertMode, sourceID: sourceID, priority: priority)
+      pid: pid, sourceID: sourceID, priority: priority)
   }
 
-  /// Decode a complete catalog payload (`publish` rows or a `search` reply).
-  /// `source` is a first-class row field and must name a manifest
-  /// `sources[].name`; routing `source_id` never crosses the wire — it is
-  /// always host-stamped here. Atomic: one malformed or over-quota row
-  /// rejects the whole payload (`nil`), and the caller keeps the previous
-  /// catalog.
-  static func catalogRows(
-    from raw: [[String: Any]], sourceID: String, allowedSources: Set<String>
-  ) -> (rows: [Candidate], encodedBytes: Int)? {
-    decodeArray(
-      raw, countLimit: PluginProtocol.maxCatalogRows, byteLimit: PluginProtocol.maxCatalogBytes
-    ) {
-      decodedCatalogRow(from: $0, sourceID: sourceID, allowedSources: allowedSources)
-    }.map { ($0.values, $0.encodedBytes) }
+  static let textGridKeys: Set<String> = ["ok", "columns", "rows", "lines"]
+  /// The two exact key sets of a `text_grid` line (`text_grid_line`).
+  static let textGridTextLineKeys: Set<String> = ["row", "column", "text"]
+  static let textGridFormatLineKeys: Set<String> = ["row", "column", "width", "format"]
+
+  /// Decode a `text_grid` reply. Atomic: a missing or out-of-bound
+  /// dimension, or one line off the grid or of neither exact shape, rejects
+  /// the whole reply (`nil`).
+  static func textGrid(from payload: [String: Any]) -> PluginTextGrid? {
+    func dimension(_ value: Any?) -> Int? {
+      guard let value = PluginJSON.integer(value),
+        (0...PluginProtocol.maxTextGridDimension).contains(value)
+      else { return nil }
+      return value
+    }
+    guard PluginJSON.boolean(payload["ok"]) == true, Set(payload.keys) == textGridKeys,
+      let columns = dimension(payload["columns"]), let rows = dimension(payload["rows"]),
+      let raw = payload["lines"] as? [Any]
+    else { return nil }
+    var lines: [PluginTextGrid.Line] = []
+    lines.reserveCapacity(raw.count)
+    for item in raw {
+      guard let line = item as? [String: Any],
+        let row = PluginJSON.integer(line["row"]), (0..<rows).contains(row),
+        let column = PluginJSON.integer(line["column"]), (0..<columns).contains(column)
+      else { return nil }
+      let keys = Set(line.keys)
+      if keys == textGridTextLineKeys, let text = line["text"] as? String {
+        lines.append(.text(row: row, column: column, text: text))
+      } else if keys == textGridFormatLineKeys, let format = line["format"] as? String,
+        let width = PluginJSON.integer(line["width"]), width >= 1, width <= columns - column
+      {
+        lines.append(.format(row: row, column: column, width: width, format: format))
+      } else {
+        return nil
+      }
+    }
+    return PluginTextGrid(columns: columns, rows: rows, lines: lines)
+  }
+
+  /// One decoded `publish`: the rows of the whole catalog (`source` nil) or
+  /// of the one declared source they replace, with each row's bytes as the
+  /// plugin wrote them, so the store can hold the catalog's wire size per
+  /// source and apply the byte quota after a merge without re-encoding.
+  struct DecodedPublish {
+    var source: String?
+    var rows: [Candidate]
+    /// Each row object's span in the frame, in row order.
+    var rowBytes: [Int]
+
+    /// The `rows` array's wire bytes (`quotas.catalog_bytes`): every row's
+    /// span, one separator byte per row and the two brackets — the compact
+    /// encoding exactly when the plugin writes compact JSON.
+    var encodedBytes: Int { Self.catalogBytes(spanSum: rowBytes.reduce(0, +), rows: rows.count) }
+
+    static func catalogBytes(spanSum: Int, rows: Int) -> Int {
+      rows == 0 ? 2 : spanSum + rows + 1
+    }
+  }
+
+  static let publishParamKeys: Set<String> = ["rows", "source"]
+
+  /// Decode one `publish` notification from the frame the reader holds and
+  /// its parsed envelope. `source` is a first-class row field and must name
+  /// a manifest `sources[].name`; a `params.source` names the one source
+  /// every row must carry; routing `source_id` never crosses the wire — it
+  /// is always host-stamped here. The byte quota is read off the frame, not
+  /// re-encoded. Atomic: one malformed or over-quota row, an unknown params
+  /// key or a row outside the named source rejects the whole payload
+  /// (`nil`), and the caller keeps the previous catalog.
+  static func publish(
+    frame line: Data, object: [String: Any], sourceID: String, allowedSources: Set<String>
+  ) -> DecodedPublish? {
+    guard let params = object["params"] as? [String: Any],
+      keys(of: params, within: publishParamKeys),
+      let raw = params["rows"] as? [[String: Any]],
+      raw.count <= PluginProtocol.maxCatalogRows
+    else { return nil }
+    let source: String?
+    if let value = PluginJSON.present(params["source"]) {
+      guard let name = value as? String, allowedSources.contains(name) else { return nil }
+      source = name
+    } else {
+      source = nil
+    }
+    guard let spans = rowByteSpans(inPublishFrame: line), spans.count == raw.count,
+      DecodedPublish.catalogBytes(spanSum: spans.reduce(0, +), rows: raw.count)
+        <= PluginProtocol.maxCatalogBytes
+    else { return nil }
+    var rows: [Candidate] = []
+    rows.reserveCapacity(raw.count)
+    for item in raw {
+      if let source, item["source"] as? String != source { return nil }
+      guard
+        let row = decodedCatalogRow(from: item, sourceID: sourceID, allowedSources: allowedSources)
+      else { return nil }
+      rows.append(row)
+    }
+    return DecodedPublish(source: source, rows: rows, rowBytes: spans)
+  }
+
+  /// The byte span of each row object of a `publish` frame, in row order, as
+  /// the plugin wrote it: whitespace and escaping inside a row count, the
+  /// envelope's never do. The frame has already parsed as JSON, so this only
+  /// walks it; `nil` when it is not an object whose `params.rows` is an
+  /// array (envelope keys are matched as the plain ASCII every encoder
+  /// writes).
+  static func rowByteSpans(inPublishFrame line: Data) -> [Int]? {
+    line.withUnsafeBytes { raw -> [Int]? in
+      var scanner = JSONSpanScanner(bytes: raw.bindMemory(to: UInt8.self))
+      return scanner.publishRowSpans()
+    }
   }
 
   private static func decodeArray<T>(
@@ -244,7 +338,7 @@ enum PluginWireCodec {
     let url: URL?
     if let value = PluginJSON.present(raw["url"]) {
       guard let text = value as? String, text.utf8.count <= PluginProtocol.maxURLBytes,
-        let parsed = URL(string: text), parsed.scheme != nil
+        let parsed = URLParsing.url(text), parsed.scheme != nil
       else { return nil }
       url = parsed
     } else {
@@ -342,11 +436,14 @@ enum PluginWireCodec {
       return type == "copy_text" ? .copyText(text) : .insertText(text)
     case "open" where allowOpen:
       if Set(effect.keys) == Set(["type", "url"]) {
+        // Never a local file: a sandboxed plugin could point a row at a
+        // `.command` or an app it wrote, and opening it would run outside
+        // the sandbox (`host.open` refuses them too).
         guard
           let value = effect["url"] as? String,
           value.utf8.count <= maxTextBytes,
-          let parsed = URL(string: value),
-          parsed.scheme != nil
+          let parsed = URLParsing.url(value),
+          let scheme = parsed.scheme, scheme.lowercased() != "file"
         else { return nil }
         return .openURL(value)
       }
@@ -394,6 +491,12 @@ enum PluginWireCodec {
     return dict
   }
 
+  static func spatialContextJSON(_ context: AppContext) -> [String: Any] {
+    var result = contextJSON(context)
+    if let scale = context.displayScale { result["display_scale"] = Double(scale) }
+    return result
+  }
+
   static func contextJSON(_ context: AppContext) -> [String: Any] {
     [
       "bundle_id": context.bundleIdentifier,
@@ -405,5 +508,171 @@ enum PluginWireCodec {
       ],
       "pid": Int(context.processID),
     ]
+  }
+}
+
+/// Walks JSON that already parsed, to measure spans without building
+/// anything: strings are skipped by their escapes, containers by depth,
+/// scalars to the next delimiter. One pass over the bytes.
+private struct JSONSpanScanner {
+  let bytes: UnsafeBufferPointer<UInt8>
+  var index = 0
+
+  private static let quote = UInt8(ascii: "\"")
+  private static let backslash = UInt8(ascii: "\\")
+  private static let openBrace = UInt8(ascii: "{")
+  private static let closeBrace = UInt8(ascii: "}")
+  private static let openBracket = UInt8(ascii: "[")
+  private static let closeBracket = UInt8(ascii: "]")
+  private static let comma = UInt8(ascii: ",")
+  private static let colon = UInt8(ascii: ":")
+  private static let params = Array("params".utf8)
+  private static let rows = Array("rows".utf8)
+
+  private var atEnd: Bool { index >= bytes.count }
+  private var byte: UInt8 { bytes[index] }
+
+  private static func isWhitespace(_ byte: UInt8) -> Bool {
+    byte == 0x20 || byte == 0x0A || byte == 0x0D || byte == 0x09
+  }
+
+  private mutating func skipWhitespace() {
+    while !atEnd, Self.isWhitespace(byte) { index += 1 }
+  }
+
+  private mutating func consume(_ expected: UInt8) -> Bool {
+    skipWhitespace()
+    guard !atEnd, byte == expected else { return false }
+    index += 1
+    return true
+  }
+
+  /// At an opening quote; leaves the index past the closing one. Returns the
+  /// raw bytes between them.
+  private mutating func skipString() -> UnsafeBufferPointer<UInt8>.SubSequence? {
+    guard !atEnd, byte == Self.quote else { return nil }
+    index += 1
+    let start = index
+    while !atEnd {
+      if byte == Self.backslash {
+        index += 2
+      } else if byte == Self.quote {
+        let content = bytes[start..<index]
+        index += 1
+        return content
+      } else {
+        index += 1
+      }
+    }
+    return nil
+  }
+
+  private mutating func skipValue() -> Bool {
+    skipWhitespace()
+    guard !atEnd else { return false }
+    switch byte {
+    case Self.quote:
+      return skipString() != nil
+    case Self.openBrace, Self.openBracket:
+      var depth = 0
+      while !atEnd {
+        switch byte {
+        case Self.quote:
+          guard skipString() != nil else { return false }
+          continue
+        case Self.openBrace, Self.openBracket:
+          depth += 1
+        case Self.closeBrace, Self.closeBracket:
+          depth -= 1
+          if depth == 0 {
+            index += 1
+            return true
+          }
+        default:
+          break
+        }
+        index += 1
+      }
+      return false
+    default:
+      while !atEnd, !Self.isWhitespace(byte), byte != Self.comma, byte != Self.closeBrace,
+        byte != Self.closeBracket
+      {
+        index += 1
+      }
+      return true
+    }
+  }
+
+  /// Walk the members of the object at the index, handing each key's bytes
+  /// to `member`, which consumes the value and reports whether to go on.
+  private mutating func forEachMember(
+    _ member: (inout JSONSpanScanner, UnsafeBufferPointer<UInt8>.SubSequence) -> Bool?
+  ) -> Bool {
+    guard consume(Self.openBrace) else { return false }
+    skipWhitespace()
+    if !atEnd, byte == Self.closeBrace {
+      index += 1
+      return true
+    }
+    while true {
+      skipWhitespace()
+      guard let key = skipString(), consume(Self.colon) else { return false }
+      guard let goOn = member(&self, key) else { return false }
+      if !goOn { return true }
+      skipWhitespace()
+      guard !atEnd else { return false }
+      if byte == Self.comma {
+        index += 1
+        continue
+      }
+      if byte == Self.closeBrace {
+        index += 1
+        return true
+      }
+      return false
+    }
+  }
+
+  mutating func publishRowSpans() -> [Int]? {
+    var spans: [Int]?
+    let walked = forEachMember { scanner, key in
+      guard key.elementsEqual(Self.params) else { return scanner.skipValue() ? true : nil }
+      let inner = scanner.forEachMember { scanner, key in
+        guard key.elementsEqual(Self.rows) else { return scanner.skipValue() ? true : nil }
+        spans = scanner.arrayElementSpans()
+        return spans == nil ? nil : false
+      }
+      return inner ? false : nil
+    }
+    return walked ? spans : nil
+  }
+
+  /// At an array: each element's span, from its first byte to its last.
+  private mutating func arrayElementSpans() -> [Int]? {
+    guard consume(Self.openBracket) else { return nil }
+    var spans: [Int] = []
+    skipWhitespace()
+    if !atEnd, byte == Self.closeBracket {
+      index += 1
+      return spans
+    }
+    while true {
+      skipWhitespace()
+      let start = index
+      guard skipValue() else { return nil }
+      spans.append(index - start)
+      skipWhitespace()
+      guard !atEnd else { return nil }
+      if byte == Self.comma {
+        index += 1
+        continue
+      }
+      if byte == Self.closeBracket {
+        index += 1
+        return spans
+      }
+      return nil
+    }
   }
 }

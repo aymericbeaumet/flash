@@ -1,13 +1,18 @@
-//! Browser tab catalogs and tab actions. One engine table maps every
-//! supported bundle id to how its tabs are read and driven: AppleScript for
-//! Chromium-family browsers and Safari ([`applescript`]), the Accessibility
-//! tab strip plus the session store for Firefox ([`firefox`]). Every row
-//! carries a `flash-browser://` route ([`route`]) that movement history
-//! restores through `on_navigate`.
+//! Browser tab catalogs, tab actions, and browser history and bookmarks. One
+//! engine table maps every supported bundle id to how its tabs are read and
+//! driven: AppleScript for Chromium-family browsers and Safari
+//! ([`applescript`]), the Accessibility tab strip plus the session store for
+//! Firefox ([`firefox`]). Every tab row carries a `flash-browser://` route
+//! ([`route`]) that movement history restores through `on_navigate`. The
+//! table also names which editions' profile stores feed the per-browser
+//! history and bookmark sources ([`history`]). Every source is published
+//! alone (`publish_source`), when its own rows change: a tab switch costs
+//! the host a browser's tab rows, never the history behind them.
 
 mod applescript;
 mod ax;
 mod firefox;
+mod history;
 mod lz4;
 mod route;
 mod session_store;
@@ -19,9 +24,8 @@ use std::time::{Duration, Instant};
 use applescript::{CHROMIUM, Dialect, ListedTab, SAFARI, TabIdentity, TabSlot};
 use firefox::StripPosition;
 use flash_plugin::{
-    ActionRequest, AppWatch, Candidate, CommandOutput, Context, Event, NavigateRequest,
-    PerformResponse, PollPriority, RefreshGate, RunningApplication, Settle, ax_notifications, run,
-    run_osascript,
+    AppWatch, Candidate, CommandRequest, Context, Event, NavigateRequest, PerformResponse,
+    PollPriority, RefreshGate, RunningApplication, Settle, ax_notifications, run,
 };
 use route::TabRoute;
 use serde::{Deserialize, Serialize};
@@ -53,6 +57,14 @@ const REPEAT_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 const SLOW_REFRESH: Duration = Duration::from_secs(1);
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(5);
+/// The host rejects a catalog over this many rows (or 4 MiB) whole, counted
+/// over every source after a per-source publish is merged. Tabs and history
+/// are separate sources with their own caps, so their sum stays inside.
+const HOST_CATALOG_ROWS: usize = 10_000;
+/// Tab rows across every running browser; `history::TOTAL_ROWS_LIMIT` caps
+/// the rest.
+const TAB_ROWS_LIMIT: usize = 3_000;
+const _: () = assert!(TAB_ROWS_LIMIT + history::TOTAL_ROWS_LIMIT <= HOST_CATALOG_ROWS);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 /// One pending coalesced event refresh at a time: the first event opens an
 /// `EVENT_DEBOUNCE` window and every event inside it joins the refresh.
@@ -90,65 +102,85 @@ enum Engine {
     Gecko,
 }
 
-/// One supported browser edition: the canonical `tell application` name (the
-/// host passes only the bundle id in action context), the `<vendor>.tabs`
-/// source label its rows carry so `@chrome` / `@firefox` etc. filter
-/// correctly, and its engine.
+/// The profile store an edition's history and bookmarks are read from
+/// ([`history`]). Editions without one (Chrome Canary, Beta and Dev keep
+/// their own profiles; the other browsers are not read) contribute tabs
+/// only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryStore {
+    /// `places.sqlite` of the newest Firefox profile, shared by the Gecko
+    /// editions.
+    Firefox,
+    /// `History` and `Bookmarks` of Chrome's `Default` profile.
+    Chrome,
+}
+
+/// One supported browser edition: its bundle ID, the `<vendor>.tabs`
+/// source its rows carry (each of type `tabs`), its engine, and the history
+/// store it owns, if any.
 struct Browser {
     bundle_id: &'static str,
-    app_name: &'static str,
     source: &'static str,
     engine: Engine,
+    history: Option<HistoryStore>,
+}
+
+impl Browser {
+    /// The same edition, reading its history and bookmarks from `store`.
+    const fn with_history(mut self, store: HistoryStore) -> Self {
+        self.history = Some(store);
+        self
+    }
 }
 
 const fn scripted(
     bundle_id: &'static str,
-    app_name: &'static str,
     source: &'static str,
     dialect: &'static Dialect,
 ) -> Browser {
     Browser {
         bundle_id,
-        app_name,
         source,
         engine: Engine::AppleScript(dialect),
+        history: None,
     }
 }
 
-const fn gecko(bundle_id: &'static str, app_name: &'static str) -> Browser {
+const fn gecko(bundle_id: &'static str) -> Browser {
     Browser {
         bundle_id,
-        app_name,
         // Release, Developer Edition and Nightly filter together.
         source: "firefox.tabs",
         engine: Engine::Gecko,
+        // The newest profile's places.sqlite, whichever edition wrote it.
+        history: Some(HistoryStore::Firefox),
     }
 }
 
 #[rustfmt::skip]
 const BROWSERS: &[Browser] = &[
-    scripted("com.google.Chrome", "Google Chrome", "chrome.tabs", &CHROMIUM),
-    scripted("com.google.Chrome.canary", "Google Chrome Canary", "chrome.tabs", &CHROMIUM),
-    scripted("com.google.Chrome.beta", "Google Chrome Beta", "chrome.tabs", &CHROMIUM),
-    scripted("com.google.Chrome.dev", "Google Chrome Dev", "chrome.tabs", &CHROMIUM),
-    scripted("org.chromium.Chromium", "Chromium", "chromium.tabs", &CHROMIUM),
-    scripted("com.brave.Browser", "Brave Browser", "brave.tabs", &CHROMIUM),
-    scripted("com.brave.Browser.beta", "Brave Browser Beta", "brave.tabs", &CHROMIUM),
-    scripted("com.brave.Browser.nightly", "Brave Browser Nightly", "brave.tabs", &CHROMIUM),
-    scripted("com.microsoft.edgemac", "Microsoft Edge", "edge.tabs", &CHROMIUM),
-    scripted("com.microsoft.edgemac.Beta", "Microsoft Edge Beta", "edge.tabs", &CHROMIUM),
-    scripted("com.microsoft.edgemac.Dev", "Microsoft Edge Dev", "edge.tabs", &CHROMIUM),
-    scripted("com.microsoft.edgemac.Canary", "Microsoft Edge Canary", "edge.tabs", &CHROMIUM),
-    scripted("company.thebrowser.Browser", "Arc", "arc.tabs", &CHROMIUM),
-    scripted("com.vivaldi.Vivaldi", "Vivaldi", "vivaldi.tabs", &CHROMIUM),
-    scripted("com.operasoftware.Opera", "Opera", "opera.tabs", &CHROMIUM),
-    scripted("com.operasoftware.OperaNext", "Opera Next", "opera.tabs", &CHROMIUM),
-    scripted("com.operasoftware.OperaDeveloper", "Opera Developer", "opera.tabs", &CHROMIUM),
-    scripted("com.apple.Safari", "Safari", "safari.tabs", &SAFARI),
-    scripted("com.apple.SafariTechnologyPreview", "Safari Technology Preview", "safari.tabs", &SAFARI),
-    gecko("org.mozilla.firefox", "Firefox"),
-    gecko("org.mozilla.firefoxdeveloperedition", "Firefox Developer Edition"),
-    gecko("org.mozilla.nightly", "Firefox Nightly"),
+    scripted("com.google.Chrome", "chrome.tabs", &CHROMIUM).with_history(HistoryStore::Chrome),
+    scripted("com.google.Chrome.canary", "chrome.tabs", &CHROMIUM),
+    scripted("com.google.Chrome.beta", "chrome.tabs", &CHROMIUM),
+    scripted("com.google.Chrome.dev", "chrome.tabs", &CHROMIUM),
+    scripted("org.chromium.Chromium", "chromium.tabs", &CHROMIUM),
+    scripted("com.brave.Browser", "brave.tabs", &CHROMIUM),
+    scripted("com.brave.Browser.beta", "brave.tabs", &CHROMIUM),
+    scripted("com.brave.Browser.nightly", "brave.tabs", &CHROMIUM),
+    scripted("com.microsoft.edgemac", "edge.tabs", &CHROMIUM),
+    scripted("com.microsoft.edgemac.Beta", "edge.tabs", &CHROMIUM),
+    scripted("com.microsoft.edgemac.Dev", "edge.tabs", &CHROMIUM),
+    scripted("com.microsoft.edgemac.Canary", "edge.tabs", &CHROMIUM),
+    scripted("company.thebrowser.Browser", "arc.tabs", &CHROMIUM),
+    scripted("com.vivaldi.Vivaldi", "vivaldi.tabs", &CHROMIUM),
+    scripted("com.operasoftware.Opera", "opera.tabs", &CHROMIUM),
+    scripted("com.operasoftware.OperaNext", "opera.tabs", &CHROMIUM),
+    scripted("com.operasoftware.OperaDeveloper", "opera.tabs", &CHROMIUM),
+    scripted("com.apple.Safari", "safari.tabs", &SAFARI),
+    scripted("com.apple.SafariTechnologyPreview", "safari.tabs", &SAFARI),
+    gecko("org.mozilla.firefox"),
+    gecko("org.mozilla.firefoxdeveloperedition"),
+    gecko("org.mozilla.nightly"),
 ];
 
 fn browser_for(bundle_id: &str) -> Option<&'static Browser> {
@@ -157,39 +189,31 @@ fn browser_for(bundle_id: &str) -> Option<&'static Browser> {
         .find(|browser| browser.bundle_id == bundle_id)
 }
 
-/// A running edition, with the AppleScript label to address it by: the
-/// localized name, or the canonical one when empty.
+/// A running edition.
 struct RunningBrowser {
     browser: &'static Browser,
-    label: String,
     pid: i64,
 }
 
 /// The running browsers to list, in host order. AppleScript addresses an app
-/// by name, not pid, so every same-named instance of a scripted browser (the
+/// by bundle id, not pid, so every instance of a scripted browser (the
 /// automation or headless Chrome instances tooling launches beside the
 /// user's) answers with the same tabs: only the first in host order is kept,
 /// or each would publish a duplicate of every row. Firefox is read per pid.
 fn running_browsers(running: &[RunningApplication]) -> Vec<RunningBrowser> {
-    let mut scripted_labels = HashSet::new();
+    let mut scripted_bundles = HashSet::new();
     running
         .iter()
         .filter(|app| app.pid > 0)
         .filter_map(|app| {
             let browser = browser_for(&app.bundle_id)?;
-            let label = if app.localized_name.is_empty() {
-                browser.app_name.to_string()
-            } else {
-                app.localized_name.clone()
-            };
             Some(RunningBrowser {
                 browser,
-                label,
                 pid: app.pid,
             })
         })
         .filter(|app| match app.browser.engine {
-            Engine::AppleScript(_) => scripted_labels.insert(app.label.clone()),
+            Engine::AppleScript(_) => scripted_bundles.insert(app.browser.bundle_id),
             Engine::Gecko => true,
         })
         .collect()
@@ -200,9 +224,6 @@ fn running_browsers(running: &[RunningApplication]) -> Vec<RunningBrowser> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct TabPayload {
     bundle_id: String,
-    /// The AppleScript label the row was listed under.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    app_name: String,
     /// The raw URL as listed (the host's copy of the row URL is re-encoded).
     #[serde(default)]
     url: String,
@@ -264,17 +285,24 @@ fn performed(pid: i64, route: Option<TabRoute>) -> PerformResponse {
     }
 }
 
-/// Per-browser rows behind the plugin's one catalog. `publish` is a full
-/// replacement, so each listing is published as soon as it lands, merged
-/// with every other running browser's last known rows: a slow or failing
-/// browser never holds back the others' tabs, and a failed read keeps that
-/// browser's previous rows instead of dropping them from the host store.
+/// One source's rows, to publish with `publish_source`.
+type SourceRows = (String, Vec<Candidate>);
+
+/// Per-browser rows behind the plugin's tab sources. A publish is
+/// proportional to the change: each listing goes out as soon as it lands,
+/// as the one source its browser's rows carry (`chrome.tabs`,
+/// `firefox.tabs`, …), so a tab switch costs the host a few rows, never the
+/// thousands of history and bookmark rows, which [`history`] publishes
+/// under their own sources on their own refresh. Editions sharing a source
+/// are merged in running order; a slow or failing browser never holds back
+/// the others' tabs, and a failed read keeps that browser's previous rows
+/// instead of dropping them from the host store.
 #[derive(Default)]
 struct TabCatalog {
     /// Each browser process's last successful listing, by pid.
     rows: HashMap<i64, Vec<Candidate>>,
-    /// The last published catalog; `None` until the first publish.
-    published: Option<Vec<Candidate>>,
+    /// Each tab source's last published rows.
+    published: HashMap<String, Vec<Candidate>>,
 }
 
 impl TabCatalog {
@@ -287,14 +315,15 @@ impl TabCatalog {
     /// Record one listing task's results. `Some(rows)` replaces that
     /// browser's rows (an empty list is an authoritative zero-tab result);
     /// `None` is a transient failure that keeps its previous rows. Returns
-    /// the catalog to publish — every running browser's rows, in `running`
-    /// order so completion timing cannot reorder it — when at least one read
-    /// succeeded and the result differs from the last publish.
+    /// the sources to publish — those whose merged rows, every running
+    /// browser's in `running` order so completion timing cannot reorder
+    /// them, differ from their last publish — when at least one read
+    /// succeeded.
     fn record(
         &mut self,
         running: &[i64],
         listings: Vec<(i64, Option<Vec<Candidate>>)>,
-    ) -> Option<Vec<Candidate>> {
+    ) -> Vec<SourceRows> {
         let mut succeeded = false;
         for (pid, rows) in listings {
             if let Some(rows) = rows {
@@ -304,23 +333,25 @@ impl TabCatalog {
         }
         if !succeeded {
             // Publish nothing: the host keeps its last-good catalog.
-            return None;
+            return Vec::new();
         }
-        let merged = self.merged(running);
-        self.publish(merged)
+        self.changed_sources(running)
     }
 
-    /// No browser running: an authoritative empty catalog.
-    fn clear(&mut self) -> Option<Vec<Candidate>> {
+    /// No browser running: every tab source still published empties.
+    fn clear(&mut self) -> Vec<SourceRows> {
         self.rows.clear();
-        self.publish(Vec::new())
+        self.changed_sources(&[])
     }
 
+    /// Every running browser's rows in running order, within
+    /// [`TAB_ROWS_LIMIT`].
     fn merged(&self, running: &[i64]) -> Vec<Candidate> {
         running
             .iter()
             .filter_map(|pid| self.rows.get(pid))
             .flatten()
+            .take(TAB_ROWS_LIMIT)
             .cloned()
             .collect()
     }
@@ -329,13 +360,38 @@ impl TabCatalog {
         self.rows.get(&pid).map_or(0, Vec::len)
     }
 
-    /// `rows` when they differ from the last publish, which they become.
-    fn publish(&mut self, rows: Vec<Candidate>) -> Option<Vec<Candidate>> {
-        if self.published.as_ref() == Some(&rows) {
-            return None;
+    /// The sources whose rows differ from their last publish, in the order
+    /// the merged rows name them, each becoming that publish. A source whose
+    /// last tab closed, or whose browser quit, publishes empty once.
+    fn changed_sources(&mut self, running: &[i64]) -> Vec<SourceRows> {
+        let mut by_source: Vec<SourceRows> = Vec::new();
+        for row in self.merged(running) {
+            match by_source
+                .iter_mut()
+                .find(|(source, _)| *source == row.source)
+            {
+                Some((_, rows)) => rows.push(row),
+                None => by_source.push((row.source.clone(), vec![row])),
+            }
         }
-        self.published = Some(rows.clone());
-        Some(rows)
+        let mut emptied: Vec<String> = self
+            .published
+            .iter()
+            .filter(|(source, rows)| {
+                !rows.is_empty() && !by_source.iter().any(|(name, _)| name == *source)
+            })
+            .map(|(source, _)| source.clone())
+            .collect();
+        emptied.sort();
+        by_source.extend(emptied.into_iter().map(|source| (source, Vec::new())));
+        let changed: Vec<SourceRows> = by_source
+            .into_iter()
+            .filter(|(source, rows)| self.published.get(source) != Some(rows))
+            .collect();
+        for (source, rows) in &changed {
+            self.published.insert(source.clone(), rows.clone());
+        }
+        changed
     }
 }
 
@@ -432,6 +488,9 @@ impl FlashPlugin for Browsers {
                 refresh_locations(&retry_ctx).await;
             });
         }
+        // The tab sources are published first; the history sources follow
+        // once their stores are copied and read, each on its own.
+        history::start(&ctx).await;
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -444,14 +503,21 @@ impl FlashPlugin for Browsers {
         ) {
             schedule_refresh(&ctx);
         }
+        history::on_event(&ctx, &event).await;
+    }
+
+    /// A bang arrives with the plugin id as its command; anything else is a
+    /// core command the manifest declares (`tab select`, the tab moves),
+    /// asked in the focused browser.
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
+        if command.command == "browsers" {
+            return history::bang_command(&command);
+        }
+        perform_command(&ctx, &command).await
     }
 
     async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
         resolve(&ctx, &row).await
-    }
-
-    async fn on_action(&self, ctx: Context, action: ActionRequest) -> PerformResponse {
-        perform_action(&ctx, &action).await
     }
 
     async fn on_navigate(&self, ctx: Context, request: NavigateRequest) -> PerformResponse {
@@ -532,7 +598,8 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<RunningBrowser>) ->
     lock(&CATALOG).retain_running(&running);
     lock(&LISTING_STREAKS).retain_running(&running);
     // Browsers are independent and each read costs hundreds of ms, so they
-    // run concurrently: one osascript per scripted edition, one task walking
+    // run concurrently: one in-process script per scripted edition (scripts
+    // overlap while each waits on its browser's reply), one task walking
     // every running Firefox (they share the session-store read). The cycle
     // holds the refresh gate until every listing lands, so concurrency stays
     // bounded to one read per running browser.
@@ -548,12 +615,9 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<RunningBrowser>) ->
     for app in &apps {
         if let Engine::AppleScript(dialect) = app.browser.engine {
             let ctx = ctx.clone();
-            let (browser, label, pid) = (app.browser, app.label.clone(), app.pid);
+            let (browser, pid) = (app.browser, app.pid);
             listings.spawn(timed(async move {
-                vec![(
-                    pid,
-                    list_scripted(&ctx, browser, dialect, &label, pid).await,
-                )]
+                vec![(pid, list_scripted(&ctx, browser, dialect, pid).await)]
             }));
         }
     }
@@ -625,26 +689,24 @@ async fn list_scripted(
     ctx: &Context,
     browser: &'static Browser,
     dialect: &'static Dialect,
-    label: &str,
     pid: i64,
 ) -> Option<Vec<Candidate>> {
-    let result = run_osascript(ctx, &dialect.list_script(label), LIST_TIMEOUT).await;
-    if !result.ok {
-        return None;
-    }
-    let rows = applescript::parse_tab_list(&result.stdout)
+    let listing = ctx
+        .applescript(&dialect.list_operation(browser.bundle_id), LIST_TIMEOUT)
+        .await
+        .ok()?;
+    let rows = applescript::parse_tab_list(&listing)
         .iter()
-        .map(|tab| scripted_row(browser, label, pid, tab))
+        .map(|tab| scripted_row(browser, pid, tab))
         .collect();
     Some(rows)
 }
 
 /// One scripted tab's row: every listed tab is its own row, its payload
 /// naming the slot it was listed at.
-fn scripted_row(browser: &Browser, label: &str, pid: i64, tab: &ListedTab) -> Candidate {
+fn scripted_row(browser: &Browser, pid: i64, tab: &ListedTab) -> Candidate {
     let payload = TabPayload {
         bundle_id: browser.bundle_id.to_string(),
-        app_name: label.to_string(),
         url: tab.url.clone(),
         title: tab.title.clone(),
         strip: None,
@@ -653,20 +715,17 @@ fn scripted_row(browser: &Browser, label: &str, pid: i64, tab: &ListedTab) -> Ca
     tab_candidate(browser, pid, &tab.title, &tab.url, tab.current, &payload)
 }
 
-/// Apply one catalog update and publish its result, if any, under the
-/// catalog lock so publishes leave in the order they were decided.
-fn publish_catalog(
-    ctx: &Context,
-    update: impl FnOnce(&mut TabCatalog) -> Option<Vec<Candidate>>,
-) -> bool {
+/// Apply one catalog update and publish each source it changed, under the
+/// catalog lock so publishes leave in the order they were decided. True
+/// when anything was published.
+fn publish_catalog(ctx: &Context, update: impl FnOnce(&mut TabCatalog) -> Vec<SourceRows>) -> bool {
     let mut catalog = lock(&CATALOG);
-    match update(&mut catalog) {
-        Some(rows) => {
-            ctx.publish(rows);
-            true
-        }
-        None => false,
+    let publishes = update(&mut catalog);
+    let changed = !publishes.is_empty();
+    for (source, rows) in publishes {
+        ctx.publish_source(&source, rows);
     }
+    changed
 }
 
 /// One browser's listing outcome: a failure warns once per streak (the SDK
@@ -785,18 +844,13 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
         Engine::Gecko => return firefox::resolve(ctx, pid, row, &tab).await,
         Engine::AppleScript(dialect) => dialect,
     };
-    let label = if tab.app_name.is_empty() {
-        browser.app_name
-    } else {
-        tab.app_name.as_str()
-    };
-    let Some((route, script)) = scripted_pick(dialect, label, pid, &tab) else {
+    let Some((route, script)) = scripted_pick(dialect, browser.bundle_id, pid, &tab) else {
         return PerformResponse::fail("tab has neither a URL nor a title");
     };
     ctx.activate(pid).await;
-    let result = run_osascript(ctx, &script, LIST_TIMEOUT).await;
+    let result = ctx.applescript(&script, LIST_TIMEOUT).await;
     log_unconfirmed(ctx, "tab-select", pid, &result);
-    scripted_outcome(route, result.ok, &result.stdout)
+    scripted_outcome(route, &result)
 }
 
 /// The route a scripted pick lands on and the script selecting it: the tab
@@ -805,36 +859,45 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
 /// either.
 fn scripted_pick(
     dialect: &Dialect,
-    label: &str,
+    bundle_id: &str,
     pid: i64,
     tab: &TabPayload,
-) -> Option<(TabRoute, String)> {
+) -> Option<(TabRoute, flash_plugin::AppleScriptOperation)> {
     let route = TabRoute::new(pid, &tab.url, &tab.title)?;
     let identity = TabIdentity::listed(&tab.url, &tab.title);
-    let script = dialect.select_script(label, identity, tab.slot);
+    let script = dialect.select_operation(bundle_id, identity, tab.slot);
     Some((route, script))
+}
+
+/// Whether a select script printed `ok`.
+fn confirmed(result: &Result<String, String>) -> bool {
+    result
+        .as_deref()
+        .is_ok_and(|printed| printed.trim() == "ok")
 }
 
 /// A select script's reply: `performed` on the route only when the script
 /// confirmed the tab (`ok`). Anything else (`missing`, a failed script) is
 /// an error, so the host neither records a jump the user never made nor
 /// falls back to another effect.
-fn scripted_outcome(route: TabRoute, ok: bool, stdout: &str) -> PerformResponse {
-    if ok && stdout.trim() == "ok" {
+fn scripted_outcome(route: TabRoute, result: &Result<String, String>) -> PerformResponse {
+    if confirmed(result) {
         performed(route.pid, Some(route))
     } else {
         PerformResponse::fail("tab not found")
     }
 }
 
-fn log_unconfirmed(ctx: &Context, what: &str, pid: i64, result: &CommandOutput) {
-    if !result.ok || result.stdout.trim() != "ok" {
+fn log_unconfirmed(ctx: &Context, what: &str, pid: i64, result: &Result<String, String>) {
+    if !confirmed(result) {
         ctx.log(
             "warn",
             &format!(
                 "[browsers] {what} did not confirm pid={pid} ok={} missing={}",
-                result.ok,
-                result.stdout.trim() == "missing"
+                result.is_ok(),
+                result
+                    .as_deref()
+                    .is_ok_and(|printed| printed.trim() == "missing")
             ),
         );
     }
@@ -855,46 +918,57 @@ async fn restore_navigation(ctx: &Context, request: &NavigateRequest) -> Perform
         Engine::Gecko => return firefox::restore(ctx, &route).await,
         Engine::AppleScript(dialect) => dialect,
     };
-    let script = dialect.select_script(&app.label, TabIdentity::route(&route.target), None);
-    let result = run_osascript(ctx, &script, ACTION_TIMEOUT).await;
+    let script = dialect.select_operation(
+        app.browser.bundle_id,
+        TabIdentity::route(&route.target),
+        None,
+    );
+    let result = ctx.applescript(&script, ACTION_TIMEOUT).await;
     log_unconfirmed(ctx, "restore", route.pid, &result);
-    scripted_outcome(route, result.ok, &result.stdout)
+    scripted_outcome(route, &result)
 }
 
-async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformResponse {
-    let Some(pid) = action.context.pid else {
+/// A core command the manifest declares, performed in the focused browser:
+/// `tab select --index=N` and the tab moves. Anything else, and anything
+/// asked outside a browser the engine table knows, is `unhandled`, so the
+/// host sends the manifest's chord instead.
+async fn perform_command(ctx: &Context, command: &CommandRequest) -> PerformResponse {
+    let Some(context) = command.context.as_ref() else {
         return PerformResponse::unhandled();
     };
-    let Some(browser) = action.context.bundle_id.as_deref().and_then(browser_for) else {
+    let Some(pid) = context.pid else {
+        return PerformResponse::unhandled();
+    };
+    let Some(browser) = context.bundle_id.as_deref().and_then(browser_for) else {
         return PerformResponse::unhandled();
     };
     let dialect = match browser.engine {
-        Engine::Gecko => return firefox::perform_action(ctx, pid, action).await,
+        Engine::Gecko => return firefox::perform_command(ctx, pid, command).await,
         Engine::AppleScript(dialect) => dialect,
     };
-    let app = browser.app_name;
-    let script = match action.name.as_str() {
-        "tab_select" => match action.index().filter(|n| *n > 0) {
-            Some(index) => dialect.tab_select_script(app, index),
+    let app = browser.bundle_id;
+    let script = match (command.command.as_str(), command.subcommand.as_str()) {
+        ("tab", "select") => match command.index().filter(|n| *n > 0) {
+            Some(index) => dialect.tab_select_operation(app, index),
             None => return PerformResponse::unhandled(),
         },
         // Unhandled for Chromium: the host then sends the manifest's chord.
-        "tab_move_next" | "tab_move_previous" => {
-            match dialect.tab_move_script(app, action.name == "tab_move_next") {
+        ("tab", "move_next" | "move_previous") => {
+            match dialect.tab_move_operation(app, command.subcommand == "move_next") {
                 Some(script) => script,
                 None => return PerformResponse::unhandled(),
             }
         }
         _ => return PerformResponse::unhandled(),
     };
-    let result = run_osascript(ctx, &script, ACTION_TIMEOUT).await;
+    let result = ctx.applescript(&script, ACTION_TIMEOUT).await;
     // The engine table gates this claim either way: an OK script is
     // `performed`, a non-OK is `failed` so the host doesn't fall back to a
     // ⌘<digit> keystroke that switches the wrong tab.
-    if result.ok && result.stdout.trim() == "ok" {
+    if confirmed(&result) {
         PerformResponse::ok().target_pid(pid)
     } else {
-        PerformResponse::fail(format!("{} did not confirm", action.name))
+        PerformResponse::fail(format!("{} did not confirm", command.name()))
     }
 }
 
@@ -916,14 +990,17 @@ fn main() {
 mod tests {
     use super::*;
     use crate::route::TabTarget;
-    use flash_plugin::ActionContext;
+    use flash_plugin::CommandContext;
     use flash_plugin::candidate_metadata::{CURRENT_LOCATION, NAVIGATION_URL};
 
-    /// Events drive every refresh: startup registers no cadence.
+    /// Events drive every refresh: startup registers no cadence. This is the
+    /// tab refresh `on_start` runs; the history rebuild it continues with
+    /// copies the user's real profile stores, so it stays out of a unit test
+    /// (it arms no cadence either: `history::on_event` is its only trigger).
     #[tokio::test]
     async fn startup_registers_no_cadence() {
         let mut harness = flash_plugin::testing::Harness::new("browsers");
-        Browsers.on_start(harness.context()).await;
+        refresh_locations(&harness.context()).await;
         let frames = harness.drain();
         assert!(
             !frames.iter().any(|frame| frame["method"] == "poll"),
@@ -997,6 +1074,36 @@ mod tests {
         assert_eq!(source("org.mozilla.thunderbird"), None);
     }
 
+    /// The history and bookmark stores read: the newest Firefox profile for
+    /// every Gecko edition, and Chrome's `Default` profile for Chrome alone
+    /// (Canary, Beta and Dev keep their own; the other browsers are not read).
+    #[test]
+    fn history_stores_belong_to_the_gecko_editions_and_chrome_alone() {
+        let stores: Vec<(&str, HistoryStore)> = BROWSERS
+            .iter()
+            .filter_map(|browser| browser.history.map(|store| (browser.bundle_id, store)))
+            .collect();
+        assert_eq!(
+            stores,
+            [
+                ("com.google.Chrome", HistoryStore::Chrome),
+                ("org.mozilla.firefox", HistoryStore::Firefox),
+                ("org.mozilla.firefoxdeveloperedition", HistoryStore::Firefox),
+                ("org.mozilla.nightly", HistoryStore::Firefox),
+            ]
+        );
+        for bundle_id in [
+            "com.google.Chrome.canary",
+            "com.google.Chrome.beta",
+            "com.google.Chrome.dev",
+            "org.chromium.Chromium",
+            "com.brave.Browser",
+            "com.apple.Safari",
+        ] {
+            assert_eq!(browser_for(bundle_id).unwrap().history, None, "{bundle_id}");
+        }
+    }
+
     #[test]
     fn running_editions_keep_host_order_and_skip_invalid_pids() {
         let app = |bundle_id: &str, pid, name: &str| RunningApplication {
@@ -1009,7 +1116,7 @@ mod tests {
             app("com.apple.Finder", 12, "Finder"),
             app("com.google.Chrome", 13, "Chrome FR"),
             app("org.mozilla.firefox", 0, "Firefox"),
-            // Another instance AppleScript would address by the same name.
+            // Another instance AppleScript would address by the same id.
             app("com.google.Chrome", 14, "Chrome FR"),
             // Firefox instances are read per pid.
             app("org.mozilla.firefoxdeveloperedition", 15, ""),
@@ -1017,20 +1124,12 @@ mod tests {
         assert_eq!(
             running
                 .iter()
-                .map(|app| (app.browser.bundle_id, app.label.as_str(), app.pid))
+                .map(|app| (app.browser.bundle_id, app.pid))
                 .collect::<Vec<_>>(),
             [
-                (
-                    "org.mozilla.firefoxdeveloperedition",
-                    "Firefox Developer Edition",
-                    11
-                ),
-                ("com.google.Chrome", "Chrome FR", 13),
-                (
-                    "org.mozilla.firefoxdeveloperedition",
-                    "Firefox Developer Edition",
-                    15
-                ),
+                ("org.mozilla.firefoxdeveloperedition", 11),
+                ("com.google.Chrome", 13),
+                ("org.mozilla.firefoxdeveloperedition", 15),
             ]
         );
     }
@@ -1049,7 +1148,6 @@ mod tests {
         let chrome = browser_for("com.google.Chrome").unwrap();
         let payload = TabPayload {
             bundle_id: chrome.bundle_id.into(),
-            app_name: "Google Chrome".into(),
             url: "https://example.com/page".into(),
             title: "Page".into(),
             strip: None,
@@ -1083,46 +1181,27 @@ mod tests {
     }
 
     #[test]
-    fn a_scripted_pick_requires_the_listed_url_and_title() {
+    fn a_scripted_pick_preserves_identity_as_data() {
         let payload = TabPayload {
             bundle_id: "com.apple.Safari".into(),
-            app_name: "Safari".into(),
             url: "https://docs.example/".into(),
             title: "Docs".into(),
             strip: None,
             slot: Some(TabSlot { window: 1, tab: 2 }),
         };
-        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &payload).unwrap();
-        // The route stays the URL alone, so history survives title changes.
-        assert_eq!(route.target, TabTarget::Url("https://docs.example/".into()));
-        assert!(script.contains(
-            "if ((URL of t as text) is targetURL) and ((name of t as text) is targetTitle) then"
-        ));
-        assert!(script.contains("set w to window 1\n      set i to 2\n"));
-        // A tab without a URL: selected by its title.
-        let untitled = TabPayload {
-            url: String::new(),
-            ..payload.clone()
-        };
-        let (route, script) = scripted_pick(&SAFARI, "Safari", 7, &untitled).unwrap();
-        assert_eq!(route, TabRoute::new(7, "", "Docs").unwrap());
-        assert!(script.contains("if ((name of t as text) is targetTitle) then"));
-        // A tab whose title is empty is matched as such, not by the URL the
-        // row shows in its place.
-        let blank = TabPayload {
-            title: String::new(),
-            ..payload.clone()
-        };
-        let (_, script) = scripted_pick(&SAFARI, "Safari", 7, &blank).unwrap();
-        assert!(script.contains(r#"set targetTitle to """#));
-        // Nothing to select by.
-        assert!(scripted_pick(&SAFARI, "Safari", 7, &TabPayload::default()).is_none());
+        let (route, operation) = scripted_pick(&SAFARI, "com.apple.Safari", 7, &payload).unwrap();
+        assert_eq!(route.target, TabTarget::Url(payload.url.clone()));
+        assert_eq!(
+            serde_json::to_value(operation).unwrap(),
+            serde_json::json!({"operation":"browser_select", "bundle_id":"com.apple.Safari", "url":payload.url, "title":"Docs", "window":1, "tab":2})
+        );
+        assert!(scripted_pick(&SAFARI, "com.apple.Safari", 7, &TabPayload::default()).is_none());
     }
 
     #[test]
     fn a_scripted_selection_performs_only_when_the_script_confirms_the_tab() {
         let route = TabRoute::new(7, "", "Docs").unwrap();
-        let confirmed = scripted_outcome(route.clone(), true, "ok\n");
+        let confirmed = scripted_outcome(route.clone(), &Ok("ok\n".to_string()));
         assert!(confirmed.is_ok());
         let wire = serde_json::to_value(&confirmed).unwrap();
         assert_eq!(wire["target_pid"], serde_json::json!(7));
@@ -1132,10 +1211,14 @@ mod tests {
         );
         // `missing` or a failed script: an error, so the host neither
         // records the jump nor falls back.
-        for (ok, stdout) in [(true, "missing\n"), (false, ""), (false, "ok\n")] {
-            let response = scripted_outcome(route.clone(), ok, stdout);
-            assert!(!response.is_ok(), "{ok} {stdout:?}");
-            assert!(!response.is_unhandled(), "{ok} {stdout:?}");
+        for result in [
+            Ok("missing\n".to_string()),
+            Err(String::new()),
+            Err("ok\n".to_string()),
+        ] {
+            let response = scripted_outcome(route.clone(), &result);
+            assert!(!response.is_ok(), "{result:?}");
+            assert!(!response.is_unhandled(), "{result:?}");
         }
     }
 
@@ -1148,7 +1231,7 @@ mod tests {
         );
         let rows: Vec<Candidate> = listed
             .iter()
-            .map(|tab| scripted_row(chrome, "Google Chrome", 42, tab))
+            .map(|tab| scripted_row(chrome, 42, tab))
             .collect();
         assert_eq!(rows.len(), 2);
         assert_ne!(rows[0], rows[1]);
@@ -1181,43 +1264,70 @@ mod tests {
         rows.iter().map(|row| row.title.as_str()).collect()
     }
 
+    /// The publishes as `(source, titles)`, in the order they go out.
+    fn published(publishes: &[SourceRows]) -> Vec<(&str, Vec<&str>)> {
+        publishes
+            .iter()
+            .map(|(source, rows)| (source.as_str(), titles(rows)))
+            .collect()
+    }
+
+    /// Tabs and history are separate sources with their own caps (the
+    /// module-level `const _` proves their sum fits the host's row quota),
+    /// so the catalog the host merges stays inside it however many tabs
+    /// are open: the rows past the tab cap are dropped, last browser first.
     #[test]
-    fn each_listing_publishes_merged_with_the_other_browsers_last_rows() {
-        let (chrome, firefox) = (1, 2);
-        let running = [chrome, firefox];
+    fn tab_rows_are_capped_so_the_merged_catalog_stays_inside_the_host_quota() {
+        let tabs: Vec<Candidate> = (0..TAB_ROWS_LIMIT + 5)
+            .map(|index| row("chrome.tabs", 1, &format!("T{index}")))
+            .collect();
+        let mut catalog = TabCatalog::default();
+        let publishes = catalog.record(&[1], vec![(1, Some(tabs.clone()))]);
+        assert_eq!(publishes.len(), 1);
+        assert_eq!(publishes[0].0, "chrome.tabs");
+        assert_eq!(publishes[0].1, tabs[..TAB_ROWS_LIMIT]);
+    }
+
+    /// A tab change publishes the one source it touched — a few rows — and
+    /// never another browser's tabs or the history rows.
+    #[test]
+    fn each_listing_publishes_its_own_source_alone() {
+        let (chrome, firefox, canary) = (1, 2, 3);
+        let running = [chrome, firefox, canary];
         let mut catalog = TabCatalog::default();
         // Firefox lands first: it publishes alone rather than waiting on
         // Chrome's read.
-        let published = catalog
-            .record(
-                &running,
-                vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F1")]))],
-            )
-            .unwrap();
-        assert_eq!(titles(&published), ["F1"]);
-        // Chrome lands: merged in running order, not completion order.
-        let published = catalog
-            .record(
-                &running,
-                vec![(chrome, Some(vec![row("chrome.tabs", chrome, "C1")]))],
-            )
-            .unwrap();
-        assert_eq!(titles(&published), ["C1", "F1"]);
-        // Next cycle: a Firefox change republishes with Chrome's last rows
+        let publishes = catalog.record(
+            &running,
+            vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F1")]))],
+        );
+        assert_eq!(published(&publishes), [("firefox.tabs", vec!["F1"])]);
+        // Chrome lands: its own source, Firefox's untouched.
+        let publishes = catalog.record(
+            &running,
+            vec![(chrome, Some(vec![row("chrome.tabs", chrome, "C1")]))],
+        );
+        assert_eq!(published(&publishes), [("chrome.tabs", vec!["C1"])]);
+        // Next cycle: a Firefox change republishes Firefox's source only,
         // while Chrome's read is still in flight.
-        let published = catalog
-            .record(
-                &running,
-                vec![(
-                    firefox,
-                    Some(vec![
-                        row("firefox.tabs", firefox, "F1"),
-                        row("firefox.tabs", firefox, "F2"),
-                    ]),
-                )],
-            )
-            .unwrap();
-        assert_eq!(titles(&published), ["C1", "F1", "F2"]);
+        let publishes = catalog.record(
+            &running,
+            vec![(
+                firefox,
+                Some(vec![
+                    row("firefox.tabs", firefox, "F1"),
+                    row("firefox.tabs", firefox, "F2"),
+                ]),
+            )],
+        );
+        assert_eq!(published(&publishes), [("firefox.tabs", vec!["F1", "F2"])]);
+        // Editions sharing a source merge in running order, not completion
+        // order.
+        let publishes = catalog.record(
+            &running,
+            vec![(canary, Some(vec![row("chrome.tabs", canary, "K1")]))],
+        );
+        assert_eq!(published(&publishes), [("chrome.tabs", vec!["C1", "K1"])]);
     }
 
     #[test]
@@ -1233,26 +1343,25 @@ mod tests {
             ],
         );
         // A failure alone publishes nothing: the host keeps last-good.
-        assert_eq!(catalog.record(&running, vec![(chrome, None)]), None);
+        assert!(catalog.record(&running, vec![(chrome, None)]).is_empty());
         assert_eq!(catalog.kept_rows(chrome), 1);
-        // The next success still carries the failed browser's rows.
-        let published = catalog
-            .record(
-                &running,
-                vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F2")]))],
-            )
-            .unwrap();
-        assert_eq!(titles(&published), ["C1", "F2"]);
-        // An empty listing is authoritative, unlike a failure.
-        let published = catalog
-            .record(&running, vec![(chrome, Some(Vec::new()))])
-            .unwrap();
-        assert_eq!(titles(&published), ["F2"]);
+        // The next success publishes its source; the failed browser's rows
+        // stay in the host store untouched.
+        let publishes = catalog.record(
+            &running,
+            vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F2")]))],
+        );
+        assert_eq!(published(&publishes), [("firefox.tabs", vec!["F2"])]);
+        // An empty listing is authoritative, unlike a failure: the source
+        // publishes empty.
+        let publishes = catalog.record(&running, vec![(chrome, Some(Vec::new()))]);
+        assert_eq!(published(&publishes), [("chrome.tabs", vec![])]);
         // A first cycle whose every read fails publishes nothing.
         let mut fresh = TabCatalog::default();
-        assert_eq!(
-            fresh.record(&running, vec![(chrome, None), (firefox, None)]),
-            None
+        assert!(
+            fresh
+                .record(&running, vec![(chrome, None), (firefox, None)])
+                .is_empty()
         );
     }
 
@@ -1263,25 +1372,33 @@ mod tests {
         let mut catalog = TabCatalog::default();
         let chrome_rows = vec![row("chrome.tabs", chrome, "C1")];
         assert!(
-            catalog
+            !catalog
                 .record(&running, vec![(chrome, Some(chrome_rows.clone()))])
-                .is_some()
+                .is_empty()
         );
-        assert_eq!(
-            catalog.record(&running, vec![(chrome, Some(chrome_rows))]),
-            None
+        assert!(
+            catalog
+                .record(&running, vec![(chrome, Some(chrome_rows))])
+                .is_empty()
         );
-        // A newly listed browser with no tabs leaves the merged set as is.
-        assert_eq!(
-            catalog.record(&running, vec![(firefox, Some(Vec::new()))]),
-            None
+        // A newly listed browser with no tabs has nothing to publish: its
+        // source was never published, so there is nothing to empty.
+        assert!(
+            catalog
+                .record(&running, vec![(firefox, Some(Vec::new()))])
+                .is_empty()
         );
-        assert!(catalog.clear().is_some());
-        assert_eq!(catalog.clear(), None, "an empty catalog publishes once");
+        assert_eq!(published(&catalog.clear()), [("chrome.tabs", vec![])]);
+        assert!(
+            catalog.clear().is_empty(),
+            "an emptied source publishes once"
+        );
     }
 
+    /// A browser quitting empties its source once; the others' sources,
+    /// unchanged, are not republished.
     #[test]
-    fn browsers_that_quit_drop_out_of_the_next_publish() {
+    fn browsers_that_quit_empty_their_source() {
         let (chrome, firefox) = (1, 2);
         let mut catalog = TabCatalog::default();
         catalog.record(
@@ -1294,13 +1411,11 @@ mod tests {
         // Chrome quit: the new cycle's snapshot no longer names it.
         catalog.retain_running(&[firefox]);
         assert_eq!(catalog.kept_rows(chrome), 0);
-        let published = catalog
-            .record(
-                &[firefox],
-                vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F1")]))],
-            )
-            .unwrap();
-        assert_eq!(titles(&published), ["F1"]);
+        let publishes = catalog.record(
+            &[firefox],
+            vec![(firefox, Some(vec![row("firefox.tabs", firefox, "F1")]))],
+        );
+        assert_eq!(published(&publishes), [("chrome.tabs", vec![])]);
     }
 
     #[test]
@@ -1343,55 +1458,62 @@ mod tests {
         );
     }
 
+    /// A core command asked in a browser, as the host sends it: the focused
+    /// app rides along as `context`.
+    fn core_command(bundle_id: &str, subcommand: &str) -> CommandRequest {
+        CommandRequest {
+            command: "tab".into(),
+            subcommand: subcommand.into(),
+            // No index: even `tab select` has nothing to claim.
+            args: vec![],
+            context: Some(CommandContext {
+                bundle_id: Some(bundle_id.into()),
+                pid: Some(4242),
+                front_window_frame: None,
+            }),
+        }
+    }
+
     #[tokio::test]
     async fn firefox_leaves_tab_creation_closing_and_moves_to_its_chords() {
         let harness = flash_plugin::testing::Harness::new("browsers");
         let ctx = harness.context();
-        for name in [
-            "tab_new",
-            "tab_close",
-            "tab_move_next",
-            "tab_move_previous",
-            "tab_select",
-        ] {
-            let action = ActionRequest {
-                name: name.into(),
-                context: ActionContext {
-                    bundle_id: Some("org.mozilla.firefox".into()),
-                    pid: Some(4242),
-                    front_window_frame: None,
-                },
-                // No index: even tab_select has nothing to claim.
-                args: Default::default(),
-            };
-            assert!(perform_action(&ctx, &action).await.is_unhandled(), "{name}");
+        for subcommand in ["new", "close", "move_next", "move_previous", "select"] {
+            let command = core_command("org.mozilla.firefox", subcommand);
+            assert!(
+                perform_command(&ctx, &command).await.is_unhandled(),
+                "{subcommand}"
+            );
         }
     }
 
     /// Every browser opens and closes tabs through its own Command-T and
-    /// Command-W: a script would only add an osascript round trip and an
-    /// Automation grant for the same result.
+    /// Command-W: a script would only add an Apple Event round trip and an
+    /// Automation grant for the same result. A scripted browser steps its
+    /// tabs by its own chords too; Firefox steps them itself, naming each
+    /// stop ([`firefox::perform_command`]).
     #[tokio::test]
     async fn every_browser_leaves_tab_creation_and_closing_to_its_chords() {
         let harness = flash_plugin::testing::Harness::new("browsers");
         let ctx = harness.context();
         for bundle_id in ["com.google.Chrome", "com.apple.Safari"] {
-            for name in ["tab_new", "tab_close"] {
-                let action = ActionRequest {
-                    name: name.into(),
-                    context: ActionContext {
-                        bundle_id: Some(bundle_id.into()),
-                        pid: Some(4242),
-                        front_window_frame: None,
-                    },
-                    args: Default::default(),
-                };
+            for subcommand in ["new", "close", "next", "previous", "first", "last"] {
+                let command = core_command(bundle_id, subcommand);
                 assert!(
-                    perform_action(&ctx, &action).await.is_unhandled(),
-                    "{bundle_id} {name}"
+                    perform_command(&ctx, &command).await.is_unhandled(),
+                    "{bundle_id} {subcommand}"
                 );
             }
         }
+        // Without the focused app, or outside a browser, nothing is claimed.
+        let mut bare = core_command("com.apple.Safari", "select");
+        bare.context = None;
+        assert!(perform_command(&ctx, &bare).await.is_unhandled());
+        assert!(
+            perform_command(&ctx, &core_command("com.apple.finder", "select"))
+                .await
+                .is_unhandled()
+        );
     }
 
     #[test]
@@ -1412,23 +1534,76 @@ mod tests {
         let mut table_sources: Vec<String> =
             BROWSERS.iter().map(|b| b.source.to_string()).collect();
         table_sources.dedup();
-        let sources: Vec<String> = manifest["sources"]
+        // The tab sources feed default results; the history and bookmark
+        // sources follow them and are reached only through their source
+        // filter or bang.
+        let tab_sources = table_sources.len();
+        table_sources.extend(history::SOURCES.iter().map(|source| source.to_string()));
+        let sources = manifest["sources"].as_array().unwrap();
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>(),
+            table_sources
+        );
+        // The history and bookmark sources are of the default kind, which
+        // the manifest leaves implicit.
+        for (index, source) in sources.iter().enumerate() {
+            let kind = if index < tab_sources {
+                serde_json::json!("locations")
+            } else {
+                serde_json::Value::Null
+            };
+            assert_eq!(source["kind"], kind, "{}", source["name"]);
+        }
+        // Every bang is `flash browsers <token>` (the host sends the plugin
+        // id as the command) and scopes the flashlight to one declared
+        // history or bookmark source.
+        let bangs: Vec<(&str, &str)> = manifest["bangs"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|source| source["name"].as_str().unwrap().to_string())
+            .map(|item| {
+                (
+                    item["token"].as_str().unwrap(),
+                    item["source"].as_str().unwrap(),
+                )
+            })
             .collect();
-        assert_eq!(sources, table_sources);
+        assert_eq!(
+            bangs,
+            [
+                ("fh", "firefox.history"),
+                ("fb", "firefox.bookmarks"),
+                ("ch", "chrome.history"),
+                ("cb", "chrome.bookmarks"),
+            ]
+        );
+        assert!(
+            bangs
+                .iter()
+                .all(|(_, source)| history::SOURCES.contains(source))
+        );
         // Firefox needs the AX broker and key posting; every row's route
         // scheme is declared so movement history dispatches it here.
         assert_eq!(
             strings(&manifest["capabilities"]),
-            ["accessibility", "app_control", "subprocess"]
+            ["accessibility", "app_control", "apple_events"]
         );
-        // Chromium browsers refuse Apple Events from any sandboxed sender
-        // (-10004), and `subprocess` without a `sandbox` spec is what spawns
-        // the plugin unsandboxed.
+        // Host-owned typed operations keep the browser process sandboxed.
         assert!(manifest.get("sandbox").is_none());
+        let expected: std::collections::HashSet<_> = BROWSERS
+            .iter()
+            .filter(|browser| matches!(browser.engine, Engine::AppleScript(_)))
+            .map(|browser| browser.bundle_id.to_string())
+            .collect();
+        assert_eq!(
+            strings(&manifest["apple_events_targets"])
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>(),
+            expected
+        );
         assert_eq!(strings(&manifest["navigation"]), ["flash-browser"]);
     }
 }

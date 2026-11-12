@@ -1,8 +1,8 @@
 //! The per-process [`Context`] handed to every plugin callback: the
 //! `publish`/`status`/`log` emitters, the typed host RPC client, config
 //! accessors, host-driven cadences and deadlines (see `poll`), sandboxed data
-//! dirs — plus the audited
-//! subprocess helpers [`run_command`] / [`run_osascript`].
+//! dirs — plus the audited subprocess helper [`run_command`]. AppleScript
+//! runs in the host ([`Context::applescript`]), never in the plugin.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 
 use crate::emit::Emitter;
 use crate::poll::PollRegistry;
-use crate::process::{self, ManagedChild, ManagedChildError};
+use crate::process;
 use crate::status::{PreviewTooLarge, StatusSegment, StatusValue};
 use crate::types::{Candidate, Event, PerformResponse, RunningApplication};
 
@@ -28,15 +28,43 @@ use crate::types::{Candidate, Event, PerformResponse, RunningApplication};
 /// can call the host.
 pub(crate) type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
-const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
-const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
+pub(crate) const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
+pub(crate) const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
 const DEFAULT_COMMAND_SLOW_THRESHOLD: Duration = Duration::from_secs(1);
+
+/// `host.applescript` bounds (`protocol.json` `applescript`): the host
+/// refuses a larger script and clamps a longer timeout, so the SDK answers
+/// the first without a round trip and never asks for the second.
+pub(crate) const APPLESCRIPT_SCRIPT_BYTES: usize = 64 * 1024;
+#[cfg(test)]
+pub(crate) const APPLESCRIPT_RESULT_BYTES: usize = 1024 * 1024;
+#[cfg(test)]
+pub(crate) const APPLESCRIPT_DEFAULT_TIMEOUT: Duration = Duration::from_millis(10_000);
+pub(crate) const APPLESCRIPT_MAX_TIMEOUT: Duration = Duration::from_millis(30_000);
+#[cfg(test)]
+pub(crate) const APPLESCRIPT_CONCURRENCY: usize = 4;
+/// How much longer than the script's own deadline a call waits for the
+/// host's reply: the host answers a late script at the deadline, so the
+/// reply, not the SDK's timeout sentinel, carries the outcome.
+const APPLESCRIPT_REPLY_SLACK: Duration = Duration::from_secs(2);
 
 /// Canonical `call_host` sentinels (pinned in `protocol.json`): `call_host`
 /// never errors and never returns nil — host death and the call timeout
 /// arrive as these result objects instead.
 const HOST_CLOSED_ERROR: &str = "host closed stdin";
 const HOST_TIMEOUT_ERROR: &str = "host call timed out";
+
+/// The `publish` notification's params, serialized straight into the frame:
+/// `source` names the one source these rows replace, or is absent for a
+/// whole-catalog replacement. The host counts the catalog byte quota from
+/// the `rows` array as it lies in this frame, so the SDK writes it compact
+/// and adds exactly the envelope around it (`wire` pins the arithmetic).
+#[derive(serde::Serialize)]
+pub(crate) struct Publish<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<&'a str>,
+    pub(crate) rows: &'a [Candidate],
+}
 
 /// Focused non-Flash app context returned by
 /// [`Context::normal_mode_target`]. Mirrors the host-side notion of
@@ -61,7 +89,7 @@ pub struct Context {
     /// loudly instead of quietly littering the current directory.
     data_dir: Option<PathBuf>,
     pub(crate) emit: Emitter,
-    /// User-supplied settings from the `[plugin.<id>]` table of
+    /// User-supplied settings from the `[plugins.<id>]` table of
     /// `~/.config/flash`, delivered as a JSON object (empty when unset).
     config: Value,
     host_pending: HostPending,
@@ -191,7 +219,7 @@ impl Context {
         self.data_dir().join("bin")
     }
 
-    /// Read a string setting from the plugin's `[plugin.<id>]` config,
+    /// Read a string setting from the plugin's `[plugins.<id>]` config,
     /// defaulting to `""` when absent or not a string.
     pub fn config_str(&self, key: &str) -> String {
         self.config
@@ -201,7 +229,7 @@ impl Context {
             .to_string()
     }
 
-    /// Decode a setting from the plugin's `[plugin.<id>]` config as `T`.
+    /// Decode a setting from the plugin's `[plugins.<id>]` config as `T`.
     pub fn config_json<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
         serde_json::from_value(self.config.get(key)?.clone()).ok()
     }
@@ -215,8 +243,35 @@ impl Context {
     /// transient refresh failure simply don't publish — the host keeps the
     /// last-good catalog, across crashes and restarts. The host validates
     /// quotas at receipt and rejects a violating publish whole.
+    ///
+    /// The host decodes every publish in full, so keep each one proportional
+    /// to the change: rows that change often (open tabs, a selection) and
+    /// rows that rarely do (history, bookmarks) belong to different sources,
+    /// each published alone with [`publish_source`](Self::publish_source).
     pub fn publish(&self, rows: Vec<Candidate>) {
-        self.emit.notify("publish", json!({ "rows": rows }));
+        self.emit.notify_with(
+            "publish",
+            &Publish {
+                source: None,
+                rows: &rows,
+            },
+        );
+    }
+
+    /// Publish one source's rows (the `publish` notification with `source`):
+    /// a replacement of the rows of that manifest `sources[].name` alone,
+    /// every other source keeping the rows it last published. Every row must
+    /// carry `source` in [`Candidate::source`] — the host rejects the publish
+    /// whole otherwise — and the catalog quotas apply to the plugin's whole
+    /// catalog after the merge. An empty vector empties that source.
+    pub fn publish_source(&self, source: &str, rows: Vec<Candidate>) {
+        self.emit.notify_with(
+            "publish",
+            &Publish {
+                source: Some(source),
+                rows: &rows,
+            },
+        );
     }
 
     /// Publish status-bar segment values declared by this plugin's
@@ -419,6 +474,64 @@ impl Context {
         }
     }
 
+    /// Run a data-only operation using a host-owned AppleScript template.
+    /// Requires `apple_events` and its declared target in `apple_events_targets`.
+    /// No source code is accepted; strings are escaped literals in the host.
+    pub async fn applescript(
+        &self,
+        operation: &crate::AppleScriptOperation,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let started_at = Instant::now();
+        let mut params = serde_json::to_value(operation).expect("operation is serializable");
+        if params.to_string().len() > APPLESCRIPT_SCRIPT_BYTES {
+            return Err(format!(
+                "operation exceeds the {APPLESCRIPT_SCRIPT_BYTES} byte host.applescript cap"
+            ));
+        }
+        let timeout = timeout.clamp(Duration::from_millis(1), APPLESCRIPT_MAX_TIMEOUT);
+        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+        let response = self
+            .call_host_timeout(
+                "host.applescript",
+                {
+                    params["timeout_ms"] = json!(timeout_ms);
+                    params
+                },
+                timeout + APPLESCRIPT_REPLY_SLACK,
+            )
+            .await;
+        let outcome = if ok(&response) {
+            match response.get("result").and_then(Value::as_str) {
+                Some(result) => Ok(result.to_string()),
+                None => Err("host.applescript response missing result".to_string()),
+            }
+        } else {
+            Err(response
+                .get("error")
+                .and_then(Value::as_str)
+                .filter(|error| !error.is_empty())
+                .unwrap_or("host.applescript failed")
+                .to_string())
+        };
+        let status = response.get("status").and_then(Value::as_i64);
+        log_applescript_latency(self, status, started_at.elapsed(), timeout);
+        if let Err(error) = &outcome
+            && let Some(code) = applescript_error_code(error)
+            && let Some(suppressed) = admit_subprocess_warning(&format!("applescript:{code}"))
+        {
+            let mut fields = BTreeMap::from([("error_code".to_string(), code.to_string())]);
+            if let Some(status) = status {
+                fields.insert("status".to_string(), status.to_string());
+            }
+            if suppressed > 0 {
+                fields.insert("suppressed".to_string(), suppressed.to_string());
+            }
+            self.log_fields("warn", "[plugin] applescript failed", fields);
+        }
+        outcome
+    }
+
     /// Query the host for the focused non-Flash app context — the same value
     /// the host treats as the "normal-mode target" (`host.normal_mode_target`).
     /// Returns `None` when no such app is focused. The `core:focus.changed`
@@ -460,9 +573,12 @@ impl Context {
 
     /// Open a URL through the host (`host.open`): LaunchServices runs
     /// host-side, so the plugin keeps a fork-free profile. Requires the
-    /// `open` capability.
-    pub async fn open_url(&self, url: &str) -> bool {
-        ok(&self.call_host("host.open", json!({ "url": url })).await)
+    /// `open` capability. `Ok` carries the bundle id of the app the URL was
+    /// handed to, when the host could name it, so the plugin can check that
+    /// app still has focus before acting on it; `Err` carries the host's
+    /// error.
+    pub async fn open_url(&self, url: &str) -> Result<Option<String>, String> {
+        open_url_from_response(&self.call_host("host.open", json!({ "url": url })).await)
     }
 
     /// Launch or raise an app by bundle id through the host (`host.open`).
@@ -473,123 +589,6 @@ impl Context {
             .await)
     }
 
-    /// Post an NX_SYSTEM_DEFINED media key host-side (`host.post_media_key`).
-    /// Requires the `media_keys` capability.
-    pub async fn post_media_key(&self, key_code: i64) -> bool {
-        ok(&self
-            .call_host("host.post_media_key", json!({ "key_code": key_code }))
-            .await)
-    }
-
-    /// List audio devices for `input` or `output`, or select one by UID.
-    /// Requires the `audio_devices` capability. The host owns CoreAudio access.
-    pub async fn audio_devices(&self, direction: &str, select_uid: Option<&str>) -> Value {
-        let mut params = json!({ "direction": direction });
-        if let Some(uid) = select_uid {
-            params["select_uid"] = json!(uid);
-        }
-        self.call_host("host.audio_devices", params).await
-    }
-
-    /// Move the default output one macOS volume-key tick in the sign of
-    /// `delta_percent` and clear mute. The host applies the 16-tick scale
-    /// through CoreAudio; a sandboxed plugin cannot run AppleScript
-    /// `set volume`. Requires the `audio_devices` capability.
-    pub async fn adjust_output_volume(&self, delta_percent: i32) -> bool {
-        ok(&self
-            .call_host(
-                "host.audio_devices",
-                json!({ "volume_delta": delta_percent }),
-            )
-            .await)
-    }
-
-    /// Toggle mute on the default output. Requires the `audio_devices` capability.
-    pub async fn toggle_output_mute(&self) -> bool {
-        ok(&self
-            .call_host("host.audio_devices", json!({ "mute": "toggle" }))
-            .await)
-    }
-
-    /// Read the host's process table (`host.process_table`), optionally
-    /// sampling CPU over `sample_window_ms`. Returns the raw result object
-    /// (rows under `"processes"`). Requires the `process_control` capability.
-    pub async fn process_table(&self, sample_window_ms: Option<u64>) -> Value {
-        let mut params = json!({});
-        if let Some(window) = sample_window_ms {
-            params["sample_window_ms"] = json!(window);
-        }
-        self.call_host("host.process_table", params).await
-    }
-
-    /// Sample one process through `host.process_table`. Exact-PID mode also
-    /// includes resident bytes, lifetime disk I/O, uptime, thread count, and
-    /// the open socket descriptor count across the process tree. CPU is the
-    /// delta since the host's previous sample of that pid, so steady polling
-    /// never sleeps host-side. Requires the `process_control` capability.
-    pub async fn process_metrics(&self, pid: i64, sample_window_ms: Option<u64>) -> Value {
-        let mut params = json!({ "pid": pid });
-        if let Some(window) = sample_window_ms {
-            params["sample_window_ms"] = json!(window);
-        }
-        self.call_host("host.process_table", params).await
-    }
-
-    /// SIGTERM `pid` host-side (`host.signal`). Requires the
-    /// `process_control` capability.
-    pub async fn signal(&self, pid: i64) -> Result<(), String> {
-        let response = self.call_host("host.signal", json!({ "pid": pid })).await;
-        if ok(&response) {
-            return Ok(());
-        }
-        Err(response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("host.signal failed")
-            .to_string())
-    }
-
-    /// Replace the system clipboard through the host (`host.clipboard_write`).
-    /// Requires the `clipboard` capability.
-    pub async fn clipboard_write(&self, text: &str) -> bool {
-        ok(&self
-            .call_host("host.clipboard_write", json!({ "text": text }))
-            .await)
-    }
-
-    /// Show a transient host banner (`host.notify`). Requires the `notify`
-    /// capability; the host rate-limits to one banner per plugin per second.
-    pub async fn notify(&self, message: &str, duration_ms: Option<u64>) -> bool {
-        let mut params = json!({ "message": message });
-        if let Some(duration_ms) = duration_ms {
-            params["duration_ms"] = json!(duration_ms);
-        }
-        ok(&self.call_host("host.notify", params).await)
-    }
-
-    /// Read one key from the host-managed KV store in the plugin's data dir
-    /// (`host.storage_get`). No capability required.
-    pub async fn storage_get(&self, key: &str) -> Option<String> {
-        let response = self
-            .call_host("host.storage_get", json!({ "key": key }))
-            .await;
-        if !ok(&response) {
-            return None;
-        }
-        response
-            .get("value")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    }
-
-    /// Write (or, with `None`, delete) one key in the host-managed KV store
-    /// (`host.storage_set`). Values are capped at 64 KiB, tables at 256 keys.
-    pub async fn storage_set(&self, key: &str, value: Option<&str>) -> bool {
-        ok(&self
-            .call_host("host.storage_set", json!({ "key": key, "value": value }))
-            .await)
-    }
-
     /// Post a keystroke plan to a target app (`host.post_keys`), e.g.
     /// `{"pid": …, "keys": [{"key_code": …, "modifiers": […]}], "interval_ms": …}`.
     /// Requires the `accessibility` capability.
@@ -597,27 +596,16 @@ impl Context {
         ok(&self.call_host("host.post_keys", params).await)
     }
 
-    /// Post one modified chord through the host's session event stream for
-    /// macOS-owned shortcuts (`host.post_global_key`). Returns the raw result
-    /// object. Requires the `accessibility` capability.
-    pub async fn post_global_key(&self, key_code: i64, modifiers: &[&str]) -> Value {
-        self.call_host(
-            "host.post_global_key",
-            json!({ "key_code": key_code, "modifiers": modifiers }),
-        )
-        .await
-    }
-
-    /// BFS-walk an app's AX subtree through the host broker
-    /// (`host.ax_snapshot`); nodes come back flat with opaque handles,
-    /// geometry in NSScreen coordinates. Returns the raw result object.
-    /// Requires the `accessibility` capability.
+    /// BFS-walk an app's AX windows through the host broker
+    /// (`host.ax_snapshot`); nodes come back flat with opaque handles.
+    /// Returns the raw result object. Requires the `accessibility`
+    /// capability.
     pub async fn ax_snapshot(&self, params: Value) -> Value {
         self.call_host("host.ax_snapshot", params).await
     }
 
-    /// [`ax_snapshot`](Context::ax_snapshot) with an explicit deadline for
-    /// hint-discovery paths tighter than the 5 s default.
+    /// [`ax_snapshot`](Context::ax_snapshot) with a reply timeout other than
+    /// the 5 s default.
     pub async fn ax_snapshot_timeout(&self, params: Value, timeout: Duration) -> Value {
         self.call_host_timeout("host.ax_snapshot", params, timeout)
             .await
@@ -710,6 +698,22 @@ fn ok(response: &Value) -> bool {
     response.get("ok").and_then(Value::as_bool) == Some(true)
 }
 
+fn open_url_from_response(response: &Value) -> Result<Option<String>, String> {
+    if !ok(response) {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .filter(|error| !error.is_empty())
+            .unwrap_or("host.open failed");
+        return Err(error.to_string());
+    }
+    Ok(response
+        .get("bundle_id")
+        .and_then(Value::as_str)
+        .filter(|bundle_id| !bundle_id.is_empty())
+        .map(str::to_string))
+}
+
 fn wifi_ssid_from_response(response: &Value) -> Option<String> {
     if !ok(response) || response.get("present").and_then(Value::as_bool) != Some(true) {
         return None;
@@ -747,7 +751,7 @@ impl PluginEnv {
     }
 }
 
-/// `FLASH_PLUGIN_CONFIG` carries the `[plugin.<id>]` settings as a JSON
+/// `FLASH_PLUGIN_CONFIG` carries the `[plugins.<id>]` settings as a JSON
 /// object. Configuration is optional at the protocol level, so an absent,
 /// empty, malformed or non-object value is an empty table — never a refusal
 /// to start.
@@ -761,8 +765,8 @@ pub(crate) fn parse_config(raw: Option<&str>) -> Value {
 // Subprocess helpers
 // ---------------------------------------------------------------------------
 
-/// The result of running a subprocess via `run_command` / `run_osascript`:
-/// exit success plus captured stdout/stderr. `into_perform` folds it into a
+/// The result of a `run_command` subprocess: exit success plus captured
+/// stdout/stderr. `into_perform` folds it into a
 /// `PerformResponse` (trimmed + length-capped). This lives in the SDK so the
 /// subprocess sandbox policy has exactly one audited home instead of being
 /// copy-pasted into every plugin.
@@ -790,45 +794,43 @@ impl CommandOutput {
     }
 }
 
-/// Run `osascript -e <script>` with the same sandboxed env + timeout as
-/// `run_command`.
-pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> CommandOutput {
-    let output = run_command(
-        ctx,
-        &[
-            "/usr/bin/osascript".to_string(),
-            "-e".to_string(),
-            script.to_string(),
-        ],
-        timeout,
-    )
-    .await;
-    // The error number names the failure (-1743: not authorized to send Apple
-    // events, -600: the app is not running) without the message's content.
-    if let Some(code) = (!output.ok)
-        .then(|| osascript_error_code(&output.stderr))
-        .flatten()
-        && let Some(suppressed) = admit_subprocess_warning(&format!("osascript:{code}"))
-    {
-        let mut fields = BTreeMap::from([
-            ("error_code".to_string(), code.to_string()),
-            ("status".to_string(), output.status.to_string()),
-        ]);
-        if suppressed > 0 {
-            fields.insert("suppressed".to_string(), suppressed.to_string());
-        }
-        ctx.log_fields("warn", "[plugin] osascript failed", fields);
-    }
-    output
-}
-
 /// The AppleScript error number osascript ends its error line with:
 /// `…: execution error: <message> (-1743)`.
-fn osascript_error_code(stderr: &str) -> Option<i64> {
-    let line = stderr.trim_end();
+fn applescript_error_code(error: &str) -> Option<i64> {
+    let line = error.trim_end();
     let inner = line.strip_suffix(')')?;
     let open = inner.rfind('(')?;
     inner[open + 1..].parse().ok()
+}
+
+/// The `[plugin] subprocess slow` warning for a host-run script, as for a
+/// program `run_command` ran: a script past its slow threshold or its
+/// deadline, once a minute per kind.
+fn log_applescript_latency(
+    ctx: &Context,
+    status: Option<i64>,
+    elapsed: Duration,
+    timeout: Duration,
+) {
+    let timed_out = status == Some(i64::from(process::TIMEOUT_STATUS));
+    if !timed_out && elapsed < DEFAULT_COMMAND_SLOW_THRESHOLD {
+        return;
+    }
+    let Some(suppressed) = admit_subprocess_warning(&format!("applescript:{timed_out}")) else {
+        return;
+    };
+    let mut fields = BTreeMap::from([
+        ("executable".to_string(), "applescript".to_string()),
+        ("elapsed_ms".to_string(), elapsed.as_millis().to_string()),
+        ("timeout_ms".to_string(), timeout.as_millis().to_string()),
+    ]);
+    if let Some(status) = status {
+        fields.insert("status".to_string(), status.to_string());
+    }
+    if suppressed > 0 {
+        fields.insert("suppressed".to_string(), suppressed.to_string());
+    }
+    ctx.log_fields("warn", "[plugin] subprocess slow", fields);
 }
 
 /// One warning per kind of subprocess trouble per window: a plugin polling a
@@ -963,20 +965,6 @@ pub async fn run_command_with_slow_threshold(
     output
 }
 
-/// Spawn a long-lived subprocess with the same scrubbed directories and PATH
-/// as [`run_command`]. The child has null stdio and a dedicated process group;
-/// callers own its complete replacement and shutdown lifecycle through
-/// [`ManagedChild`].
-pub fn spawn_managed(ctx: &Context, argv: &[String]) -> Result<ManagedChild, ManagedChildError> {
-    let Some((program, args)) = argv.split_first() else {
-        return Err(ManagedChildError::EmptyArgv);
-    };
-    let mut command = tokio::process::Command::new(program);
-    command.args(args);
-    configure_command(ctx, &mut command);
-    ManagedChild::spawn(&mut command)
-}
-
 fn configure_command(ctx: &Context, command: &mut tokio::process::Command) {
     command
         .current_dir(ctx.data_dir())
@@ -1108,40 +1096,40 @@ mod tests {
     fn subprocess_warnings_are_admitted_once_a_window_with_a_held_back_count() {
         let mut gate = WarningGate::default();
         let start = Instant::now();
-        assert_eq!(gate.admit("osascript:false", start), Some(0));
+        assert_eq!(gate.admit("applescript:false", start), Some(0));
         assert_eq!(
-            gate.admit("osascript:false", start + Duration::from_secs(10)),
+            gate.admit("applescript:false", start + Duration::from_secs(10)),
             None
         );
         assert_eq!(
-            gate.admit("osascript:false", start + Duration::from_secs(20)),
+            gate.admit("applescript:false", start + Duration::from_secs(20)),
             None
         );
-        assert_eq!(gate.admit("osascript:true", start), Some(0), "per key");
+        assert_eq!(gate.admit("applescript:true", start), Some(0), "per key");
         assert_eq!(
-            gate.admit("osascript:false", start + SUBPROCESS_WARNING_WINDOW),
+            gate.admit("applescript:false", start + SUBPROCESS_WARNING_WINDOW),
             Some(2)
         );
         assert_eq!(
-            gate.admit("osascript:false", start + SUBPROCESS_WARNING_WINDOW * 3),
+            gate.admit("applescript:false", start + SUBPROCESS_WARNING_WINDOW * 3),
             Some(0)
         );
     }
 
     #[test]
-    fn osascript_errors_are_read_by_number_alone() {
+    fn applescript_errors_are_read_by_number_alone() {
         assert_eq!(
-            osascript_error_code(
+            applescript_error_code(
                 "35:120: execution error: Not authorized to send Apple events to Safari. (-1743)\n"
             ),
             Some(-1743)
         );
         assert_eq!(
-            osascript_error_code("execution error: (it) broke (-600)"),
+            applescript_error_code("execution error: (it) broke (-600)"),
             Some(-600)
         );
-        assert_eq!(osascript_error_code("Connection invalid"), None);
-        assert_eq!(osascript_error_code(""), None);
+        assert_eq!(applescript_error_code("Connection invalid"), None);
+        assert_eq!(applescript_error_code(""), None);
     }
 
     #[test]
@@ -1291,7 +1279,7 @@ mod tests {
         // One permissive reply satisfies every wrapper's result decoder.
         let host_reply = json!({
             "ok": true, "present": true, "ssid": "Atelier", "body": "b",
-            "pid": 7, "bundle_id": "com.example.App", "value": "v"
+            "pid": 7, "bundle_id": "com.example.App"
         });
         let table: Vec<(&str, Value, Call, Value)> = vec![
             (
@@ -1336,8 +1324,8 @@ mod tests {
             (
                 "host.open",
                 json!({ "url": "https://example.com/x" }),
-                call!(|ctx| ctx.open_url("https://example.com/x").await),
-                json!(true),
+                call!(|ctx| ctx.open_url("https://example.com/x").await.unwrap()),
+                json!("com.example.App"),
             ),
             (
                 "host.open",
@@ -1346,81 +1334,9 @@ mod tests {
                 json!(true),
             ),
             (
-                "host.post_media_key",
-                json!({ "key_code": 16 }),
-                call!(|ctx| ctx.post_media_key(16).await),
-                json!(true),
-            ),
-            (
-                "host.audio_devices",
-                json!({ "direction": "input" }),
-                call!(|ctx| ctx.audio_devices("input", None).await["ok"].clone()),
-                json!(true),
-            ),
-            (
-                "host.audio_devices",
-                json!({ "volume_delta": 10 }),
-                call!(|ctx| ctx.adjust_output_volume(10).await),
-                json!(true),
-            ),
-            (
-                "host.audio_devices",
-                json!({ "mute": "toggle" }),
-                call!(|ctx| ctx.toggle_output_mute().await),
-                json!(true),
-            ),
-            (
-                "host.process_table",
-                json!({ "sample_window_ms": 150 }),
-                call!(|ctx| ctx.process_table(Some(150)).await["ok"].clone()),
-                json!(true),
-            ),
-            (
-                "host.process_table",
-                json!({ "pid": 7 }),
-                call!(|ctx| ctx.process_metrics(7, None).await["ok"].clone()),
-                json!(true),
-            ),
-            (
-                "host.signal",
-                json!({ "pid": 7 }),
-                call!(|ctx| ctx.signal(7).await.is_ok()),
-                json!(true),
-            ),
-            (
-                "host.clipboard_write",
-                json!({ "text": "copy" }),
-                call!(|ctx| ctx.clipboard_write("copy").await),
-                json!(true),
-            ),
-            (
-                "host.notify",
-                json!({ "message": "hi", "duration_ms": 900 }),
-                call!(|ctx| ctx.notify("hi", Some(900)).await),
-                json!(true),
-            ),
-            (
-                "host.storage_get",
-                json!({ "key": "k" }),
-                call!(|ctx| ctx.storage_get("k").await),
-                json!("v"),
-            ),
-            (
-                "host.storage_set",
-                json!({ "key": "k", "value": null }),
-                call!(|ctx| ctx.storage_set("k", None).await),
-                json!(true),
-            ),
-            (
                 "host.post_keys",
                 json!({ "pid": 7, "keys": [] }),
                 call!(|ctx| ctx.post_keys(json!({ "pid": 7, "keys": [] })).await),
-                json!(true),
-            ),
-            (
-                "host.post_global_key",
-                json!({ "key_code": 4, "modifiers": ["command"] }),
-                call!(|ctx| ctx.post_global_key(4, &["command"]).await["ok"].clone()),
                 json!(true),
             ),
             (
@@ -1466,6 +1382,27 @@ mod tests {
             assert!(harness.reply_host(id, host_reply.clone()), "{method}");
             assert_eq!(task.await.unwrap(), expected, "{method}");
         }
+    }
+
+    #[test]
+    fn open_url_response_names_the_handler_or_carries_the_host_error() {
+        assert_eq!(
+            open_url_from_response(&json!({ "ok": true, "bundle_id": "com.example.App" })),
+            Ok(Some("com.example.App".to_string()))
+        );
+        assert_eq!(open_url_from_response(&json!({ "ok": true })), Ok(None));
+        assert_eq!(
+            open_url_from_response(&json!({ "ok": true, "bundle_id": "" })),
+            Ok(None)
+        );
+        assert_eq!(
+            open_url_from_response(&json!({ "ok": false, "error": "open failed" })),
+            Err("open failed".to_string())
+        );
+        assert_eq!(
+            open_url_from_response(&json!({ "ok": false })),
+            Err("host.open failed".to_string())
+        );
     }
 
     #[test]

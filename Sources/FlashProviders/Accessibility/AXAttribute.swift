@@ -128,7 +128,7 @@ public enum AXAttribute {
     var rect = CGRect.zero
     guard AXValueGetValue(axValue, .cgRect, &rect), rect.width > 0, rect.height > 0
     else { return nil }
-    return ScreenSpace.flip(rect, height: screenH)
+    return ScreenRect<AXSpace>(rect).toNS(primaryHeight: screenH).cgRect
   }
 
   /// The on-screen character range, when the element publishes one. A range

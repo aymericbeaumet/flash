@@ -9,25 +9,25 @@ function row(partial: Partial<MappingRow> & Pick<MappingRow, "key" | "action" | 
 
 const brightness = row({
   key: "2",
-  action: "flash system_key --key=brightness_up",
+  action: "flash key system --key=brightness_up",
   explanation: "Raises the display brightness.",
 });
 const volume = row({
   key: "=",
-  action: "flash system_key --key=volume_up",
+  action: "flash key system --key=volume_up",
   explanation: "Raises the volume.",
 });
 const arrow = row({
   key: "h",
-  action: "flash arrow --direction=left",
+  action: "flash key arrow --direction=left",
   explanation: "Posts the Left arrow.",
 });
 const shiftArrow = row({
   key: "shift+h",
-  action: "flash arrow --direction=left --shift",
+  action: "flash key arrow --direction=left --shift",
   explanation: "Posts Shift+Left.",
 });
-const quit = row({ key: "q", action: "flash quit", explanation: "Quits Flash." });
+const quit = row({ key: "q", action: "flash resident quit", explanation: "Quits Flash." });
 
 function score(query: string, item: MappingRow, source = ""): number | null {
   return scoreSearch(query, searchFields(item, [], source));
@@ -40,13 +40,13 @@ test("a typo for what a mapping does still finds it", () => {
 });
 
 test("the explanation outranks a source-only hit and a key still wins when it is the query", () => {
-  const sourceOnly = row({ key: "x", action: "flash quit", explanation: "Quits Flash." });
+  const sourceOnly = row({ key: "x", action: "flash resident quit", explanation: "Quits Flash." });
   const byEffect = row({
     key: "mf",
-    action: "flash mouse_target --move",
+    action: "flash mouse target --move",
     explanation: "Labels targets in the focused window and moves the pointer onto the one you pick.",
   });
-  const byKey = row({ key: "pointer", action: "flash quit", explanation: "Quits Flash." });
+  const byKey = row({ key: "pointer", action: "flash resident quit", explanation: "Quits Flash." });
   assert.ok((score("pointer", byEffect) ?? 0) > (score("pointer", sourceOnly, "pointer plugin") ?? 0));
   assert.ok((score("pointer", byKey) ?? 0) > (score("pointer", byEffect) ?? 0));
 });
@@ -63,10 +63,10 @@ test("an empty query is not a match", () => {
 test("a one-letter search matches that key, not every word containing the letter", () => {
   const jump = row({
     key: "f",
-    action: "flash mouse_target",
+    action: "flash mouse target",
     explanation: "Labels targets in the focused window and left-clicks the one you pick.",
   });
-  const nextApp = row({ key: "a", action: "flash app_next", explanation: "Focuses the next app." });
+  const nextApp = row({ key: "a", action: "flash app next", explanation: "Focuses the next app." });
   assert.ok((score("f", jump) ?? 0) > 0);
   assert.equal(score("f", quit), null);
   assert.equal(score("up", nextApp), null);
@@ -77,21 +77,21 @@ test("a plugin description is the hover text and counts in the ranking", () => {
   const mapping = row({
     scope: "normal",
     key: "<leader>c",
-    action: "flash caffeinate toggle",
-    explanation: "Runs the caffeinate toggle command.",
+    action: "flash screenshot window",
+    explanation: "Runs the screenshot window command.",
   });
   const commands: CommandInfo[] = [{
-    name: ":caffeinate toggle",
-    command: "caffeinate",
-    subcommand: "toggle",
-    description: "Toggle the caffeinate assertion",
-    source: "caffeinate",
+    name: ":screenshot window",
+    command: "screenshot",
+    subcommand: "window",
+    description: "Copy a capture of the focused window to the clipboard",
+    source: "screenshot",
     source_kind: "plugin",
   }];
-  assert.equal(explainMapping(mapping, commands), "Toggle the caffeinate assertion");
-  const fields = searchFields(mapping, commands, "plugin caffeinate");
-  assert.match(fields.explanation, /Toggle the caffeinate assertion/);
-  assert.match(fields.explanation, /Runs the caffeinate toggle command/);
-  assert.ok((scoreSearch("assertion", fields) ?? 0) > 0);
-  assert.equal(scoreSearch("assertion", searchFields(quit, commands, "")), null);
+  assert.equal(explainMapping(mapping, commands), "Copy a capture of the focused window to the clipboard");
+  const fields = searchFields(mapping, commands, "plugin screenshot");
+  assert.match(fields.explanation, /Copy a capture of the focused window/);
+  assert.match(fields.explanation, /Runs the screenshot window command/);
+  assert.ok((scoreSearch("capture", fields) ?? 0) > 0);
+  assert.equal(scoreSearch("capture", searchFields(quit, commands, "")), null);
 });

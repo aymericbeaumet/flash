@@ -3,6 +3,7 @@
   import Icon from "./Icon.svelte";
   import type { LogRecord } from "./types";
   import { logSearchText, timestamp } from "./format";
+  import { copyText } from "./toasts.svelte";
 
   // The field is the page's search, so opening the page lands the cursor there.
   function focusOnMount(node: HTMLInputElement) {
@@ -21,8 +22,6 @@
   let scrollTop = $state(0);
   let viewportHeight = $state(400);
   let selected = $state<LogRecord | null>(null);
-  let copied = $state(false);
-  let copyError = $state("");
   // The viewport renders only the visible rows; printing renders every
   // filtered record once, beside it, for the length of the print.
   let printing = $state(false);
@@ -73,20 +72,9 @@
   }
   function selectRow(record: LogRecord) {
     selected = selected === record ? null : record;
-    copied = false;
-    copyError = "";
   }
-  async function copySelected() {
-    const record = selected;
-    if (!record) return;
-    copied = false;
-    copyError = "";
-    try {
-      await navigator.clipboard.writeText(recordJSON(record));
-      if (selected === record) copied = true;
-    } catch {
-      if (selected === record) copyError = "Copy failed. Select the record text below to copy it manually.";
-    }
+  function copySelected() {
+    if (selected) void copyText(recordJSON(selected), "the record as JSON", "Select the record text below and copy it instead.");
   }
 </script>
 
@@ -125,64 +113,60 @@
   {/if}
   {#if selected}
     <section class="detail" id="log-detail" aria-label="Selected log record">
-      <div class="detail-bar"><span class="level level-{selected.level || 'info'}">{selected.level || "info"}</span><strong>{selected.source || "Record details"}</strong><span class="detail-time">{timestamp(selected.time_unix_ms)}</span><button class="copy" onclick={copySelected}><Icon name={copied ? "check" : "clipboard"} size={13} />{copied ? "Copied" : "Copy JSON"}</button><button class="close" aria-label="Close log details" onclick={() => selected = null}><Icon name="close" size={15} /></button></div>
-      {#if copyError}<p class="copy-error" role="alert">{copyError}</p>{/if}
+      <div class="detail-bar"><span class="level level-{selected.level || 'info'}">{selected.level || "info"}</span><strong>{selected.source || "Record details"}</strong><span class="detail-time">{timestamp(selected.time_unix_ms)}</span><button class="copy" onclick={copySelected}><Icon name="clipboard" size={13} />Copy JSON</button><button class="close" aria-label="Close log details" onclick={() => selected = null}><Icon name="close" size={15} /></button></div>
       <pre>{recordJSON(selected)}</pre>
-      <span class="sr-status" role="status">{copied ? "Record copied to clipboard." : ""}</span>
     </section>
   {/if}
 </div>
 
 <style>
   .logs { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-  .toolbar { flex-shrink: 0; padding: 14px 16px; }
-  .toolbar input, .toolbar select, .toolbar button { font-size: 11px; min-height: 33px; }
+  .toolbar { flex-shrink: 0; padding: 10px 12px; }
+  .toolbar input, .toolbar select, .toolbar button { font-size: 12px; min-height: 32px; }
   .toolbar input { max-width: none; flex: 1; min-width: 180px; }
   .source-filter { max-width: 170px; }
   .tail-button { display: flex; align-items: center; gap: 7px; color: var(--muted); }
-  .tail-button i { width: 6px; height: 6px; border-radius: 50%; background: #bb974e; }
-  .tail-button.following { color: var(--accent); background: #f1f6eb; }
-  .tail-button.following i { background: #5b9761; }
-  .log-caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 17px; font-size: 10px; color: var(--muted); flex-shrink: 0; }
-  .log-caption button { margin-left: 10px; border: 0; min-height: 0; padding: 0; color: var(--accent); background: none; font-size: 10px; text-decoration: underline; }
-  .header, .row { display: grid; grid-template-columns: 103px 54px minmax(90px, .25fr) minmax(180px, 1fr) 12px; gap: 13px; align-items: center; padding: 0 17px; }
-  .header { min-height: 34px; background: #f8faf5; border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border); color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; flex-shrink: 0; }
-  .viewport { flex: 1; overflow: auto; min-width: 0; min-height: 0; position: relative; }
+  .tail-button i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+  .tail-button.following { color: var(--verdigris); border-color: rgba(111, 181, 163, .35); background: var(--verdigris-soft); }
+  .tail-button.following i { background: var(--verdigris); }
+  .log-caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 14px; font: 12px var(--mono); color: var(--muted); flex-shrink: 0; }
+  .log-caption button { margin-left: 10px; border: 0; min-height: 0; padding: 0; color: var(--accent); background: none; font-size: 12px; text-decoration: underline; }
+  .header, .row { display: grid; grid-template-columns: 108px 60px minmax(90px, .25fr) minmax(180px, 1fr) 12px; gap: 12px; align-items: center; padding: 0 14px; }
+  .header { min-height: 30px; background: var(--raised); border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border); color: var(--muted); font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: .08em; flex-shrink: 0; }
+  .viewport { flex: 1; overflow: auto; min-width: 0; min-height: 0; position: relative; background: var(--inset); }
   .spacer { position: relative; width: 100%; min-width: 600px; }
   .rows { position: absolute; top: 0; left: 0; right: 0; }
-  .row { width: 100%; height: 36px; min-height: 36px; text-align: left; border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0; cursor: pointer; background: #fff; }
-  .row:hover { background: #f7f9f2; }
-  .row.selected { background: #eaf2e1; }
-  .row > :global(svg) { color: #97a38e; }
-  .time { color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
-  .source { color: var(--accent); font: 10px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); }
-  .fields { margin-left: 14px; color: #7b857a; font-size: 10px; }
-  .level { display: inline-block; text-align: center; border-radius: 4px; padding: 3px 4px; text-transform: uppercase; font-size: 8px; letter-spacing: .04em; font-weight: 600; color: var(--muted); background: #f0f2ed; }
-  .level-info { color: #47704b; background: #edf3e6; }
-  .level-debug { color: #5e737d; background: #eef3f6; }
-  .level-warn { color: #9a701a; background: #fcf3d9; }
-  .level-error, .level-fatal { color: var(--danger); background: #fbe9e3; }
-  .detail { flex: 0 0 auto; max-height: 43%; display: flex; flex-direction: column; border-top: 1px solid #c4d2bb; min-height: 0; background: #fafcf7; }
-  .detail-bar { display: flex; gap: 10px; align-items: center; padding: 10px 16px; flex-shrink: 0; border-bottom: 1px solid var(--border-soft); }
-  .detail-bar strong { font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .detail-time { font: 9px var(--mono); color: var(--muted); }
-  .detail-bar button { min-height: 28px; padding: 4px 8px; font-size: 10px; display: flex; align-items: center; justify-content: center; gap: 5px; }
+  .row { width: 100%; height: 36px; min-height: 36px; text-align: left; border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0; cursor: pointer; background: transparent; color: var(--text); }
+  .row:hover { background: var(--hover); }
+  .row.selected { background: var(--raised); box-shadow: inset 2px 0 0 var(--accent); }
+  .row > :global(svg) { color: var(--faint); }
+  .time { color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+  .source { color: var(--accent); font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); }
+  .fields { margin-left: 14px; color: var(--muted); }
+  .level { display: inline-block; text-align: center; border-radius: 3px; padding: 0 4px; text-transform: uppercase; font: 600 12px/1.6 var(--mono); letter-spacing: .02em; color: var(--muted); background: rgba(166, 157, 139, .08); }
+  .level-info { color: var(--verdigris); background: var(--verdigris-soft); }
+  .level-debug, .level-trace { color: var(--steel); background: var(--steel-soft); }
+  .level-warn { color: var(--amber); background: var(--amber-soft); }
+  .level-error, .level-fatal { color: var(--danger); background: var(--danger-soft); }
+  .detail { flex: 0 0 auto; max-height: 43%; display: flex; flex-direction: column; border-top: 1px solid var(--accent-dim); min-height: 0; background: var(--panel); }
+  .detail-bar { display: flex; gap: 10px; align-items: center; padding: 8px 14px; flex-shrink: 0; border-bottom: 1px solid var(--border-soft); }
+  .detail-bar strong { font: 600 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-time { font: 12px var(--mono); color: var(--muted); }
+  .detail-bar button { min-height: 30px; padding: 4px 8px; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 5px; }
   .detail-bar .copy { margin-left: auto; white-space: nowrap; }
   .detail-bar .close { padding: 4px; }
-  .detail pre { margin: 0; padding: 15px 18px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10px; }
-  .copy-error { font-size: 10px; color: var(--danger); padding: 8px 17px 0; }
-  .sr-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .empty { font-size: 12px; }
-  @media (max-width: 850px) { .header, .row { gap: 9px; padding-left: 13px; padding-right: 13px; grid-template-columns: 91px 49px minmax(75px, .25fr) minmax(160px, 1fr) 12px; }.detail-time { display: none; }.source-filter { max-width: 140px; } }
-  @media (max-width: 640px) { .log-caption { flex-wrap: wrap; gap: 3px; }.toolbar { gap: 7px; }.toolbar input { flex-basis: 100%; }.header { grid-template-columns: 91px 49px 75px minmax(160px, 1fr) 12px; overflow: hidden; }.header span { white-space: nowrap; } }
+  .detail pre { margin: 0; padding: 12px 16px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; color: var(--text); }
+  .empty { font-size: 13px; }
+  @media (max-width: 850px) { .header, .row { gap: 9px; padding-left: 12px; padding-right: 12px; grid-template-columns: 96px 56px minmax(75px, .25fr) minmax(160px, 1fr) 12px; }.detail-time { display: none; }.source-filter { max-width: 140px; } }
+  @media (max-width: 640px) { .log-caption { flex-wrap: wrap; gap: 3px; }.toolbar { gap: 7px; }.toolbar input { flex-basis: 100%; }.header { grid-template-columns: 96px 56px 75px minmax(160px, 1fr) 12px; overflow: hidden; }.header span { white-space: nowrap; } }
   .print-rows { display: none; }
   @media print {
     .logs { display: block; height: auto; flex: none; }
     .toolbar, .viewport, .header, .detail, .log-caption > span:last-child { display: none; }
     .log-caption { padding: 0 0 8px; }
     .print-rows { display: block; }
-    .print-row { display: grid; grid-template-columns: 90px 44px minmax(80px, .25fr) minmax(0, 1fr); gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border-soft); break-inside: avoid; }
+    .print-row { display: grid; grid-template-columns: 90px 50px minmax(80px, .25fr) minmax(0, 1fr); gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border-soft); break-inside: avoid; }
     .print-row .source, .print-row .message { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
     .print-row .fields { display: block; margin: 2px 0 0; }
   }

@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/subscribe.schema.json",
+  "title": "subscribe",
+  "description": "Client to resident: from now on, send the events these patterns name. Replaces the connection's subscription; an empty list ends it. The resident answers subscribed, or unknown_event with the same id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "id",
+    "events"
+  ],
+  "properties": {
+    "type": {
+      "const": "subscribe"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Chosen by the client, 1 to 128 bytes; the reply carries it back. Distinct among the connection's requests in flight."
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Event names or globs, * the only wildcard (core:*, core:hints.*); each must name at least one streamed event."
+    }
+  }
+}

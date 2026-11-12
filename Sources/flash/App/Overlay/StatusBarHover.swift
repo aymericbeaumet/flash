@@ -45,7 +45,7 @@ extension OverlayPanel {
     statusBarHover = next
     if effect != .none {
       FlashLog.debug(
-        "Status hover eligibility changed",
+        "[statusbar] hover_eligibility_changed",
         fields: [
           "permits": String(next.permitsHover),
           "native_menu_revealed": String(next.nativeMenuBarRevealed),
@@ -62,7 +62,7 @@ extension OverlayPanel {
     // Only a preview is tied to the pointer; the reveal itself dismisses a
     // pinned popup (`statusBarNativeMenuDidReveal`).
     statusPopupController.leaveAnchor()
-    activeStatusBarPopupName = statusPopupController.presentation.name
+    activeStatusBarPopupName = statusPopupController.anchoredName
     NSCursor.arrow.set()
   }
 }

@@ -2,7 +2,7 @@
 
 A popup is a small window Flash shows over your apps: under a status-bar label
 while you hover it, pinned by a right-click, or standalone in the middle of the
-screen through `enter_terminal_mode`. Every popup runs in a real PTY terminal.
+screen through `mode terminal`. Every popup runs in a real PTY terminal.
 There is one namespace, `[popup.<name>]`, and each popup is one of two kinds:
 
 - a **text popup** sets `text`, a [status format](status-format.md). Flash
@@ -28,17 +28,24 @@ persistent = true
 enabled = true
 template = "#[align=right]#[popup=btop]CPU MEM#[nopopup] #[popup=date]%H:%M#[nopopup]"
 
+[mode.all.mappings]
+"cmd+ctrl+[" = ["flash", "mode", "normal"]  # turns Flash's modes on; once per config
+"cmd+ctrl+i" = ["flash", "mode", "insert"]
+
 [mode.normal.mappings]
-"'t" = ["flash", "enter_terminal_mode"]               # the built-in terminal popup
-"'b" = ["flash", "enter_terminal_mode", "--name=btop"]
+"'t" = ["flash", "mode", "terminal"]               # the built-in terminal popup
+"'b" = ["flash", "mode", "terminal", "--name=btop"]
 ```
 
 See the [example status strip](examples/statusbar/README.md) for a complete
-configuration.
+configuration. Install and configure the tool yourself; Flash provides its
+popup, keyboard access and lifecycle. If a command is missing, install it on
+your login `PATH` and press Command-R; `flash resident doctor` reports missing
+popup commands, and the live [logs](/logs) say why a popup stopped.
 
 ## Style
 
-`[popup]` holds the style keys every popup shares, hover previews and
+[`[popup]`](config:popup) holds the style keys every popup shares, hover previews and
 standalone windows alike. Every other `[popup]` key is a table, a named popup;
 TOML types tell the two apart, and an unknown scalar key is diagnosed with the
 closest style key.
@@ -87,6 +94,7 @@ A terminal popup takes:
 | `env` | table of extra environment variables |
 | `size` | `"COLUMNSxROWS"`, default `"100x28"` |
 | `persistent` | `true` for one long-lived process; default `false` |
+| `pause_hidden` | `true` stops a persistent process while hidden; default `false`, needs `persistent = true` |
 
 Commands use the shared [environment and path resolution](configuration.md#executables-and-opaque-arguments):
 the login-shell environment, `$VAR` and a leading `~` expanded on every argument
@@ -114,14 +122,15 @@ screen's visible frame changes (a display change, the menu bar, the Dock);
 hidden ones refit to the main screen. A popup that is already showing is
 placed again on that new geometry: one hanging from a label follows the
 label, and a standalone one recentres on the screen that still contains it. Changing `size`, colours or fonts keeps
-the process; changing `command`, `cwd`, `env` or `persistent` replaces it.
+the process, and so does `pause_hidden`, which pauses or continues it in
+place; changing `command`, `cwd`, `env` or `persistent` replaces it.
 Removing a declaration stops it.
 
 ### The terminal popup
 
 `config.default.toml` declares one terminal popup, `terminal`: a fresh login
-shell, `["$SHELL", "-l"]`, in the home directory. `enter_terminal_mode` without
-a name opens it. Redeclare `[popup.terminal]` to change it.
+shell, `["$SHELL", "-l"]`, in the home directory. `mode terminal` without
+a name opens it. Redeclare [`[popup.terminal]`](config:popup.terminal) to change it.
 
 ## Lifecycles
 
@@ -138,14 +147,39 @@ resets the delay; ten consecutive failed starts park it until an explicit
 restart or a definition change. The last screen stays visible, with an
 `Exited (N) · restarting automatically` footer, while it waits.
 
+A persistent program runs while hidden, and its CPU counts on your Mac even
+though it is not Flash's: btop redraws on its own interval whether or not its
+popup shows. `pause_hidden = true` stops the process group (SIGSTOP) whenever
+the popup is hidden and continues it (SIGCONT) when the popup shows, so it
+costs nothing in the background and keeps its state: no restart, no reload of
+its data. The trade-off is what you see first: the screen a shown popup opens
+on is the one the program drew before it was paused, stale until the program
+redraws on its own interval or on the resize a size change queued meanwhile; a
+process paused from its start, never shown yet, draws its first screen when
+first shown, as a fresh popup does. A stopped process reads no input,
+answers no signal and no network, and holds whatever it holds: a program that
+others connect to, a sync client, a download in flight does not belong in a
+paused popup. A stop, quit or restart continues the process first, so it can
+act on its hangup and leave on its own terms. `pause_hidden` needs
+`persistent = true`: a fresh popup's process stops when it hides, so pausing
+it is a contradiction the loader reports.
+
+```toml
+[popup.btop]
+command = ["btop"]
+size = "90%x85%"
+persistent = true
+pause_hidden = true
+```
+
 A command that cannot start at all fails the same way on every retry, so it
 skips the backoff and waits: a bare name no directory of the login `PATH`
 holds (`btop: command not found · install it, then Command-R`), an executable
 `execve` refuses, or a working directory that cannot be entered. No child is
-forked for a missing command. Command-R (`popup_restart`) first rereads the
+forked for a missing command. Command-R (`popup restart`) first rereads the
 login environment, so a tool installed since Flash started is found, and a
 configuration reload retries every such persistent popup once the environment
-is reread. `flash doctor` lists popup commands missing from the login `PATH`.
+is reread. `flash resident doctor` lists popup commands missing from the login `PATH`.
 
 **Fresh** popups (the default) run one process per showing, and dismissing
 the popup stops it. A process you end by typing into it (`exit` in a shell,
@@ -155,17 +189,17 @@ dismiss it as usual, with an `Exited (N)` footer when the status is not 0;
 scrolling its history does not count. That screen is final, so the popup drops
 its blank trailing rows and its cursor and fits the output. No process is left to read keys, so a
 focused one closes on a key press (Command-C still copies, and Command-V does
-nothing); `popup_restart` (Command-R) runs it again in place.
+nothing); `popup restart` (Command-R) runs it again in place.
 
 A fresh popup a user can open is **prewarmed**: Flash keeps its next process
 running hidden, so showing it attaches to a live screen instead of waiting for
 the program to start. The next process starts once the previous one is gone,
 so a program holding a lock (newsboat's cache) can start again. A popup counts
 as openable when it appears in a `#[popup=<name>]` marker of the enabled bar's
-template or text popups, in a `[statusbar.click]` `enter_terminal_mode`
-action, or in an `enter_terminal_mode` mapping of any scope
-(`enter_terminal_mode` without a name counts for `terminal`). Any other fresh
-popup starts when it is opened: on `enter_terminal_mode`, or on hover after a
+template or text popups, in a [`[statusbar.click]`](config:statusbar.click) `mode terminal`
+action, or in a `mode terminal` mapping of any scope
+(`mode terminal` without a name counts for `terminal`). Any other fresh
+popup starts when it is opened: on `mode terminal`, or on hover after a
 150 ms dwell with the pointer still on its label, so sweeping across the bar
 never forks one child per label.
 
@@ -201,12 +235,15 @@ pointer: centred on the label's text (the span the hover wash covers, without
 its outer separator spaces), its top `offset` points below the bar, and clamped
 to the screen that bar is on. Moving the pointer along the label never moves
 it; moving onto another label switches to that label's popup, hung from that
-label. A refresh or a size change keeps it centred on its label, and when the
-bar re-lays out (a value gets wider) it follows the label. Leaving the label
+label. While the label only changes width, one edge staying put (a carousel
+line, a value growing), a refresh or a size change keeps the popup where it
+is, so it never slides sideways under you; when the bar re-lays out and the
+label moves, it follows the label. Leaving the label
 hides the preview immediately, and so do a click anywhere outside Flash's
 status bar, a change of focused app or window, a bare Escape (swallowed while a
-preview shows, except in the command line and during hints), and
-`enter_normal_mode`; the preview then stays closed until the pointer leaves the
+preview shows, except in the command line, during hints, or while a focused
+terminal owns the keyboard), and
+`mode normal`; the preview then stays closed until the pointer leaves the
 label. Hover works anywhere in the band, its top point row included, where a
 pointer thrown at the bar comes to rest. The native menu bar owns the band only
 while it is revealed under the pointer: the bar then shows no wash, preview or
@@ -218,7 +255,9 @@ while hidden, and showing it draws that current screen at once rather than the
 one it had when it was hidden.
 
 **Right-click** a popup label to pin it and focus its terminal;
-repeated clicks keep it open, and right-clicking another label switches popups.
+repeated clicks keep it open, and right-clicking another label switches the
+focused popup. A separate hover preview can appear beside it without taking
+keyboard focus; clicking or pinning that preview makes it the focused popup.
 Left-click follows a link or configured click action when present; otherwise it
 leaves the hover preview unchanged. Pinning leaves a preview where it is, and a
 pinned popup stays hung from its label while the pointer moves. When that
@@ -231,50 +270,61 @@ one the popup covers included (clicking back into the browser behind it, or
 fresh one is closed and its process stops. A popup is otherwise only up while
 the pointer hovers its label.
 
-**`enter_terminal_mode --name=<name>`** shows a popup standalone, centred on
+**`mode terminal --name=<name>`** shows a popup standalone, centred on
 the focused application's screen and focused. Without a name it opens
 `terminal`. A text popup shows the document the status bar last evaluated, so
 it needs `[statusbar] enabled = true`; without it Flash logs a warning and
-shows nothing. One popup shows at a time: entering another hides a persistent
-one and stops a fresh one, and entering the popup already focused does
-nothing. Hover and article rotation never replace a standalone popup.
+shows nothing. One popup owns keyboard focus at a time: entering another
+hides a persistent one and stops a fresh one, and entering the popup already
+focused does nothing. Other labels can show one separate hover preview while
+the standalone terminal stays open and keeps its keyboard input. Leaving the
+label hides only that preview. Hovering the focused popup's own label keeps
+its existing window and session in place rather than showing it twice.
+Clicking or pinning a different preview transfers focus to it; leaving
+TERMINAL or switching to another app closes both presentations.
 
-A focused popup, whether entered with `enter_terminal_mode`, pinned from the
+A focused popup, whether entered with `mode terminal`, pinned from the
 bar or clicked, puts Flash in TERMINAL mode (the mode label is
 `mode.labels.terminal`): its terminal receives every key its
-`[mode.terminal.mappings]` leave alone, and plain Escape reaches the program.
-`leave_mode` leaves TERMINAL like any other mode: it closes the popup and
+[`[mode.terminal.mappings]`](config:mode.terminal.mappings) leave alone, and plain Escape reaches the program.
+`mode leave` leaves TERMINAL like any other mode: it closes the popup and
 restores the previous mode and application. The default mappings are:
 
 ```toml
 [mode.terminal.mappings]
-"cmd+q" = ["flash", "popup_quit"]    # stop the process
-"cmd+r" = ["flash", "popup_restart"] # restart it now
-"cmd+w" = ["flash", "leave_mode"]    # close the popup
+"cmd+q" = ["flash", "popup", "quit"]    # stop the process
+"cmd+r" = ["flash", "popup", "restart"] # restart it now
+"cmd+w" = ["flash", "mode", "leave"]    # close the popup
 ```
 
-| Verb | Effect |
+| Command | Effect |
 | --- | --- |
-| `enter_terminal_mode [--name=N]` | Show `N` (default `terminal`) standalone and focus it |
-| `leave_mode` | Close the focused popup and restore the previous mode and app |
-| `popup_restart [--name=N]` | Restart the focused or named popup's process now |
-| `popup_quit [--name=N]` | End the focused or named popup's process |
+| `mode terminal [--name=N]` | Show `N` (default `terminal`) standalone and focus it |
+| `mode leave` | Close the focused popup and restore the previous mode and app |
+| `popup restart [--name=N]` | Restart the focused or named popup's process now |
+| `popup quit [--name=N]` | End the focused or named popup's process |
 
-`popup_restart` works for every kind: a text popup rereads the latest collected
-values. `popup_quit` ends a persistent process, which then restarts
+`popup restart` works for every kind: a text popup reevaluates its format at
+the current time with the latest collected values. `popup quit` ends a
+persistent process, which then restarts
 automatically; a fresh popup or a pager closes. Only effective INSERT mappings
-for `enter_normal_mode` or `leave_mode` are inherited as terminal exit
+for `mode normal` or `mode leave` are inherited as terminal exit
 mappings; explicit terminal mappings override them. Exiting through an
 inherited NORMAL mapping restores the previously focused application; losing
 focus to another app does not steal it back. Menu reveal, focus loss, removed
 labels and other Flash surfaces dismiss a hover or pinned popup. See
-[popup input](normal-mode.md#popup-input) for sequences and key routing.
+[popup input](terminal-mode.md) for sequences and key routing.
 
 A focused text popup holds its content and search stable: reopen it or press
 Command-R to consume the latest values. Selecting text and Command-C work in
 every popup. Shift-click opens HTTP(S) links, including printed URLs and OSC 8
 hyperlinks, without forwarding the click to the program; wrapped URLs stay one
-link, and Shift-drag selects even when a TUI requests mouse reporting.
+link, and Shift-drag selects even when a TUI requests mouse reporting. The
+terminal reads only `http` and `https` hyperlinks with a host, and the open
+goes through the same door as a `#[link]` on the bar
+([status bar](statusbar.md#turn-a-label-into-an-action)), so
+`[statusbar] link_schemes` never widens what a popup's program can have
+macOS open.
 Command-V uses Ghostty's paste encoder and respects bracketed paste. macOS
 input-method composition stays local to the popup.
 
@@ -283,20 +333,22 @@ input-method composition stays local to the popup.
 Set `[debug] log_level = "debug"` (or `"trace"`) to record popup diagnostics in
 `~/Library/Logs/Flash/flash.log`:
 
-- `Status hover regions changed` and `Status hover target changed`: hover
-  regions, pointer targets, whether the window passes mouse input through and
-  whether the native menu bar suppressed the hover.
-- `Status popup presentation changed` / `Status popup layout changed`:
-  dismissal reason, terminal grid, frame readiness, rendering state and panel
+- `[statusbar] hover_regions_changed` and `[statusbar] hover_target_changed`:
+  hover regions, pointer targets, whether the window passes mouse input
+  through and whether the native menu bar suppressed the hover.
+- `[popup] presentation_changed` / `[popup] layout_changed`: dismissal
+  reason, terminal grid, frame readiness, rendering state and panel
   visibility.
-- `Status terminal state changed`: PID, exit status, and spawn failure
-  category and reason, under `core:StatusTerminalRegistry.lifecycle`.
-- `Status terminal restart scheduled`: attempt and delay of a persistent
-  restart, under `core:StatusTerminalRegistry.restart`; `Status popup
-  prewarmed` marks each prewarmed start, and `Status popup starts on show` a
-  prewarmed process that ended before any showing.
-- `Status menu reveal changed`, `Status hover eligibility changed` and
-  `Status inline popup rejected`.
+- `[popup] terminal_state`: PID, exit status, and spawn failure category and
+  reason, under `core:StatusTerminalRegistry.lifecycle` (`warn` for a
+  failure). `[popup] restart_parked` is an `error`: a persistent process that
+  kept failing waits for `popup restart` or a configuration change.
+- `[popup] restart_scheduled`: attempt and delay of a persistent restart,
+  under `core:StatusTerminalRegistry.restart`; `[popup] prewarmed` marks each
+  prewarmed start, and `[popup] starts_on_show` a prewarmed process that ended
+  before any showing.
+- `[statusbar] menu_reveal_changed`, `[statusbar] hover_eligibility_changed`
+  and `[statusbar] inline_popup_rejected`.
 
 Records carry a hashed popup ID; they exclude popup names, text, URLs, terminal
 contents and command arguments. A healthy plugin with no hover target points to
@@ -310,8 +362,17 @@ presentation.
 `StatusTerminalRegistry` owns every popup session on the main thread, keyed by
 popup name, with an explicit kind: `pager` (a text or inline popup's `less`
 over a private snapshot file) or `terminal` (a configured command). A terminal
-popup's lifecycle is `persistent` or `fresh`. `StatusPopupController` owns only
-presentation — hidden, preview, focused, or standalone — and places a label's
+popup's lifecycle is `persistent` or `fresh`, and a persistent one may be
+paused while hidden (`pause_hidden`): the registry records which popups a
+showing is attached to and which processes it stopped, and
+`StatusPopupPause.action`, a pure function of the definition, the session
+state, whether the popup shows and whether its process is paused, decides the
+one SIGSTOP or SIGCONT the registry sends on `open`, `hide`, a process
+reaching `running` while hidden, or a policy change in place.
+`StatusPopupController` owns presentation through two surfaces: one focused
+or standalone popup and one hover preview. A popup name occupies at most one
+surface, and promotion moves the existing preview and its session into the
+focused role. Only that role owns keyboard input. Each surface places a label's
 popup with `OverlayPanel.statusBarPopupFrame`, a pure function of the label's
 span, the popup size, the screen's visible frame and `offset`; a refresh
 re-hangs a shown popup from the nearest span of the same name. It tells the
@@ -324,6 +385,14 @@ tells a typed exit, which releases it at once, from a report. Removing,
 replacing or reloading a declaration, and quitting Flash, cancel pending
 restarts; replies carry the session and restart generation, so a late callback
 never mutates a replacement.
+
+Each terminal run also owns a generation. A stop, restart or shutdown
+invalidates queued state, frame and input publications before teardown starts;
+cancelled PTY sources and frame coalescing work cannot read from a replacement
+process. A restart publishes the new run's initial frame even when its blank
+screen matches the old one. Frame generations also prevent an older queued
+publication from overwriting the synchronous snapshot used when a view binds.
+Cleanup completions and diagnostics still identify the retired process.
 
 The configuration reload computes one set of terminal popup names
 (`Config.terminalPopupNames`) for the status bar's hover regions and the
@@ -357,7 +426,7 @@ focused pager keeps it for `/` search and messages.
 
 ### Stopping
 
-Flash owns the child and its terminal process groups. Stop sends hangup and termination, allows a bounded grace period, escalates to kill, then closes the
+Flash owns the child and its terminal process groups. Stop continues a paused process group first (a stopped process handles no signal but kill), then sends hangup and termination, allows a bounded grace period, escalates to kill, then closes the
 PTY before a bounded nonblocking reap. Both 200 ms waits block on the kernel's
 exit event (`kqueue`) rather than sleeping between polls, so a stop returns as
 soon as the child is gone. Application shutdown stops every active and retiring
@@ -397,17 +466,16 @@ code as a release build.
 
 ### Build and verification
 
-The backend pins libghostty-vt to `b40acce58dcf77df52231c3798ea58e924647c89` and Zig 0.16.0, built ReleaseFast. `Scripts/build-ghostty.sh --dev` downloads the pinned source with a SHA-256 check, removes retired revisions, and caches a native macOS static XCFramework under `build/ghostty`. `--release` builds the arm64 and x86_64 slices in parallel and combines them into the macOS slice. Finished slices are stamped per architecture and reused without invoking Zig, and a universal framework for the pinned revision already satisfies `--dev`, so alternating release and development builds does not rewrite the framework or relink SwiftPM products. The x86_64 slice uses Zig's macOS baseline (core2): Ghostty's build replaces a macOS target with its generic macOS target on macOS hosts, so a `-Dcpu` model has no effect. CI caches only the stamped XCFramework. The script does not build or depend on the Ghostty application. The Ghostty MIT notice ships in the application resources.
+The backend pins libghostty-vt to `a622196c930138f312884382ab784e45b9ab653b` and Zig 0.17.1, built ReleaseFast. `mise run build:ghostty` downloads the pinned source with a SHA-256 check, removes retired revisions, and caches a native macOS static XCFramework under `build/ghostty`. `--release` builds the arm64 and x86_64 slices in parallel and combines them into the macOS slice. Finished slices are stamped per architecture and reused without invoking Zig, and a universal framework for the pinned revision already satisfies `--dev`, so alternating release and development builds does not rewrite the framework or relink SwiftPM products. The x86_64 slice uses Zig's macOS baseline (core2): Ghostty's build replaces a macOS target with its generic macOS target on macOS hosts, so a `-Dcpu` model has no effect. CI caches only the stamped XCFramework. The script does not build or depend on the Ghostty application. The Ghostty MIT notice ships in the application resources.
 
-Run the bootstrap before direct SwiftPM commands on a fresh checkout:
+A fresh checkout bootstraps it with `mise run setup`; the build, test and integration tasks build it first:
 
 ```sh
-mise install
-./Scripts/build-ghostty.sh --dev
-swift test --filter TerminalTests
+mise run setup
+mise run test -- --filter TerminalTests
 ```
 
-The app build, CI, plugin conformance, and GUI integration entrypoints bootstrap this dependency automatically. Development deployment remains `./Scripts/install.sh --dev`.
+The app build, CI, plugin conformance, and GUI integration tasks bootstrap this dependency automatically. Development deployment remains `mise run install:dev`.
 
 `TerminalTests`, `TerminalLinkTests`, `TerminalSnapshotTests`, and
 `TerminalRenderingTests` exercise real PTY startup, styled and Unicode output,
@@ -416,7 +484,7 @@ controlling-terminal dimensions, retained exit screens, input and what counts
 as received input, resize, explicit restart, failed spawn, and bounded
 shutdown and reaping. Direct VT tests cover incremental snapshots, terminal
 queries, application cursor input, Ctrl-C, Kitty modifiers and releases,
-bracketed paste, alternate screens, and scrollback. `TerminalBenchmarkTests` prints `[terminal-bench]` throughput lines
+bracketed paste, alternate screens, and scrollback. `TerminalBenchmarkTests` prints `[bench] terminal` throughput lines
 for VT parsing, snapshots, drawing, and PTY spawns (`FLASH_TERMINAL_BENCH_MB`
 scales the parsed workload). `StatusTerminalRegistryTests` cover both
 lifecycles, prewarming and one-shot reports started on show, the persistent

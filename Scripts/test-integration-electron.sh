@@ -45,7 +45,7 @@ if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null |
   grep -q "\"$SIGN_IDENTITY\""; then
   cat <<EOF >&2
 ERROR: signing identity "$SIGN_IDENTITY" not found in $KEYCHAIN_PATH.
-Run Scripts/install.sh --dev once first; it creates the stable dev identity.
+Run mise run install:dev once first; it creates the stable dev identity.
 EOF
   exit 1
 fi
@@ -68,8 +68,8 @@ EOF
 fi
 
 echo "==> Building $ORACLE_PRODUCT (release)"
-swift build -c release --product "$ORACLE_PRODUCT"
-BIN_PATH="$(swift build -c release --show-bin-path)/$ORACLE_PRODUCT"
+swift build --force-resolved-versions -c release --product "$ORACLE_PRODUCT"
+BIN_PATH="$(swift build --force-resolved-versions -c release --show-bin-path)/$ORACLE_PRODUCT"
 if [[ ! -f "$BIN_PATH" ]]; then
   echo "ERROR: built binary not found at $BIN_PATH" >&2
   exit 1
@@ -107,7 +107,7 @@ cat >"$STAGING_APP/Contents/Info.plist" <<EOF
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

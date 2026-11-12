@@ -1,10 +1,12 @@
 import FlashCore
+import FlashTerminal
 import Foundation
+import os
 
 /// Seatbelt profile generation and executable resolution for plugin
-/// processes. Everything here is pure and static — profiles are built from
-/// the manifest + config settings before spawn; `PluginProcess` only wraps
-/// the result in `sandbox-exec -p`.
+/// processes. Profiles are pure — built from the manifest + config settings
+/// before spawn; `PluginProcess` only wraps the result in `sandbox-exec -p`.
+/// Executable resolution is remembered in `executableResolutions`.
 enum PluginSandbox {
 
   static let sandboxExecPath = "/usr/bin/sandbox-exec"
@@ -38,27 +40,24 @@ enum PluginSandbox {
       + " \(baseClause))"
   }
 
-  /// Seatbelt profile for the plugin's runtime process: allow everything but
-  /// deny outbound network. Returns nil (spawn unsandboxed) for plugins that
-  /// declare `network` (they legitimately reach the network) or `subprocess`
-  /// (they exec privileged helpers like setgid `/bin/ps` that seatbelt forbids —
-  /// no profile can run those without also letting children escape the network
-  /// deny). Third-party install steps run under `installSandboxProfile`.
-  static func networkSandboxProfile(for manifest: PluginManifest) -> String? {
-    if manifest.capabilities.contains(.network) || manifest.capabilities.contains(.subprocess) {
-      return nil
-    }
-    return "(version 1)\n(allow default)\n(deny network*)"
+  /// The resident's socket directory, which no sandboxed process may
+  /// connect into: the socket runs any command, `:!` shell lines included,
+  /// outside the sandbox. A rule after every allow, so no allow reopens it.
+  static func residentSocketDeny(_ directories: [String]) -> String {
+    directories.map { "(deny network-outbound (remote unix-socket (subpath \(q($0)))))" }
+      .joined(separator: "\n")
   }
 
   /// Deny-default profile generated from the manifest's `sandbox` spec plus
   /// capability composition: everything is denied except loading the binary
-  /// (plugin root + system libraries), the plugin's own data dir, declared
-  /// exec/appleevents/signal/mach allowances, and network-outbound when the
-  /// `network` capability is declared.
+  /// (plugin root + system libraries, plus an interpreter outside the root),
+  /// the plugin's own data dir, declared mach allowances, and
+  /// network-outbound when the `network` capability is declared — never to
+  /// the resident's own socket.
   static func denyDefaultSandboxProfile(
     for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL,
-    executablePath: String = ""
+    executablePath: String = "",
+    residentSocketDirectories: [String] = IPCEndpoint.standard.sandboxPaths
   ) -> String {
     let baseDataDir = dataDir.deletingLastPathComponent()
     var lines = [
@@ -96,26 +95,12 @@ enum PluginSandbox {
     ]
     if manifest.capabilities.contains(.network) {
       lines.append("(allow network-outbound)")
+      lines.append(residentSocketDeny(residentSocketDirectories))
       lines.append("(allow system-socket)")
       lines.append("(allow mach-lookup (global-name \"com.apple.dnssd.service\"))")
       lines.append(
         "(allow file-read* (literal \"/etc/hosts\") (literal \"/etc/resolv.conf\")"
           + " (subpath \"/private/etc\"))")
-    }
-    if !spec.exec.isEmpty {
-      lines.append("(allow process-fork)")
-      let literals = spec.exec.map { "(literal \(q($0)))" }.joined(separator: " ")
-      lines.append("(allow process-exec \(literals))")
-      // The exec'd child's dyld must also map the tool executable, and
-      // tools like /usr/bin/open and osascript resolve apps through
-      // LaunchServices.
-      lines.append("(allow file-map-executable \(literals))")
-      lines.append(
-        "(allow mach-lookup (global-name \"com.apple.coreservices.launchservicesd\")"
-          + " (global-name \"com.apple.lsd.mapdb\"))")
-    }
-    if spec.signal {
-      lines.append("(allow signal)")
     }
     // Interpreted plugins exec a runtime outside the plugin root (python3,
     // bun): allow exec + dyld mapping of the resolved interpreter itself.
@@ -130,74 +115,39 @@ enum PluginSandbox {
       let names = spec.mach.map { "(global-name \(q($0)))" }.joined(separator: " ")
       lines.append("(allow mach-lookup \(names))")
     }
-    if spec.appleEvents {
-      // osascript-driven plugins: AppleEvents routing and the TCC daemon
-      // that mediates Automation consent.
-      lines.append(
-        "(allow mach-lookup (global-name \"com.apple.coreservices.appleevents\")"
-          + " (global-name \"com.apple.tccd\")"
-          + " (global-name \"com.apple.tccd.system\"))")
-      lines.append("(allow appleevent-send)")
-    }
     return lines.joined(separator: "\n")
   }
 
-  /// Expand a manifest sandbox spec for this machine. Bare tool names in
-  /// spec.exec resolve through the login-shell PATH (the user's package
-  /// manager decides where spotify_player lives); both the PATH hit and its
-  /// symlink-resolved target land in the profile because seatbelt matches
-  /// canonical vnode paths (Homebrew bins are Cellar symlinks). Config
-  /// `[plugin.<id>] exec_paths` appends machine-specific absolute paths.
-  /// Unresolvable names are dropped with a loud log — the later exec then
-  /// fails as a clear seatbelt denial instead of silently widening the
-  /// profile.
-  static func expandedSandboxSpec(
-    _ spec: PluginSandboxSpec, settings: [String: PluginConfigValue], pluginID: String,
-    root: URL? = nil
-  ) -> PluginSandboxSpec {
-    var expanded = spec
-    expanded.exec = spec.exec.flatMap { entry -> [String] in
-      let candidates: [String]
-      if entry.hasPrefix("/") {
-        candidates = [entry]
-      } else if let resolved = resolveExecutable(named: entry, from: root) {
-        candidates = [resolved]
-      } else {
-        FlashLog.warn(
-          "[plugin] \(pluginID) sandbox exec tool not found on PATH: \(entry)",
-          fields: ["plugin": pluginID, "tool": entry])
-        return []
-      }
-      return candidates.flatMap { path -> [String] in
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        return resolved == path ? [path] : [path, resolved]
-      }
-    }
-    if case .stringArray(let extra) = settings["exec_paths"] {
-      expanded.exec.append(contentsOf: extra.filter { $0.hasPrefix("/") })
-    }
-    return expanded
-  }
+  /// Every bare-name resolution for the life of the resident. A `mise which`
+  /// spawn can stall for seconds while `syspolicyd` is busy, and plugin
+  /// launches and the tmux bigram capture used to pay one on every call. Callers stay off the main thread: a miss still
+  /// spawns `mise`.
+  static let executableResolutions = ExecutableResolutionCache()
 
   /// Resolve a bare tool name to an absolute path. mise is the toolchain
   /// authority (the repo mise.toml pins interpreter versions) and its
   /// activation is interactive-shell-only — the login-shell PATH never
   /// carries it — so ask `mise which` first (cwd-aware, so plugin roots
   /// under the checkout pick up the repo pins) and only then fall back to
-  /// a login-PATH walk for non-mise tools.
+  /// a login-PATH walk for non-mise tools. A remembered answer is served
+  /// while it is still an executable file.
   static func resolveExecutable(named name: String, from directory: URL? = nil) -> String? {
+    let path =
+      FlashProcessEnvironment.shared.environment["PATH"] ?? FlashProcessEnvironment.fallbackPath
+    let key = ExecutableResolutionCache.Key(name: name, directory: directory, searchPath: path)
+    return executableResolutions.resolve(key) {
+      resolveExecutableUncached(named: name, from: directory, searchPath: path)
+    }
+  }
+
+  private static func resolveExecutableUncached(
+    named name: String, from directory: URL?, searchPath path: String
+  ) -> String? {
     if let resolved = miseWhich(name, from: directory) {
       return resolved
     }
-    let path =
-      FlashProcessEnvironment.shared.environment["PATH"] ?? FlashProcessEnvironment.fallbackPath
-    for entry in path.split(separator: ":") {
-      let candidate = "\(entry)/\(name)"
-      if FileManager.default.isExecutableFile(atPath: candidate) {
-        return candidate
-      }
-    }
-    return nil
+    // The same search a terminal popup's command gets.
+    return name.contains("/") ? nil : TerminalExecutable.resolve(name, path: path)
   }
 
   private static func miseWhich(_ name: String, from directory: URL?) -> String? {
@@ -208,33 +158,22 @@ enum PluginSandbox {
     ]
     guard let mise = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
     else { return nil }
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: mise)
-    process.arguments = ["which", name]
-    if let directory { process.currentDirectoryURL = directory }
-    let out = Pipe()
-    process.standardOutput = out
-    process.standardError = Pipe()
-    do { try process.run() } catch { return nil }
     // Bound a wedged mise the same way installIfNeeded bounds installers —
     // this runs on the plugin's serial queue.
-    let killWork = DispatchWorkItem { if process.isRunning { process.terminate() } }
-    DispatchQueue.global(qos: .utility).asyncAfter(
-      deadline: .now() + .seconds(10), execute: killWork)
-    process.waitUntilExit()
-    killWork.cancel()
-    guard process.terminationStatus == 0 else { return nil }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    guard let path = String(data: data, encoding: .utf8)?.trimmed, !path.isEmpty,
-      FileManager.default.isExecutableFile(atPath: path)
+    let result = BoundedCommand.run(
+      [mise, "which", name], environment: ProcessInfo.processInfo.environment,
+      directory: directory?.path, timeout: 10)
+    let path = result.text.trimmed
+    guard result.succeeded, !path.isEmpty, FileManager.default.isExecutableFile(atPath: path)
     else { return nil }
     return path
   }
 
   /// Which profile a plugin launches under, in order: the per-plugin
-  /// `[plugin.<id>] sandbox = false` kill switch (fail-open, logged loudly by
-  /// the caller), a manifest `sandbox` spec (deny-default), else the legacy
-  /// network-deny transitional profile.
+  /// `[plugins.<id>] sandbox = false` kill switch (fail-open, logged loudly by
+  /// the caller), a manifest's `"sandbox": false`, else the deny-default
+  /// profile built from the manifest's spec (absent: the empty spec).
+  /// Third-party install steps run under `installSandboxProfile` either way.
   static func resolvedSandboxProfile(
     manifest: PluginManifest, settings: [String: PluginConfigValue], root: URL, dataDir: URL,
     executablePath: String = ""
@@ -242,20 +181,15 @@ enum PluginSandbox {
     if case .bool(false) = settings["sandbox"] {
       return (nil, "disabled_by_config")
     }
-    if let spec = manifest.sandbox {
-      let expanded = expandedSandboxSpec(
-        spec, settings: settings, pluginID: manifest.id, root: root)
-      return (
-        denyDefaultSandboxProfile(
-          for: manifest, spec: expanded, root: root, dataDir: dataDir,
-          executablePath: executablePath),
-        "deny_default"
-      )
+    guard let spec = manifest.sandboxSpec else {
+      return (nil, "disabled_by_manifest")
     }
-    if let legacy = networkSandboxProfile(for: manifest) {
-      return (legacy, "network_denied")
-    }
-    return (nil, "unsandboxed")
+    return (
+      denyDefaultSandboxProfile(
+        for: manifest, spec: spec, root: root, dataDir: dataDir,
+        executablePath: executablePath),
+      "deny_default"
+    )
   }
 
   /// Seatbelt for third-party `install` scripts: network and exec stay open
@@ -263,7 +197,10 @@ enum PluginSandbox {
   /// arbitrary build toolchain is hopeless), so the containment is the
   /// filesystem scope — writes confined to the plugin's own root, data dir,
   /// and temp; secrets read-denied.
-  static func installSandboxProfile(root: URL, dataDir: URL) -> String {
+  static func installSandboxProfile(
+    root: URL, dataDir: URL,
+    residentSocketDirectories: [String] = IPCEndpoint.standard.sandboxPaths
+  ) -> String {
     let baseDataDir = dataDir.deletingLastPathComponent()
     return [
       "(version 1)",
@@ -281,7 +218,55 @@ enum PluginSandbox {
       "(allow sysctl-read)",
       "(allow mach-lookup)",
       "(allow network-outbound)",
+      residentSocketDeny(residentSocketDirectories),
       "(allow system-socket)",
     ].joined(separator: "\n")
+  }
+}
+
+/// Remembered bare-name executable resolutions, keyed by everything one
+/// reads: the name, the directory `mise which` runs in (its pins are
+/// cwd-aware) and the login `PATH` the fallback walk searches. A hit is
+/// served only while it is still an executable file; otherwise it is
+/// dropped and resolved afresh. A failed resolution is never remembered, so
+/// a miss — a tool installed later included — behaves as an uncached lookup.
+final class ExecutableResolutionCache: @unchecked Sendable {
+  struct Key: Hashable {
+    let name: String
+    let directory: String?
+    let searchPath: String
+
+    init(name: String, directory: URL?, searchPath: String) {
+      self.name = name
+      self.directory = directory?.standardizedFileURL.path
+      self.searchPath = searchPath
+    }
+  }
+
+  private let entries = OSAllocatedUnfairLock(initialState: [Key: String]())
+  private let isExecutable: (String) -> Bool
+
+  init(
+    isExecutable: @escaping (String) -> Bool = {
+      FileManager.default.isExecutableFile(atPath: $0)
+    }
+  ) {
+    self.isExecutable = isExecutable
+  }
+
+  /// The remembered path for `key` while it is still executable, else
+  /// `resolve()`'s answer, remembered when there is one. `resolve` runs
+  /// outside the lock: concurrent misses for one key each resolve, and the
+  /// last answer is kept.
+  func resolve(_ key: Key, _ resolve: () -> String?) -> String? {
+    if let hit = entries.withLock({ $0[key] }) {
+      if isExecutable(hit) { return hit }
+      entries.withLock { entries in
+        if entries[key] == hit { entries[key] = nil }
+      }
+    }
+    guard let resolved = resolve() else { return nil }
+    entries.withLock { $0[key] = resolved }
+    return resolved
   }
 }

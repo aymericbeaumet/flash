@@ -1,6 +1,6 @@
 import Foundation
 
-/// The core `#{flash.calendar}` value: today's date, the previous, current and
+/// The core `#{flash.calendar}` value: local time, today's date, the previous, current and
 /// next months side by side, the day's progress through its week, month,
 /// quarter and year, and the time zone, daylight-saving and moon facts of the
 /// day. Everything derives from the date and timezone alone.
@@ -9,7 +9,9 @@ enum CalendarStatusDocument {
   static let columns = 3 * monthWidth + 2 * monthGap
   private static let monthWidth = 23
   private static let monthGap = 3
-  private static let labelWidth = 12
+  private static let footerWidth = 36
+  private static let footerGap = 3
+  private static let clockWidth = 33
   private static let barWidth = 20
   private static let months = [
     "January", "February", "March", "April", "May", "June",
@@ -46,9 +48,11 @@ enum CalendarStatusDocument {
   static func render(now: Date, timeZone: TimeZone) -> String {
     var calendar = Calendar(identifier: .iso8601)
     calendar.timeZone = timeZone
-    let date = calendar.dateComponents([.year, .month, .day, .weekday, .weekOfYear], from: now)
+    let date = calendar.dateComponents(
+      [.year, .month, .day, .weekday, .weekOfYear, .hour, .minute, .second], from: now)
     guard let year = date.year, let month = date.month, let day = date.day,
       let weekday = date.weekday, let week = date.weekOfYear,
+      let hour = date.hour, let minute = date.minute, let second = date.second,
       let today = calendar.dateInterval(of: .day, for: now),
       let monthStart = calendar.dateInterval(of: .month, for: now)?.start,
       let previous = calendar.date(byAdding: .month, value: -1, to: monthStart),
@@ -63,9 +67,17 @@ enum CalendarStatusDocument {
 
     var header = Line()
     header.append("\(weekdays[weekday - 1]), \(months[month - 1]) \(day), \(year)", "bold")
+    header.append("  " + twoDigits(hour) + ":" + twoDigits(minute), "bold")
     header.pad(to: max(header.width + 2, columns - timeZone.identifier.count))
     header.append(timeZone.identifier, "dim")
     var lines = [header, Line()]
+    for face in clockLines(hour: hour, minute: minute, second: second) {
+      var line = Line()
+      line.pad(to: (columns - clockWidth) / 2)
+      line.append(markup: face.replacingOccurrences(of: "#", with: "##"), width: face.count)
+      lines.append(line)
+    }
+    lines.append(Line())
 
     let blocks = [
       monthLines(previous, calendar: calendar),
@@ -82,6 +94,7 @@ enum CalendarStatusDocument {
     }
 
     lines.append(Line())
+    var progress: [Line] = []
     for (label, elapsed, total) in [
       ("Week \(twoDigits(week))", (weekday + 5) % 7 + 1, 7),
       (months[month - 1], day, monthDays),
@@ -91,16 +104,65 @@ enum CalendarStatusDocument {
       ),
       (String(year), yearDay, yearDays),
     ] {
-      lines.append(progressLine(label, elapsed: elapsed, total: total))
+      if !progress.isEmpty { progress.append(Line()) }
+      progress.append(contentsOf: progressLines(label, elapsed: elapsed, total: total))
     }
 
-    lines.append(Line())
-    lines.append(factLine("Time zone", timeZoneFact(now: now, timeZone: timeZone)))
-    lines.append(
-      factLine(
-        "DST", daylightSavingFact(now: now, today: today.start, calendar: calendar)))
-    lines.append(factLine("Moon", moonFact(today: today, calendar: calendar)))
+    var facts: [Line] = []
+    for (label, value) in [
+      ("Time zone", timeZoneFact(now: now, timeZone: timeZone)),
+      ("DST", daylightSavingFact(now: now, today: today.start, calendar: calendar)),
+      ("Moon", moonFact(today: today, calendar: calendar)),
+    ] {
+      if !facts.isEmpty { facts.append(Line()) }
+      facts.append(contentsOf: factLines(label, value))
+    }
+    for row in 0..<max(progress.count, facts.count) {
+      var line = row < progress.count ? progress[row] : Line()
+      if row < facts.count, !facts[row].markup.isEmpty {
+        line.pad(to: footerWidth + footerGap)
+        line.append(markup: facts[row].markup, width: facts[row].width)
+      }
+      lines.append(line)
+    }
     return lines.map(\.markup).joined(separator: "\n")
+  }
+
+  private static func clockLines(hour: Int, minute: Int, second: Int) -> [String] {
+    var face = Array(repeating: Array(repeating: Character(" "), count: clockWidth), count: 17)
+    for degree in stride(from: 0, to: 360, by: 3) {
+      let angle = Double(degree) * Double.pi / 180
+      let x = 16 + Int((sin(angle) * 16).rounded())
+      let y = 8 - Int((cos(angle) * 8).rounded())
+      face[y][x] = "."
+    }
+    for (label, x, y) in [
+      ("12", 15, 0), ("1", 24, 1), ("2", 30, 4), ("3", 32, 8),
+      ("4", 30, 12), ("5", 24, 15), ("6", 16, 16), ("7", 8, 15),
+      ("8", 2, 12), ("9", 0, 8), ("10", 1, 4), ("11", 7, 1),
+    ] {
+      for (offset, character) in label.enumerated() { face[y][x + offset] = character }
+    }
+
+    func hand(turn: Double, radius: Double, stroke: Character) {
+      let angle = turn * 2 * Double.pi
+      // Terminal cells are about twice as tall as they are wide.
+      let dx = sin(angle) * radius
+      let dy = -cos(angle) * radius / 2
+      let steps = Int(ceil(max(abs(dx), abs(dy))))
+      for step in 1...steps {
+        let x = 16 + Int((dx * Double(step) / Double(steps)).rounded())
+        let y = 8 + Int((dy * Double(step) / Double(steps)).rounded())
+        face[y][x] = stroke
+      }
+    }
+
+    let minutes = Double(minute) + Double(second) / 60
+    hand(turn: Double(second) / 60, radius: 14, stroke: ".")
+    hand(turn: minutes / 60, radius: 12, stroke: "+")
+    hand(turn: (Double(hour % 12) + minutes / 60) / 12, radius: 8, stroke: "#")
+    face[8][16] = "o"
+    return face.map { String($0.reversed().drop(while: { $0 == " " }).reversed()) }
   }
 
   private static func monthLines(
@@ -138,29 +200,37 @@ enum CalendarStatusDocument {
     return lines
   }
 
-  /// `label ████▋     3/7  4 days left`: the day's position in a period,
-  /// counting today, drawn by the status format's own meter.
-  private static func progressLine(_ label: String, elapsed: Int, total: Int) -> Line {
-    var line = Line()
-    line.append(label, "dim")
-    line.pad(to: labelWidth)
-    line.append(
+  private static func progressLines(_ label: String, elapsed: Int, total: Int) -> [Line] {
+    var title = Line()
+    title.append(label, "bold")
+    var meter = Line()
+    meter.append(
       markup: "#[bg=colour238]#[meter=\(barWidth)/\(total)]\(elapsed)#[nometer]#[default]",
       width: barWidth)
     let count = "\(elapsed)/\(total)"
-    line.pad(to: line.width + 2 + 7 - count.count)
-    line.append(count)
+    meter.pad(to: meter.width + 2 + 7 - count.count)
+    meter.append(count)
     let left = total - elapsed
-    line.append(left == 0 ? "  last day" : left == 1 ? "  1 day left" : "  \(left) days left")
-    return line
+    var remaining = Line()
+    remaining.append(left == 0 ? "last day" : left == 1 ? "1 day left" : "\(left) days left", "dim")
+    return [title, meter, remaining]
   }
 
-  private static func factLine(_ label: String, _ value: String) -> Line {
+  private static func factLines(_ label: String, _ value: String) -> [Line] {
+    var title = Line()
+    title.append(label, "bold")
+    var lines = [title]
     var line = Line()
-    line.append(label, "dim")
-    line.pad(to: labelWidth)
-    line.append(value)
-    return line
+    for word in value.split(separator: " ") {
+      if line.width > 0, line.width + 1 + word.count > footerWidth {
+        lines.append(line)
+        line = Line()
+      }
+      if line.width > 0 { line.append(" ") }
+      line.append(String(word))
+    }
+    if line.width > 0 { lines.append(line) }
+    return lines
   }
 
   private static func timeZoneFact(now: Date, timeZone: TimeZone) -> String {

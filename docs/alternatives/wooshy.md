@@ -10,11 +10,11 @@ twenty releases since January 2025.
 | | Wooshy | Flash |
 | --- | --- | --- |
 | License, price | Closed; free with naps, or subscription | MIT, free |
-| Platforms | macOS 14.6+ (older builds for Ventura and Monterey) | macOS 14+ |
-| Permissions | Accessibility | Accessibility; Automation per browser for tab lists; Screen Recording only for `:screenshot` |
-| Targets | Fuzzy search over the whole UI: windows, Dock, menu bar, status bar; role search; `*` lists all | Labels over the focused window; `--scope=screen` for every app; `mouse_dock`, `mouse_menubar`, `mouse_notifications` |
+| Platforms | macOS 14.6+ (older builds for Ventura and Monterey) | macOS 13+ |
+| Permissions | Accessibility | Accessibility; Automation per browser for tab lists; Screen Recording only for `:screenshot screen` |
+| Targets | Fuzzy search over the whole UI: windows, Dock, menu bar, status bar; role search; `*` lists all | Labels over the focused window; `--scope=screen` for every app; `mouse dock`, `mouse menubar`, `mouse notifications` |
 | Actions | Click, Ctrl-Return right-click, Fn-Return double-click, modifier clicks, move without clicking, ⌘C copies the target's text | Click, right, double, move, drag, select, words, path, sticky, multi |
-| Integration | Karabiner `WsInputStatus` variable, `wooshy://` URL scheme, distributed notifications | `flash <verb>` CLI, `[mode.apps]` per bundle |
+| Integration | Karabiner `WsInputStatus` variable, `wooshy://` URL scheme, distributed notifications | `flash <topic> <action>` CLI, `[mode.apps]` per bundle |
 | Beyond pointing | The Inspector shows which terms reach an element | NORMAL mode, flashlight, status bar, widgets, popups, window placement, plugins |
 | Maintenance | Version 51, October 2026; monthly | 1.0.0, October 2026 |
 
@@ -24,7 +24,8 @@ twenty releases since January 2025.
   every window are one search space; Flash labels one surface per command.
 - **Role search and `*`** list everything an app exposes, which is also a
   good debugging tool.
-- **Yank the target's text or metadata** with ⌘C.
+- **Yank a target's metadata** (role, identifiers) with ⌘C; Flash copies
+  its text or URL only.
 - **Designed for fast typists** and for pairing with kindaVim, by the same
   author, so Vim keys drive the result list.
 - **Karabiner integration** through a shared variable.
@@ -38,33 +39,35 @@ twenty releases since January 2025.
   and Karabiner conditions.
 - **A built-in modal layer** rather than a separate Vim app.
 - **Everything after the click.**
+- **Lower macOS floor** for current releases (13 against Wooshy's 14.6).
 
 ## Flash features you might like
 
-- `mouse_target --search` is Wooshy's input over the focused window, and
-  `mouse_target --scope=screen` labels every app on the screen.
-- `:flashlight @menus` finds menu items by name; `@windows` focuses by
-  title; `@system.actions` lists system actions ([flashlight](../flashlight.md)).
-- `mouse_target --words --select` selects text between two words, where
-  Wooshy would yank one element's text.
+- `mouse target --search` is Wooshy's input over the focused window, and
+  `mouse target --scope=screen` labels every app on the screen.
+- `:flashlight @menus` finds menu items by name; `@system` lists
+  system actions ([flashlight](../flashlight.md)).
+- `mouse target --copy-text` labels the targets with text and copies the one
+  you pick, as Wooshy's ⌘C does; `--copy-url` copies a link's URL, and
+  `mouse target --words --select` selects text between two words.
 - NORMAL's `y` copies immediately.
 
 ## Moving from Wooshy
 
 | Wooshy | Flash |
 | --- | --- |
-| Open the input | `["flash", "mouse_target", "--search"]` in the focused window; `mouse_target --scope=screen` labels every app |
-| Dock, menu bar, status bar targets | `mouse_dock`, `mouse_menubar`; status bar items through `mouse_menubar` |
-| Ctrl-Return right-click | `mouse_bigram --secondary`, or `cf` in NORMAL |
-| Shift-Cmd-Return move only | `mouse_target --move` |
-| ⌘C yank | `--words --select` then `y` |
-| `wooshy://openTheInput` | `flash mouse_target --search` |
+| Open the input | `["flash", "mouse", "target", "--search"]` in the focused window; `mouse target --scope=screen` labels every app |
+| Dock, menu bar, status bar targets | `mouse dock`, `mouse menubar`; status bar items through `mouse menubar` |
+| Ctrl-Return right-click | `mouse bigram --secondary`, or `cf` in NORMAL |
+| Shift-Cmd-Return move only | `mouse target --move` |
+| ⌘C yank | `mouse target --copy-text`; `--copy-url` for a link's URL |
+| `wooshy://openTheInput` | `flash mouse target --search` |
 | kindaVim for Vim keys | NORMAL mode ([normal mode](../normal-mode.md)) |
 
 ```toml
 [mode.all.mappings]
-"cmd+shift+space" = ["flash", "mouse_target", "--search"]
-"cmd+shift+alt+space" = ["flash", "mouse_target", "--scope=screen"]
+"cmd+shift+space" = ["flash", "mouse", "target", "--search"]
+"cmd+shift+alt+space" = ["flash", "mouse", "target", "--scope=screen"]
 ```
 
 *Checked 2026-10-14 against

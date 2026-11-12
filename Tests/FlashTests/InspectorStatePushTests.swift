@@ -32,7 +32,7 @@ final class InspectorStatePushTests: XCTestCase {
     // Not listening: the pushes are counted where the snapshot is taken.
     let server = DebugServer(
       host: delegate.config.debug.httpInspectorHost,
-      port: delegate.config.debug.httpInspectorPort,
+      port: delegate.config.debug.httpInspectorPort, accessToken: HelpAccess.newToken(),
       coalescingWindowMs: 20
     ) { [unowned self] in
       self.snapshots += 1
@@ -65,12 +65,16 @@ final class InspectorStatePushTests: XCTestCase {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
   }
 
-  private func waitForSnapshot(after count: Int, timeout: TimeInterval = 2) -> Bool {
+  private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
-    while snapshots == count && Date() < deadline {
+    while !condition() && Date() < deadline {
       spin(for: 0.02)
     }
-    return snapshots > count
+    return condition()
+  }
+
+  private func waitForSnapshot(after count: Int, timeout: TimeInterval = 2) -> Bool {
+    waitUntil(timeout: timeout) { snapshots > count }
   }
 
   /// `change` pushes exactly one snapshot once its window has passed.
@@ -97,7 +101,7 @@ final class InspectorStatePushTests: XCTestCase {
 
   func testFocusAndMappingChangesPushOnce() {
     assertOnePush("focus and the mappings it applies") {
-      delegate.applyFocusedApplicationChange(.current, reason: "test", emitFocusEvent: false)
+      delegate.applyFocusedApplicationChange(.current, emitFocusEvent: false)
     }
     delegate.invalidateEffectiveMappings()
     assertOnePush("mappings") { delegate.refreshEffectiveMappings(for: nil) }
@@ -139,6 +143,15 @@ final class InspectorStatePushTests: XCTestCase {
 
   func testPluginAndConfigChangesPushOnce() {
     assertOnePush("plugins") { delegate.pluginStateDidChange() }
+    assertOnePush("monitors") {
+      delegate.monitorsDidChange([
+        MonitorSnapshot(
+          id: "disk", spec: StatusMonitorSpec(value: .init(template: "93"), warning: 90),
+          tracker: MonitorTracker(sinceMs: 0))
+      ])
+    }
+    let monitors = delegate.debugStateJSON()["monitors"] as? [[String: Any]]
+    XCTAssertEqual(monitors?.map { $0["id"] as? String }, ["disk"])
     assertOnePush("config reload") { delegate.configureDebugServer(for: delegate.config) }
     XCTAssertTrue(delegate.debugServer === server, "the same listener keeps serving")
   }
@@ -156,7 +169,7 @@ final class InspectorStatePushTests: XCTestCase {
     assertOnePush("widgets") {
       delegate.widgetController?.apply(
         widgets: [:], statusBarReservesSpace: false, statusBarMonitor: .all,
-        screenCapture: .show)
+        hideFromCapture: false)
     }
     let window = NSWindow(
       contentRect: CGRect(x: 0, y: 0, width: 100, height: 100), styleMask: .borderless,
@@ -165,6 +178,59 @@ final class InspectorStatePushTests: XCTestCase {
     assertOnePush("window geometry") {
       window.setFrame(CGRect(x: 20, y: 20, width: 120, height: 90), display: false)
     }
+  }
+
+  /// The status bar republishes as its values change, several times a
+  /// second: its snapshot rebuilds the bar and the popup anchors it places
+  /// on main, never the mappings, commands and plugins; any other change
+  /// still rebuilds everything.
+  func testAStatusBarChangeRebuildsOnlyTheBarsSections() {
+    var scoped: [Set<String>] = []
+    var full = 0
+    let delegate: AppDelegate = self.delegate
+    let server = DebugServer(
+      host: delegate.config.debug.httpInspectorHost,
+      port: delegate.config.debug.httpInspectorPort, accessToken: HelpAccess.newToken(),
+      coalescingWindowMs: 200,
+      sectionsProvider: { [unowned delegate] sections in
+        scoped.append(sections)
+        return delegate.debugStateJSON(sections: sections)
+      },
+      stateProvider: { [unowned delegate] in
+        full += 1
+        return delegate.debugStateJSON()
+      })
+    delegate.stopDebugServer()
+    delegate.attachDebugServer(server)
+    server.streamsDidChange(by: 1)
+    self.server = server
+    // The first snapshot is whole: there is nothing to rebuild over.
+    delegate.applyModeOverlay()
+    XCTAssertTrue(waitUntil { full > 0 }, "the initial snapshot did not publish")
+    XCTAssertEqual(full, 1)
+
+    // Wait for each burst to publish before starting the next. The shared
+    // scheduler may deliver later than its coalescing window under load.
+    delegate.overlay.statusBarDidChange?()
+    delegate.overlay.statusPopupController.didChange?()
+    XCTAssertTrue(waitUntil { !scoped.isEmpty }, "the status bar snapshot did not publish")
+    XCTAssertEqual(full, 1, "a status bar change takes no whole snapshot")
+    XCTAssertEqual(scoped, [AppDelegate.statusBarSections], "one rebuild of the burst's sections")
+    delegate.widgetController?.didChange?()
+    XCTAssertTrue(waitUntil { scoped.count > 1 }, "the widget snapshot did not publish")
+    XCTAssertEqual(scoped, [AppDelegate.statusBarSections, ["widgets"]])
+    XCTAssertEqual(full, 1)
+
+    XCTAssertEqual(
+      Set(delegate.debugStateJSON(sections: AppDelegate.statusBarSections).keys),
+      AppDelegate.statusBarSections.union(["snapshot_at_unix_ms"]))
+    XCTAssertEqual(
+      Set(delegate.debugStateJSON(sections: ["statusbar", "mappings"]).keys),
+      Set(delegate.debugStateJSON().keys), "a section the scoped build lacks rebuilds everything")
+
+    delegate.applyModeOverlay()
+    XCTAssertTrue(waitUntil { full > 1 }, "the mode snapshot did not publish")
+    XCTAssertEqual(full, 2, "a mode change rebuilds everything")
   }
 
   /// Without a reader nothing is taken; the inspector's observers go with

@@ -2,44 +2,76 @@
 
 Thanks for helping. Bug reports, plugins, bar and widget setups, and
 documentation fixes are all welcome.
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
+
+You do not need to build Flash to help:
+
+- **Test an app you use.** Report a control that has no hint, including the
+  app version and steps to reach it. Accessibility coverage varies by app.
+- **Improve a first-run instruction.** Say what you expected, where you got
+  stuck, and which release you installed. The source documentation can be
+  ahead of the latest release.
+- **Share a small configuration.** One useful shortcut or popup with its
+  dependencies explained is enough; see [sharing a setup](#sharing-a-setup).
+- **Record a real demonstration.** The [media guide](docs/assets/README.md)
+  lists short workflows to capture. Include the build version and use
+  non-sensitive example data; show the keys as well as the result.
 
 ## Reporting a bug
 
-Open an [issue](https://github.com/aymericbeaumet/flash/issues/new/choose) with:
+Check [troubleshooting](docs/troubleshooting.md) first: it starts with
+`flash resident doctor` and ends with the known limitations, which are not
+bugs. Then open an [issue](https://github.com/aymericbeaumet/flash/issues/new/choose) with:
 
-- the output of `flash doctor` and `flash status`;
+- the Flash version and channel (stable, nightly or development), plus the
+  output of `flash resident doctor` and `flash resident status` on current
+  builds; for an older release, use the diagnostic commands in its help;
+- the macOS version and CPU architecture (`sw_vers -productVersion`, `uname -m`);
 - the app name and version where it happened (`Finder 15.0`, `Firefox 142`);
 - the relevant part of `~/.config/flash/flash.toml`;
 - for missing or misplaced hints, a screenshot taken with
   `[debug] show_hints_bounds = true`.
 
-Logs live in `~/Library/Logs/Flash/flash.log`. They never contain keys typed
-in other apps, so they are safe to attach; redact anything you consider
-personal.
+If Flash cannot start, include the CLI error and a crash report if macOS
+recorded one: find it in Console's Crash Reports or
+`~/Library/Logs/DiagnosticReports/`.
+
+Logs live in `~/Library/Logs/Flash/flash.log`. They do not record keys typed in
+other apps, but can include submitted command text, paths, URLs and, at trace
+level, Accessibility tree dumps. Review logs, configuration and crash reports
+before sharing; redact credentials, query text, private URLs and personal paths.
+See [privacy](docs/privacy.md) for what each diagnostic can contain.
 
 ## Sharing a setup
 
 Send a pull request adding your bar, widget or popup configuration to
 [`docs/examples`](docs/examples), with a short README that names every external
-tool it runs.
+tool it runs. Include the Flash version you tested, the exact configuration,
+how to activate it and how to undo it. Screenshots are welcome, with private
+window titles, account names, paths and tokens removed. A setup should work
+without copying the rest of your dotfiles.
 
 ## Changing code
 
-[docs/development.md](docs/development.md) covers the toolchain, the dev build
-(`Scripts/install.sh --dev`), tests and the integration fixtures.
+mise is the whole developer environment: `mise.toml` pins the tools and
+defines every entry point as a task (`mise tasks ls` lists them).
+[docs/development.md](docs/development.md) covers the toolchain, the tasks,
+the dev build (`mise run install:dev`), tests and the integration fixtures.
 [AGENTS.md](AGENTS.md) is the contributor guide proper: architecture
 boundaries, the hard constraints every change must respect, and the required
 checks. Read the constraints before proposing a feature; a few requests, such as
 screen reading or a second event tap, are declined by design.
 
-Before opening a pull request:
+Before opening a pull request, run the required checks (format, lint,
+guardrails, the plugin gate and the Swift suite):
 
 ```sh
-swift format lint --strict --recursive Sources Tests Package.swift
-./Scripts/check-guardrails.sh
-swift test
-./Scripts/test-plugins.sh --lane all
+mise run check
 ```
+
+Documentation changes also run `mise run build:site`, which builds the
+published manual from `docs/` and fails on a broken link or anchor; a new page
+joins `docs/nav.json`.
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
 

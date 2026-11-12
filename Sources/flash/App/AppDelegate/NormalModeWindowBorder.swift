@@ -22,6 +22,26 @@ struct ActiveWindowBorderRead {
   /// Apply through the reconciliation diff (redraw or hide only on change)
   /// rather than repainting unconditionally.
   let reconciles: Bool
+  /// The settle series this pass belongs to when a read that finds the
+  /// window where the stroke already is ends it: the later passes would read
+  /// the same window list (`scheduleActiveWindowBorderReconciliation`).
+  var endsSettleSeries: UInt64? = nil
+}
+
+/// When the authoritative window-list read follows the cached paint.
+enum ActiveWindowBorderReadTiming {
+  /// This turn: the cache is a guess the read corrects at once (a window AX
+  /// event: the window that fired may be the one on top now).
+  case nextTurn
+  /// Only when nothing is cached. With a cache the next truth is the settle
+  /// pass that follows an activation, or the next AX event for a transition
+  /// over the same app and window (a HYPER hold), so the read — 5 ms, 18 ms
+  /// at p95, on main during the activation animation — is not paid here.
+  case onlyWithoutCache
+  /// Unless the cache is the window list's own answer with no window event
+  /// since (`activeWindowBorderEventEpoch`): a mode change moves no window,
+  /// and re-reading on each one cost 1.8 ms at p50, up to 15 ms, on main.
+  case unlessFresh
 }
 
 enum ActiveWindowBorderSessionSuspension: Hashable {
@@ -47,11 +67,11 @@ extension AppDelegate {
     activatedPID ?? frontmostPID
   }
 
-  /// `reusesCachedFrame` paints the frame the AX notifications last reported
-  /// for the app and skips the WindowServer read: for a transition over the
-  /// same app and window (a HYPER hold), nothing could have moved it.
+  /// `read` says when the WindowServer read follows the cached paint; see
+  /// `ActiveWindowBorderReadTiming`.
   func updateActiveWindowBorder(
-    reason: String, activated: NSRunningApplication? = nil, reusesCachedFrame: Bool = false
+    reason: String, activated: NSRunningApplication? = nil,
+    read: ActiveWindowBorderReadTiming = .nextTurn
   ) {
     guard
       Self.activeWindowBorderShouldBeVisible(
@@ -69,16 +89,25 @@ extension AppDelegate {
       applyActiveWindowBorder(frame: nil)
       return
     }
-    let pid = app.processIdentifier
-    // Paint what the AX notifications last told us about this app right away.
-    // The authoritative read below supersedes it under the same generation, so
-    // a stale entry self-corrects instead of persisting.
+    paintActiveWindowBorder(pid: app.processIdentifier, reason: reason, read: read)
+  }
+
+  /// Paint `pid`'s stroke: the frame the AX notifications last reported for
+  /// the app right away, then the authoritative read as `read` says. The
+  /// read supersedes the cache under the same generation, so a stale entry
+  /// self-corrects instead of persisting. The visibility gate is
+  /// `updateActiveWindowBorder`'s.
+  func paintActiveWindowBorder(pid: pid_t, reason: String, read: ActiveWindowBorderReadTiming) {
     if let cached = activeWindowBorderFrameCache[pid] {
       FlashLog.trace(
         "[mode] active_border_cached reason=\(reason) pid=\(pid) frame=\(Self.describe(cached))")
       applyActiveWindowBorder(frame: cached)
-      if reusesCachedFrame { return }
     }
+    guard
+      Self.activeWindowBorderNeedsRead(
+        read, cached: activeWindowBorderFrameCache[pid] != nil,
+        readEpoch: activeWindowBorderReadEpochs[pid], eventEpoch: activeWindowBorderEventEpoch)
+    else { return }
     scheduleActiveWindowBorderRead(
       ActiveWindowBorderRead(
         pid: pid, reason: reason, generation: activeWindowBorderUpdateGeneration,
@@ -106,23 +135,31 @@ extension AppDelegate {
     DispatchQueue.main.async { [weak self] in self?.performActiveWindowBorderRead() }
   }
 
-  private func performActiveWindowBorderRead() {
+  func performActiveWindowBorderRead() {
     guard let read = activeWindowBorderPendingRead else { return }
     activeWindowBorderPendingRead = nil
     // A hide, a geometry event or a newer identity superseded it.
     guard read.generation == activeWindowBorderUpdateGeneration else { return }
     let startedAt = DispatchTime.now().uptimeNanoseconds
-    let frame = AppMonitor.topApplicationWindowFrame(
-      for: read.pid, primaryH: ScreenSpace.primaryHeight)
+    let frame = activeWindowBorderFrameReader(read.pid)
+    activeWindowBorderReadEpochs[read.pid] = activeWindowBorderEventEpoch
     FlashLog.trace(
       "[mode] active_border_frame reason=\(read.reason) pid=\(read.pid) "
         + "read_ms=\(Self.elapsedMs(startedAt, DispatchTime.now().uptimeNanoseconds)) "
         + "frame=\(Self.describe(frame))")
     rememberActiveWindowBorderFrame(frame, for: read.pid)
-    if read.reconciles {
-      applyActiveWindowBorderReconciliation(frame: frame, reason: read.reason)
-    } else {
+    guard read.reconciles else {
       applyActiveWindowBorder(frame: frame)
+      return
+    }
+    let action = applyActiveWindowBorderReconciliation(frame: frame, reason: read.reason)
+    // The window is where the stroke already is: the window list has caught
+    // up with the event, and the remaining passes would read the same.
+    if let series = read.endsSettleSeries, action == .none,
+      series == activeWindowBorderReconciliationGeneration
+    {
+      activeWindowBorderReconciliationGeneration &+= 1
+      FlashLog.trace("[mode] active_border_settled reason=\(read.reason)")
     }
   }
 
@@ -138,6 +175,19 @@ extension AppDelegate {
 
   func forgetActiveWindowBorderFrames(for pid: pid_t) {
     activeWindowBorderFrameCache.removeValue(forKey: pid)
+    activeWindowBorderReadEpochs.removeValue(forKey: pid)
+  }
+
+  /// Whether painting from the cache must be followed by a window-list read.
+  static func activeWindowBorderNeedsRead(
+    _ timing: ActiveWindowBorderReadTiming, cached: Bool, readEpoch: UInt64?, eventEpoch: UInt64
+  ) -> Bool {
+    guard cached else { return true }
+    switch timing {
+    case .nextTurn: return true
+    case .onlyWithoutCache: return false
+    case .unlessFresh: return readEpoch != eventEpoch
+    }
   }
 
   /// A move or resize names the window that changed, so its geometry is one
@@ -206,7 +256,16 @@ extension AppDelegate {
     FlashLog.trace("[mode] active_border_reconcile_cancel reason=\(reason)")
   }
 
-  func scheduleActiveWindowBorderReconciliation(delaysMs: [Int], reason: String) {
+  /// A bounded fan-out of settle passes after one event whose window-list
+  /// state settles late. `endsWhenSettled` ends the series at the first pass
+  /// that finds the window where the stroke already is (an activation: the
+  /// 80 ms pass, after the activation animation, is its first authoritative
+  /// read, and the 250 and 750 ms passes run only while it still disagrees).
+  /// The AX-event settle keeps every pass: its first read can still see a
+  /// closing window fading out of the list.
+  func scheduleActiveWindowBorderReconciliation(
+    delaysMs: [Int], reason: String, endsWhenSettled: Bool = false
+  ) {
     guard !delaysMs.isEmpty,
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
@@ -221,12 +280,14 @@ extension AppDelegate {
         guard let self, self.activeWindowBorderReconciliationGeneration == generation else {
           return
         }
-        self.reconcileActiveWindowBorder(reason: "\(reason)_settled_\(delayMs)ms")
+        self.reconcileActiveWindowBorder(
+          reason: "\(reason)_settled_\(delayMs)ms",
+          endsSettleSeries: endsWhenSettled ? generation : nil)
       }
     }
   }
 
-  func reconcileActiveWindowBorder(reason: String) {
+  func reconcileActiveWindowBorder(reason: String, endsSettleSeries: UInt64? = nil) {
     guard
       Self.activeWindowBorderShouldBeVisible(
         configEnabled: overlay.overlayConfig.windowBorder,
@@ -246,17 +307,21 @@ extension AppDelegate {
     scheduleActiveWindowBorderRead(
       ActiveWindowBorderRead(
         pid: app.processIdentifier, reason: reason,
-        generation: activeWindowBorderUpdateGeneration, reconciles: true))
+        generation: activeWindowBorderUpdateGeneration, reconciles: true,
+        endsSettleSeries: endsSettleSeries))
   }
 
-  private func applyActiveWindowBorderReconciliation(frame: CGRect?, reason: String) {
-    switch Self.activeWindowBorderReconciliationAction(
+  @discardableResult
+  private func applyActiveWindowBorderReconciliation(
+    frame: CGRect?, reason: String
+  ) -> ActiveWindowBorderReconciliationAction {
+    let action = Self.activeWindowBorderReconciliationAction(
       trackedFrame: overlay.activeWindowBorderFrame,
       currentFrame: frame,
       tolerance: Self.activeWindowBorderFrameTolerance)
-    {
+    switch action {
     case .none:
-      return
+      break
     case .hide:
       FlashLog.trace("[mode] active_border_reconcile action=hide reason=\(reason)")
       overlay.setActiveWindowBorder(around: nil)
@@ -264,6 +329,7 @@ extension AppDelegate {
       FlashLog.trace("[mode] active_border_reconcile action=redraw reason=\(reason)")
       overlay.setActiveWindowBorder(around: frame)
     }
+    return action
   }
 
   func setActiveWindowBorderSessionSuspended(
@@ -286,7 +352,7 @@ extension AppDelegate {
     FlashLog.trace("[mode] active_border_session_resume reason=\(reason)")
     guard activeWindowBorderSessionSuspensions.isEmpty else { return }
     windowLayoutSessionChanged(suspended: false)
-    reconcileFrontmostApplication(reason: reason)
+    reconcileFrontmostApplication()
     updateActiveWindowBorder(reason: reason)
     scheduleActiveWindowBorderReconciliation(
       delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: reason)
@@ -302,7 +368,7 @@ extension AppDelegate {
     // normal, a thicker blue one in insert — so the focused window stays
     // identifiable (most useful for apps with several windows). The user can
     // opt out wholesale (`[overlay] window_border = false`). Advanced mode
-    // (an all-mode `leave_mode` or `enter_normal_mode` binding) is the gate: without it
+    // (an all-mode `mode leave` or `mode normal` binding) is the gate: without it
     // there's no normal/insert distinction to visualise. Suspended while hints
     // are up (chips aren't double-framed) and whenever the user session or
     // displays are inactive, so Flash never survives over the lock surface.

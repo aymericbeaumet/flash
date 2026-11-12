@@ -10,7 +10,6 @@ public enum QueryEvaluationSurface: String, Codable, Hashable, Sendable {
 
 public struct QueryEvaluationRequest: Sendable {
   public let surface: QueryEvaluationSurface
-  public let scope: CandidateScope
   public let text: String
   /// Literal marker ownership. When present, the host routes the request only
   /// to evaluators that declared the same marker; nil is the additive lane.
@@ -18,12 +17,10 @@ public struct QueryEvaluationRequest: Sendable {
 
   public init(
     surface: QueryEvaluationSurface,
-    scope: CandidateScope,
     text: String,
     exclusivePrefix: String? = nil
   ) {
     self.surface = surface
-    self.scope = scope
     self.text = text
     self.exclusivePrefix = exclusivePrefix
   }

@@ -1,0 +1,342 @@
+{
+  "site": {
+    "name": "Flash",
+    "description": "Your keyboard, all of macOS.",
+    "url": "https://aymericbeaumet.github.io/flash/",
+    "repository": "https://github.com/aymericbeaumet/flash",
+    "repository_name": "aymericbeaumet/flash",
+    "edit": "https://github.com/aymericbeaumet/flash/edit/main/docs/"
+  },
+  "unlisted": [
+    "assets/README.md"
+  ],
+  "nav": [
+    { "title": "Home", "page": "README.md", "aliases": ["overview", "manual", "docs", "reference"] },
+    {
+      "title": "Get started",
+      "items": [
+        { "title": "Install and update", "page": "install.md", "aliases": ["uninstall", "download"] },
+        { "title": "Getting started", "page": "getting-started.md", "aliases": ["start"] },
+        { "title": "How Flash works", "page": "concepts.md", "aliases": ["how"] },
+        { "title": "Coming from Vim", "page": "vim.md", "aliases": ["vi"] },
+        { "title": "Troubleshooting", "page": "troubleshooting.md", "aliases": ["doctor", "diagnostics"] }
+      ]
+    },
+    {
+      "title": "Modes",
+      "items": [
+        { "title": "Overview", "page": "modes.md", "aliases": ["mode"] },
+        { "title": "NORMAL", "page": "normal-mode.md", "aliases": ["normal"] },
+        { "title": "VISUAL", "page": "visual-mode.md", "aliases": ["visual", "selection"] },
+        { "title": "INSERT", "page": "insert-mode.md", "aliases": ["insert"] },
+        { "title": "COMMAND", "page": "command-mode.md", "aliases": ["command", "cmdline"] },
+        { "title": "TERMINAL", "page": "terminal-mode.md", "aliases": ["terminal"] },
+        { "title": "HYPER", "page": "hyper-mode.md", "aliases": ["hyper"] },
+        { "title": "HOLD", "page": "hold-mode.md", "aliases": ["hold"] },
+        { "title": "Layers", "page": "layers.md", "aliases": ["layer"] }
+      ]
+    },
+    {
+      "title": "Using Flash",
+      "items": [
+        { "title": "Hints", "page": "hints.md", "aliases": ["hint", "mouse"] },
+        { "title": "Mouse grid", "page": "mouse-grid.md", "aliases": ["grid", "pointer", "screens"] },
+        { "title": "flashlight", "page": "flashlight.md" },
+        { "title": "Windows", "page": "windows.md" },
+        { "title": "Tiling", "page": "tiling.md", "aliases": ["tile", "workspace", "workspaces"] },
+        { "title": "Clipboard", "page": "clipboard.md" },
+        { "title": "Marks", "page": "marks.md", "aliases": ["mark"] },
+        { "title": "Audio devices", "page": "audio.md" },
+        { "title": "Startup commands", "page": "startup.md" },
+        { "title": "Updates", "page": "updates.md", "aliases": ["update", "upgrade"] },
+        { "title": "Plugins", "page": "plugins.md" }
+      ]
+    },
+    {
+      "title": "Status bar and widgets",
+      "items": [
+        { "title": "Status bar", "page": "statusbar.md", "aliases": ["status-bar"] },
+        { "title": "Status format", "page": "status-format.md", "aliases": ["formats"] },
+        { "title": "Status plugins", "page": "status-plugins.md" },
+        { "title": "Widgets", "page": "widgets.md", "aliases": ["widget"] },
+        { "title": "Popups", "page": "popups.md", "aliases": ["popup"] },
+        { "title": "Monitors", "page": "monitors.md", "aliases": ["monitor"] },
+        { "title": "Calendar", "page": "calendar.md" },
+        { "title": "Telemetry", "page": "telemetry.md", "aliases": ["otel", "opentelemetry"] },
+        {
+          "title": "Examples",
+          "items": [
+            { "title": "Status bar", "page": "examples/statusbar/README.md" },
+            { "title": "Widgets", "page": "examples/widgets/README.md" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        { "title": "Configuration", "page": "configuration.md", "aliases": ["config"] },
+        { "title": "Mapping syntax", "page": "mappings.md" },
+        { "title": "Commands", "page": "commands.md" },
+        { "title": "Browser help", "page": "help.md" },
+        { "title": "Privacy", "page": "privacy.md", "aliases": ["permissions"] }
+      ]
+    },
+    {
+      "title": "Alternatives",
+      "items": [
+        { "title": "Overview", "page": "alternatives/README.md", "aliases": ["linux"] },
+        {
+          "title": "Hint and pointer tools",
+          "items": [
+            { "title": "Neru", "page": "alternatives/neru.md" },
+            { "title": "Homerow", "page": "alternatives/homerow.md" },
+            { "title": "Shortcat", "page": "alternatives/shortcat.md" },
+            { "title": "Scoot", "page": "alternatives/scoot.md" },
+            { "title": "Vimac", "page": "alternatives/vimac.md" },
+            { "title": "Mouseless", "page": "alternatives/mouseless.md" },
+            { "title": "Wooshy", "page": "alternatives/wooshy.md" },
+            { "title": "Superkey", "page": "alternatives/superkey.md" },
+            { "title": "warpd", "page": "alternatives/warpd.md" },
+            { "title": "Neverclick", "page": "alternatives/neverclick.md" },
+            { "title": "mousemaster", "page": "alternatives/mousemaster.md" }
+          ]
+        },
+        {
+          "title": "Browser extensions",
+          "items": [
+            { "title": "Vimium", "page": "alternatives/vimium.md" },
+            { "title": "Surfingkeys", "page": "alternatives/surfingkeys.md" },
+            { "title": "Tridactyl", "page": "alternatives/tridactyl.md" },
+            { "title": "Vimium C", "page": "alternatives/vimium-c.md" },
+            { "title": "Vimari", "page": "alternatives/vimari.md" }
+          ]
+        },
+        {
+          "title": "Vim in text fields",
+          "items": [
+            { "title": "kindaVim", "page": "alternatives/kindavim.md" },
+            { "title": "SketchyVim", "page": "alternatives/sketchyvim.md" }
+          ]
+        },
+        {
+          "title": "Automation and keyboard",
+          "items": [
+            { "title": "Hammerspoon", "page": "alternatives/hammerspoon.md" },
+            { "title": "BetterTouchTool", "page": "alternatives/bettertouchtool.md" },
+            { "title": "Karabiner-Elements", "page": "alternatives/karabiner-elements.md" },
+            { "title": "skhd", "page": "alternatives/skhd.md" },
+            { "title": "Hyperkey", "page": "alternatives/hyperkey.md" },
+            { "title": "Leader Key", "page": "alternatives/leader-key.md" },
+            { "title": "Keyboard Maestro", "page": "alternatives/keyboard-maestro.md" }
+          ]
+        },
+        {
+          "title": "Launchers",
+          "items": [
+            { "title": "Raycast", "page": "alternatives/raycast.md" },
+            { "title": "Alfred", "page": "alternatives/alfred.md" },
+            { "title": "Spotlight", "page": "alternatives/spotlight.md" },
+            { "title": "LaunchBar", "page": "alternatives/launchbar.md" },
+            { "title": "Kando", "page": "alternatives/kando.md" }
+          ]
+        },
+        {
+          "title": "Clipboard managers",
+          "items": [
+            { "title": "Maccy", "page": "alternatives/maccy.md" },
+            { "title": "Paste", "page": "alternatives/paste.md" },
+            { "title": "Clipy", "page": "alternatives/clipy.md" },
+            { "title": "CopyQ", "page": "alternatives/copyq.md" }
+          ]
+        },
+        {
+          "title": "Bars and widgets",
+          "items": [
+            { "title": "SketchyBar", "page": "alternatives/sketchybar.md" },
+            { "title": "Übersicht", "page": "alternatives/uebersicht.md" },
+            { "title": "conky", "page": "alternatives/conky.md" },
+            { "title": "SwiftBar", "page": "alternatives/swiftbar.md" },
+            { "title": "xbar", "page": "alternatives/xbar.md" }
+          ]
+        },
+        {
+          "title": "Menu bar managers",
+          "items": [
+            { "title": "Ice", "page": "alternatives/ice.md" },
+            { "title": "Bartender", "page": "alternatives/bartender.md" },
+            { "title": "Hidden Bar", "page": "alternatives/hidden-bar.md" }
+          ]
+        },
+        {
+          "title": "Menu bar utilities",
+          "items": [
+            { "title": "MeetingBar", "page": "alternatives/meetingbar.md" },
+            { "title": "Itsycal", "page": "alternatives/itsycal.md" },
+            { "title": "Amphetamine", "page": "alternatives/amphetamine.md" },
+            { "title": "KeepingYouAwake", "page": "alternatives/keepingyouawake.md" }
+          ]
+        },
+        {
+          "title": "Monitoring",
+          "items": [
+            { "title": "iStat Menus", "page": "alternatives/istat-menus.md" },
+            { "title": "Stats", "page": "alternatives/stats.md" },
+            { "title": "iStatistica", "page": "alternatives/istatistica.md" },
+            { "title": "TG Pro", "page": "alternatives/tg-pro.md" },
+            { "title": "eul", "page": "alternatives/eul.md" },
+            { "title": "MenuMeters", "page": "alternatives/menumeters.md" },
+            { "title": "btop", "page": "alternatives/btop.md" },
+            { "title": "htop", "page": "alternatives/htop.md" },
+            { "title": "Activity Monitor", "page": "alternatives/activity-monitor.md" },
+            { "title": "Glances", "page": "alternatives/glances.md" },
+            { "title": "Netdata", "page": "alternatives/netdata.md" }
+          ]
+        },
+        {
+          "title": "Battery, fans and maintenance",
+          "items": [
+            { "title": "coconutBattery", "page": "alternatives/coconutbattery.md" },
+            { "title": "AlDente", "page": "alternatives/aldente.md" },
+            { "title": "Macs Fan Control", "page": "alternatives/macs-fan-control.md" },
+            { "title": "Sensei", "page": "alternatives/sensei.md" }
+          ]
+        },
+        {
+          "title": "Window switchers",
+          "items": [
+            { "title": "AltTab", "page": "alternatives/alttab.md" },
+            { "title": "Witch", "page": "alternatives/witch.md" },
+            { "title": "Contexts", "page": "alternatives/contexts.md" },
+            { "title": "rcmd", "page": "alternatives/rcmd.md" }
+          ]
+        },
+        {
+          "title": "Window managers",
+          "items": [
+            { "title": "AeroSpace", "page": "alternatives/aerospace.md" },
+            { "title": "yabai", "page": "alternatives/yabai.md" },
+            { "title": "Rectangle", "page": "alternatives/rectangle.md" },
+            { "title": "Amethyst", "page": "alternatives/amethyst.md" },
+            { "title": "Loop", "page": "alternatives/loop.md" },
+            { "title": "Magnet", "page": "alternatives/magnet.md" },
+            { "title": "Moom", "page": "alternatives/moom.md" },
+            { "title": "Swish", "page": "alternatives/swish.md" },
+            { "title": "Phoenix", "page": "alternatives/phoenix.md" }
+          ]
+        },
+        {
+          "title": "Linux desktop tools",
+          "items": [
+            {
+              "title": "Window managers",
+              "items": [
+                { "title": "i3", "page": "alternatives/i3.md" },
+                { "title": "sway", "page": "alternatives/sway.md" },
+                { "title": "Hyprland", "page": "alternatives/hyprland.md" },
+                { "title": "bspwm", "page": "alternatives/bspwm.md" },
+                { "title": "xmonad", "page": "alternatives/xmonad.md" },
+                { "title": "Qtile", "page": "alternatives/qtile.md" },
+                { "title": "awesome", "page": "alternatives/awesome.md" },
+                { "title": "river", "page": "alternatives/river.md" }
+              ]
+            },
+            {
+              "title": "Hotkeys and key remapping",
+              "items": [
+                { "title": "sxhkd", "page": "alternatives/sxhkd.md" },
+                { "title": "KMonad", "page": "alternatives/kmonad.md" },
+                { "title": "kanata", "page": "alternatives/kanata.md" },
+                { "title": "keyd", "page": "alternatives/keyd.md" },
+                { "title": "xremap", "page": "alternatives/xremap.md" },
+                { "title": "Interception Tools", "page": "alternatives/interception-tools.md" }
+              ]
+            },
+            {
+              "title": "Launchers and menus",
+              "items": [
+                { "title": "rofi", "page": "alternatives/rofi.md" },
+                { "title": "dmenu", "page": "alternatives/dmenu.md" },
+                { "title": "wofi", "page": "alternatives/wofi.md" },
+                { "title": "fuzzel", "page": "alternatives/fuzzel.md" },
+                { "title": "Ulauncher", "page": "alternatives/ulauncher.md" },
+                { "title": "Albert", "page": "alternatives/albert.md" },
+                { "title": "KRunner", "page": "alternatives/krunner.md" }
+              ]
+            },
+            {
+              "title": "Bars",
+              "items": [
+                { "title": "polybar", "page": "alternatives/polybar.md" },
+                { "title": "Waybar", "page": "alternatives/waybar.md" },
+                { "title": "eww", "page": "alternatives/eww.md" },
+                { "title": "i3blocks", "page": "alternatives/i3blocks.md" },
+                { "title": "i3status", "page": "alternatives/i3status.md" }
+              ]
+            },
+            {
+              "title": "Pointer and hints",
+              "items": [
+                { "title": "keynav", "page": "alternatives/keynav.md" },
+                { "title": "hints", "page": "alternatives/hints.md" }
+              ]
+            },
+            {
+              "title": "Notifications and clipboard",
+              "items": [
+                { "title": "dunst", "page": "alternatives/dunst.md" },
+                { "title": "mako", "page": "alternatives/mako.md" },
+                { "title": "greenclip", "page": "alternatives/greenclip.md" },
+                { "title": "clipmenu", "page": "alternatives/clipmenu.md" },
+                { "title": "cliphist", "page": "alternatives/cliphist.md" }
+              ]
+            },
+            {
+              "title": "Scripting and idle",
+              "items": [
+                { "title": "xdotool", "page": "alternatives/xdotool.md" },
+                { "title": "ydotool", "page": "alternatives/ydotool.md" },
+                { "title": "wtype", "page": "alternatives/wtype.md" },
+                { "title": "wmctrl", "page": "alternatives/wmctrl.md" },
+                { "title": "swayidle", "page": "alternatives/swayidle.md" },
+                { "title": "xss-lock", "page": "alternatives/xss-lock.md" }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Examples",
+          "items": [
+            { "title": "Neverclick-shaped configuration", "page": "examples/neverclick/README.md" },
+            { "title": "mousemaster-shaped configuration", "page": "examples/mousemaster/README.md" }
+          ]
+        },
+        { "title": "Comparison table and FAQ", "page": "comparison.md", "aliases": ["faq"] }
+      ]
+    },
+    {
+      "title": "Contributing",
+      "items": [
+        { "title": "Development", "page": "development.md" },
+        { "title": "Releases and notarization", "page": "release.md" },
+        { "title": "Architecture", "page": "architecture.md" },
+        { "title": "Input capture", "page": "input-internals.md", "aliases": ["input-latency"] },
+        { "title": "Browser help internals", "page": "help-internals.md" },
+        { "title": "Prepared model", "page": "prepared-model.md" },
+        { "title": "Observability", "page": "observability.md" },
+        { "title": "Performance", "page": "performance.md" }
+      ]
+    },
+    {
+      "title": "Advanced",
+      "items": [
+        { "title": "IPC protocol", "page": "ipc-protocol.md", "aliases": ["ipc", "socket", "events"] },
+        { "title": "Plugin protocol", "page": "plugin-protocol.md" },
+        { "title": "Plugin cookbook", "page": "plugin-cookbook.md" },
+        { "title": "Rust plugin SDK", "page": "plugin-rust-sdk.md" },
+        { "title": "Plugin performance", "page": "plugin-performance.md" },
+        { "title": "Standards", "page": "standards.md" }
+      ]
+    }
+  ]
+}

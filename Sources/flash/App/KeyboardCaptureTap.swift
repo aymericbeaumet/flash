@@ -15,6 +15,7 @@ import CoreGraphics
 /// in the main run loop). Returning true consumes the event and schedules
 /// `handle`; returning false passes it through untouched (modified chords →
 /// Carbon, INSERT → the focused app, command-line/modal → the key-window path).
+/// It never logs, holds or keeps a key.
 final class KeyboardCaptureTap {
   private var tap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
@@ -107,8 +108,9 @@ final class KeyboardCaptureTap {
     /// in the actual frontmost app (reconciled first: the app switcher may
     /// have changed it without a notification yet).
     case swallowIfInsertChordIsMapped
-    /// A native surface (About window, suspended session) owns the keyboard:
-    /// only a key a mapping or the NORMAL interpreter claims is swallowed.
+    /// A native surface (a context menu, a suspended session, Mission
+    /// Control over NORMAL) owns the keyboard: only a key a mapping or the
+    /// NORMAL interpreter claims is swallowed.
     case swallowIfNativeSurfaceKeyIsMapped
     /// A bare Escape while a status-bar hover preview shows closes the
     /// preview, in any base mode, instead of reaching the app.
@@ -127,7 +129,8 @@ final class KeyboardCaptureTap {
     nativeSurfaceSuspended: Bool,
     isModifiedChord: Bool,
     isBareEscape: Bool = false,
-    ephemeralPopupShown: Bool = false
+    ephemeralPopupShown: Bool = false,
+    dockViewShown: Bool = false
   ) -> Decision {
     // A terminal popup's own view owns input.
     if isTerminal { return .pass }
@@ -146,7 +149,14 @@ final class KeyboardCaptureTap {
     if flashMode == .insert, !nativeSurfaceShown {
       return isModifiedChord ? .swallowIfInsertChordIsMapped : .pass
     }
-    if aboutWindowOwnsKeyboard || nativeSurfaceSuspended {
+    // The About window, while key, is a normal window: every key is its own,
+    // so closing it never closes the app behind it.
+    if aboutWindowOwnsKeyboard { return .pass }
+    if nativeSurfaceSuspended { return .swallowIfNativeSurfaceKeyIsMapped }
+    // Mission Control or App Exposé: NORMAL keeps the keys it maps (`f`
+    // labels the Dock's view) and the Dock reads the rest, so Escape closes
+    // it as it does without Flash.
+    if dockViewShown, flashMode == .normal, inputMode == .normal {
       return .swallowIfNativeSurfaceKeyIsMapped
     }
     return shouldSwallow(flashMode: flashMode, inputMode: inputMode) ? .swallow : .pass
@@ -243,7 +253,13 @@ final class KeyboardCaptureTap {
       if let tap = me.tap { CGEvent.tapEnable(tap: tap, enable: true) }
       return passthrough
     }
-    // Pass Flash's own synthesized keys straight through. `send_key` output
+    return me.passes(type, event) ? passthrough : nil
+  }
+
+  /// One key event, in the order the session delivers them: true passes it
+  /// on, false swallows it. Main thread, inside the synchronous callback.
+  func passes(_ type: CGEventType, _ event: CGEvent) -> Bool {
+    // Pass Flash's own synthesized keys straight through. `key send` output
     // (`/`→⌘F, the ⌘⇧[ / ⌘⇧] tab chords, ⌘V, …) is posted with this tag and can
     // loop back through the session tap; re-capturing it in NORMAL mode would
     // re-trigger the mapping that sent it — an infinite replay. Mirrors the
@@ -251,34 +267,36 @@ final class KeyboardCaptureTap {
     if event.getIntegerValueField(.eventSourceUserData)
       == NormalModeDispatcher.syntheticKeyEventTag
     {
-      return passthrough
+      return true
     }
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
     if type == .keyUp {
-      guard me.swallowedKeys.releaseIsSwallowed(keyCode) else { return passthrough }
-      guard me.keyUpMatters(keyCode) else { return nil }
+      guard swallowedKeys.releaseIsSwallowed(keyCode) else { return true }
+      guard keyUpMatters(keyCode) else { return false }
       if let ns = NSEvent(cgEvent: event) {
-        let keyUp = me.handleKeyUp
+        let keyUp = handleKeyUp
         DispatchQueue.main.async { keyUp(ns) }
       }
-      return nil
+      return false
     }
-    guard type == .keyDown else { return passthrough }
+    guard type == .keyDown else { return true }
+    let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
     let outcome = Self.keyDownOutcome(
-      held: me.swallowedKeys.heldDecision(keyCode),
-      isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-    ) { me.shouldSwallow(event) }
+      held: swallowedKeys.heldDecision(keyCode), isRepeat: isRepeat
+    ) { shouldSwallow(event) }
     guard case .swallow(let route) = outcome else {
-      me.swallowedKeys.press(keyCode, swallowed: false)
-      return passthrough
+      swallowedKeys.press(keyCode, swallowed: false)
+      return true
     }
-    me.swallowedKeys.press(keyCode, swallowed: true)
-    if route, let ns = NSEvent(cgEvent: event) {
-      // The swallow (returning nil) is synchronous, so the key never reaches
-      // the app; defer the (possibly heavy) handling so the callback returns
-      // fast and the tap doesn't trip its time budget.
-      DispatchQueue.main.async { me.handle(ns) }
+    swallowedKeys.press(keyCode, swallowed: true)
+    guard route else { return false }
+    if let ns = NSEvent(cgEvent: event) {
+      // The swallow (returning false) is synchronous, so the key never
+      // reaches the app; defer the (possibly heavy) handling so the callback
+      // returns fast and the tap doesn't trip its time budget.
+      let handle = handle
+      DispatchQueue.main.async { handle(ns) }
     }
-    return nil
+    return false
   }
 }

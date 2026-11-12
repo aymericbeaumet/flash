@@ -10,6 +10,26 @@ body:
     validations:
       required: true
   - type: input
+    id: system
+    attributes:
+      label: macOS version and CPU architecture
+      description: Run `sw_vers -productVersion` and `uname -m`, or use About This Mac.
+      placeholder: macOS version; arm64 (Apple Silicon) or x86_64 (Intel)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Flash was installed
+      description: The signature differs between them, which matters for permission problems.
+      options:
+        - Homebrew cask `flash`
+        - Homebrew cask `flash@nightly`
+        - Release ZIP moved to /Applications
+        - Built from source (`mise run install:dev`)
+    validations:
+      required: true
+  - type: input
     id: app
     attributes:
       label: App and version where it happened
@@ -17,14 +37,23 @@ body:
   - type: textarea
     id: doctor
     attributes:
-      label: Output of `flash doctor` and `flash status`
+      label: Output of `flash resident doctor` and `flash resident status`
+      description: >
+        If Flash cannot start, include the CLI error or say that the resident
+        is not running. Review output for private paths before sharing.
+        For a manual install, use /Applications/Flash.app/Contents/MacOS/flash
+        in place of flash.
       render: text
     validations:
       required: true
   - type: textarea
     id: config
     attributes:
-      label: Relevant part of `~/.config/flash/flash.toml`
+      label: Relevant part of your flash.toml
+      description: >
+        Usually ~/.config/flash/flash.toml; FLASH_CONFIG or XDG_CONFIG_HOME
+        may select another file. Remove API keys, tokens, credentials, private
+        URLs and personal paths before sharing.
       render: toml
   - type: textarea
     id: extra
@@ -33,3 +62,14 @@ body:
       description: >
         Lines from `~/Library/Logs/Flash/flash.log`, or a screenshot with
         `[debug] show_hints_bounds = true` for missing or misplaced hints.
+        Logs can include submitted commands, URLs and paths; trace logs can
+        include Accessibility tree dumps. Redact private data and review
+        visible content in screenshots before sharing.
+  - type: textarea
+    id: crash
+    attributes:
+      label: Crash report, if Flash exited
+      description: >
+        If macOS recorded a report, find Flash in Console's Crash Reports or
+        ~/Library/Logs/DiagnosticReports/. Attach the .ips file or its relevant
+        section after reviewing it for usernames, paths and other private data.

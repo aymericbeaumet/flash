@@ -10,9 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", default-features = false, features = [
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", default-features = false, features = [
   "rt",
   "macros",
   "io-std",
@@ -25,7 +26,7 @@ tokio = { version = "1", default-features = false, features = [
 
 [dev-dependencies]
 # Paused time: tests measure the SDK's host-call timeout without waiting it out.
-tokio = { version = "1", default-features = false, features = ["test-util"] }
+tokio = { version = "1.54.1", default-features = false, features = ["test-util"] }
 
 # Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
 # (fully-unoptimized tokio is visibly slow under the plugin latency contracts),

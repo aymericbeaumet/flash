@@ -3,16 +3,18 @@ import AppKit
 /// The printed Apple function row, and the plain F-keys behind it.
 ///
 /// Hyper+1…9, 0, -, + follow the icons: brightness, Mission Control,
-/// Spotlight, Dictation, Focus, media, mute, and volume. Alt+Hyper sends
+/// Spotlight, Dictation, Focus, media, mute, and volume. Shift+Hyper sends
 /// F1–F12. Special keys are posted as system events, the same path as the
-/// keyboard, except Mission Control, which asks the Dock. F-keys are
-/// ordinary keystrokes to the focused app.
+/// keyboard. Mission Control is no key event on recent macOS (a posted 160
+/// reaches nothing): Hyper+3 is `missioncontrol toggle`, which asks the Dock
+/// (`SystemSurfaceController`). F-keys are ordinary keystrokes to the
+/// focused app.
 enum SystemKeyboard {
-  /// One macOS function-row action, in F1…F12 order.
+  /// One macOS function-row action, in F1…F12 order; F3, Mission Control,
+  /// is a system surface instead (`missioncontrol toggle`).
   enum RowKey: String, CaseIterable {
     case brightnessDown = "brightness_down"
     case brightnessUp = "brightness_up"
-    case missionControl = "mission_control"
     case spotlight
     case dictation
     case focus
@@ -28,6 +30,10 @@ enum SystemKeyboard {
     }
   }
 
+  /// Where every synthesized event goes: the HID tap, as the keyboard's own
+  /// keys arrive. Tests swap it to count events without posting them.
+  static var eventPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+
   /// NX_KEYTYPE values from `IOKit/hidsystem/ev_keymap.h`.
   private enum Auxiliary {
     static let soundUp = 0
@@ -40,27 +46,10 @@ enum SystemKeyboard {
     static let previous = 18
   }
 
-  /// Mission Control is the Dock's: a posted Mission Control key (160)
-  /// reaches nothing on recent macOS, so Flash asks the Dock directly.
-  private static let missionControlNotification = "com.apple.expose.awake"
-
-  private typealias DockNotificationFunction = @convention(c) (CFString, Int32) -> Void
-
-  /// Send `name` to the Dock through the private `CoreDockSendNotification`,
-  /// resolved at run time. False when this macOS does not export it.
-  @discardableResult
-  static func sendDockNotification(_ name: String) -> Bool {
-    guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CoreDockSendNotification")
-    else { return false }
-    unsafeBitCast(symbol, to: DockNotificationFunction.self)(name as CFString, 0)
-    return true
-  }
-
   static func perform(_ key: RowKey) {
     switch key {
     case .brightnessDown: postAuxiliary(Auxiliary.brightnessDown)
     case .brightnessUp: postAuxiliary(Auxiliary.brightnessUp)
-    case .missionControl: sendDockNotification(missionControlNotification)
     case .spotlight: postNamedKey("space", flags: .maskCommand)
     case .dictation: postNamedKey("f5", flags: .maskSecondaryFn)
     case .focus: postNamedKey("f6", flags: .maskSecondaryFn)
@@ -105,7 +94,7 @@ enum SystemKeyboard {
       else { return false }
       cgEvent.setIntegerValueField(
         .eventSourceUserData, value: NormalModeDispatcher.syntheticKeyEventTag)
-      PluginHostRPC.mediaKeyPoster(cgEvent)
+      eventPoster(cgEvent)
     }
     return true
   }
@@ -122,7 +111,7 @@ enum SystemKeyboard {
       .eventSourceUserData, value: NormalModeDispatcher.syntheticKeyEventTag)
     up.setIntegerValueField(
       .eventSourceUserData, value: NormalModeDispatcher.syntheticKeyEventTag)
-    PluginHostRPC.mediaKeyPoster(down)
-    PluginHostRPC.mediaKeyPoster(up)
+    eventPoster(down)
+    eventPoster(up)
   }
 }

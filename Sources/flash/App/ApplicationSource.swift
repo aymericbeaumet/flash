@@ -8,9 +8,8 @@ final class ApplicationSource: FlashSource {
   let priority = 0
   let capabilities: FlashSourceCapabilities = [.candidates, .appActivation]
   let activationPolicy: FlashSourceActivationPolicy = .always
-  let candidateSourceLabels = ["apps"]
   let candidateSourceDescriptors = [
-    CandidateSourceDescriptor(name: "core.apps", kind: .locations, priority: .high)
+    CandidateSourceDescriptor(name: "core.apps", type: "apps", kind: .locations, priority: .high)
   ]
   private let cacheLock = NSLock()
   /// Always-readable immutable snapshot. An empty array means the resident's
@@ -315,7 +314,7 @@ final class ApplicationSource: FlashSource {
     for target: String,
     environment: FlashSourceEnvironment
   ) -> URL? {
-    // Reject targets that look like a path. The `app_open name=…` verb is
+    // Reject targets that look like a path. The `app open --name=…` command is
     // reachable from the `flash` CLI and via osascript-driven AppleEvents,
     // so an absolute or relative path would let a remote sender launch
     // an arbitrary `.app` bundle the attacker dropped into a writable

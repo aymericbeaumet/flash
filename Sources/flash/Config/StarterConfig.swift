@@ -6,6 +6,7 @@ import Foundation
 /// a bundled default would take an explicit `"<key>" = false` to remove.
 enum StarterConfig {
   static let text = """
+    #:schema https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/flash.schema.json
     # Flash configuration. Flash created this starter because you had no config
     # and never rewrites it, so edit freely. Changes apply as soon as you save.
     # Every option, with its default and documentation:
@@ -14,22 +15,22 @@ enum StarterConfig {
     [mode.all.mappings]
     # Label every clickable control in the focused app, then type a label to
     # click it (Escape cancels).
-    "cmd+shift+space" = ["flash", "mouse_target"]
+    "cmd+shift+space" = ["flash", "mouse", "target"]
 
     # More shortcuts: delete the leading "# " to enable one.
     #
     # Reach any screen position with a grid laid out like the left half of
     # your keyboard (12345 / qwert / asdfg / zxcvb): press the key where you
     # want to go, then again to refine.
-    # "cmd+shift+alt+space" = ["flash", "mouse_grid"]
+    # "cmd+shift+alt+space" = ["flash", "mouse", "grid"]
     #
-    # Search apps, browser tabs, emoji and more (keep the space after flashlight):
-    # "cmd+ctrl+alt+space" = ["flash", "enter_command_mode", "--input=:flashlight "]
+    # Search apps, browser tabs, emoji and more:
+    # "cmd+ctrl+alt+space" = ["flash", "mode", "flashlight"]
     #
     # Vim-like normal mode. While it is on, unmapped keys are captured instead of
-    # typed until you press cmd+ctrl+i or click into a text field.
-    # "cmd+ctrl+[" = ["flash", "enter_normal_mode"]
-    # "cmd+ctrl+i" = ["flash", "enter_insert_mode"]
+    # typed until you press i (or enable cmd+ctrl+i below). Clicking keeps NORMAL.
+    # "cmd+ctrl+[" = ["flash", "mode", "normal"]
+    # "cmd+ctrl+i" = ["flash", "mode", "insert"]
 
     """
 
@@ -61,7 +62,7 @@ enum StarterConfig {
       // check is left alone rather than replaced.
       try Data(text.utf8).write(to: url, options: .withoutOverwriting)
     } catch {
-      FlashLog.warn("[config] starter_failed path=\(url.path) error=\(error.localizedDescription)")
+      FlashLog.error("[config] starter_failed path=\(url.path) error=\(error.localizedDescription)")
       return nil
     }
     FlashLog.info("[config] starter_created path=\(url.path)")
