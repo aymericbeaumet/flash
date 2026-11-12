@@ -47,10 +47,10 @@ enum CalendarStatusDocument {
     var calendar = Calendar(identifier: .iso8601)
     calendar.timeZone = timeZone
     let date = calendar.dateComponents(
-      [.year, .month, .day, .weekday, .weekOfYear, .hour, .minute], from: now)
+      [.year, .month, .day, .weekday, .weekOfYear, .hour, .minute, .second], from: now)
     guard let year = date.year, let month = date.month, let day = date.day,
       let weekday = date.weekday, let week = date.weekOfYear,
-      let hour = date.hour, let minute = date.minute,
+      let hour = date.hour, let minute = date.minute, let second = date.second,
       let today = calendar.dateInterval(of: .day, for: now),
       let monthStart = calendar.dateInterval(of: .month, for: now)?.start,
       let previous = calendar.date(byAdding: .month, value: -1, to: monthStart),
@@ -95,12 +95,12 @@ enum CalendarStatusDocument {
       ),
       (String(year), yearDay, yearDays),
     ] {
-      progress.append(progressLine(label, elapsed: elapsed, total: total))
+      progress.append(contentsOf: progressLines(label, elapsed: elapsed, total: total))
     }
 
-    for (row, face) in clockLines(hour: hour, minute: minute).enumerated() {
+    for (row, face) in clockLines(hour: hour, minute: minute, second: second).enumerated() {
       var line = row < progress.count ? progress[row] : Line()
-      line.pad(to: columns - 17)
+      line.pad(to: columns - 29)
       line.append(markup: face.replacingOccurrences(of: "#", with: "##"), width: face.count)
       lines.append(line)
     }
@@ -114,37 +114,40 @@ enum CalendarStatusDocument {
     return lines.map(\.markup).joined(separator: "\n")
   }
 
-  private static func clockLines(hour: Int, minute: Int) -> [String] {
-    var face = [
-      "      .-12-.     ",
-      "   .'       '.   ",
-      "  /           \\  ",
-      " .             . ",
-      "9       o       3",
-      " '             ' ",
-      "  \\           /  ",
-      "   '.       .'   ",
-      "      '-6-'      ",
-    ].map(Array.init)
+  private static func clockLines(hour: Int, minute: Int, second: Int) -> [String] {
+    var face = Array(repeating: Array(repeating: Character(" "), count: 29), count: 15)
+    for degree in stride(from: 0, to: 360, by: 3) {
+      let angle = Double(degree) * Double.pi / 180
+      let x = 14 + Int((sin(angle) * 14).rounded())
+      let y = 7 - Int((cos(angle) * 7).rounded())
+      face[y][x] = "."
+    }
+    for (label, x, y) in [
+      ("12", 13, 0), ("1", 21, 1), ("2", 26, 3), ("3", 28, 7),
+      ("4", 26, 11), ("5", 21, 13), ("6", 14, 14), ("7", 7, 13),
+      ("8", 2, 11), ("9", 0, 7), ("10", 1, 3), ("11", 6, 1),
+    ] {
+      for (offset, character) in label.enumerated() { face[y][x + offset] = character }
+    }
 
-    func hand(turn: Double, radius: Double, hourHand: Bool) {
+    func hand(turn: Double, radius: Double, stroke: Character) {
       let angle = turn * 2 * Double.pi
       // Terminal cells are about twice as tall as they are wide.
       let dx = sin(angle) * radius
       let dy = -cos(angle) * radius / 2
       let steps = Int(ceil(max(abs(dx), abs(dy))))
-      let stroke: Character =
-        hourHand ? "#" : abs(dx) < 1 ? "|" : abs(dy) < 0.5 ? "-" : dx * dy < 0 ? "/" : "\\"
       for step in 1...steps {
-        let x = 8 + Int((dx * Double(step) / Double(steps)).rounded())
-        let y = 4 + Int((dy * Double(step) / Double(steps)).rounded())
+        let x = 14 + Int((dx * Double(step) / Double(steps)).rounded())
+        let y = 7 + Int((dy * Double(step) / Double(steps)).rounded())
         face[y][x] = stroke
       }
     }
 
-    hand(turn: Double(minute) / 60, radius: 6, hourHand: false)
-    hand(turn: (Double(hour % 12) + Double(minute) / 60) / 12, radius: 4, hourHand: true)
-    face[4][8] = "o"
+    let minutes = Double(minute) + Double(second) / 60
+    hand(turn: Double(second) / 60, radius: 12, stroke: ".")
+    hand(turn: minutes / 60, radius: 10, stroke: "+")
+    hand(turn: (Double(hour % 12) + minutes / 60) / 12, radius: 7, stroke: "#")
+    face[7][14] = "o"
     return face.map { String($0.reversed().drop(while: { $0 == " " }).reversed()) }
   }
 
@@ -183,9 +186,9 @@ enum CalendarStatusDocument {
     return lines
   }
 
-  /// `label ████▋     3/7  4 days left`: the day's position in a period,
-  /// counting today, drawn by the status format's own meter.
-  private static func progressLine(_ label: String, elapsed: Int, total: Int) -> Line {
+  /// Keep the meter/count and remaining days on separate rows so the clock
+  /// can share the calendar's fixed width without shortening any progress bar.
+  private static func progressLines(_ label: String, elapsed: Int, total: Int) -> [Line] {
     var line = Line()
     line.append(label, "dim")
     line.pad(to: labelWidth)
@@ -196,8 +199,10 @@ enum CalendarStatusDocument {
     line.pad(to: line.width + 2 + 7 - count.count)
     line.append(count)
     let left = total - elapsed
-    line.append(left == 0 ? "  last day" : left == 1 ? "  1 day left" : "  \(left) days left")
-    return line
+    var remaining = Line()
+    remaining.pad(to: labelWidth)
+    remaining.append(left == 0 ? "last day" : left == 1 ? "1 day left" : "\(left) days left", "dim")
+    return [line, remaining]
   }
 
   private static func factLine(_ label: String, _ value: String) -> Line {

@@ -497,14 +497,16 @@ cannot express "fit this label between the lanes".
 
 Time is read on its own boundaries, never polled on an interval. Each
 evaluation reports the finest unit it showed: seconds when a strftime seconds
-conversion (`%S`, `%T`, `%s`, `%X`, `%r`, `%c`, `%+`) was expanded; days when
-only date conversions or `#{flash.calendar}` were; minutes for anything else,
+conversion (`%S`, `%T`, `%s`, `%X`, `%r`, `%c`, `%+`) or the analog clock in
+`#{flash.calendar}` was expanded; days when only date conversions were; minutes for anything else,
 including `#{flash.date}` and `t:` times. A literal `%%` is not time, and
 neither are the `#{flash.calendar.next…}` values: the controller wakes at the
 instants they change (the countdown's next minute, an event starting or
 ending). The controller wakes at the next boundary of the finest unit any
 visible surface shows; a day ends at local midnight or at a daylight-saving transition inside
-it. Setting the clock, a time-zone change, a new calendar day and a wake
+it. A text popup contributes its clock only while its hover preview is visible;
+pinned and standalone pagers keep their snapshot until explicit refresh.
+Setting the clock, a time-zone change, a new calendar day and a wake
 re-plan that boundary at once. `[statusbar] interval` and a widget's
 `interval` govern only `#()` jobs and named sources.
 

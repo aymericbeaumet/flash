@@ -139,7 +139,7 @@ The core `#{flash.calendar}` status value combines the local clock and calendar 
 text popup:
 
 ```text
-Wednesday, September 30, 2026  12:00                           Europe/Paris
+Wednesday, September 30, 2026  10:08                           Europe/Paris
 
        August 2026              September 2026             October 2026
 Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su
@@ -150,15 +150,21 @@ Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su
 35 24 25 26 27 28 29 30   40 28 29 30               44 26 27 28 29 30 31
 36 31
 
-Week 40     ████████▋                 3/7  4 days left          .-12-.
-September   ████████████████████    30/30  last day          .'   |   '.
-Q3          ████████████████████    92/92  last day         /     #     \
-2026        ███████████████       273/365  92 days left    .      #      .
-                                                          9       o       3
-                                                           '             '
-                                                            \           /
-                                                             '.       .'
-                                                                '-6-'
+Week 40     ████████▋                 3/7              ....12.....
+            4 days left                             11.           .1.
+September   ████████████████████    30/30         ..                 ..
+            last day                           10.                     .2
+Q3          ████████████████████    92/92      ..                  ++   ..
+            last day                          ..      ##        +++      ..
+2026        ███████████████       273/365     .         ###   ++          .
+            92 days left                      9            #o+            3
+                                              .          ..               .
+                                              ..        .                ..
+                                               ..     ..                ..
+                                                8.  ..                 .4
+                                                  ..                 ..
+                                                    .7.           .5.
+                                                       .....6.....
 
 Time zone   UTC+02:00 · Central European Summer Time
 DST         Ends Sun Oct 25 · 03:00 → 02:00 · in 25 days
@@ -175,16 +181,17 @@ open it with `mode terminal --name=date`. Existing calendar files and
 appointment/task data are untouched.
 
 - **Header**: today's date, local 24-hour `HH:MM`, and the timezone identifier.
-- **Clock**: a compact ASCII face beside the progress bars, with a short `#`
-  hour hand and a longer minute hand. The hour hand moves between hour marks;
-  neither the face nor the numeric time shows seconds or milliseconds.
+- **Clock**: a 29-by-15 ASCII face beside the progress bars, labelled with all
+  twelve hours. The short `#` hour hand and longer `+` minute hand move between
+  hour/minute marks; the longest `.` seconds hand advances each second. The
+  numeric header stays `HH:MM`, without seconds or milliseconds.
 - **Months**: the previous, current and next months side by side, rows
   aligned, with ISO week numbers. The current month sits in the middle with a
   bold title; today has a bold inverse highlight and its week number is bold.
   Weekends are dimmed. The rows follow the tallest of the three months.
 - **Progress**: today's place in its ISO week, month, quarter and year,
   counting today, with the days left after it. The bars are status-format
-  meters on a grey track.
+  meters on a grey track, with the remaining days on the row below each bar.
 - **Time zone**: the current UTC offset and the zone's English name.
 - **DST**: the next daylight-saving transition as the wall clock sees it, or
   `Not observed` for a zone without one.
@@ -196,7 +203,7 @@ appointment/task data are untouched.
 
 Dates use a Monday-first Gregorian calendar with ISO week numbers,
 English labels, and the current local timezone. The view is 75 content
-columns and at most 24 rows. Text popups size to their widest line between
+columns and at most 30 rows. Text popups size to their widest line between
 `[popup] min_width` and `max_width`: the default 750-point `max_width` fits it
 at the 13-point font with 10-point padding (697 points wide). A smaller
 `max_width` or screen wraps it, and smaller screens scroll in the pager, which
@@ -211,8 +218,8 @@ snapshot; see [popups](popups.md).
 The calendar generator performs no file access, account lookup, network or
 location access, and shows no events or todos: the
 [next-meeting values](#next-meeting) are what read your calendars. One result is cached
-for each minute and timezone, including its current UTC offset. The existing
-status clock refreshes it every minute; daylight-saving and timezone changes
+for each second and timezone, including its current UTC offset. The existing
+status clock refreshes it every second; daylight-saving and timezone changes
 also update the clock and offset. A timezone
 change also re-renders the bar's clock and the next meeting's start and end
 in the new zone at once, and `calendar next` and `calendar join` read the new

@@ -28,6 +28,8 @@ final class FlashStatusBarController {
   private var environmentWakeArmed = false
   private var template: FlashStatusBarTemplate
   private var popupTemplates: [String: FlashStatusBarTemplate]
+  /// Only hover previews update live; focused pagers keep their captured document.
+  private var livePopupNames: Set<String> = []
   private var sources: [String: FlashStatusBarSourceDefinition]
   private var terminalPopupNames: Set<String>
   private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
@@ -453,6 +455,17 @@ final class FlashStatusBarController {
     }
   }
 
+  /// A hidden popup needs no clock wakes. Showing one evaluates at the current
+  /// wall time immediately, even when none of the bar's other inputs changed.
+  func setLivePopupNames(_ names: Set<String>) {
+    queue.async { [weak self] in
+      guard let self, self.livePopupNames != names else { return }
+      self.livePopupNames = names
+      self.bar?.memo = nil
+      self.publishCurrentModel()
+    }
+  }
+
   /// The enabled widgets. A widget whose spec changed evaluates afresh; one
   /// that disappeared releases what only it required.
   func updateWidgets(_ specs: [String: StatusWidgetSpec]) {
@@ -824,8 +837,10 @@ final class FlashStatusBarController {
     let result = FlashStatusBarTemplateEngine.evaluate(
       template: template, popupTemplates: popupTemplates, context: context,
       terminalPopupNames: terminalPopupNames, nativeContext: native,
-      popupCache: popupCache)
+      popupCache: popupCache, visiblePopupNames: livePopupNames)
     bar?.record(result.dependencies, jobs: result.jobs, native: native)
+    // Dependencies retain hidden popup data subscriptions; only visible clocks wake.
+    bar?.clock = result.clock
     surfaceEvaluations["bar", default: 0] += 1
     requirementsChanged = true
     if result.model != lastPublishedModel {

@@ -612,7 +612,8 @@ enum FlashStatusBarTemplateEngine {
     jobValues: [String: String] = [:],
     terminalPopupNames: Set<String> = [],
     nativeContext: StatusFormatContext? = nil,
-    popupCache: PopupEvaluationCache? = nil
+    popupCache: PopupEvaluationCache? = nil,
+    visiblePopupNames: Set<String>? = nil
   ) -> (
     model: FlashStatusBarModel, jobs: [StatusFormatJobRequest], sources: Set<String>,
     clock: StatusFormatTimeResolution?, dependencies: StatusFormatDependencies
@@ -635,6 +636,7 @@ enum FlashStatusBarTemplateEngine {
     var popupTexts: [String: String] = [:]
     var jobs = result.jobs
     var dependencies = result.dependencies
+    var clockDependencies = result.dependencies
     for name in popupTemplates.keys.sorted() {
       guard let popup = popupTemplates[name] else { continue }
       if let memo = popupCache?.memos[name],
@@ -642,6 +644,9 @@ enum FlashStatusBarTemplateEngine {
           == memo.inputs
       {
         dependencies.formUnion(memo.dependencies)
+        if visiblePopupNames?.contains(name) ?? true {
+          clockDependencies.formUnion(memo.dependencies)
+        }
         popups[name] = memo.runs
         popupTexts[name] = memo.serialized
         continue
@@ -649,6 +654,9 @@ enum FlashStatusBarTemplateEngine {
       let expanded = evaluateDocument(popup, native: native)
       jobs.append(contentsOf: expanded.jobs)
       dependencies.formUnion(expanded.dependencies)
+      if visiblePopupNames?.contains(name) ?? true {
+        clockDependencies.formUnion(expanded.dependencies)
+      }
       let runs = trimmedPopupRuns(expanded.runs)
       let serialized = StatusFormatDocument.serialize(runs)
       popups[name] = runs
@@ -667,7 +675,8 @@ enum FlashStatusBarTemplateEngine {
       popups[name] = []
       popupTexts[name] = ""
     }
-    let needs = Self.requirements(of: dependencies)
+    let sources = Self.requirements(of: dependencies).sources
+    let clock = Self.requirements(of: clockDependencies).clock
     return (
       FlashStatusBarModel(
         appText: "", modeText: "", rightText: "",
@@ -678,7 +687,7 @@ enum FlashStatusBarTemplateEngine {
             var run = $0
             run.text = normalizedTemplate(run.text)
             return run
-          })), jobs, needs.sources, needs.clock, dependencies
+          })), jobs, sources, clock, dependencies
     )
   }
 
@@ -713,9 +722,9 @@ enum FlashStatusBarTemplateEngine {
       }
     }
     var clock = dependencies
-    // Both core date values show local time to the minute.
+    // The calendar's analog second hand moves even though its numeric time is HH:MM.
     if dependencies.values.contains("flash.date") { clock.noteTime(.minute) }
-    if dependencies.values.contains("flash.calendar") { clock.noteTime(.minute) }
+    if dependencies.values.contains("flash.calendar") { clock.noteTime(.second) }
     return (sources, clock.timeResolution)
   }
 
@@ -841,21 +850,21 @@ enum FlashStatusBarRenderer {
   private static let dateFormatter = DateFormatter()
   /// Keyed by the zone's identifier and UTC offset, never `TimeZone`
   /// equality, which holds between two autoupdating zones whatever they read.
-  private static var calendarCache: (minute: Int, zone: String, text: String)?
+  private static var calendarCache: (second: Int, zone: String, text: String)?
   /// `flash.date` shows minutes: one formatted string per minute, calendar
   /// and locale, so a seconds clock does not reconfigure the formatter.
   private static var dateTextCache: (minute: Int, calendar: Calendar, locale: Locale, text: String)?
 
-  /// One document per minute and timezone; the absolute minute distinguishes
+  /// One document per second and timezone; the absolute second distinguishes
   /// the repeated hour when daylight saving ends, and the offset catches transitions.
   static func calendarText(now: Date, timeZone: TimeZone) -> String {
-    let minute = Int(floor(now.timeIntervalSince1970 / 60))
+    let second = Int(floor(now.timeIntervalSince1970))
     let zone = "\(timeZone.identifier)\(timeZone.secondsFromGMT(for: now))"
-    if let cached = calendarCache, cached.zone == zone, cached.minute == minute {
+    if let cached = calendarCache, cached.zone == zone, cached.second == second {
       return cached.text
     }
     let text = CalendarStatusDocument.render(now: now, timeZone: timeZone)
-    calendarCache = (minute, zone, text)
+    calendarCache = (second, zone, text)
     return text
   }
 

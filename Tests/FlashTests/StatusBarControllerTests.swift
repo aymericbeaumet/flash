@@ -1,3 +1,4 @@
+import AppKit
 import FlashCore
 import XCTest
 
@@ -34,10 +35,13 @@ final class StatusBarControllerTests: XCTestCase {
 
     init(
       _ template: String, sources: [String: FlashStatusBarSourceDefinition] = [:],
+      popups: [String: String] = [:],
       interval: TimeInterval = 0, environment: FlashProcessEnvironment = .shared
     ) {
       controller = FlashStatusBarController(
-        template: .init(template: template, sourceNames: Set(sources.keys)), sources: sources,
+        template: .init(template: template, sourceNames: Set(sources.keys)),
+        popupTemplates: popups.mapValues { .init(template: $0, sourceNames: Set(sources.keys)) },
+        sources: sources,
         refreshIntervalSeconds: interval,
         pluginStatusesProvider: { [unowned self] in pluginStatuses },
         scheduler: PollScheduler(), queue: queue, clock: { [unowned self] in now },
@@ -125,14 +129,115 @@ final class StatusBarControllerTests: XCTestCase {
       Controller.nextWakeup([clock, Controller.Deadline(at: 10.06, priority: .normal)]), clock)
   }
 
-  func testACalendarAloneWakesAtTheNextMinute() {
+  func testACalendarAloneWakesAtTheNextSecondAndPublishesItsMovingHand() {
     let harness = Harness("#{flash.calendar}")
     defer { harness.controller.stop() }
     let wall = harness.queue.sync { harness.wall }
-    let boundary = Calendar.current.dateInterval(of: .minute, for: wall)!.end
+    let boundary = Calendar.current.dateInterval(of: .second, for: wall)!.end
     XCTAssertEqual(
       harness.queue.sync { harness.controller.nextWakeup }!,
       100 + boundary.timeIntervalSince(wall), accuracy: 0.001)
+    let before = harness.queue.sync { harness.controller.lastPublishedModel }
+    harness.queue.sync {
+      harness.now += boundary.timeIntervalSince(wall)
+      harness.wall = boundary
+    }
+    harness.tick()
+    XCTAssertNotEqual(harness.queue.sync { harness.controller.lastPublishedModel }, before)
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }!, 102, accuracy: 0.001)
+  }
+
+  func testAHiddenClockPopupKeepsTheBarsMinuteCadence() {
+    let harness = Harness("#[popup=clock]%H:%M", popups: ["clock": "#{flash.calendar}"])
+    defer { harness.controller.stop() }
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 140)
+    XCTAssertNotNil(
+      harness.queue.sync { harness.controller.lastPublishedModel?.popupDocuments["clock"] })
+  }
+
+  func testShowingAndHidingAClockPreviewReplansWithoutWaitingForAnotherInput() {
+    let harness = Harness("#[popup=clock]%H:%M", popups: ["clock": "#{flash.calendar}"])
+    defer { harness.controller.stop() }
+    harness.queue.sync {
+      harness.now += 0.5
+      harness.wall += 0.5
+    }
+    harness.controller.setLivePopupNames(["clock"])
+    harness.drain()
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }!, 101, accuracy: 0.001)
+    let evaluations = harness.queue.sync { harness.controller.surfaceEvaluations["bar"] }
+    harness.controller.setLivePopupNames(["clock"])
+    harness.drain()
+    XCTAssertEqual(harness.queue.sync { harness.controller.surfaceEvaluations["bar"] }, evaluations)
+
+    harness.controller.setLivePopupNames([])
+    harness.drain()
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }!, 140, accuracy: 0.001)
+  }
+
+  func testHiddenPopupClocksDoNotCancelAnIndependentWidgetClock() {
+    let harness = Harness("#[popup=clock]Clock", popups: ["clock": "#{flash.calendar}"])
+    defer { harness.controller.stop() }
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+    harness.controller.updateWidgets([
+      "seconds": StatusWidgetSpec(template: .init(template: "%S"), intervalSeconds: 0, columns: 10)
+    ])
+    harness.drain()
+    harness.controller.setLivePopupNames(["clock"])
+    harness.drain()
+    harness.controller.setLivePopupNames([])
+    harness.drain()
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 101)
+    harness.controller.setWidgetVisible(name: "seconds", false)
+    harness.drain()
+    XCTAssertNil(harness.queue.sync { harness.controller.nextWakeup })
+  }
+
+  func testClockPreviewAlongsideBonsaiUsesSecondsOnlyUntilItHidesOrBecomesFocused() {
+    _ = NSApplication.shared
+    let harness = Harness("#[popup=clock]%H:%M", popups: ["clock": "#{flash.calendar}"])
+    let delegate = AppDelegate()
+    delegate.overlay = OverlayPanel()
+    delegate.statusBarController = harness.controller
+    let registry = delegate.overlay.statusTerminals
+    let popup = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    delegate.overlay.statusPopupController = popup
+    delegate.wireInspectorChangeSources()
+    defer {
+      popup.dismiss()
+      registry.shutdown()
+      harness.controller.stop()
+    }
+    registry.apply(
+      style: .init(),
+      terminals: [
+        "bonsai": Config.Terminal(command: ["/bin/sleep", "30"], lifecycle: .persistent)
+      ])
+    let screen = CGRect(x: 0, y: 0, width: 900, height: 800)
+    let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    popup.show(name: "bonsai", visibleFrame: screen, style: .init(), font: font)
+    harness.drain()
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 140)
+    let clock = StatusBarPopupRegion(
+      rect: CGRect(x: 100, y: 800, width: 100, height: 20), name: "clock", content: "Clock")
+    popup.preview(clock, visibleFrame: screen, style: .init(), font: font)
+    harness.drain()
+    XCTAssertEqual(popup.focusedName, "bonsai")
+    XCTAssertEqual(popup.previewName, "clock")
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 101)
+
+    popup.leaveAnchor()
+    harness.drain()
+    XCTAssertEqual(popup.focusedName, "bonsai")
+    XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 140)
+    popup.preview(clock, visibleFrame: screen, style: .init(), font: font)
+    popup.focus()
+    harness.drain()
+    XCTAssertEqual(popup.focusedName, "clock")
+    XCTAssertNil(popup.previewName)
+    XCTAssertEqual(
+      harness.queue.sync { harness.controller.nextWakeup }, 140,
+      "a focused pager keeps its snapshot until an explicit refresh")
   }
 
   func testADayEndsAtADaylightSavingTransitionInsideIt() throws {

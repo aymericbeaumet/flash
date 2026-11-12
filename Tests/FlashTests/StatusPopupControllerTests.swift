@@ -629,6 +629,47 @@ final class StatusPopupControllerTests: XCTestCase {
     XCTAssertEqual(focusedTransitions, 0)
   }
 
+  func testCalendarHoverRepaintsItsSecondHandWithoutReplacingEitherSession() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    registry.apply(
+      style: .init(), terminals: ["bonsai": terminal(["/bin/sleep", "30"], persistent: true)])
+    let controller = StatusPopupController(terminals: registry, windowActionsEnabled: false)
+    defer { controller.dismiss() }
+    show(controller, "bonsai")
+    let focusedSession = try XCTUnwrap(registry.session(named: "bonsai"))
+    let focusedFrame = controller.frame
+    let now = Date(timeIntervalSince1970: 1_800_000_020)
+    let utc = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+    func calendar(at date: Date) -> StatusBarPopupRegion {
+      let markup = FlashStatusBarRenderer.calendarText(now: date, timeZone: utc)
+      var popup = region("date", text: markup)
+      popup.document = FlashStatusBarRenderer.segments(from: markup)
+      return popup
+    }
+    let screen = CGRect(x: 0, y: 0, width: 1600, height: 1000)
+    preview(controller, region: calendar(at: now), screen: screen)
+    let clockSession = try XCTUnwrap(registry.session(named: "date"))
+    waitUntil("calendar pager first complete frame") {
+      clockSession.frame?.text.contains("Moon") == true
+    }
+    let original = try XCTUnwrap(clockSession.frame?.text)
+    let originalPID = clockSession.state
+    controller.refresh([calendar(at: now + 1)])
+    waitUntil("calendar's second hand repaints in the existing pager") {
+      guard let text = clockSession.frame?.text else { return false }
+      return text != original
+    }
+    XCTAssertEqual(
+      clockSession.frame?.text.components(separatedBy: "\n").first,
+      original.components(separatedBy: "\n").first, "numeric HH:MM stays unchanged")
+    XCTAssertEqual(clockSession.state, originalPID)
+    XCTAssertTrue(registry.session(named: "date") === clockSession)
+    XCTAssertTrue(registry.session(named: "bonsai") === focusedSession)
+    XCTAssertEqual(controller.focusedName, "bonsai")
+    XCTAssertEqual(controller.frame, focusedFrame)
+  }
+
   func testAnInvalidStandaloneDocumentCannotDisplaceEitherPresentation() {
     let registry = StatusTerminalRegistry()
     defer { registry.shutdown() }

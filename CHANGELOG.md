@@ -9,6 +9,8 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Fixes
 
+- Enlarge the calendar's analog clock and animate its second hand while hovered,
+  without keeping a second-by-second clock running for hidden popups.
 - Keep a focused terminal popup open while other status-bar hover previews
   appear, without moving keyboard focus away from the terminal.
 - Expand the active-app hover with app identity, uptime, resource totals and

@@ -274,7 +274,8 @@ extension AppDelegate {
   }
 
   /// The components whose changes the state reads report them here; wired
-  /// once at launch, and a no-op while the inspector is off.
+  /// once at launch. Inspector publication is a no-op while it is off; popup
+  /// visibility also scopes the live status clock.
   ///
   /// The status bar republishes as its values change, several times a second
   /// with a clock or a graph on it: its snapshot rebuilds only the bar and
@@ -284,7 +285,10 @@ extension AppDelegate {
       self?.debugStateDidChange(.sections(Self.statusBarSections))
     }
     overlay.statusPopupController.didChange = { [weak self] in
-      self?.debugStateDidChange(.sections(["terminals"]))
+      guard let self else { return }
+      self.statusBarController?.setLivePopupNames(
+        Set([self.overlay.statusPopupController.previewName].compactMap { $0 }))
+      self.debugStateDidChange(.sections(["terminals"]))
     }
     widgetController?.didChange = { [weak self] in
       self?.debugStateDidChange(.sections(["widgets"]))

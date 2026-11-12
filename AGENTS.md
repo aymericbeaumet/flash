@@ -231,6 +231,8 @@ Surface requests that would violate these constraints before implementing them.
   A focused terminal and a separate hover preview may coexist, with one
   presentation per popup name. Preview dismissal never closes or takes
   keyboard focus from the focused terminal; promotion transfers that ownership.
+  Only a live hover preview contributes its popup's clock deadline; hidden
+  popups and focused pager snapshots must not keep that clock ticking.
 - Prefer events to polling. A window move or resize reads its frame from the AX
   element that fired, never a WindowServer scan, and schedules no settle tick.
 - A source that switches tabs or windows replies with the `navigation_url` it

@@ -111,8 +111,8 @@ final class StatusFormatLinesTests: XCTestCase {
     }
     XCTAssertEqual(clock("%H:%M"), .minute)
     XCTAssertEqual(clock("%a %d %b"), .day)
-    XCTAssertEqual(clock("#{flash.calendar}"), .minute)
-    XCTAssertEqual(clock("#{flash.calendar} %H:%M"), .minute)
+    XCTAssertEqual(clock("#{flash.calendar}"), .second)
+    XCTAssertEqual(clock("#{flash.calendar} %H:%M"), .second)
     for seconds in ["%S", "%T", "%s", "%X", "%r", "%c", "%+", "%-S", "%OS", "%H:%M:%S"] {
       XCTAssertEqual(clock(seconds), .second, seconds)
     }
