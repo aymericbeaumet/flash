@@ -197,7 +197,7 @@ final class StatusPopupPlacementTests: XCTestCase {
     XCTAssertEqual(panel.statusPopupController.frame.maxX, screen.maxX, accuracy: 0.001)
   }
 
-  func testPinningFromHoverKeepsTheFrameAndFollowsItsOwnSpan() {
+  func testPinningFromHoverRevealsThePromptWithoutMovingItsAnchor() {
     let panel = makePanel()
     defer { panel.hideStatusBarPopup() }
     let right = CGRect(x: 2_000, y: 0, width: 2_000, height: 900)
@@ -209,7 +209,13 @@ final class StatusPopupPlacementTests: XCTestCase {
     panel.activateStatusBarPopup(
       label, at: pointer(in: label, at: 0.9), screenSnapshot: screens)
     XCTAssertEqual(panel.statusPopupController.focusedName, "metrics")
-    XCTAssertEqual(panel.statusPopupController.frame, hovered, "pinning does not move it")
+    let pinned = panel.statusPopupController.frame
+    XCTAssertEqual(pinned.minX, hovered.minX, accuracy: wholePoint)
+    XCTAssertEqual(pinned.maxY, hovered.maxY, accuracy: wholePoint)
+    XCTAssertEqual(pinned.width, hovered.width, accuracy: wholePoint)
+    XCTAssertEqual(
+      pinned.height, hovered.height + panel.statusPopupController.terminalView.cellSize.height,
+      accuracy: wholePoint, "focusing immediately exposes the pager prompt row")
 
     // The same label on the other display comes first; the pinned popup
     // stays on its own label and follows it when the bar re-lays out.

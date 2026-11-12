@@ -713,9 +713,9 @@ enum FlashStatusBarTemplateEngine {
       }
     }
     var clock = dependencies
-    // `#{flash.date}` shows minutes; `#{flash.calendar}` changes once a day.
+    // Both core date values show local time to the minute.
     if dependencies.values.contains("flash.date") { clock.noteTime(.minute) }
-    if dependencies.values.contains("flash.calendar") { clock.noteTime(.day) }
+    if dependencies.values.contains("flash.calendar") { clock.noteTime(.minute) }
     return (sources, clock.timeResolution)
   }
 
@@ -841,26 +841,21 @@ enum FlashStatusBarRenderer {
   private static let dateFormatter = DateFormatter()
   /// Keyed by the zone's identifier and UTC offset, never `TimeZone`
   /// equality, which holds between two autoupdating zones whatever they read.
-  private static var calendarCache: (valid: DateInterval, zone: String, text: String)?
+  private static var calendarCache: (minute: Int, zone: String, text: String)?
   /// `flash.date` shows minutes: one formatted string per minute, calendar
   /// and locale, so a seconds clock does not reconfigure the formatter.
   private static var dateTextCache: (minute: Int, calendar: Calendar, locale: Locale, text: String)?
 
-  /// One calendar per local day and timezone; a daylight-saving transition
-  /// inside the day ends it early, since the calendar shows the UTC offset.
+  /// One document per minute and timezone; the absolute minute distinguishes
+  /// the repeated hour when daylight saving ends, and the offset catches transitions.
   static func calendarText(now: Date, timeZone: TimeZone) -> String {
+    let minute = Int(floor(now.timeIntervalSince1970 / 60))
     let zone = "\(timeZone.identifier)\(timeZone.secondsFromGMT(for: now))"
-    if let cached = calendarCache, cached.zone == zone,
-      now >= cached.valid.start, now < cached.valid.end
-    {
+    if let cached = calendarCache, cached.zone == zone, cached.minute == minute {
       return cached.text
     }
-    var calendar = Calendar(identifier: .iso8601)
-    calendar.timeZone = timeZone
-    guard let day = calendar.dateInterval(of: .day, for: now) else { return "" }
-    let end = min(day.end, timeZone.nextDaylightSavingTimeTransition(after: now) ?? day.end)
     let text = CalendarStatusDocument.render(now: now, timeZone: timeZone)
-    calendarCache = (DateInterval(start: day.start, end: end), zone, text)
+    calendarCache = (minute, zone, text)
     return text
   }
 

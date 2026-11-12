@@ -860,7 +860,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     fixed.setWantsFrames(true)
     waitUntil { session.frame != nil && fixed.frame != nil }
     screen = CGSize(width: 1600, height: 800)
-    registry.refitHidden(except: nil)
+    registry.refitHidden(excluding: [])
     waitUntil { session.frame?.columns == 100 && session.frame?.rows == 25 }
     XCTAssertEqual(fixed.frame?.columns, 100)
     XCTAssertEqual(fixed.frame?.rows, 28, "a size in cells ignores the screen")

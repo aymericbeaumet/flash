@@ -304,8 +304,8 @@ final class StatusTerminalRegistry {
 
   /// Screen geometry changed: hidden sessions whose size follows the screen
   /// refit, so the next showing starts at the right grid.
-  func refitHidden(except shown: String?) {
-    for (name, entry) in entries where name != shown {
+  func refitHidden(excluding shown: Set<String>) {
+    for (name, entry) in entries where !shown.contains(name) {
       guard case .terminal(let definition) = entry.kind, definition.size.followsScreen else {
         continue
       }

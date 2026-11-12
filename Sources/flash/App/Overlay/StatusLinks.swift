@@ -731,7 +731,6 @@ extension OverlayPanel {
     screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot(),
     preservingContent: Bool = false
   ) {
-    guard !statusPopupController.presentation.isFocused else { return }
     if statusPopupController.isContentSnapshot, !preservingContent {
       if statusPopupController.containsSnapshotAnchor(pointer) { return }
       statusPopupController.leaveAnchor()
@@ -770,6 +769,10 @@ extension OverlayPanel {
     screenSnapshot snapshot: ScreenSnapshot,
     preservingContent: Bool
   ) {
+    guard popup.name != statusPopupController.focusedName else {
+      hideStatusBarPreview(reason: "focused_anchor")
+      return
+    }
     statusBarHoverGate = statusBarHoverGate.hovering(popup.name)
     guard statusBarHoverGate.permits(popup.name) else { return }
     // The popup shows on the display whose bar draws its label.
@@ -778,14 +781,14 @@ extension OverlayPanel {
       let screen = snapshot.screens.first(where: { $0.frame.contains(labelCentre) })
         ?? snapshot.screens.first(where: { $0.frame.intersects(popup.rect) })
     else {
-      hideStatusBarPopup(reason: "screen_missing")
+      hideStatusBarPreview(reason: "screen_missing")
       return
     }
-    if let current = statusPopupController.presentation.name, current != popup.name {
-      hideStatusBarPopup(reason: "anchor_changed")
+    if let current = statusPopupController.previewName, current != popup.name {
+      hideStatusBarPreview(reason: "anchor_changed")
     }
     guard statusBarTerminalPrepareHandler?(popup.name, popup.link) ?? true else {
-      hideStatusBarPopup(reason: "terminal_missing")
+      hideStatusBarPreview(reason: "terminal_missing")
       return
     }
     statusPopupController.preview(
@@ -793,8 +796,8 @@ extension OverlayPanel {
       font: NSFont.monospacedSystemFont(
         ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
         weight: .medium), preservingContent: preservingContent)
-    activeStatusBarPopupName = statusPopupController.presentation.name
-    activeStatusBarPopupContent = statusPopupController.content
+    activeStatusBarPopupName = statusPopupController.anchoredName
+    activeStatusBarPopupContent = statusPopupController.anchoredContent
     activeStatusBarPopupVisibleFrame = screen.visibleFrame
   }
 
@@ -822,17 +825,10 @@ extension OverlayPanel {
     _ popup: StatusBarPopupRegion, at pointer: CGPoint,
     screenSnapshot snapshot: ScreenSnapshot = OverlayPanel.currentScreenSnapshot()
   ) {
-    let wasFocused = statusPopupController.focusedName
-    guard wasFocused != popup.name else { return }
-    if wasFocused != nil {
-      if let statusBarPopupDismissHandler {
-        statusBarPopupDismissHandler(false)
-      } else {
-        hideStatusBarPopup(reason: "anchor_clicked")
-      }
-    }
+    guard statusPopupController.focusedName != popup.name else { return }
+    _ = statusBarSpawnDwell.cancel()
     statusBarHoverGate = .ready
-    showStatusBarPopup(popup, at: pointer, screenSnapshot: snapshot)
+    presentStatusBarPopup(popup, at: pointer, screenSnapshot: snapshot, preservingContent: false)
     statusPopupController.focus()
   }
 
@@ -841,11 +837,15 @@ extension OverlayPanel {
   /// pointer leaves its region; a pinned popup is left alone because it is no
   /// longer tied to hover.
   func dismissStatusBarPopupForClick() {
-    guard let name = statusPopupController.presentation.name,
-      !statusPopupController.presentation.isStandalone
-    else { return }
+    guard let name = statusPopupController.previewName else { return }
     statusBarHoverGate = .dismissed(name)
-    hideStatusBarPopup(reason: "link_click")
+    hideStatusBarPreview(reason: "link_click")
+  }
+
+  func hideStatusBarPreview(reason: String = "anchor_left") {
+    _ = statusBarSpawnDwell.cancel()
+    statusPopupController.dismissPreview(reason: reason)
+    activeStatusBarPopupName = statusPopupController.anchoredName
   }
 
   func hideStatusBarPopup(reason: String = "overlay_hidden") {
@@ -964,7 +964,7 @@ extension OverlayPanel {
         if self.statusPopupController.containsSnapshotAnchor(point) { return }
         self.statusBarHoverGate = .ready
         self.statusPopupController.leaveAnchor()
-        self.activeStatusBarPopupName = self.statusPopupController.presentation.name
+        self.activeStatusBarPopupName = self.statusPopupController.anchoredName
       }
     }
     view.onHoverHighlight = { [weak self] rect in
@@ -986,8 +986,8 @@ extension OverlayPanel {
       return screenSnapshot.screens.first { $0.frame.contains(centre) }?.visibleFrame
         ?? screenSnapshot.screens.first { $0.frame.intersects(anchor) }?.visibleFrame
     }
-    activeStatusBarPopupName = statusPopupController.presentation.name
-    activeStatusBarPopupContent = statusPopupController.content
+    activeStatusBarPopupName = statusPopupController.anchoredName
+    activeStatusBarPopupContent = statusPopupController.anchoredContent
     hitTestStatusBarHover(popups: popups, links: links, at: pointer, screenSnapshot: screenSnapshot)
   }
 
@@ -1005,13 +1005,12 @@ extension OverlayPanel {
     let link = permitted ? links.first(where: { $0.rect.contains(pointer) }) : nil
     setStatusBarHoverHighlight(
       StatusBarClickView.hoverWashRect(link: link?.rect, popup: popup?.rect))
-    guard !statusPopupController.presentation.isFocused else { return }
     if let popup {
       showStatusBarPopup(popup, at: pointer, screenSnapshot: screenSnapshot)
     } else {
       statusBarHoverGate = .ready
       statusPopupController.leaveAnchor()
-      activeStatusBarPopupName = nil
+      activeStatusBarPopupName = statusPopupController.anchoredName
     }
   }
 
@@ -1019,6 +1018,7 @@ extension OverlayPanel {
   func hideStatusBarClickWindows() {
     lastModeBadgeLayoutStamp = nil
     stopMenuBarRevealTracking()
+    hideStatusBarPreview()
     if !statusPopupController.presentation.isStandalone { hideStatusBarPopup() }
     guard !statusBarClickWindows.isEmpty || lastStatusBarClickSignature != nil else { return }
     for window in statusBarClickWindows { window.orderOut(nil) }
@@ -1145,8 +1145,10 @@ extension OverlayPanel {
   }
 
   func statusBarNativeMenuDidReveal() {
-    guard !statusPopupController.presentation.isStandalone else { return }
-    hideStatusBarPopup(reason: "native_menu_revealed")
+    hideStatusBarPreview(reason: "native_menu_revealed")
+    if !statusPopupController.presentation.isStandalone {
+      hideStatusBarPopup(reason: "native_menu_revealed")
+    }
   }
 
   /// True while the pointer sits in the top band of the main display — the

@@ -63,9 +63,6 @@ extension AppDelegate {
         self.dispatchMode(.closeTerminal(restoresApp: reason == "terminal_removed"))
       }
     }
-    overlay.statusBarPopupDismissHandler = { [weak self] restoreApplication in
-      self?.dismissPopup(restoreApplication: restoreApplication)
-    }
     overlay.statusBarTerminalNeedsSpawnHandler = { [weak self] name in
       guard let self else { return false }
       return self.config.terminalPopupNames.contains(name)
@@ -168,7 +165,9 @@ extension AppDelegate {
 
   func suppressDismissedPopupHover() {
     let popup = overlay.statusPopupController
-    if let name = popup.presentation.name, !popup.presentation.isStandalone {
+    if let name = popup.previewName ?? overlay.statusBarSpawnDwell.pendingName
+      ?? (popup.presentation.isStandalone ? nil : popup.presentation.name)
+    {
       overlay.statusBarHoverGate = .dismissed(name)
     }
   }
@@ -206,6 +205,12 @@ extension AppDelegate {
     let popup = overlay.statusPopupController
     return [
       "focused": popup.focusedName as Any? ?? NSNull(),
+      "preview": popup.previewName as Any? ?? NSNull(),
+      "standalone": popup.presentation.isStandalone,
+      "visible_names": popup.visibleNames.sorted(),
+      "preview_frame": popup.previewFrame.map { frame in
+        ["x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height]
+      } as Any? ?? NSNull(),
       "visible": popup.isVisible,
       "frame": [
         "x": popup.frame.minX, "y": popup.frame.minY,

@@ -62,7 +62,7 @@ extension OverlayPanel {
     // Only a preview is tied to the pointer; the reveal itself dismisses a
     // pinned popup (`statusBarNativeMenuDidReveal`).
     statusPopupController.leaveAnchor()
-    activeStatusBarPopupName = statusPopupController.presentation.name
+    activeStatusBarPopupName = statusPopupController.anchoredName
     NSCursor.arrow.set()
   }
 }

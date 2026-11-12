@@ -7,15 +7,14 @@ extension OverlayPanel {
   /// too, so it cannot stay above the window the user just opened. Hiding
   /// keeps a persistent process; it stops a fresh one.
   func relinquishShownStatusPopup(reason: String) {
-    guard let name = statusPopupController.presentation.name else {
+    guard let name = statusPopupController.focusedName else {
       dismissEphemeralStatusBarPopup(reason: reason)
       return
     }
-    if statusPopupController.presentation.ephemeralName != nil {
-      dismissEphemeralStatusBarPopup(reason: reason)
-      return
-    }
-    if !statusPopupController.presentation.isStandalone {
+    let hadPreview =
+      statusPopupController.previewName != nil || statusBarSpawnDwell.pendingName != nil
+    dismissEphemeralStatusBarPopup(reason: reason)
+    if !hadPreview && !statusPopupController.presentation.isStandalone {
       statusBarHoverGate = .dismissed(name)
     }
     hideStatusBarPopup(reason: reason)
@@ -31,8 +30,8 @@ extension OverlayPanel {
     if let pending = statusBarSpawnDwell.cancel() {
       statusBarHoverGate = .dismissed(pending)
     }
-    guard let name = statusPopupController.presentation.ephemeralName else { return }
+    guard let name = statusPopupController.previewName else { return }
     statusBarHoverGate = .dismissed(name)
-    hideStatusBarPopup(reason: reason)
+    hideStatusBarPreview(reason: reason)
   }
 }

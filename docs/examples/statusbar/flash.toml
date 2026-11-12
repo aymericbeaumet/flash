@@ -18,10 +18,7 @@ template = """
 # Code, Codex and Grok already stored; no other tool is needed.
 
 [popup.active-app]
-text = """
-#[fg=#EBCB8B]#{flash.focused_app_name}#[default]
-#{flash.focused_app_details}
-"""
+text = "#{flash.focused_app_details}"
 
 # AI usage from tokscale's own TUI (https://github.com/junhoyeo/tokscale),
 # which you install yourself, e.g. `npm i -g tokscale`: tokens and cost by day

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// The process values a status surface can show: conky's `${top}` tables and
@@ -22,9 +23,55 @@ struct FocusedProcess: Equatable {
   var bundleID: String
 }
 
-/// How the process values read as text. Every value is plain text the
-/// surrounding template colours; a literal `#` from a process or bundle name
-/// is escaped, so no name can open a style marker.
+/// Application metadata is read on the sampler queue, once per process
+/// identity, rather than doing bundle I/O on the focus-change path.
+struct FocusedProcessMetadata: Equatable {
+  var name = ""
+  var version = ""
+  var bundlePath = ""
+  var executablePath = ""
+
+  static func read(_ app: FocusedProcess) -> Self {
+    guard let running = NSRunningApplication(processIdentifier: app.pid),
+      app.bundleID.isEmpty || running.bundleIdentifier == app.bundleID
+    else { return Self() }
+    let bundle = running.bundleURL.flatMap { Bundle(url: $0) }
+    let version =
+      bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+    let build = bundle?.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    return Self(
+      name: running.localizedName ?? "",
+      version: version.isEmpty
+        ? build : (build.isEmpty || build == version ? version : "\(version) (\(build))"),
+      bundlePath: running.bundleURL?.path ?? "",
+      executablePath: running.executableURL?.path ?? "")
+  }
+}
+
+struct FocusedProcessMetadataCache {
+  private struct Identity: Equatable {
+    var app: FocusedProcess
+    var startAbstime: UInt64
+  }
+
+  private var identity: Identity?
+  private var value = FocusedProcessMetadata()
+
+  mutating func read(
+    _ app: FocusedProcess, startAbstime: UInt64,
+    using read: (FocusedProcess) -> FocusedProcessMetadata
+  ) -> FocusedProcessMetadata {
+    let next = Identity(app: app, startAbstime: startAbstime)
+    if identity != next {
+      value = read(app)
+      identity = next
+    }
+    return value
+  }
+}
+
+/// How the process values read as text. Focused details have bold headings;
+/// external names are escaped so they cannot open a style marker.
 enum ProcessStatusFormat {
   /// `[statusbar] top_count`: rows per table.
   static let topCountRange = 1...20
@@ -72,24 +119,54 @@ enum ProcessStatusFormat {
     return escaped(lines.joined(separator: "\n"))
   }
 
-  /// The focused app's figures, one labelled row each.
-  static func focusedDetails(_ app: FocusedProcess, _ tree: ProcessTable.Tree) -> String {
+  /// A compact app summary; resource totals include the currently reachable
+  /// descendants, while uptime belongs to the main process alone.
+  static func focusedDetails(
+    _ app: FocusedProcess, _ tree: ProcessTable.Tree,
+    metadata: FocusedProcessMetadata = .init()
+  ) -> String {
     let memoryPercent = Double(tree.residentBytes) / Double(ProcessTable.physicalMemory) * 100
-    let rows =
-      identityRows(app) + [
-        row("Process", tree.name),
-        row("CPU", String(format: "%.1f%%", tree.cpuPercent)),
-        row(
-          "Memory", "\(bytesIEC(tree.residentBytes)) (\(String(format: "%.1f%%", memoryPercent)))"),
-        row("Sockets", String(tree.socketCount)),
-        row("Processes", String(tree.processCount)),
-        row("Threads", String(tree.threadCount)),
-        row("Uptime", uptime(tree.uptimeSeconds)),
-        row(
-          "Disk I/O",
-          "\(bytesIEC(tree.diskReadBytes)) read · \(bytesIEC(tree.diskWriteBytes)) written"),
-      ]
-    return escaped(rows.joined(separator: "\n"))
+    let title = metadata.name.isEmpty ? tree.name : metadata.name
+    var identity = identityRows(app)
+    if !metadata.version.isEmpty { identity.insert(row("Version", metadata.version), at: 0) }
+    let resources = [
+      row("CPU", String(format: "%.1f%% · 100%% = 1 core", tree.cpuPercent)),
+      row(
+        "Memory",
+        "\(bytesIEC(tree.residentBytes)) (\(String(format: "%.1f%%", memoryPercent)) of RAM)"),
+      row("Processes", "\(tree.processCount) · \(tree.threadCount) threads"),
+      row("Sockets", String(tree.socketCount)),
+      row("Running", "\(uptime(tree.uptimeSeconds)) · main process"),
+      row("Disk read", "\(bytesIEC(tree.diskReadBytes)) cumulative"),
+      row("Disk written", "\(bytesIEC(tree.diskWriteBytes)) cumulative"),
+    ]
+    var sections = [
+      heading(title) + "\n" + escaped(identity.joined(separator: "\n")),
+      heading("Resources · app + descendants") + "\n" + escaped(resources.joined(separator: "\n")),
+    ]
+    if !tree.descendants.isEmpty {
+      let helpers = tree.descendants.sorted {
+        if $0.cpuPercent != $1.cpuPercent { return $0.cpuPercent > $1.cpuPercent }
+        if $0.residentBytes != $1.residentBytes { return $0.residentBytes > $1.residentBytes }
+        return $0.pid < $1.pid
+      }.prefix(5)
+      let lines =
+        [padded("Process", to: 24) + String(format: "%7@ %8@ %10@", "PID", "CPU", "Memory")]
+        + helpers.map {
+          padded(cellName($0, width: 24), to: 24)
+            + String(format: "%7d %7.1f%% %10@", $0.pid, $0.cpuPercent, bytesIEC($0.residentBytes))
+        }
+      sections.append(
+        heading("Busiest helpers · \(helpers.count) of \(tree.descendants.count)")
+          + "\n" + escaped(lines.joined(separator: "\n")))
+    }
+    let paths = [
+      ("Bundle path", metadata.bundlePath), ("Executable", metadata.executablePath),
+    ].filter { !$0.1.isEmpty }.map { row($0.0, $0.1) }
+    if !paths.isEmpty {
+      sections.append(heading("Application") + "\n" + escaped(paths.joined(separator: "\n")))
+    }
+    return sections.joined(separator: "\n\n")
   }
 
   /// The app's identity over a state line, shown while its figures are being
@@ -138,7 +215,22 @@ enum ProcessStatusFormat {
   }
 
   private static func row(_ label: String, _ value: String) -> String {
-    padded(label, to: labelWidth) + value
+    padded(label, to: labelWidth) + oneLine(value)
+  }
+
+  private static func heading(_ title: String) -> String {
+    "#[bold]" + escaped(oneLine(title)) + "#[nobold]"
+  }
+
+  private static func oneLine(_ text: String) -> String {
+    String(
+      String.UnicodeScalarView(
+        text.unicodeScalars.map {
+          switch $0.properties.generalCategory {
+          case .control, .lineSeparator, .paragraphSeparator: return "?"
+          default: return $0
+          }
+        }))
   }
 
   private static func padded(_ text: String, to width: Int) -> String {
@@ -148,14 +240,12 @@ enum ProcessStatusFormat {
   /// A process name as one table cell: a control character cannot break the
   /// row, a name wider than the column ends in an ellipsis, and a nameless
   /// process shows its pid.
-  private static func cellName(_ process: ProcessTable.Process) -> String {
+  private static func cellName(_ process: ProcessTable.Process, width: Int = nameWidth) -> String {
     let trimmed = process.name.trimmingCharacters(in: .whitespacesAndNewlines)
-    let name = String(
-      String.UnicodeScalarView(
-        trimmed.unicodeScalars.map { $0.properties.generalCategory == .control ? "?" : $0 }))
+    let name = oneLine(trimmed)
     if name.isEmpty { return "[\(process.pid)]" }
-    guard name.count > nameWidth else { return name }
-    return String(name.prefix(nameWidth - 1)) + "…"
+    guard name.count > width else { return name }
+    return String(name.prefix(width - 1)) + "…"
   }
 }
 
@@ -231,12 +321,14 @@ final class ProcessStatusSampler {
   private let scheduler: PollScheduler
   private let readProcesses: () -> [ProcessTable.Process]
   private let readTree: (pid_t) -> ProcessTable.Tree?
+  private let readMetadata: (FocusedProcess) -> FocusedProcessMetadata
   private let publish: Publish
   private let settle: PollDeadline
   // Confined to `queue`.
   private var observation = ProcessStatusObservation()
   private var topCount = ProcessStatusFormat.defaultTopCount
   private var focused: FocusedProcess?
+  private var metadataCache = FocusedProcessMetadataCache()
   private var published: [ProcessStatusValue: String] = [:]
   private var topFailureLogged = false
 
@@ -249,12 +341,15 @@ final class ProcessStatusSampler {
       ProcessTable.shared.processes()
     },
     readTree: @escaping (pid_t) -> ProcessTable.Tree? = { ProcessTable.shared.tree(root: $0) },
+    readMetadata: @escaping (FocusedProcess) -> FocusedProcessMetadata = FocusedProcessMetadata
+      .read,
     publish: @escaping Publish
   ) {
     self.queue = queue
     self.scheduler = scheduler
     self.readProcesses = readProcesses
     self.readTree = readTree
+    self.readMetadata = readMetadata
     self.publish = publish
     settle = PollDeadline(Self.focusSettleID, priority: .high, on: queue, scheduler: scheduler)
   }
@@ -310,6 +405,7 @@ final class ProcessStatusSampler {
     case .disarm:
       scheduler.unregister(Self.focusedPollID)
       settle.cancel()
+      metadataCache = .init()
     case .keep:
       break
     }
@@ -330,6 +426,7 @@ final class ProcessStatusSampler {
   private func applyFocus(_ app: FocusedProcess?) {
     guard app != focused else { return }
     focused = app
+    metadataCache = .init()
     settle.cancel()
     guard observation.observesFocused else { return }
     guard let app else {
@@ -372,9 +469,16 @@ final class ProcessStatusSampler {
   /// The focused app's figures, or its placeholder when they cannot be read.
   private func sampleFocused() {
     guard observation.observesFocused, let app = focused else { return }
-    let text =
-      readTree(app.pid).map { ProcessStatusFormat.focusedDetails(app, $0) }
-      ?? ProcessStatusFormat.focusedPlaceholder(app, ProcessStatusFormat.unavailable)
+    guard let tree = readTree(app.pid) else {
+      metadataCache = .init()
+      send([
+        .focusedAppDetails: ProcessStatusFormat.focusedPlaceholder(
+          app, ProcessStatusFormat.unavailable)
+      ])
+      return
+    }
+    let metadata = metadataCache.read(app, startAbstime: tree.startAbstime, using: readMetadata)
+    let text = ProcessStatusFormat.focusedDetails(app, tree, metadata: metadata)
     send([.focusedAppDetails: text])
   }
 

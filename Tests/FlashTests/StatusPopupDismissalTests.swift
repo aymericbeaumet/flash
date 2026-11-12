@@ -69,6 +69,52 @@ final class StatusPopupDismissalTests: XCTestCase {
     XCTAssertEqual(panel.statusBarHoverGate, .ready)
   }
 
+  func testHoverRoutingAndOutsideDismissalPreserveStandaloneUntilAppFocusLeaves() {
+    let panel = OverlayPanel()
+    panel.statusPopupController = StatusPopupController(
+      terminals: panel.statusTerminals, windowActionsEnabled: false)
+    defer {
+      panel.statusPopupController.dismiss()
+      panel.statusTerminals.shutdown()
+    }
+    let screen = CGRect(x: 0, y: 0, width: 900, height: 900)
+    let snapshot = OverlayPanel.ScreenSnapshot(
+      screens: [(scale: 1, frame: screen, visibleFrame: screen, notch: nil)],
+      unionFrame: screen, mainFrame: screen, mainScale: 1, mainVisibleFrame: screen,
+      nativeStatusBarFallbackHeight: 0)
+    let controller = panel.statusPopupController
+    controller.show(
+      name: "bonsai",
+      document: [FlashStatusTextSegment(text: "Bonsai", foreground: .defaultForeground)],
+      visibleFrame: screen, style: .init(),
+      font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    let view = controller.terminalView
+    let point = CGPoint(x: region.rect.midX, y: region.rect.midY)
+
+    panel.hitTestStatusBarHover(popups: [region], links: [], at: point, screenSnapshot: snapshot)
+    XCTAssertEqual(controller.visibleNames, ["bonsai", "article"])
+    XCTAssertEqual(controller.focusedName, "bonsai")
+    XCTAssertTrue(controller.terminalView === view)
+    panel.dismissEphemeralStatusBarPopup(reason: "pointer_click")
+    XCTAssertEqual(controller.visibleNames, ["bonsai"])
+    XCTAssertEqual(panel.statusBarHoverGate, .dismissed("article"))
+    panel.hitTestStatusBarHover(popups: [region], links: [], at: point, screenSnapshot: snapshot)
+    XCTAssertNil(controller.previewName, "an unmoved pointer does not reopen the dismissed preview")
+
+    panel.hitTestStatusBarHover(popups: [], links: [], at: .zero, screenSnapshot: snapshot)
+    panel.hitTestStatusBarHover(popups: [region], links: [], at: point, screenSnapshot: snapshot)
+    XCTAssertEqual(controller.previewName, "article")
+    panel.statusBarNativeMenuDidReveal()
+    XCTAssertEqual(controller.visibleNames, ["bonsai"])
+    panel.hitTestStatusBarHover(popups: [region], links: [], at: point, screenSnapshot: snapshot)
+    XCTAssertEqual(controller.visibleNames, ["bonsai", "article"])
+    panel.relinquishShownStatusPopup(reason: "app_activated")
+    XCTAssertFalse(controller.isVisible)
+    XCTAssertNil(controller.focusedName)
+    XCTAssertNil(controller.previewName)
+    XCTAssertEqual(panel.statusBarHoverGate, .dismissed("article"))
+  }
+
   func testAPendingHoverDwellIsCancelled() {
     let panel = OverlayPanel()
     let work = DispatchWorkItem {}

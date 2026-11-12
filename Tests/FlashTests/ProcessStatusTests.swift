@@ -95,17 +95,89 @@ final class ProcessStatusTests: XCTestCase {
     XCTAssertEqual(
       ProcessStatusFormat.focusedDetails(app, tree),
       """
+      #[bold]firefox#[nobold]
       Bundle        org.mozilla.firefox
       PID           4242
-      Process       firefox
-      CPU           12.5%
-      Memory        \(memory) (6.2%)
+
+      #[bold]Resources · app + descendants#[nobold]
+      CPU           12.5% · 100% = 1 core
+      Memory        \(memory) (6.2% of RAM)
+      Processes     9 · 42 threads
       Sockets       7
-      Processes     9
-      Threads       42
-      Uptime        2h 3m
-      Disk I/O      512 MiB read · 64 MiB written
+      Running       2h 3m · main process
+      Disk read     512 MiB cumulative
+      Disk written  64 MiB cumulative
       """)
+  }
+
+  func testFocusedIdentityCannotInjectExtraRowsOrTerminalControls() {
+    let text = ProcessStatusFormat.focusedPlaceholder(
+      FocusedProcess(pid: 7, bundleID: "com.example.#[bold]\n\u{1b}[31m"),
+      ProcessStatusFormat.unavailable)
+    XCTAssertEqual(
+      text, "Bundle        com.example.##[bold]??[31m\nPID           7\nMetrics unavailable")
+  }
+
+  func testFocusedDetailsKeepApplicationMetadataLiteralAndRankOnlyFiveHelpers() {
+    let app = FocusedProcess(pid: 42, bundleID: "com.example.Editor")
+    let tree = ProcessTable.Tree(
+      pid: 42, name: "editor", cpuPercent: 215, residentBytes: 1024, processCount: 7,
+      threadCount: 12, socketCount: 3, uptimeSeconds: 60, diskReadBytes: 4, diskWriteBytes: 5,
+      descendants: [
+        process(9, "slow", cpu: 1),
+        process(8, "busy", cpu: 30),
+        process(7, "tie-less-memory", cpu: 20, bytes: 1),
+        process(6, "tie-low-pid", cpu: 20, bytes: 3),
+        process(5, "zero", cpu: 0),
+        process(10, "tie-high-pid", cpu: 20, bytes: 3),
+      ])
+    let text = ProcessStatusFormat.focusedDetails(
+      app, tree,
+      metadata: .init(
+        name: "Editor #[bold]\nTitle", version: "2.1 (42)",
+        bundlePath: "/Applications/Editor.app",
+        executablePath: "/Applications/Editor.app/Contents/MacOS/editor"))
+    XCTAssertTrue(text.hasPrefix("#[bold]Editor ##[bold]?Title#[nobold]\nVersion       2.1 (42)"))
+    XCTAssertTrue(text.contains("CPU           215.0% · 100% = 1 core"))
+    XCTAssertTrue(text.contains("#[bold]Busiest helpers · 5 of 6#[nobold]"))
+    let rows = text.components(separatedBy: "\n").filter {
+      ["busy", "tie-low-pid", "tie-high-pid", "tie-less-memory", "slow", "zero"].contains(
+        $0.components(separatedBy: " ")[0])
+    }
+    XCTAssertEqual(
+      rows.map { $0.split(separator: " ").first.map(String.init) },
+      ["busy", "tie-low-pid", "tie-high-pid", "tie-less-memory", "slow"])
+    XCTAssertEqual(rows.first?.contains("8    30.0%"), true)
+    XCTAssertTrue(text.contains("Bundle path   /Applications/Editor.app"))
+    XCTAssertTrue(text.contains("Executable    /Applications/Editor.app/Contents/MacOS/editor"))
+    let rendered = FlashStatusBarTemplateEngine.render(
+      template: .init(template: "#{flash.focused_app_details}"), context: .init(),
+      dynamicValues: [ProcessStatusValue.focusedAppDetails.rawValue: text]
+    ).document.runs
+    XCTAssertTrue(rendered.map(\.text).joined().contains("Editor #[bold]?Title"))
+    XCTAssertEqual(rendered.first { $0.text.contains("Editor #[bold]?Title") }?.bold, true)
+    XCTAssertEqual(rendered.first { $0.text.contains("Version") }?.bold, false)
+  }
+
+  func testFocusedMetadataCacheDoesNotReuseARecycledPID() {
+    var cache = FocusedProcessMetadataCache()
+    let app = FocusedProcess(pid: 42, bundleID: "com.example.Editor")
+    var reads = 0
+    func read(_ app: FocusedProcess) -> FocusedProcessMetadata {
+      reads += 1
+      return .init(name: "App \(reads)")
+    }
+    XCTAssertEqual(cache.read(app, startAbstime: 100, using: read).name, "App 1")
+    XCTAssertEqual(cache.read(app, startAbstime: 100, using: read).name, "App 1")
+    XCTAssertEqual(reads, 1, "ordinary metric refreshes reuse application metadata")
+    XCTAssertEqual(cache.read(app, startAbstime: 200, using: read).name, "App 2")
+    XCTAssertEqual(
+      cache.read(
+        FocusedProcess(pid: 42, bundleID: "com.example.Other"), startAbstime: 200, using: read
+      ).name,
+      "App 3")
+    cache = .init()
+    XCTAssertEqual(cache.read(app, startAbstime: 200, using: read).name, "App 4")
   }
 
   func testTheFocusedPlaceholderNeverShowsAnotherAppsFiguresOrOpensMarkup() {
@@ -234,20 +306,28 @@ final class ProcessStatusTests: XCTestCase {
       pid: 42, name: "editor", cpuPercent: 2.5, residentBytes: 1024, processCount: 1,
       threadCount: 4, socketCount: 0, uptimeSeconds: 60, diskReadBytes: 0, diskWriteBytes: 0)
     var treeReads: [pid_t] = []
+    var metadataReads = 0
     let sampler = ProcessStatusSampler(
       scheduler: scheduler, readProcesses: { [] },
       readTree: { pid in
         treeReads.append(pid)
         return pid == 42 ? tree : nil
+      },
+      readMetadata: { _ in
+        XCTAssertFalse(Thread.isMainThread)
+        metadataReads += 1
+        return .init()
       }, publish: published.append)
     let app = FocusedProcess(pid: 42, bundleID: "com.example.Editor")
     sampler.focusChanged(app)
     sampler.drain()
     XCTAssertEqual(treeReads, [], "focus alone reads nothing")
+    XCTAssertEqual(metadataReads, 0, "focus alone reads no application metadata")
 
     sampler.observe([.focusedAppDetails])
     sampler.drain()
     XCTAssertEqual(treeReads, [42])
+    XCTAssertEqual(metadataReads, 1)
     XCTAssertEqual(registeredIDs(scheduler), [ProcessStatusSampler.focusedPollID])
     XCTAssertEqual(
       published.all,
@@ -330,6 +410,10 @@ final class ProcessStatusTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(tree.processCount, 2)
     XCTAssertGreaterThan(tree.threadCount, 0)
     XCTAssertGreaterThan(tree.residentBytes, 0)
+    XCTAssertGreaterThan(tree.startAbstime, 0)
+    XCTAssertTrue(
+      tree.descendants.contains { $0.pid == child.processIdentifier && $0.name == "sleep" })
+    XCTAssertFalse(tree.descendants.contains { $0.pid == getpid() })
   }
 
   func testTerminateRefusesLowPidsAndReportsTheOSReason() {

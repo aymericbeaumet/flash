@@ -125,13 +125,11 @@ final class StatusBarControllerTests: XCTestCase {
       Controller.nextWakeup([clock, Controller.Deadline(at: 10.06, priority: .normal)]), clock)
   }
 
-  func testACalendarAloneWakesAtTheNextLocalMidnight() {
+  func testACalendarAloneWakesAtTheNextMinute() {
     let harness = Harness("#{flash.calendar}")
     defer { harness.controller.stop() }
     let wall = harness.queue.sync { harness.wall }
-    let midnight = Calendar.current.dateInterval(of: .day, for: wall)!.end
-    let boundary = min(
-      midnight, TimeZone.current.nextDaylightSavingTimeTransition(after: wall) ?? midnight)
+    let boundary = Calendar.current.dateInterval(of: .minute, for: wall)!.end
     XCTAssertEqual(
       harness.queue.sync { harness.controller.nextWakeup }!,
       100 + boundary.timeIntervalSince(wall), accuracy: 0.001)

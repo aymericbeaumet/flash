@@ -268,7 +268,7 @@ extension OverlayPanel {
       }
     }
     // Hidden popups sized in percentages refit to the new geometry.
-    statusTerminals.refitHidden(except: statusPopupController.presentation.name)
+    statusTerminals.refitHidden(excluding: statusPopupController.visibleNames)
   }
 
   func orderOutIfNoPersistentContent() {

@@ -241,7 +241,8 @@ is, so it never slides sideways under you; when the bar re-lays out and the
 label moves, it follows the label. Leaving the label
 hides the preview immediately, and so do a click anywhere outside Flash's
 status bar, a change of focused app or window, a bare Escape (swallowed while a
-preview shows, except in the command line and during hints), and
+preview shows, except in the command line, during hints, or while a focused
+terminal owns the keyboard), and
 `mode normal`; the preview then stays closed until the pointer leaves the
 label. Hover works anywhere in the band, its top point row included, where a
 pointer thrown at the bar comes to rest. The native menu bar owns the band only
@@ -254,7 +255,9 @@ while hidden, and showing it draws that current screen at once rather than the
 one it had when it was hidden.
 
 **Right-click** a popup label to pin it and focus its terminal;
-repeated clicks keep it open, and right-clicking another label switches popups.
+repeated clicks keep it open, and right-clicking another label switches the
+focused popup. A separate hover preview can appear beside it without taking
+keyboard focus; clicking or pinning that preview makes it the focused popup.
 Left-click follows a link or configured click action when present; otherwise it
 leaves the hover preview unchanged. Pinning leaves a preview where it is, and a
 pinned popup stays hung from its label while the pointer moves. When that
@@ -271,9 +274,14 @@ the pointer hovers its label.
 the focused application's screen and focused. Without a name it opens
 `terminal`. A text popup shows the document the status bar last evaluated, so
 it needs `[statusbar] enabled = true`; without it Flash logs a warning and
-shows nothing. One popup shows at a time: entering another hides a persistent
-one and stops a fresh one, and entering the popup already focused does
-nothing. Hover and article rotation never replace a standalone popup.
+shows nothing. One popup owns keyboard focus at a time: entering another
+hides a persistent one and stops a fresh one, and entering the popup already
+focused does nothing. Other labels can show one separate hover preview while
+the standalone terminal stays open and keeps its keyboard input. Leaving the
+label hides only that preview. Hovering the focused popup's own label keeps
+its existing window and session in place rather than showing it twice.
+Clicking or pinning a different preview transfers focus to it; leaving
+TERMINAL or switching to another app closes both presentations.
 
 A focused popup, whether entered with `mode terminal`, pinned from the
 bar or clicked, puts Flash in TERMINAL mode (the mode label is
@@ -360,8 +368,10 @@ showing is attached to and which processes it stopped, and
 state, whether the popup shows and whether its process is paused, decides the
 one SIGSTOP or SIGCONT the registry sends on `open`, `hide`, a process
 reaching `running` while hidden, or a policy change in place.
-`StatusPopupController` owns only
-presentation — hidden, preview, focused, or standalone — and places a label's
+`StatusPopupController` owns presentation through two surfaces: one focused
+or standalone popup and one hover preview. A popup name occupies at most one
+surface, and promotion moves the existing preview and its session into the
+focused role. Only that role owns keyboard input. Each surface places a label's
 popup with `OverlayPanel.statusBarPopupFrame`, a pure function of the label's
 span, the popup size, the screen's visible frame and `offset`; a refresh
 re-hangs a shown popup from the nearest span of the same name. It tells the

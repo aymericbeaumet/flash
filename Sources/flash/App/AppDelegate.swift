@@ -1778,7 +1778,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         activationInFlight: activationInFlight, tapLive: true),
       isModifiedChord: isModifiedChord,
       isBareEscape: isBareEscape,
-      ephemeralPopupShown: overlay.statusPopupController.presentation.ephemeralName != nil,
+      ephemeralPopupShown: overlay.statusPopupController.previewName != nil,
       dockViewShown: missionControlView != nil)
   }
 

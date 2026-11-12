@@ -38,6 +38,8 @@ final class ProcessTable {
     var uptimeSeconds: Int
     var diskReadBytes: UInt64
     var diskWriteBytes: UInt64
+    var startAbstime: UInt64 = 0
+    var descendants: [Process] = []
   }
 
   /// One libproc read of a pid, kept so the next read computes CPU as a
@@ -94,7 +96,7 @@ final class ProcessTable {
     var tree = Tree(
       pid: root, name: rootSample.name, cpuPercent: 0, residentBytes: 0, processCount: 0,
       threadCount: 0, socketCount: 0, uptimeSeconds: Self.uptimeSeconds(root),
-      diskReadBytes: 0, diskWriteBytes: 0)
+      diskReadBytes: 0, diskWriteBytes: 0, startAbstime: rootSample.usage.startAbstime)
     for pid in pids {
       guard let process = sampled[pid] else { continue }
       tree.processCount += 1
@@ -104,6 +106,12 @@ final class ProcessTable {
       tree.diskWriteBytes = Self.saturatingAdd(tree.diskWriteBytes, process.usage.diskWriteBytes)
       tree.threadCount += Self.threadCount(pid)
       tree.socketCount += Self.socketDescriptorCount(pid)
+      if pid != root {
+        tree.descendants.append(
+          Process(
+            pid: pid, name: process.name, cpuPercent: process.cpuPercent,
+            residentBytes: process.usage.residentBytes))
+      }
     }
     return tree
   }

@@ -102,8 +102,9 @@ htop and Flash do not overlap at run time: Flash's figures come from its
 own sandboxed system plugin, so the bar keeps updating whether htop runs or
 not, and htop in a popup is the same htop as in any terminal. Keep htop in
 the terminal you already use for SSH sessions, and add the popup for the
-local Mac. If you also use btop, give each its own popup; one popup shows at
-a time, and showing one hides the other with its process still running.
+local Mac. If you also use btop, give each its own popup. One popup owns the
+keyboard at a time, and focusing another hides the previous one with its
+process still running; a separate hover preview can appear beside it.
 
 *Checked 2026-10-23 against the htop [README](https://github.com/htop-dev/htop),
 [ChangeLog](https://github.com/htop-dev/htop/blob/main/ChangeLog) and

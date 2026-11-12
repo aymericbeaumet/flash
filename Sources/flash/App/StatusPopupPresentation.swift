@@ -1,4 +1,4 @@
-/// Which popup shows and in which state. Where a label's popup shows is its
+/// Which popup one surface shows and in which state. Where a label's popup shows is its
 /// span's business (`OverlayPanel.statusBarPopupFrame`), never the pointer's,
 /// so the state carries no position.
 enum StatusPopupPresentation: Equatable {

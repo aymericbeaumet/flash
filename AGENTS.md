@@ -228,6 +228,9 @@ Surface requests that would violate these constraints before implementing them.
   until explicit refresh. Popup lifecycles are exactly `persistent` and `fresh`,
   with one restart backoff; presentation ends a showing once, through
   `hide`. See the popup guide.
+  A focused terminal and a separate hover preview may coexist, with one
+  presentation per popup name. Preview dismissal never closes or takes
+  keyboard focus from the focused terminal; promotion transfers that ownership.
 - Prefer events to polling. A window move or resize reads its frame from the AX
   element that fired, never a WindowServer scan, and schedules no settle tick.
 - A source that switches tabs or windows replies with the `navigation_url` it

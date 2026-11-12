@@ -63,6 +63,14 @@ its week, month, quarter and year, and time-zone, daylight-saving and moon
 information. It has no appointments or tasks. It uses the same pager as the
 metric popups.
 
+The same calendar view includes numeric local time and an ASCII analog clock
+with hour and minute hands. It updates once a minute and shows no milliseconds.
+
+The app-name hover shows identity, resource totals and the busiest helpers of
+the focused app's process tree. For interactive filtering, graphs and process
+details, [btop](https://github.com/aristocratos/btop) fits a terminal popup;
+the compact app summary keeps the macOS app and bundle context.
+
 Text popups fit their widest line between `[popup] min_width` (480 points,
 50 content columns at the standard font and padding) and `max_width` (750
 points, 80 columns, room for the calendar). The pager reserves one footer row.

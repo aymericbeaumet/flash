@@ -160,7 +160,7 @@ final class OverlayPanel: NSPanel {
     let controller = StatusPopupController(terminals: statusTerminals)
     controller.sharingType = CaptureSharing.sharingType(hidden: hidesFromCapture)
     // A hyperlink in a popup's pager or program is a status link too.
-    controller.terminalView.openURL = { [weak self] url in _ = self?.statusLinkOpener.follow(url) }
+    controller.openURL = { [weak self] url in _ = self?.statusLinkOpener.follow(url) }
     return controller
   }()
   /// `[popup]`: the chrome of every popup this panel presents.
@@ -220,8 +220,6 @@ final class OverlayPanel: NSPanel {
   var statusBarActionHandler: ((String) -> Void)?
   /// A scroll over a carousel run on the bar: step that carousel.
   var statusBarCycleStepHandler: ((String, Int) -> Void)?
-  /// The argument requests restoring the previous app; false switches popups in place.
-  var statusBarPopupDismissHandler: ((Bool) -> Void)?
   var statusBarTerminalPrepareHandler: ((String, String?) -> Bool)?
   /// Whether hovering `name` would have to fork a terminal child (a declared
   /// terminal popup with no running session). Such popups dwell before they

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The core `#{flash.calendar}` value: today's date, the previous, current and
+/// The core `#{flash.calendar}` value: local time, today's date, the previous, current and
 /// next months side by side, the day's progress through its week, month,
 /// quarter and year, and the time zone, daylight-saving and moon facts of the
 /// day. Everything derives from the date and timezone alone.
@@ -46,9 +46,11 @@ enum CalendarStatusDocument {
   static func render(now: Date, timeZone: TimeZone) -> String {
     var calendar = Calendar(identifier: .iso8601)
     calendar.timeZone = timeZone
-    let date = calendar.dateComponents([.year, .month, .day, .weekday, .weekOfYear], from: now)
+    let date = calendar.dateComponents(
+      [.year, .month, .day, .weekday, .weekOfYear, .hour, .minute], from: now)
     guard let year = date.year, let month = date.month, let day = date.day,
       let weekday = date.weekday, let week = date.weekOfYear,
+      let hour = date.hour, let minute = date.minute,
       let today = calendar.dateInterval(of: .day, for: now),
       let monthStart = calendar.dateInterval(of: .month, for: now)?.start,
       let previous = calendar.date(byAdding: .month, value: -1, to: monthStart),
@@ -63,6 +65,7 @@ enum CalendarStatusDocument {
 
     var header = Line()
     header.append("\(weekdays[weekday - 1]), \(months[month - 1]) \(day), \(year)", "bold")
+    header.append("  " + twoDigits(hour) + ":" + twoDigits(minute), "bold")
     header.pad(to: max(header.width + 2, columns - timeZone.identifier.count))
     header.append(timeZone.identifier, "dim")
     var lines = [header, Line()]
@@ -82,6 +85,7 @@ enum CalendarStatusDocument {
     }
 
     lines.append(Line())
+    var progress: [Line] = []
     for (label, elapsed, total) in [
       ("Week \(twoDigits(week))", (weekday + 5) % 7 + 1, 7),
       (months[month - 1], day, monthDays),
@@ -91,7 +95,14 @@ enum CalendarStatusDocument {
       ),
       (String(year), yearDay, yearDays),
     ] {
-      lines.append(progressLine(label, elapsed: elapsed, total: total))
+      progress.append(progressLine(label, elapsed: elapsed, total: total))
+    }
+
+    for (row, face) in clockLines(hour: hour, minute: minute).enumerated() {
+      var line = row < progress.count ? progress[row] : Line()
+      line.pad(to: columns - 17)
+      line.append(markup: face.replacingOccurrences(of: "#", with: "##"), width: face.count)
+      lines.append(line)
     }
 
     lines.append(Line())
@@ -101,6 +112,40 @@ enum CalendarStatusDocument {
         "DST", daylightSavingFact(now: now, today: today.start, calendar: calendar)))
     lines.append(factLine("Moon", moonFact(today: today, calendar: calendar)))
     return lines.map(\.markup).joined(separator: "\n")
+  }
+
+  private static func clockLines(hour: Int, minute: Int) -> [String] {
+    var face = [
+      "      .-12-.     ",
+      "   .'       '.   ",
+      "  /           \\  ",
+      " .             . ",
+      "9       o       3",
+      " '             ' ",
+      "  \\           /  ",
+      "   '.       .'   ",
+      "      '-6-'      ",
+    ].map(Array.init)
+
+    func hand(turn: Double, radius: Double, hourHand: Bool) {
+      let angle = turn * 2 * Double.pi
+      // Terminal cells are about twice as tall as they are wide.
+      let dx = sin(angle) * radius
+      let dy = -cos(angle) * radius / 2
+      let steps = Int(ceil(max(abs(dx), abs(dy))))
+      let stroke: Character =
+        hourHand ? "#" : abs(dx) < 1 ? "|" : abs(dy) < 0.5 ? "-" : dx * dy < 0 ? "/" : "\\"
+      for step in 1...steps {
+        let x = 8 + Int((dx * Double(step) / Double(steps)).rounded())
+        let y = 4 + Int((dy * Double(step) / Double(steps)).rounded())
+        face[y][x] = stroke
+      }
+    }
+
+    hand(turn: Double(minute) / 60, radius: 6, hourHand: false)
+    hand(turn: (Double(hour % 12) + Double(minute) / 60) / 12, radius: 4, hourHand: true)
+    face[4][8] = "o"
+    return face.map { String($0.reversed().drop(while: { $0 == " " }).reversed()) }
   }
 
   private static func monthLines(

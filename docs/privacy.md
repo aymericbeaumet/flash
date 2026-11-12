@@ -290,6 +290,18 @@ stored as separate register files.
   windows, nothing in them) and which status item of the menu bar is the
   clock or Control Center, all through Accessibility. Flash keeps only which
   view or panel is open, in memory.
+- **Process status and focused-app details:** while a bar, its text popup,
+  or a visible widget uses a [process value](status-format.md#process-values),
+  Flash reads process IDs, names, CPU time and resident memory through
+  libproc. Focused-app details also read its descendants, thread/socket
+  counts, start time and cumulative disk I/O, and show up to five helpers
+  from that same sample. The app name, version/build, bundle ID and bundle
+  and executable paths come from macOS application metadata and the app's
+  Info.plist, read on a background queue. These values stay in memory;
+  this collector reads no command arguments, environment variables or file
+  contents beyond that application metadata, and sends nothing over the
+  network. Application paths can contain your account name, so review a
+  popup screenshot before sharing it.
 - **Window titles:** for `window switch` and the flashlight's `@windows`, Flash reads every regular app's
   windows through Accessibility (title, whether minimized) and its name and
   icon, and remembers the order you focused windows in. It reads them at

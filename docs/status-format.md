@@ -184,13 +184,32 @@ widget or a text popup; the bar joins its lines. `[statusbar] top_count`
 sets the rows of each table, an integer from 1 to 20 (default 5); any other
 value is a configuration error.
 
-`flash.focused_app_details` describes the focused app's process tree, one
-labelled row each: Bundle, PID, Process, CPU, Memory, Sockets, Processes,
-Threads, Uptime and Disk I/O. Browser and Electron work lives mostly in
-helper processes, so every figure sums the app's process and its current
-descendants. While its figures are being read, or when they cannot be, the
-value shows the app's bundle and PID over a state line, never another app's
-figures.
+`flash.focused_app_details` is a compact summary of the focused app, with
+bold section headings and the popup's own colours:
+
+- **Identity:** the app name, version and build when available, bundle ID
+  and main process ID.
+- **Resources:** CPU (100% is one core), resident memory and its share of
+  physical RAM, process/thread/socket counts, the main process's running
+  time, and cumulative disk reads and writes.
+- **Busiest helpers:** up to five descendants, with their process names,
+  PIDs, CPU and resident memory. They rank by CPU, then memory, then PID.
+- **Application:** bundle and executable paths when available.
+
+Browser and Electron work lives mostly in helpers, so resource totals sum
+the app and its currently reachable descendants. Running time belongs to
+the main process alone. Disk figures are totals over each current process's
+lifetime, not rates; exited helpers are no longer included. The helper rows
+reuse the same sample and do not start another collector. App metadata is
+read off the main thread and cached for the process identity, including its
+start time so a reused PID cannot inherit old metadata. Names and paths are
+literal text, never status-format instructions or terminal controls.
+
+While figures are being read, or when they cannot be, the value shows the
+app's bundle and PID over a state line, never another app's figures. For
+interactive process browsing, filtering and graphs, put a maintained TUI
+such as [btop](https://github.com/aristocratos/btop) in a
+[terminal popup](popups.md); this summary stays focused on the current app.
 
 Sampling is scoped to what is shown. Flash reads the process table through
 libproc on a background queue, never the main thread, and only while the bar

@@ -9,6 +9,11 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Fixes
 
+- Keep a focused terminal popup open while other status-bar hover previews
+  appear, without moving keyboard focus away from the terminal.
+- Expand the active-app hover with app identity, uptime, resource totals and
+  its busiest helper processes. The calendar popup combines an analog face
+  and numeric time in the same view.
 - Preserve a flashlight pick while returning focus refreshes the app's mappings,
   so emoji insertion reaches the original input field.
 - Parse Inspector HTML comments without joining surrounding text into new tags.
