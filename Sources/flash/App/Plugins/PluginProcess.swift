@@ -980,16 +980,7 @@ final class PluginProcess {
     let semaphore = DispatchSemaphore(value: 0)
     var targets: [JumpTarget] = []
     let resultLock = NSLock()
-    let params: [String: Any] = [
-      "bundle_id": context.bundleIdentifier,
-      "pid": Int(context.processID),
-      "front_window_frame": [
-        "x": context.frontWindowFrame.minX,
-        "y": context.frontWindowFrame.minY,
-        "width": context.frontWindowFrame.width,
-        "height": context.frontWindowFrame.height,
-      ],
-    ]
+    let params = PluginWireCodec.spatialContextJSON(context)
     sendRequest(
       method: "hints",
       params: params,
@@ -1052,7 +1043,7 @@ final class PluginProcess {
         let currentContext = AppContext(
           bundleIdentifier: context.bundleIdentifier, processID: context.processID,
           runningApp: context.runningApp, frontWindowFrame: current.frame,
-          allScreensFrame: context.allScreensFrame)
+          allScreensFrame: context.allScreensFrame, displays: context.displays)
         let live = self.discoverTargets(
           context: currentContext, timeout: timeout, resolveAtCommit: false)
         guard
@@ -1077,7 +1068,7 @@ final class PluginProcess {
     let startedAt = DispatchTime.now()
     sendRequest(
       method: "text_grid",
-      params: PluginWireCodec.contextJSON(context),
+      params: PluginWireCodec.spatialContextJSON(context),
       timeout: .milliseconds(PluginProtocol.textGridDeadlineMs)
     ) { [weak self] response in
       let payload = PluginWireCodec.okPayload(response)

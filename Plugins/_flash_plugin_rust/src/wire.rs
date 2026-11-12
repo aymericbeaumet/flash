@@ -285,6 +285,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spatial_requests_preserve_optional_display_scale() {
+        let value = serde_json::json!({"display_scale": 2.0});
+        assert_eq!(
+            serde_json::from_value::<crate::HintsRequest>(value.clone())
+                .unwrap()
+                .display_scale,
+            Some(2.0)
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::TextGridRequest>(value)
+                .unwrap()
+                .display_scale,
+            Some(2.0)
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::HintsRequest>(serde_json::json!({}))
+                .unwrap()
+                .display_scale,
+            None
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::TextGridRequest>(serde_json::json!({}))
+                .unwrap()
+                .display_scale,
+            None
+        );
+    }
+
+    #[test]
+    fn spatial_requests_reject_non_numeric_display_scale() {
+        let value = serde_json::json!({"display_scale": "2"});
+        assert!(serde_json::from_value::<crate::HintsRequest>(value.clone()).is_err());
+        assert!(serde_json::from_value::<crate::TextGridRequest>(value).is_err());
+    }
+
+    #[test]
     fn shared_wire_corpus_matches_the_rust_boundary() {
         let fixture: Value =
             serde_json::from_str(include_str!("../fixtures/wire-values.fixture")).unwrap();

@@ -58,12 +58,12 @@
 //! window frame; the plugin returns pane-chip and link-chip targets in
 //! screen coordinates.
 //!
-//! Geometry mirrors the previous implementation:
-//!   - cell size = window / cells (fallback) OR alacritty-style font
-//!     metrics when alacritty.toml exposes the font (NSFont
-//!     ascender/descender/advance via objc2).
+//! Alacritty uses tmux-reported cell pixels and the captured display scale,
+//! for an undecorated, dynamically padded window. Other terminals keep their
+//! window/grid geometry.
 //!   - pane chips: 3-cell-wide rect at pane centre.
-//!   - link chips: per-regex match in `capture-pane -p` output.
+//!   - link chips: OSC 8 spans and plain URL/path matches in visible
+//!     `capture-pane -p -e` snapshots, with terminal-cell columns.
 //!
 //! ## Text grid
 //!
@@ -96,6 +96,7 @@ use serde_json::{Value, json};
 use flash_plugin::process as bounded_process;
 
 mod control_mode;
+mod pane_capture;
 mod socket_watch;
 mod status_hints;
 
@@ -172,8 +173,9 @@ fn is_url(text: &str) -> bool {
 }
 
 /// Yield `(column, text)` for each link match on a line, bounded by `max_cols`
-/// columns. Column is a character index to mirror the Python implementation.
+/// columns. Columns use display cells, including wide and combining text.
 fn extract_links(line: &str, max_cols: usize) -> Vec<(usize, String)> {
+    use unicode_width::UnicodeWidthStr;
     let mut out = Vec::new();
     for m in link_pattern().find_iter(line) {
         let raw = m.as_str();
@@ -190,7 +192,7 @@ fn extract_links(line: &str, max_cols: usize) -> Vec<(usize, String)> {
         } else {
             (0, raw)
         };
-        let col = line[..m.start()].chars().count() + leading_quote_cols;
+        let col = line[..m.start()].width() + leading_quote_cols;
         if col >= max_cols {
             continue;
         }
@@ -201,6 +203,36 @@ fn extract_links(line: &str, max_cols: usize) -> Vec<(usize, String)> {
         out.push((col, text.to_string()));
     }
     out
+}
+
+fn captured_links(
+    content: &pane_capture::Line,
+    columns: usize,
+) -> Vec<(usize, String, Option<String>)> {
+    use unicode_width::UnicodeWidthStr;
+    let mut links: Vec<_> = content
+        .links
+        .iter()
+        .filter(|link| pane_capture::http_uri(&link.uri))
+        .map(|link| {
+            (
+                content.column(link.start),
+                content.text[link.start..link.end].to_string(),
+                Some(link.uri.clone()),
+            )
+        })
+        .collect();
+    for (col, text) in extract_links(&content.text, columns) {
+        // An OSC span owns its label, including an unsafe destination whose
+        // URL-shaped label must not masquerade as an ordinary clickable URL.
+        if content.links.iter().any(|link| {
+            col < content.column(link.end) && col + text.width() > content.column(link.start)
+        }) {
+            continue;
+        }
+        links.push((col, text, None));
+    }
+    links
 }
 
 // ---- tmux invocation --------------------------------------------------------
@@ -1999,7 +2031,7 @@ enum PaneCaptureRunner {
 
 impl PaneCaptureRunner {
     async fn capture(&self, pane_id: &str) -> Option<String> {
-        let args = ["capture-pane", "-t", pane_id, "-p"];
+        let args = ["capture-pane", "-t", pane_id, "-p", "-e"];
         match self {
             Self::Local {
                 tmux_path,
@@ -2393,13 +2425,6 @@ async fn focused_tmux_client(
     }
 }
 
-fn parse_two_ints(line: &str) -> Option<(i64, i64)> {
-    let mut parts = line.split_whitespace();
-    let a = parts.next()?.parse::<i64>().ok()?;
-    let b = parts.next()?.parse::<i64>().ok()?;
-    Some((a, b))
-}
-
 /// Status lines `#{status}` turns on: `on` is one, a number is that many.
 fn status_line_count(raw: &str) -> i64 {
     raw.parse::<i64>()
@@ -2444,129 +2469,210 @@ fn status_hint_row(status: &str, client_rows: i64) -> Option<i64> {
     matches!(fields.next()?, "on" | "1").then_some(row)
 }
 
-// ---- Alacritty font + cell geometry -----------------------------------------
+// ---- Alacritty cell geometry -------------------------------------------------
 
-fn read_toml_raw(text: &str, section: &str, key: &str) -> Option<String> {
-    let mut in_section = false;
-    for raw_line in text.split('\n') {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            in_section = line[1..line.len() - 1].trim() == section;
-            continue;
-        }
-        if !in_section {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=')
-            && k.trim() == key
-        {
-            return Some(v.trim().to_string());
-        }
+fn supported_alacritty_layout(text: &str) -> bool {
+    let Ok(config) = toml::from_str::<toml::Value>(text) else {
+        return false;
+    };
+    if config.get("import").is_some()
+        || config
+            .get("general")
+            .and_then(|v| v.get("import"))
+            .is_some()
+    {
+        return false;
     }
-    None
+    let Some(window) = config.get("window") else {
+        return false;
+    };
+    window.get("decorations").and_then(toml::Value::as_str) == Some("None")
+        && window.get("dynamic_padding").and_then(toml::Value::as_bool) == Some(true)
 }
 
-fn read_toml_string(text: &str, section: &str, key: &str) -> Option<String> {
-    let mut raw = read_toml_raw(text, section, key)?;
-    if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
-        raw = raw[1..raw.len() - 1].to_string();
-    }
-    if raw.is_empty() { None } else { Some(raw) }
-}
-
-fn read_toml_number(text: &str, section: &str, key: &str) -> Option<f64> {
-    read_toml_raw(text, section, key)?.parse::<f64>().ok()
-}
-
-/// (path, mtime, font) of the last Alacritty config read; this sits on the
-/// `f` hot path, so the file is re-read only when its modification time moves.
-type AlacrittyFontCache = Option<(String, std::time::SystemTime, (String, f64))>;
-static ALACRITTY_FONT_CACHE: std::sync::LazyLock<std::sync::Mutex<AlacrittyFontCache>> =
+type AlacrittyLayoutCache = Option<(String, std::time::SystemTime, bool)>;
+static ALACRITTY_LAYOUT_CACHE: std::sync::LazyLock<std::sync::Mutex<AlacrittyLayoutCache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
-async fn alacritty_font() -> Option<(String, f64)> {
-    let home = std::env::var("HOME").ok()?;
-    let paths = [
-        format!("{home}/.config/alacritty/alacritty.toml"),
-        format!("{home}/.alacritty.toml"),
-    ];
+fn alacritty_config_override(command: &str) -> Option<Option<PathBuf>> {
+    // ps does not preserve argv boundaries. Accept only unambiguous shapes;
+    // never guess a quoted/spaced path or a process with geometry overrides.
+    let words: Vec<_> = command.split_whitespace().collect();
+    if !words
+        .first()
+        .is_some_and(|program| executable_name(program) == "alacritty")
+    {
+        return None;
+    }
+    let mut path = None;
+    let mut index = 1;
+    while index < words.len() {
+        match words[index] {
+            "-e" | "--command" => return (index + 1 < words.len()).then_some(path),
+            "--title" | "-T" => {
+                words.get(index + 1)?;
+                index += 2;
+            }
+            "--config-file" => {
+                let value = words.get(index + 1)?;
+                if path.is_some() || !value.starts_with('/') {
+                    return None;
+                }
+                path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            option if option.starts_with("--config-file=") => {
+                let value = option.strip_prefix("--config-file=")?;
+                if path.is_some() || !value.starts_with('/') {
+                    return None;
+                }
+                path = Some(PathBuf::from(value));
+                index += 1;
+            }
+            option if option.starts_with("--title=") => {
+                index += 1;
+            }
+            _ => return None,
+        }
+    }
+    Some(path)
+}
+
+async fn alacritty_layout_supported(pid: i64) -> bool {
+    let Some(command) = process_command(pid).await else {
+        return false;
+    };
+    let Some(config_override) = alacritty_config_override(&command) else {
+        return false;
+    };
+    let Ok(home) = std::env::var("HOME") else {
+        return false;
+    };
+    let paths = if let Some(path) = config_override {
+        vec![path]
+    } else {
+        // An alternate environment's search root is not proof of the running
+        // GUI instance's config. Require an explicit path for that case.
+        if std::env::var("XDG_CONFIG_HOME").is_ok_and(|path| path != format!("{home}/.config")) {
+            return false;
+        }
+        vec![
+            PathBuf::from(format!("{home}/.config/alacritty/alacritty.toml")),
+            PathBuf::from(format!("{home}/.config/alacritty.toml")),
+            PathBuf::from(format!("{home}/.alacritty.toml")),
+        ]
+    };
     for path in paths {
         let Ok(metadata) = tokio::fs::metadata(&path).await else {
             continue;
         };
-        let modified = metadata.modified().ok()?;
-        if let Some((cached_path, cached_modified, font)) = ALACRITTY_FONT_CACHE
+        if !metadata.is_file() || metadata.len() > 256 * 1024 {
+            return false;
+        }
+        let path = path.to_string_lossy().into_owned();
+        let Ok(modified) = metadata.modified() else {
+            return false;
+        };
+        if let Some((cached_path, cached_modified, supported)) = ALACRITTY_LAYOUT_CACHE
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             && *cached_path == path
             && *cached_modified == modified
         {
-            return Some(font.clone());
+            return *supported;
         }
-        let Ok(text) = tokio::fs::read_to_string(&path).await else {
-            continue;
+        let Ok(file) = tokio::fs::File::open(&path).await else {
+            return false;
         };
-        let size = read_toml_number(&text, "font", "size").unwrap_or(11.0);
-        let family =
-            read_toml_string(&text, "font.normal", "family").unwrap_or_else(|| "Menlo".to_string());
-        let font = (family, size);
-        *ALACRITTY_FONT_CACHE
+        use tokio::io::AsyncReadExt;
+        let mut text = String::new();
+        if file
+            .take(256 * 1024 + 1)
+            .read_to_string(&mut text)
+            .await
+            .is_err()
+            || text.len() > 256 * 1024
+        {
+            return false;
+        }
+        let supported = supported_alacritty_layout(&text);
+        *ALACRITTY_LAYOUT_CACHE
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some((path, modified, font.clone()));
-        return Some(font);
+            .unwrap_or_else(|e| e.into_inner()) = Some((path, modified, supported));
+        return supported;
     }
-    None
+    false
 }
 
-/// (advance, line_height) from NSFont design metrics, mirroring the previous
-/// PyObjC path: advance = maximumAdvancement.width, line_height = ascender −
-/// descender.
-fn cell_metrics_appkit(family: &str, size: f64) -> Option<(f64, f64)> {
-    use objc2_app_kit::NSFont;
-    use objc2_foundation::NSString;
-
-    let name = NSString::from_str(family);
-    let font = NSFont::fontWithName_size(&name, size).or_else(|| {
-        let menlo = NSString::from_str("Menlo");
-        NSFont::fontWithName_size(&menlo, size)
-    })?;
-    let line_height = font.ascender() - font.descender();
-    let advance = font.maximumAdvancement().width;
-    if advance <= 0.0 || line_height <= 0.0 {
-        return None;
-    }
-    Some((advance, line_height))
-}
-
-/// (cell_w, cell_h, pad_x, pad_y). Alacritty uses font metrics with the
-/// content block centred in the window; every other terminal falls back to a
-/// flat window/cells division.
-async fn resolve_geometry(
-    bundle_id: &str,
+/// Alacritty reports actual rasterized cell pixels to tmux, including font
+/// zoom and offsets. Its undecorated, dynamically padded grid is centered in
+/// the captured window, with padding rounded down in physical pixels.
+fn reported_geometry(
     win_w: f64,
     win_h: f64,
-    cols: f64,
-    rows: f64,
-) -> (f64, f64, f64, f64) {
-    if ALACRITTY_BUNDLES.contains(&bundle_id)
-        && let Some((family, size)) = alacritty_font().await
-        && let Some((cell_w, cell_h)) = cell_metrics_appkit(&family, size)
+    cols: i64,
+    rows: i64,
+    cell_width: i64,
+    cell_height: i64,
+    display_scale: Option<f64>,
+) -> Option<(f64, f64, f64, f64)> {
+    let scale = display_scale.filter(|v| v.is_finite() && *v > 0.0)?;
+    if cols <= 0
+        || rows <= 0
+        || cell_width <= 0
+        || cell_height <= 0
+        || !win_w.is_finite()
+        || !win_h.is_finite()
     {
-        let content_w = cols * cell_w;
-        let content_h = rows * cell_h;
-        let pad_x = ((win_w - content_w) / 2.0).max(0.0);
-        let pad_y = ((win_h - content_h) / 2.0).max(0.0);
-        return (cell_w, cell_h, pad_x, pad_y);
+        return None;
     }
-    (win_w / cols, win_h / rows, 0.0, 0.0)
+    let spare_x = win_w * scale - cols as f64 * cell_width as f64;
+    let spare_y = win_h * scale - rows as f64 * cell_height as f64;
+    if spare_x < 0.0 || spare_y < 0.0 {
+        return None;
+    }
+    Some((
+        cell_width as f64 / scale,
+        cell_height as f64 / scale,
+        (spare_x / 2.0).floor() / scale,
+        (spare_y / 2.0).floor() / scale,
+    ))
+}
+
+async fn resolve_geometry(
+    bundle_id: &str,
+    pid: i64,
+    win_w: f64,
+    win_h: f64,
+    layout: &ClientLayout,
+    display_scale: Option<f64>,
+) -> Option<(f64, f64, f64, f64)> {
+    if ALACRITTY_BUNDLES.contains(&bundle_id) {
+        if !alacritty_layout_supported(pid).await {
+            return None;
+        }
+        return reported_geometry(
+            win_w,
+            win_h,
+            layout.columns,
+            layout.rows,
+            layout.cell_width,
+            layout.cell_height,
+            display_scale,
+        );
+    }
+    Some((
+        win_w / layout.columns as f64,
+        win_h / layout.rows as f64,
+        0.0,
+        0.0,
+    ))
 }
 
 // ---- Hint targets -----------------------------------------------------------
 
+#[derive(Debug, PartialEq, Eq)]
 struct Pane {
     id: String,
     left: i64,
@@ -2623,11 +2729,11 @@ fn parse_hint_pane(line: &str, context: &HintContext) -> Option<Pane> {
         return None;
     }
     let fields: Vec<_> = geometry.split_whitespace().collect();
-    let border = match fields.len() {
-        5 => "off",
-        6 => fields[5],
-        _ => return None,
-    };
+    // capture-pane without -M reads the base grid, never a displayed copy mode.
+    if fields.len() != 7 || fields[6] != "0" {
+        return None;
+    }
+    let border = fields[5];
     fields[0].strip_prefix('%')?.parse::<u64>().ok()?;
     Some(Pane {
         id: fields[0].to_string(),
@@ -2670,10 +2776,13 @@ fn build_target(
 /// One consistent read of a client's visible layout: its cell grid, its
 /// status line and the panes of its current window, from two replies that
 /// both name the server, session and window they describe.
+#[derive(Debug, PartialEq, Eq)]
 struct ClientLayout {
     columns: i64,
     rows: i64,
-    /// `#{status} #{status-position} #{mouse}`.
+    cell_width: i64,
+    cell_height: i64,
+    /// `#{status} #{status-position} #{mouse} #{window_zoomed_flag}`.
     status: String,
     context: HintContext,
     /// `#{W:#{window_index} #{window_id};}`.
@@ -2695,8 +2804,21 @@ impl ClientLayout {
         let [size, status, context, windows, status_format] = fields.as_slice() else {
             return None;
         };
+        let status_fields: Vec<_> = status.split_whitespace().collect();
+        // Zoom hides the ordinary pane layout; do not map it onto the client.
+        if status_fields.len() != 4 || status_fields[3] != "0" {
+            return None;
+        }
         let context = HintContext::parse(context)?;
-        let (columns, rows) = parse_two_ints(size)?;
+        let values = size
+            .split_whitespace()
+            .map(str::parse::<i64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let [columns, rows, cell_width, cell_height] = values.as_slice() else {
+            return None;
+        };
+        let (columns, rows, cell_width, cell_height) = (*columns, *rows, *cell_width, *cell_height);
         if columns <= 0 || rows <= 0 {
             return None;
         }
@@ -2711,6 +2833,8 @@ impl ClientLayout {
         Some(Self {
             columns,
             rows,
+            cell_width,
+            cell_height,
             status: status.to_string(),
             context,
             windows: windows.to_string(),
@@ -2734,10 +2858,10 @@ async fn client_layout(plugin: &Tmux, client: &TmuxClient) -> Option<ClientLayou
     // literal text the server always emits verbatim (the same separator
     // `list-clients`/`list-windows` rely on), so the split is deterministic.
     let combined_format = format!(
-        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}} #{{mouse}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{W:#{{window_index}} #{{window_id}};}}{TMUX_FIELD_SEP}#{{T:status-format[0]}}"
+        "#{{client_width}} #{{client_height}} #{{client_cell_width}} #{{client_cell_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}} #{{mouse}} #{{window_zoomed_flag}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{W:#{{window_index}} #{{window_id}};}}{TMUX_FIELD_SEP}#{{T:status-format[0]}}"
     );
     let pane_format = format!(
-        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}} #{{pane-border-status}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{T:pane-border-format}}"
+        "#{{pane_id}} #{{pane_left}} #{{pane_top}} #{{pane_width}} #{{pane_height}} #{{pane-border-status}} #{{pane_in_mode}}{TMUX_FIELD_SEP}#{{pid}} #{{session_id}} #{{window_id}}{TMUX_FIELD_SEP}#{{T:pane-border-format}}"
     );
     let display_args = [
         "display-message",
@@ -2806,14 +2930,11 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
     let hint_context = &layout.context;
     let panes = &layout.panes;
 
-    let (cell_w, cell_h, pad_x, pad_y) = resolve_geometry(
-        bundle_id,
-        win_w,
-        win_h,
-        client_cols as f64,
-        client_rows as f64,
-    )
-    .await;
+    let Some((cell_w, cell_h, pad_x, pad_y)) =
+        resolve_geometry(bundle_id, pid, win_w, win_h, &layout, req.display_scale).await
+    else {
+        return HintsResponse::targets(vec![]).context_pid(pid);
+    };
 
     let top_offset = parse_status_top_offset(&layout.status);
 
@@ -2827,10 +2948,14 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         screen_col: i64,
         text: String,
         context_id: String,
+        url: Option<String>,
     }
     let mut raw_links: Vec<RawLink> = Vec::new();
 
     let mut captures = capture_panes(plugin, &client, panes).await;
+    if client_layout(plugin, &client).await.as_ref() != Some(&layout) {
+        return HintsResponse::targets(vec![]).context_pid(pid);
+    }
     for (i, pane) in panes.iter().enumerate() {
         let context_id = hint_context.target_id(&client, &pane.id);
         let center_col = pane.left + pane.cols / 2;
@@ -2878,19 +3003,20 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
             );
         }
 
-        let Some(raw) = captures[i].take() else {
-            continue;
+        let Some(lines) = captures[i]
+            .take()
+            .and_then(|raw| pane_capture::parse(&raw, pane.cols as usize, pane.rows as usize))
+        else {
+            return HintsResponse::targets(vec![]).context_pid(pid);
         };
-        for (row_idx, content) in raw.split('\n').enumerate() {
-            if row_idx as i64 >= pane.rows {
-                break;
-            }
-            for (col, text) in extract_links(content, pane.cols as usize) {
+        for (row_idx, content) in lines.iter().enumerate() {
+            for (col, text, url) in captured_links(content, pane.cols as usize) {
                 raw_links.push(RawLink {
                     screen_row: top_offset + pane.top + row_idx as i64,
                     screen_col: pane.left + col as i64,
                     text,
                     context_id: context_id.clone(),
+                    url,
                 });
             }
         }
@@ -2947,20 +3073,23 @@ async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> 
         // Terminal links use a generic host-understood semantic role. The host
         // sends `f` as Shift-click and `F` as Command-Shift-click so Alacritty
         // handles the link instead of forwarding a pane click to tmux.
-        targets.push(
-            build_target(
-                &target_id,
-                x,
-                y,
-                cell_w,
-                cell_h,
-                TERMINAL_LINK_ROLE,
-                &link.text,
-                pid,
-                Priority::Normal,
-            )
-            .context_id(link.context_id),
-        );
+        let target = build_target(
+            &target_id,
+            x,
+            y,
+            cell_w,
+            cell_h,
+            TERMINAL_LINK_ROLE,
+            &link.text,
+            pid,
+            Priority::Normal,
+        )
+        .context_id(link.context_id);
+        targets.push(if let Some(uri) = link.url {
+            target.url(uri)
+        } else {
+            target
+        });
     }
 
     HintsResponse::targets(targets).context_pid(pid)
@@ -2985,6 +3114,9 @@ async fn text_grid_for_context(
         return TextGridResponse::default();
     };
     let captures = capture_panes(plugin, &client, &layout.panes).await;
+    if client_layout(plugin, &client).await.as_ref() != Some(&layout) {
+        return TextGridResponse::default();
+    }
     text_grid(&layout, &captures)
 }
 
@@ -3025,7 +3157,12 @@ fn text_grid(layout: &ClientLayout, captures: &[Option<String>]) -> TextGridResp
         let Some(capture) = capture else {
             continue;
         };
-        for (index, text) in capture.split('\n').take(pane.rows as usize).enumerate() {
+        let Some(capture) = pane_capture::parse(capture, pane.cols as usize, pane.rows as usize)
+        else {
+            return TextGridResponse::default();
+        };
+        for (index, line) in capture.iter().enumerate() {
+            let text = &line.text;
             let row = top_offset + pane.top + index as i64;
             if !on_grid(row, pane.left) {
                 break;
@@ -5573,8 +5710,8 @@ mod tests {
         let binary = fixture.script(
             "tmux",
             r#"case "$1" in
-display-message) printf '%s\n' '120 61|||on top on|||123 $0 @1|||0 @1;1 @2;|||#[range=user|0]first#[norange] #[range=window|1]second#[norange]' ;;
-list-panes) printf '%s\n' '%1 0 0 60 60|||123 $0 @1' '%2 61 0 59 60|||123 $0 @1' ;;
+display-message) printf '%s\n' '120 61 0 0|||on top on 0|||123 $0 @1|||0 @1;1 @2;|||#[range=user|0]first#[norange] #[range=window|1]second#[norange]' ;;
+list-panes) printf '%s\n' '%1 0 0 60 60 off 0|||123 $0 @1' '%2 61 0 59 60 off 0|||123 $0 @1' ;;
 capture-pane)
     i=0
     while test "$i" -lt 50; do
@@ -5651,14 +5788,205 @@ esac"#,
     }
 
     #[tokio::test]
+    async fn hints_recover_osc8_label_and_destination_from_visible_snapshot() {
+        let fixture = ExecutableFixture::new().await;
+        let binary = fixture.script("tmux", r#"case "$1" in
+display-message) printf '%s\n' '80 24 0 0|||off top on 0|||123 $0 @1||||||' ;;
+list-panes) printf '%s\n' '%1 0 0 80 24 off 0|||123 $0 @1' ;;
+capture-pane) printf '\033[4m界 e\314\201 \033]8;id=docs;https://example.com/actual\033\\Read docs\033]8;;\007\033[0m\n' ;;
+*) exit 1 ;;
+esac"#).await;
+        let plugin = Tmux::default();
+        plugin.tmux_path.set(Some(binary)).unwrap();
+        plugin.client_snapshot().lock().unwrap().clients =
+            vec![client("/dev/ttys000", "work", 42, 0)];
+        let harness = flash_plugin::testing::Harness::new("tmux");
+        let request = HintsRequest {
+            pid: Some(42),
+            front_window_frame: Some(Frame::new(100.0, 200.0, 800.0, 240.0)),
+            ..Default::default()
+        };
+        let response = hints_for_context(&plugin, &harness.context(), &request).await;
+        let links: Vec<_> = response
+            .targets
+            .iter()
+            .filter(|t| t.role.as_deref() == Some(TERMINAL_LINK_ROLE))
+            .collect();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].label.as_deref(), Some("Read docs"));
+        assert_eq!(links[0].url.as_deref(), Some("https://example.com/actual"));
+        assert_eq!(links[0].frame, Frame::new(150.0, 430.0, 10.0, 10.0));
+        fixture.cleanup().await;
+    }
+
+    #[test]
+    fn plain_link_columns_follow_terminal_cells() {
+        assert_eq!(
+            extract_links("界 e\u{301} 👩‍💻 https://example.com", 80),
+            vec![(8, "https://example.com".into())]
+        );
+    }
+
+    #[test]
+    fn osc_spans_own_their_labels_and_text_grid_never_exposes_control_payloads() {
+        let capture = "\x1b]52;c;secret\x07\x1b[4m\x1b]8;;https://actual.example\x07https://display.example\x1b]8;;\x1b\\ plain.txt\x1b[0m";
+        let lines = pane_capture::parse(capture, 80, 1).unwrap();
+        assert_eq!(
+            captured_links(&lines[0], 80),
+            vec![
+                (
+                    0,
+                    "https://display.example".into(),
+                    Some("https://actual.example".into())
+                ),
+                (24, "plain.txt".into(), None),
+            ]
+        );
+        let unsafe_capture = capture.replace("https://actual.example", "file:///tmp/secret");
+        let unsafe_lines = pane_capture::parse(&unsafe_capture, 80, 1).unwrap();
+        assert_eq!(
+            captured_links(&unsafe_lines[0], 80),
+            vec![(24, "plain.txt".into(), None)]
+        );
+        let layout = ClientLayout::parse(
+            "80 1 0 0|||off top on 0|||123 $0 @1||||||",
+            "%1 0 0 80 1 off 0|||123 $0 @1",
+        )
+        .unwrap();
+        assert_eq!(
+            text_grid(&layout, &[Some(capture.into())]),
+            TextGridResponse::new(
+                80,
+                1,
+                vec![TextGridLine::text(
+                    0,
+                    0,
+                    "https://display.example plain.txt"
+                )]
+            )
+        );
+    }
+
+    #[test]
+    fn reported_cells_fit_the_undecorated_alacritty_grid_at_display_scale() {
+        assert_eq!(
+            reported_geometry(2048.0, 1122.0, 256, 70, 16, 32, Some(2.0)),
+            Some((8.0, 16.0, 0.0, 1.0))
+        );
+        assert_eq!(
+            reported_geometry(803.0, 603.0, 80, 30, 20, 40, Some(2.0)),
+            Some((10.0, 20.0, 1.5, 1.5))
+        );
+        for scale in [None, Some(0.0), Some(-1.0), Some(f64::NAN)] {
+            assert!(reported_geometry(800.0, 600.0, 80, 30, 20, 40, scale).is_none());
+        }
+        assert!(reported_geometry(800.0, 600.0, 80, 30, 0, 40, Some(2.0)).is_none());
+        assert!(reported_geometry(799.0, 600.0, 80, 30, 20, 40, Some(2.0)).is_none());
+        assert!(supported_alacritty_layout(
+            "[window]\ndecorations = 'None'\ndynamic_padding = true"
+        ));
+        for config in [
+            "",
+            "[window]\ndecorations = 'Full'\ndynamic_padding = true",
+            "[window]\ndecorations = 'None'\ndynamic_padding = false",
+            "[general]\nimport = ['other.toml']\n[window]\ndecorations = 'None'\ndynamic_padding = true",
+        ] {
+            assert!(!supported_alacritty_layout(config));
+        }
+    }
+
+    #[test]
+    fn alacritty_launch_config_is_explicit_or_unambiguous() {
+        assert_eq!(
+            alacritty_config_override(
+                "alacritty --title fixture --config-file /tmp/fixture.toml -e tmux -o child-argument"
+            ),
+            Some(Some(PathBuf::from("/tmp/fixture.toml")))
+        );
+        assert_eq!(
+            alacritty_config_override("alacritty -T fixture --command sh -c example"),
+            Some(None)
+        );
+        assert_eq!(
+            alacritty_config_override("/Applications/Alacritty.app/Contents/MacOS/alacritty"),
+            Some(None)
+        );
+        assert_eq!(
+            alacritty_config_override("alacritty --config-file /tmp/fixture.toml"),
+            Some(Some(PathBuf::from("/tmp/fixture.toml")))
+        );
+        assert_eq!(
+            alacritty_config_override("alacritty --config-file=/tmp/fixture.toml"),
+            Some(Some(PathBuf::from("/tmp/fixture.toml")))
+        );
+        for command in [
+            "alacritty -o window.decorations=Full",
+            "alacritty --option window.dynamic_padding=false",
+            "alacritty --config-file /tmp/has spaces.toml",
+            "alacritty --config-file relative.toml",
+            "alacritty --config-file /tmp/a -o window.decorations=Full",
+            "other",
+        ] {
+            assert_eq!(alacritty_config_override(command), None, "{command}");
+        }
+    }
+
+    #[tokio::test]
+    async fn switching_or_resizing_during_capture_rejects_hint_and_text_grids() {
+        for changed in [
+            "80 24 0 0|||off top on 0|||123 $0 @2||||||",
+            "79 24 0 0|||off top on 0|||123 $0 @1||||||",
+        ] {
+            let fixture = ExecutableFixture::new().await;
+            let marker = shell_quote(fixture.0.join("captured").to_str().unwrap());
+            let binary = fixture.script("tmux", &format!(r#"case "$1" in
+display-message) if test -f {marker}; then printf '%s\n' '{changed}'; else printf '%s\n' '80 24 0 0|||off top on 0|||123 $0 @1||||||'; fi ;;
+list-panes) printf '%s\n' '%1 0 0 80 24 off 0|||123 $0 @1' ;;
+capture-pane) touch {marker}; printf 'https://example.com\n' ;;
+*) exit 1 ;;
+esac"#)).await;
+            let plugin = Tmux::default();
+            plugin.tmux_path.set(Some(binary)).unwrap();
+            plugin.client_snapshot().lock().unwrap().clients =
+                vec![client("/dev/ttys000", "work", 42, 0)];
+            let harness = flash_plugin::testing::Harness::new("tmux");
+            let request = HintsRequest {
+                pid: Some(42),
+                front_window_frame: Some(Frame::new(0.0, 0.0, 800.0, 240.0)),
+                ..Default::default()
+            };
+            assert!(
+                hints_for_context(&plugin, &harness.context(), &request)
+                    .await
+                    .targets
+                    .is_empty()
+            );
+            tokio::fs::remove_file(fixture.0.join("captured"))
+                .await
+                .unwrap();
+            let grid = text_grid_for_context(
+                &plugin,
+                &harness.context(),
+                &TextGridRequest {
+                    pid: Some(42),
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert_eq!(grid, TextGridResponse::default());
+            fixture.cleanup().await;
+        }
+    }
+
+    #[tokio::test]
     async fn text_grid_reads_the_focused_client_it_hints() {
         let fixture = ExecutableFixture::new().await;
         let binary = fixture
             .script(
                 "tmux",
                 r#"case "$1" in
-display-message) printf '%s\n' '20 6|||on top on|||123 $0 @1|||0 @1;|||#[fg=colour178 bold]za' ;;
-list-panes) printf '%s\n' '%1 0 0 9 5 top|||123 $0 @1|||#[align=centre] t' '%2 10 0 10 5 off|||123 $0 @1|||' ;;
+display-message) printf '%s\n' '20 6 0 0|||on top on 0|||123 $0 @1|||0 @1;|||#[fg=colour178 bold]za' ;;
+list-panes) printf '%s\n' '%1 0 0 9 5 top 0|||123 $0 @1|||#[align=centre] t' '%2 10 0 10 5 off 0|||123 $0 @1|||' ;;
 capture-pane) printf '%s\nb\n' "$3" ;;
 *) exit 1 ;;
 esac"#,
@@ -5699,9 +6027,9 @@ esac"#,
     #[test]
     fn text_grid_rows_follow_the_status_line_and_pane_border_titles() {
         let top = ClientLayout::parse(
-            "20 6|||on top on|||123 $0 @1|||0 @1;|||#[fg=colour178 bold]za",
-            "%7 10 1 9 4 top|||123 $0 @1|||#[align=centre] a\n\
-             %8 0 1 9 4 off|||123 $0 @1|||#[align=left]hidden",
+            "20 6 0 0|||on top on 0|||123 $0 @1|||0 @1;|||#[fg=colour178 bold]za",
+            "%7 10 1 9 4 top 0|||123 $0 @1|||#[align=centre] a\n\
+             %8 0 1 9 4 off 0|||123 $0 @1|||#[align=left]hidden",
         )
         .unwrap();
         assert_eq!(
@@ -5722,12 +6050,12 @@ esac"#,
         );
 
         let bottom = ClientLayout::parse(
-            "9 5|||on bottom on|||123 $0 @1||||||#[align=left]s",
-            "%1 0 0 9 3 bottom|||123 $0 @1|||#[align=left]t",
+            "9 5 0 0|||on bottom on 0|||123 $0 @1||||||#[align=left]s",
+            "%1 0 0 9 3 bottom 0|||123 $0 @1|||#[align=left]t",
         )
         .unwrap();
         assert_eq!(
-            text_grid(&bottom, &[Some("a\nb\nc\nd\n".into())]),
+            text_grid(&bottom, &[Some("a\nb\nc\n".into())]),
             TextGridResponse::new(
                 9,
                 5,
@@ -5742,9 +6070,28 @@ esac"#,
                 ],
             )
         );
+        assert_eq!(
+            text_grid(&bottom, &[Some("a\nb\nc\nd\n".into())]),
+            TextGridResponse::default()
+        );
         assert_eq!(status_format_row("2 bottom on", 10), Some(8));
         assert_eq!(status_format_row("off top on", 10), None);
         assert_eq!(status_format_row("on left on", 10), None);
+    }
+
+    #[test]
+    fn zoom_and_copy_mode_never_publish_the_hidden_base_grid() {
+        let combined = "80 24 0 0|||off top on 0|||123 $0 @1||||||";
+        let pane = "%1 0 0 80 24 off 0|||123 $0 @1";
+        assert!(ClientLayout::parse(combined, pane).is_some());
+        assert!(
+            ClientLayout::parse(&combined.replace("off top on 0", "off top on 1"), pane).is_none()
+        );
+        assert!(ClientLayout::parse(combined, &pane.replace("off 0|||", "off 1|||")).is_none());
+        assert!(ClientLayout::parse(combined, &pane.replace("off 0|||", "off 2|||")).is_none());
+        assert!(
+            ClientLayout::parse(&combined.replace("off top on 0", "off top on"), pane).is_none()
+        );
     }
 
     /// A window larger than its client keeps every line on the client's
@@ -5752,8 +6099,8 @@ esac"#,
     #[test]
     fn text_grid_lines_stay_on_the_client_grid() {
         let layout = ClientLayout::parse(
-            "10 3|||off top on|||123 $0 @1||||||",
-            "%1 5 0 9 4 bottom|||123 $0 @1|||t",
+            "10 3 0 0|||off top on 0|||123 $0 @1||||||",
+            "%1 5 0 9 4 bottom 0|||123 $0 @1|||t",
         )
         .unwrap();
         assert_eq!(
@@ -5769,15 +6116,15 @@ esac"#,
             )
         );
         let wide = ClientLayout::parse(
-            "10 6|||off top on|||123 $0 @1||||||",
-            "%1 5 0 9 4 bottom|||123 $0 @1|||t",
+            "10 6 0 0|||off top on 0|||123 $0 @1||||||",
+            "%1 5 0 9 4 bottom 0|||123 $0 @1|||t",
         )
         .unwrap();
         assert_eq!(
             text_grid(&wide, &[None]).lines,
             vec![TextGridLine::format(4, 5, 5, "t")]
         );
-        assert!(ClientLayout::parse("10 6|||off top on|||123 $0 @1||||||", "").is_none());
+        assert!(ClientLayout::parse("10 6 0 0|||off top on 0|||123 $0 @1||||||", "").is_none());
     }
 
     #[test]
@@ -5991,9 +6338,9 @@ esac"#,
     #[test]
     fn hint_context_rejects_a_window_switch_between_geometry_and_pane_replies() {
         let context = HintContext::parse("123 $0 @1").unwrap();
-        let pane = parse_hint_pane("%1 0 0 80 24|||123 $0 @1", &context).unwrap();
+        let pane = parse_hint_pane("%1 0 0 80 24 off 0|||123 $0 @1", &context).unwrap();
         assert_eq!(pane.id, "%1");
-        assert!(parse_hint_pane("%1 0 0 80 24|||123 $0 @2", &context).is_none());
+        assert!(parse_hint_pane("%1 0 0 80 24 off 0|||123 $0 @2", &context).is_none());
         for invalid in ["", "0 $0 @1", "123 work @1", "123 $0 1", "123 $0 @1 extra"] {
             assert!(HintContext::parse(invalid).is_none(), "{invalid}");
         }

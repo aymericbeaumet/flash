@@ -462,6 +462,7 @@ extension AppMonitor {
         AppContext(
           bundleIdentifier: owner.bundleIdentifier, processID: surface.pid, runningApp: app,
           frontWindowFrame: surface.frame, allScreensFrame: focusedContext.allScreensFrame,
+          displays: focusedContext.displays,
           walkRoot: .elementsInFrame)
       )
     }
@@ -477,7 +478,7 @@ extension AppMonitor {
           processID: pid,
           runningApp: app,
           frontWindowFrame: surface,
-          allScreensFrame: focusedContext.allScreensFrame))
+          allScreensFrame: focusedContext.allScreensFrame, displays: focusedContext.displays))
     }
     guard !contexts.isEmpty || !auxiliaryContexts.isEmpty else {
       completion([])
@@ -548,7 +549,8 @@ extension AppMonitor {
         let menuContext = AppContext(
           bundleIdentifier: context.bundleIdentifier, processID: context.processID,
           runningApp: context.runningApp, frontWindowFrame: region,
-          allScreensFrame: context.allScreensFrame, walkRoot: .openMenus,
+          allScreensFrame: context.allScreensFrame, displays: context.displays,
+          walkRoot: .openMenus,
           menus: menus.map(\.element))
         let collection = Self.collectFocusedTargets(context: menuContext, providers: providers)
         let finalized = TargetFinalizer.finalizeWithStats(

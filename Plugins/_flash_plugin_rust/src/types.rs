@@ -747,6 +747,9 @@ pub struct HintsRequest {
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
+    /// Physical pixels per AppKit point on the captured window display, when known.
+    #[serde(default)]
+    pub display_scale: Option<f64>,
 }
 
 /// A `text_grid` request: the same focused-app context as [`HintsRequest`].
@@ -759,6 +762,9 @@ pub struct TextGridRequest {
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
+    /// Physical pixels per AppKit point on the captured window display, when known.
+    #[serde(default)]
+    pub display_scale: Option<f64>,
 }
 
 /// A `perform {kind: "navigate"}` request. `url` is the durable route the host

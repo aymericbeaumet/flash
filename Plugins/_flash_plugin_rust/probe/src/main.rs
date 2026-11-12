@@ -448,7 +448,7 @@ mod tests {
     async fn hints_reply_carries_exact_targets() {
         let mut wire = serve(json!({})).await;
         wire.send(json!({ "id": 97, "method": "hints", "params": {
-            "bundle_id": "dev.flash.probe", "pid": 999,
+            "bundle_id": "dev.flash.probe", "pid": 999, "display_scale": 2.0,
             "front_window_frame": { "x": 0, "y": 0, "width": 1512, "height": 982 },
         }}))
         .await;
@@ -468,7 +468,7 @@ mod tests {
         let mut wire = serve(json!({})).await;
         let request = |id: u64, pid: i64| {
             json!({ "id": id, "method": "text_grid", "params": {
-                "bundle_id": "dev.flash.probe", "pid": pid,
+                "bundle_id": "dev.flash.probe", "pid": pid, "display_scale": 2.0,
                 "front_window_frame": { "x": 0, "y": 0, "width": 1512, "height": 982 },
             }})
         };

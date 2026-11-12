@@ -194,6 +194,14 @@ mise run test:integration:electron
 
 `mise run test:integration` runs all three in turn.
 
+For tmux hyperlink changes, build the pinned terminal oracle with
+`mise run build:tmux-oracle`, then run
+`mise run test:integration:native -- --terminal-links`. This also opens an
+isolated Alacritty window and tmux server, verifies a hidden OSC 8 URL after
+wide text, and checks both URL copying and a real hint click. Its private link
+handler records the destination without opening a browser; the fixture restores
+the clipboard and removes its own processes. Alacritty must already be installed.
+
 Electron setup installs both the pinned npm package and its binary. The
 native oracle drives the resident through the installed `flash` CLI, over the
 socket; it needs no Automation permission. Its direct clicks wait for fixture

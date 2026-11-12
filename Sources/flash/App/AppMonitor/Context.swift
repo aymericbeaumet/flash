@@ -148,7 +148,7 @@ extension AppMonitor {
       processID: context.processID,
       runningApp: context.runningApp,
       frontWindowFrame: frame.isNull ? context.frontWindowFrame : frame,
-      allScreensFrame: context.allScreensFrame,
+      allScreensFrame: context.allScreensFrame, displays: context.displays,
       walkRoot: context.walkRoot,
       walkedWindow: walkedWindow ?? context.walkedWindow,
       menus: context.menus
@@ -175,8 +175,8 @@ extension AppMonitor {
     let pid = app.processIdentifier
     guard pid > 0 else { return nil }
 
-    var screenFrame: CGRect = .null
-    for s in NSScreen.screens { screenFrame = screenFrame.union(s.frame) }
+    let screens = OverlayPanel.currentScreenSnapshot()
+    var screenFrame = screens.unionFrame
     if screenFrame.isNull { screenFrame = .zero }
 
     // Deliberately no AX IPC here. `makeContext` runs on the main thread
@@ -192,7 +192,8 @@ extension AppMonitor {
       processID: pid,
       runningApp: app,
       frontWindowFrame: windowFrame,
-      allScreensFrame: screenFrame
+      allScreensFrame: screenFrame,
+      displays: screens.screens.map { AppContext.Display(frame: $0.frame, scale: $0.scale) }
     )
   }
 
@@ -392,7 +393,7 @@ extension AppMonitor {
         processID: entry.pid,
         runningApp: app,
         frontWindowFrame: entry.nsBounds,
-        allScreensFrame: front.allScreensFrame,
+        allScreensFrame: front.allScreensFrame, displays: front.displays,
         walkRoot: .elementsInFrame))
   }
 }

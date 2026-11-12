@@ -335,7 +335,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let context = AppContext(
       bundleIdentifier: "com.example.term", processID: 4242,
       runningApp: NSRunningApplication.current,
-      frontWindowFrame: CGRect(x: 10, y: 20, width: 800, height: 400), allScreensFrame: .null)
+      frontWindowFrame: CGRect(x: 10, y: 20, width: 800, height: 400), allScreensFrame: .null,
+      displays: [.init(frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 2)])
 
     func request() -> [PluginTextGrid?] {
       let settled = expectation(description: "text_grid settles")
@@ -372,6 +373,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let params = try XCTUnwrap(first["params"] as? [String: Any])
     XCTAssertEqual(params["bundle_id"] as? String, "com.example.term")
     XCTAssertEqual(params["pid"] as? Int, 4242)
+    XCTAssertEqual(params["display_scale"] as? Double, 2)
     XCTAssertEqual(
       params["front_window_frame"] as? [String: Double],
       ["x": 10, "y": 20, "width": 800, "height": 400])

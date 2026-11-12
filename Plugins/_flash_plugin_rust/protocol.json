@@ -18,8 +18,8 @@
       "ping": "request {} -> {ok:true}",
       "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`; `core:status.observed` carries {segments: [name]}, the complete set of unique nonempty manifest `status` names of this plugin that a status surface shows (empty = none), sent once after initialize and again on every change",
       "evaluate": "request {query} -> {ok, answers}; CPU-only over pre-warmed state",
-      "hints": "request {bundle_id, pid, front_window_frame} -> {ok, targets, context_pid?}; always live",
-      "text_grid": "request {bundle_id, pid, front_window_frame} -> {ok, columns, rows, lines}; always live; sent to the focused app's hint providers in hint order, first non-empty grid wins; each line is one text_grid_line shape; empty lines = no grid",
+      "hints": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, targets, context_pid?}; always live",
+      "text_grid": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, columns, rows, lines}; always live; sent to the focused app's hint providers in hint order, first non-empty grid wins; each line is one text_grid_line shape; empty lines = no grid",
       "perform": "request {kind: resolve|command|navigate, ...} -> {ok, target_pid?, navigation_url?, message?} | {ok:false, unhandled:true} | {ok:false, error}; a command is one perform_command shape: a core command the manifest declares under one of Flash's topics (with context), the plugin's own command or a bang (without)"
     },
     "plugin_to_host_notifications": {

@@ -258,6 +258,17 @@ stored as separate register files.
   it, hooks that follow a command (`after-*`) run in its context, and until
   your next keystroke a tmux command that names no client, run from a script
   outside tmux, may resolve to it.
+  Link discovery reads only the visible pane grid, including its OSC 8
+  hyperlink destinations and styling metadata. Flash strips the styling and
+  keeps the displayed label and HTTP(S) destination in memory for hint
+  discovery and validation; it does not read scrollback or record the capture.
+  As with other hints, these labels and destinations are visible in the local inspector
+  while the session is active. This does not tap another terminal's PTY or
+  execute terminal escape sequences.
+  For Alacritty's hint placement, it also reads the focused process's launch
+  arguments and its geometry configuration (at most 256 KiB), without retaining
+  the arguments or configuration text. Cell sizes come from the attached tmux
+  client rather than font files.
 - **Menu bar and Notification Center:** `mouse menubar` reads the focused
   app's menu titles through Accessibility, and where the status items sit from
   WindowServer geometry. `mouse notifications` reads the banners, alerts and

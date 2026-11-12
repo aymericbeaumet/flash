@@ -603,6 +603,14 @@ Terminal links additionally require Shift, so `f` is a plain current-context cli
 (Shift-click for terminal links). `F` is the keyboard-shaped mouse grid; see
 [normal mode](normal-mode.md#mouse-grid).
 
+In a supported tmux-backed terminal, `f` also labels OSC 8 hyperlinks whose
+visible text is not a URL. Flash reads their destinations from the visible
+tmux grid, alongside ordinary printed URL and path matches; it does not read
+another terminal application's PTY. Alacritty needs a supported undecorated,
+dynamically padded layout so Flash can place hints using its reported cell
+size. See [terminal hint geometry](architecture.md#terminal-snapshots)
+for the capture and layout constraints.
+
 ## Existing hotkey tools
 
 Native mappings are the simplest option, but any launcher that can execute a command can trigger flash:

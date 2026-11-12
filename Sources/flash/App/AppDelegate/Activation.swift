@@ -108,7 +108,8 @@ extension AppDelegate {
       ? AppContext(
         bundleIdentifier: target.context.bundleIdentifier, processID: target.context.processID,
         runningApp: target.context.runningApp, frontWindowFrame: target.context.frontWindowFrame,
-        allScreensFrame: target.context.allScreensFrame, walkRoot: .openMenus,
+        allScreensFrame: target.context.allScreensFrame, displays: target.context.displays,
+        walkRoot: .openMenus,
         menus: nativeSurfaceOwnership.openMenus)
       : target.context
     FlashLog.debug(

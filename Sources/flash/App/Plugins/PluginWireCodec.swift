@@ -491,6 +491,12 @@ enum PluginWireCodec {
     return dict
   }
 
+  static func spatialContextJSON(_ context: AppContext) -> [String: Any] {
+    var result = contextJSON(context)
+    if let scale = context.displayScale { result["display_scale"] = Double(scale) }
+    return result
+  }
+
   static func contextJSON(_ context: AppContext) -> [String: Any] {
     [
       "bundle_id": context.bundleIdentifier,

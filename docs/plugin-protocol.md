@@ -376,9 +376,14 @@ never asks the host what it supports. See the
   The per-input evaluator: synchronous, CPU-only over state prepared earlier
   — no I/O. Unclaimed input answers `{"ok": true, "answers": []}` —
   evaluators are additive parsers, never error paths.
-- `hints` — `{bundle_id, pid, front_window_frame}` → `{"ok": true,
+- `hints` — `{bundle_id, pid, front_window_frame, display_scale?}` → `{"ok": true,
   "targets": [...], "context_pid"?}`. Always a live request; there is no
-  cached-discovery path. The host owns commit: it posts the mouse event
+  cached-discovery path. `display_scale` is physical pixels per AppKit point,
+  captured with the display geometry on the main thread. It names the display
+  containing the largest part of the requested window; unknown geometry or
+  an equal overlap across different scales omits it. Providers that require
+  pixel-exact geometry must reject an absent, non-finite or non-positive scale.
+  The host owns commit: it posts the mouse event
   directly to the target app and never calls back into the plugin to
   activate a target. Use role `AXLink` for native-style semantic links (`f`
   plain; `F` Command-Shift), or
@@ -394,7 +399,7 @@ never asks the host what it supports. See the
   revalidating a captured hint; omitted/null means unspecified. Tmux includes
   its backend, client tty, server process, session, window and pane identities,
   so a reused pane label in another session cannot receive a captured click.
-- `text_grid` — `{bundle_id, pid, front_window_frame}` → `{"ok": true,
+- `text_grid` — `{bundle_id, pid, front_window_frame, display_scale?}` → `{"ok": true,
   "columns": C, "rows": R, "lines": [...]}`: the focused app's visible text
   as a `C` × `R` cell grid, row 0 at the top, for a letter search (`s`) in an
   app whose Accessibility tree has no text, such as a terminal that draws its

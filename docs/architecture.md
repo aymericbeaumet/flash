@@ -166,6 +166,40 @@ unless the search's generation is still current. `f` and `cf` label that
 grid's panes, links, window tabs and pane titles; they also label the same
 status-bar spans.
 
+### Terminal snapshots
+
+The terminals plugin captures only each visible pane's current grid with
+`capture-pane -p -e`. It recognizes HTTP(S) OSC 8 links even when their labels
+are ordinary words, preserves the destination separately from the label, and
+keeps regex URL/path hints outside those spans. Wrapped OSC 8 labels yield one
+target per visible row. SGR and OSC metadata never enter the text-search grid;
+OSC 52 is ignored and no captured control sequence is executed. Captures are
+bounded to 1 MiB per pane, retained link destinations to 1 MiB, control sequences
+to 8 KiB and grid dimensions to 16,384 cells. Malformed controls, tabs whose cell
+widths are unknown, ambiguous script ligatures and grids exceeding the captured
+pane size reject the read. Unicode display-cell widths place wide and combining text.
+Layout is read again after all panes: a changed server, session, window, pane
+geometry or client grid cancels discovery. Commit repeats discovery off the
+main thread and matches both the displayed label and actual destination.
+Copy-mode panes and zoomed tmux windows decline discovery because the base
+capture and ordinary pane layout do not describe their visible grid.
+
+Alacritty geometry uses the attached tmux client's reported cell pixels and the
+captured display scale. The supported window is undecorated
+(`window.decorations = "None"`) with `window.dynamic_padding = true`; padding
+is centered in physical pixels. Font metrics are not guessed. Configuration
+reads are bounded to 256 KiB. A focused process's unambiguous absolute
+`--config-file` path is honored; otherwise its ordinary launch uses Flash's
+HOME default configuration search paths. Imports, ambiguous paths containing
+spaces, unsupported launch overrides, alternate `XDG_CONFIG_HOME`, missing
+cell metrics and unsupported window layouts decline Alacritty discovery.
+Launching the GUI with a different unreported environment is outside this
+default-HOME contract; use an explicit configuration path. Other terminals
+retain their existing window/grid geometry. No terminal output stream is
+monitored, and no scrollback history is captured.
+Window title arguments are allowed; arguments after `-e`/`--command` belong to
+the child command and are never interpreted as Alacritty configuration.
+
 A walk resolves the window it covers once: the frame step keeps the focused
 window element (`AppContext.walkedWindow`) and the walk starts there instead
 of asking the app for its focused window again. Per node, the batched

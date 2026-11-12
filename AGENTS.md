@@ -222,6 +222,9 @@ Surface requests that would violate these constraints before implementing them.
 - Resolve version-manager shims before caching executables used repeatedly on a
   hint hot path. Tmux status hints require exact supported format geometry; do
   not approximate unknown status layouts (see `docs/architecture.md`).
+  Terminal link captures preserve OSC 8 destinations separately from display
+  text; escape bytes never count as cells. Reject unsupported geometry or a
+  layout that changes across capture instead of publishing misplaced hints.
 - Every popup uses a real PTY session owned by `StatusTerminalRegistry`, one
   per name. Text popups use the shared terminal pager; do not add a separate
   native document renderer. Keep focused pager input and its snapshot stable

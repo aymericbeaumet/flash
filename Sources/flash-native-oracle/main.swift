@@ -12,6 +12,10 @@ private struct Args {
   var flashCLIPath: String = "\(NSHomeDirectory())/.local/bin/flash"
   var flashStateURL: String = "http://127.0.0.1:4242/api/state"
   var skipResidentModeTests = false
+  var terminalLinks = false
+  var terminalLinksOnly = false
+  var terminalTmux = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    .appendingPathComponent("build/tmux-oracle/bin/tmux").path
   var statePath: String = "/tmp/flash-native-fixture-state.json"
   var timingsPath: String?
   /// `--bench=N [--bench-trigger=key|cli]`: time hint activations on the
@@ -37,6 +41,17 @@ private func parseArgs() -> Args {
       args.flashStateURL = iter.next() ?? args.flashStateURL
     case "--skip-resident-mode-tests":
       args.skipResidentModeTests = true
+    case "--terminal-links":
+      args.terminalLinks = true
+    case "--terminal-links-only":
+      args.terminalLinks = true
+      args.terminalLinksOnly = true
+    case "--terminal-tmux":
+      guard let path = iter.next(), path.hasPrefix("/") else {
+        fputs("--terminal-tmux needs an absolute executable path\n", stderr)
+        exit(2)
+      }
+      args.terminalTmux = path
     case "--state-file":
       args.statePath = iter.next() ?? args.statePath
     case "--timings":
@@ -55,6 +70,7 @@ private func parseArgs() -> Args {
         flash-native-oracle [--fixture-app <path>] [--state-file <path>] [--timings <path>]
                             [--flash-cli <path>] [--flash-state-url <url>]
                             [--skip-resident-mode-tests]
+                            [--terminal-links|--terminal-links-only [--terminal-tmux <absolute-path>]]
                             [--bench=<runs> [--bench-trigger=key|cli]
                              [--fixture-large-table <rows>]]
 
@@ -62,6 +78,11 @@ private func parseArgs() -> Args {
         AX targets against expected native controls, verifies host clicks,
         and drives the installed Flash resident through captured-target and
         normal/insert mode handoff regressions.
+
+        --terminal-links also launches an isolated Alacritty/tmux window to
+        verify OSC8 link discovery, URL copying and real host clicks. Requires
+        Alacritty and `mise run build:tmux-oracle`; never opens the fixture URL.
+        --terminal-links-only runs just that terminal probe.
         """)
       exit(0)
     default:
@@ -1160,6 +1181,109 @@ private func runResidentModeProbe(
   }
 }
 
+private func waitForTerminalLink(
+  fixture: TerminalLinkFixture, copying: Bool, args: Args
+) throws -> ResidentHint {
+  let deadline = Date().addingTimeInterval(8)
+  var nextEmptyRetry = Date().addingTimeInterval(0.5)
+  while Date() < deadline {
+    try ensureUnlockedConsole()
+    let state = try fetchFlashState(args: args, timeout: 1)
+    if state["overlay"] as? String == "hints",
+      state["activation_in_flight"] as? Bool == false,
+      let command = state["hint_command"] as? String,
+      copying ? command == "copyURL" : command.hasPrefix("click("),
+      let values = state["hints"] as? [[String: Any]]
+    {
+      let matches = try values.map(ResidentHint.init).filter {
+        $0.role == JumpTarget.terminalLinkRole && $0.accessibilityLabel == fixture.label
+      }
+      if matches.count == 1, let hint = matches.first,
+        hint.frame.width > 0, hint.frame.height > 0
+      {
+        return hint
+      }
+    }
+    // A new socket may reach the plugin watcher just after the first query.
+    // Retry only a finished, empty capture; never replace a live layout or walk.
+    if state["activation_in_flight"] as? Bool == false,
+      let values = state["hints"] as? [[String: Any]], values.isEmpty,
+      Date() >= nextEmptyRetry, Date() < deadline
+    {
+      try runFlash("mouse target", arguments: copying ? ["--copy-url"] : [], args: args)
+      nextEmptyRetry = Date().addingTimeInterval(0.5)
+    }
+    Thread.sleep(forTimeInterval: 0.1)
+  }
+  throw OracleError.targetMissing("unique terminal OSC8 label \(fixture.label)")
+}
+
+private func runTerminalLinkProbe(args: Args, recorder: ConsoleIntegrationRecorder) throws {
+  try ensureUnlockedConsole()
+  let fixture = try TerminalLinkFixture(tmux: args.terminalTmux)
+  defer { fixture.stop() }
+  var succeeded = false
+  defer { if !succeeded { recorder.info(fixture.diagnostics()) } }
+  let originalMode = try flashMode(args: args)
+  let pasteboard = NSPasteboard.general
+  let savedClipboard = (pasteboard.pasteboardItems ?? []).map { item in
+    item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+  }
+  defer {
+    pasteboard.clearContents()
+    let items = savedClipboard.map { values in
+      let item = NSPasteboardItem()
+      for (type, data) in values { item.setData(data, forType: type) }
+      return item
+    }
+    if !items.isEmpty { pasteboard.writeObjects(items) }
+    try? runFlash("hints dismiss", args: args)
+    try? runFlash(originalMode == "insert" ? "mode insert" : "mode normal", args: args)
+  }
+  let app = try fixture.start()
+  guard AXIntegrationHarness.waitForAXWindow(app, timeout: 10) else {
+    throw OracleError.axWindowTimedOut
+  }
+  app.activate()
+  try waitForFocusedAXElement(pid: app.processIdentifier)
+  try runFlash("mode normal", args: args)
+  try runFlash("mouse target", arguments: ["--copy-url"], args: args)
+  let copyHint = try waitForTerminalLink(fixture: fixture, copying: true, args: args)
+  recorder.pass("terminal discovers the hidden OSC8 URL behind a wide-character prefix")
+  try ensureUnlockedConsole()
+  try postHintLabel(copyHint.label)
+  try waitForResidentHintsDismissed(args: args)
+  guard pasteboard.string(forType: .string) == fixture.url else {
+    throw OracleError.stateTimedOut("terminal copy-url equals the fixture's hidden URL")
+  }
+  recorder.pass("terminal copy-url copies the OSC8 destination instead of its visible label")
+
+  try waitForFocusedAXElement(pid: app.processIdentifier)
+  try runFlash("mouse target", args: args)
+  let clickHint = try waitForTerminalLink(fixture: fixture, copying: false, args: args)
+  try ensureUnlockedConsole()
+  try postHintLabel(clickHint.label)
+  let clickDeadline = Date().addingTimeInterval(5)
+  while fixture.capturedURL() == nil, Date() < clickDeadline {
+    try ensureUnlockedConsole()
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  guard fixture.capturedURL() == fixture.url else {
+    try ensureUnlockedConsole()
+    recorder.info("terminal click hint frame=\(NSStringFromRect(clickHint.frame))")
+    for window in AXIntegrationHarness.windows(pid: app.processIdentifier) {
+      if let frame = AXIntegrationHarness.frame(of: window) {
+        recorder.info("owned terminal window frame=\(NSStringFromRect(frame))")
+      }
+    }
+    throw OracleError.stateTimedOut("Alacritty received the OSC8 URL from the real hint click")
+  }
+  try waitForFlashMode("normal", args: args, timeout: 2)
+  recorder.pass(
+    "terminal hint Shift-click reaches Alacritty with tmux mouse enabled and preserves NORMAL")
+  succeeded = true
+}
+
 private let args = parseArgs()
 private let recorder = ConsoleIntegrationRecorder()
 private let timer = IntegrationTimer()
@@ -1168,6 +1292,11 @@ private let provider = AccessibilityProvider()
 do {
   try ensureUnlockedConsole()
   try ensureAccessibility()
+  if args.terminalLinksOnly {
+    try runTerminalLinkProbe(args: args, recorder: recorder)
+    recorder.info("PASS terminal integration oracle")
+    exit(0)
+  }
   try? FileManager.default.removeItem(atPath: args.statePath)
   terminateRunningFixture(bundleID: args.fixtureBundleID)
 
@@ -1276,6 +1405,8 @@ do {
   runResidentEmojiInsertionProbe(args: args, app: app, recorder: recorder)
 
   runOpenMenuProbe(args: args, provider: provider, recorder: recorder, timer: timer)
+
+  if args.terminalLinks { try runTerminalLinkProbe(args: args, recorder: recorder) }
 
   if let timingsPath = args.timingsPath {
     try timer.writeJSON(to: URL(fileURLWithPath: timingsPath))
