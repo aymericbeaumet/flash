@@ -632,12 +632,16 @@ auto-hide the native menu bar, and disabling it restores only a menu bar Flash
 itself hid. Flash stays out of a frontmost full-screen app. Neither the bar
 window nor its click windows is a full-screen auxiliary, so WindowServer leaves
 them off a native full-screen Space and the app keeps the clicks in the band.
-`FullScreenPresentationObserver` follows `NSApp.currentSystemPresentationOptions`
-by key-value observation: native full screen auto-hides the menu bar, and a
-window that covers the display without its own Space, as games and browser
-video do, hides it outright. Another process may see native full screen only
-as that auto-hide, which Flash's own preference never puts into effect, so
-either counts. While one is in effect the mode surface takes the bar off screen
+Two signals say the frontmost app is full screen (`FullScreenSignals`). A
+window that covers the display without its own Space, as games use, hides the
+menu bar through the app's presentation options, which
+`FullScreenPresentationObserver` follows in
+`NSApp.currentSystemPresentationOptions` by key-value observation. Native full
+screen, a browser's video included, shows no presentation option to another
+process, so the focused window's `AXFullScreen` is read on the window-layout AX
+queue whenever the answer can change: the app's activation, a Space change, and
+a resize into a whole display's frame or while full screen; the latest read
+wins. While either holds the mode surface takes the bar off screen
 (its reserved band stays, so no window moves), the focus border's visibility
 gate hides it, and `displayAlert` holds an alert until the app leaves, the
 latest one winning; only a confirmation, which owns the keyboard for the

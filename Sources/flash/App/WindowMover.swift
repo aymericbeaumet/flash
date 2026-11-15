@@ -658,6 +658,15 @@ final class WindowLayoutManager {
     }
   }
 
+  /// `WindowMover.focusedWindowIsFullScreen` on the serial AX queue;
+  /// `completion` runs on main.
+  func readFocusedWindowFullScreen(pid: pid_t, completion: @escaping (Bool?) -> Void) {
+    queue.async {
+      let fullScreen = WindowMover.focusedWindowIsFullScreen(pid: pid)
+      DispatchQueue.main.async { completion(fullScreen) }
+    }
+  }
+
   private func scheduleNavigationRefresh(pid: pid_t, screens: [WindowScreenLayout]) {
     navigationBuildQueue.async { [weak self] in
       guard let self, let snapshot = self.loadNavigationWindows(pid: pid, screens: screens)
@@ -1739,6 +1748,14 @@ enum WindowMover {
       return nil
     }
     return raw as? Bool
+  }
+
+  /// Whether `pid`'s focused window is in native full screen: nil when the
+  /// app reports no window or no `AXFullScreen`.
+  static func focusedWindowIsFullScreen(pid: pid_t) -> Bool? {
+    guard let window = resolveWindow(AXApp.make(pid: pid))?.window else { return nil }
+    AXUIElementSetMessagingTimeout(window, AXApp.defaultMessagingTimeout)
+    return readBoolean(window, attribute: "AXFullScreen")
   }
 
   private static func move(

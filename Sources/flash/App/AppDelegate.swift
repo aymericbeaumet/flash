@@ -225,11 +225,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Mirrors `config.statusBar.enabled`, independent of `modeBadgeEnabled`.
   /// Only the bar window steps aside while `frontmostAppIsFullScreen`.
   var statusBarVisible = false
-  /// The frontmost app is full screen, natively or behind a hidden menu bar
-  /// as games and browser video are: Flash steps aside until it leaves
-  /// (`frontmostPresentationDidChange`). Pushed by
-  /// `fullScreenPresentationObserver`.
-  var frontmostAppIsFullScreen = false
+  /// What says the frontmost app is full screen: its presentation options,
+  /// pushed by `fullScreenPresentationObserver`, and its focused window's
+  /// native full screen (`refreshNativeFullScreen`). Flash steps aside while
+  /// either holds (`updateFullScreenSignals`).
+  var fullScreenSignals = FullScreenSignals()
+  var frontmostAppIsFullScreen: Bool { fullScreenSignals.isFullScreen }
+  /// The latest native full-screen read; an older one's answer is dropped.
+  var nativeFullScreenReadGeneration: UInt64 = 0
+  /// Reads whether a pid's focused window is in native full screen,
+  /// completing on main. Replaced in tests.
+  lazy var focusedWindowFullScreenReader: (pid_t, @escaping (Bool?) -> Void) -> Void = {
+    [windowLayoutManager] pid, done in
+    windowLayoutManager.readFocusedWindowFullScreen(pid: pid, completion: done)
+  }
   var normalModeTargetPID: pid_t?
   /// Vim-style yank/paste registers. The unnamed register is the system
   /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
@@ -719,10 +728,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     fullScreenPresentationObserver = FullScreenPresentationObserver(NSApplication.shared) {
       [weak self] options in self?.frontmostPresentationDidChange(options)
     }
-    frontmostAppIsFullScreen = FullScreenPresentationObserver.isFullScreen(
+    fullScreenSignals.presentation = FullScreenPresentationObserver.isFullScreen(
       NSApplication.shared.currentSystemPresentationOptions)
     mappings.setSuspended(frontmostAppIsFullScreen)
     overlay.fullScreenAppFrontmost = frontmostAppIsFullScreen
+    refreshNativeFullScreen(
+      pid: NSWorkspace.shared.frontmostApplication?.processIdentifier, reason: "launch")
     overlay.debugConfig = config.debug
     overlay.popupStyle = config.popupStyle
     overlay.statusLinkOpener.schemes = Set(config.statusBar.linkSchemes)
@@ -1263,6 +1274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.setSessionSuspended(
           secureUI, source: .secureUI, reason: secureUI ? "secure_ui" : "secure_ui_exit")
         self.applyFocusedApplicationChange(app, emitFocusEvent: true)
+        self.refreshNativeFullScreen(pid: app.processIdentifier, reason: "app_activated")
         self.cancelOverlay(departure: .activated(app.processIdentifier))
         // Move the stroke on the activation itself rather than waiting for the
         // new app's first AX geometry notification. `app` is authoritative
@@ -1294,6 +1306,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.activeWindowBorderEventEpoch &+= 1
       self.reconcileFrontmostApplication()
+      // Entering or leaving native full screen switches Spaces.
+      self.refreshNativeFullScreen(pid: self.lastFocusedApplicationPID, reason: "space_changed")
       // Accessibility lists the active Space's windows: read them all again.
       self.refreshWindowSwitcherCatalog()
       // Raising a commit's target can switch Spaces: that is its handoff.

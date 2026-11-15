@@ -144,6 +144,83 @@ final class FullScreenPresentationTests: XCTestCase {
     XCTAssertNil(panel.heldAlert)
   }
 
+  /// Native full screen (a browser's video, the green button) shows no
+  /// presentation option to another process: the focused window's
+  /// `AXFullScreen`, read again on each activation, Space change and resize,
+  /// is what says so. Either signal alone makes the app full screen.
+  func testNativeFullScreenStepsAsideLikeACoveringWindow() {
+    let delegate = makeDelegate()
+    delegate.statusBarVisible = true
+    var reads: [(pid: pid_t, done: (Bool?) -> Void)] = []
+    delegate.focusedWindowFullScreenReader = { pid, done in reads.append((pid, done)) }
+    defer {
+      delegate.statusBarVisible = false
+      delegate.applyModeOverlay()
+      delegate.overlay.orderOut(nil)
+    }
+    delegate.applyModeOverlay()
+
+    delegate.refreshNativeFullScreen(pid: 42, reason: "space_changed")
+    XCTAssertEqual(reads.map(\.pid), [42])
+    reads[0].done(true)
+    XCTAssertTrue(delegate.frontmostAppIsFullScreen)
+    XCTAssertFalse(delegate.overlay.modeSurface.barVisible)
+    XCTAssertTrue(delegate.mappings.isSuspended)
+
+    // Still full screen while either signal holds.
+    delegate.frontmostPresentationDidChange(Self.coveringWindow)
+    delegate.refreshNativeFullScreen(pid: 42, reason: "window_resized")
+    reads[1].done(false)
+    XCTAssertTrue(delegate.frontmostAppIsFullScreen)
+    delegate.frontmostPresentationDidChange([])
+    XCTAssertFalse(delegate.frontmostAppIsFullScreen)
+    XCTAssertTrue(delegate.overlay.modeSurface.barVisible)
+    XCTAssertFalse(delegate.mappings.isSuspended)
+
+    // A read that a newer request superseded changes nothing.
+    delegate.refreshNativeFullScreen(pid: 42, reason: "app_activated")
+    delegate.refreshNativeFullScreen(pid: 7, reason: "app_activated")
+    reads[3].done(false)
+    reads[2].done(true)
+    XCTAssertFalse(delegate.frontmostAppIsFullScreen, "the superseded read is dropped")
+
+    // No frontmost app to read: nothing is full screen.
+    delegate.refreshNativeFullScreen(pid: 42, reason: "space_changed")
+    reads[4].done(true)
+    XCTAssertTrue(delegate.frontmostAppIsFullScreen)
+    delegate.refreshNativeFullScreen(pid: nil, reason: "space_changed")
+    XCTAssertEqual(reads.count, 5)
+    XCTAssertFalse(delegate.frontmostAppIsFullScreen)
+  }
+
+  /// A resize reads `AXFullScreen` only when it can change it: into a whole
+  /// display's frame, or any resize while full screen.
+  func testOnlyAResizeThatCanChangeNativeFullScreenReadsIt() {
+    let screens = [
+      CGRect(x: 0, y: 0, width: 1920, height: 1080),
+      CGRect(x: 1920, y: 0, width: 1440, height: 900),
+    ]
+    XCTAssertTrue(
+      AppDelegate.resizeMayChangeNativeFullScreen(
+        frame: CGRect(x: 1920, y: 0, width: 1440, height: 900), screens: screens,
+        fullScreen: false))
+    XCTAssertTrue(
+      AppDelegate.resizeMayChangeNativeFullScreen(
+        frame: CGRect(x: 0.5, y: 0, width: 1919.5, height: 1080), screens: screens,
+        fullScreen: false))
+    XCTAssertFalse(
+      AppDelegate.resizeMayChangeNativeFullScreen(
+        frame: CGRect(x: 0, y: 0, width: 1920, height: 1050), screens: screens,
+        fullScreen: false))
+    XCTAssertFalse(
+      AppDelegate.resizeMayChangeNativeFullScreen(
+        frame: nil, screens: screens, fullScreen: false))
+    XCTAssertTrue(
+      AppDelegate.resizeMayChangeNativeFullScreen(
+        frame: CGRect(x: 100, y: 100, width: 800, height: 600), screens: screens,
+        fullScreen: true))
+  }
+
   func testOnlyALiveTapReenablesAfterTheSystemDisablesIt() {
     XCTAssertTrue(KeyboardCaptureTap.reenablesAfterSystemDisable(suspended: false))
     XCTAssertFalse(KeyboardCaptureTap.reenablesAfterSystemDisable(suspended: true))

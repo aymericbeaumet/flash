@@ -1155,8 +1155,8 @@ mode entry resets that interaction context.
 ## Full-screen apps
 
 While the frontmost app is full screen, natively (the green button,
-`window fullscreen`) or with a window that covers the display and hides the
-menu bar, as games and browser video do, Flash stays out of it. The status
+`window fullscreen`, a browser's video) or with a window that covers the
+display and hides the menu bar, as games do, Flash stays out of it. The status
 bar and the focus border leave the screen, an alert waits until the app
 leaves, and the app owns the whole keyboard: Flash switches its session tap
 off and unregisters every global chord, so every key reaches the app with no

@@ -228,9 +228,30 @@ extension AppDelegate {
             statusBarMonitor: statusBarMonitor)
         }
         self.rememberActiveWindowBorderFrame(frame, for: pid)
+        if notification == kAXWindowResizedNotification as String,
+          Self.resizeMayChangeNativeFullScreen(
+            frame: frame, screens: NSScreen.screens.map(\.frame),
+            fullScreen: self.frontmostAppIsFullScreen)
+        {
+          self.refreshNativeFullScreen(pid: pid, reason: "window_resized")
+        }
         guard borderVisible, self.activeWindowBorderUpdateGeneration == generation else { return }
         self.applyActiveWindowBorder(frame: frame)
       }
+    }
+  }
+
+  /// Only a resize into a whole display's frame can enter native full
+  /// screen, and only one while full screen can leave it, so ordinary resizes
+  /// and drags read nothing more.
+  static func resizeMayChangeNativeFullScreen(
+    frame: CGRect?, screens: [CGRect], fullScreen: Bool
+  ) -> Bool {
+    if fullScreen { return true }
+    guard let frame else { return false }
+    return screens.contains {
+      abs($0.minX - frame.minX) <= 1 && abs($0.minY - frame.minY) <= 1
+        && abs($0.width - frame.width) <= 1 && abs($0.height - frame.height) <= 1
     }
   }
 

@@ -763,18 +763,48 @@ extension AppDelegate {
     debugStateDidChange()
   }
 
-  /// The frontmost app's presentation changed. Entering full screen, Flash
+  /// The frontmost app's presentation options changed.
+  func frontmostPresentationDidChange(_ options: NSApplication.PresentationOptions) {
+    FlashLog.debug("[input] frontmost_presentation options=\(options.rawValue)")
+    updateFullScreenSignals(reason: "presentation=\(options.rawValue)") {
+      $0.presentation = FullScreenPresentationObserver.isFullScreen(options)
+    }
+  }
+
+  /// Read again whether the frontmost app's focused window is in native full
+  /// screen, on the window-layout AX queue. Its activation, a Space change and
+  /// a resize of its windows ask: entering or leaving native full screen
+  /// switches Spaces and resizes the window. The latest request wins; without
+  /// a frontmost app nothing is full screen.
+  func refreshNativeFullScreen(pid: pid_t?, reason: String) {
+    nativeFullScreenReadGeneration &+= 1
+    let generation = nativeFullScreenReadGeneration
+    guard let pid else {
+      updateFullScreenSignals(reason: reason) { $0.nativeWindow = false }
+      return
+    }
+    focusedWindowFullScreenReader(pid) { [weak self] fullScreen in
+      guard let self, self.nativeFullScreenReadGeneration == generation else { return }
+      self.updateFullScreenSignals(reason: "\(reason) pid=\(pid)") {
+        $0.nativeWindow = fullScreen == true
+      }
+    }
+  }
+
+  /// Apply a change of the full-screen signals. Entering full screen, Flash
   /// steps aside: the bar and the focus border leave the screen, alerts wait,
   /// and the app owns the keyboard. Leaving, all of it comes back. The bar's
   /// reserved band stays, so no window moves, and the mode stays, so NORMAL
   /// resumes with the app's departure.
-  func frontmostPresentationDidChange(_ options: NSApplication.PresentationOptions) {
-    let fullScreen = FullScreenPresentationObserver.isFullScreen(options)
-    FlashLog.debug("[input] frontmost_presentation options=\(options.rawValue)")
-    guard fullScreen != frontmostAppIsFullScreen else { return }
-    frontmostAppIsFullScreen = fullScreen
+  func updateFullScreenSignals(reason: String, _ change: (inout FullScreenSignals) -> Void) {
+    let wasFullScreen = frontmostAppIsFullScreen
+    change(&fullScreenSignals)
+    let fullScreen = frontmostAppIsFullScreen
+    guard fullScreen != wasFullScreen else { return }
     FlashLog.info(
-      "[input] frontmost_full_screen=\(fullScreen) presentation=\(options.rawValue)")
+      "[input] frontmost_full_screen=\(fullScreen) "
+        + "presentation=\(fullScreenSignals.presentation) "
+        + "native=\(fullScreenSignals.nativeWindow) reason=\(reason)")
     keyboardCaptureTap?.setSuspended(fullScreen)
     mappings.setSuspended(fullScreen)
     if fullScreen { resetPendingNormalSequence(reason: "full_screen_app") }

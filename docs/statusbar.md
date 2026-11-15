@@ -4,8 +4,9 @@ Enable the bar independently of NORMAL mode. It occupies the top band of each
 selected display; macOS's menu bar auto-hides and remains available by
 reaching the top edge. Turning the Flash bar off restores the native setting
 when Flash was the one that changed it. The bar hides while the frontmost app
-is full screen, natively or as games and browser video are, and comes back
-when it leaves ([full-screen apps](normal-mode.md#full-screen-apps)).
+is full screen, natively (a browser's video included) or as games are, and
+comes back when it leaves
+([full-screen apps](normal-mode.md#full-screen-apps)).
 
 ```toml
 [statusbar]
