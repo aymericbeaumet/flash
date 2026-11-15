@@ -763,6 +763,28 @@ extension AppDelegate {
     debugStateDidChange()
   }
 
+  /// The frontmost app hid or restored the menu bar: take the bar off screen
+  /// and hand that app the keyboard, or take both back. The bar's reserved
+  /// band stays, so no window moves, and the mode stays, so NORMAL resumes
+  /// with the app's departure.
+  func frontmostMenuBarPresentationDidChange(hidden: Bool) {
+    guard hidden != frontmostAppHidesMenuBar else { return }
+    frontmostAppHidesMenuBar = hidden
+    FlashLog.info("[input] frontmost_hides_menu_bar=\(hidden)")
+    keyboardCaptureTap?.setSuspended(hidden)
+    mappings.setSuspended(hidden)
+    if hidden { resetPendingNormalSequence(reason: "keyboard_suspended") }
+    applyModeOverlay(reusesWindowFrame: true)
+  }
+
+  /// A full-screen app that hides the menu bar owns the keyboard: the tap is
+  /// off, no chord is registered, and NORMAL captures nothing, so every key
+  /// reaches the app with no stop in Flash. A hint session someone starts
+  /// explicitly still reads its labels, through the key window.
+  var fullScreenAppOwnsKeyboard: Bool {
+    frontmostAppHidesMenuBar && !hintSession.isActive && !activationInFlight
+  }
+
   func applyModeOverlay(captureOverride: Bool? = nil, reusesWindowFrame: Bool = false) {
     MainThreadActivity.note("mode_overlay")
     let mode = modeStore.mode
@@ -776,7 +798,7 @@ extension AppDelegate {
     // `captureOverride: true` (e.g. a recapture attempt that raced a menu open).
     let capture =
       (captureOverride ?? mode.ownsKeyboard(hasHints: hasHints, activationInFlight: inFlight))
-      && !suspended
+      && !suspended && !fullScreenAppOwnsKeyboard
     let text = modeLabelText(mode.label)
     FlashLog.trace(
       "[mode] overlay mode=\(mode) input=\(inputMode) capture=\(capture) "
@@ -794,8 +816,8 @@ extension AppDelegate {
     // The surface first: the border's colour is derived from its style.
     overlay.setModeSurface(
       ModeSurface(
-        label: text, style: mode.badgeStyle, barVisible: statusBarVisible,
-        capturesInput: capture),
+        label: text, style: mode.badgeStyle,
+        barVisible: statusBarVisible && !frontmostAppHidesMenuBar, capturesInput: capture),
       render: !entersCommand)
     updateActiveWindowBorder(
       reason: "apply_mode_overlay", read: reusesWindowFrame ? .onlyWithoutCache : .unlessFresh)
@@ -1150,11 +1172,12 @@ extension AppDelegate {
   }
 
   var shouldCaptureNormalModeInput: Bool {
-    return Self.normalModeShouldOwnKeyboardInput(
-      mode: flashMode,
-      overlayInputMode: overlay.inputMode,
-      hasHints: hintSession.isActive,
-      activationInFlight: activationInFlight)
+    return !fullScreenAppOwnsKeyboard
+      && Self.normalModeShouldOwnKeyboardInput(
+        mode: flashMode,
+        overlayInputMode: overlay.inputMode,
+        hasHints: hintSession.isActive,
+        activationInFlight: activationInFlight)
   }
 
   @discardableResult

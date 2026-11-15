@@ -491,7 +491,9 @@ final class StatusBarClickPanel: NSPanel {
     level = OverlayPanel.statusBarClickWindowLevel
     ignoresMouseEvents = false
     acceptsMouseMovedEvents = true
-    collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    // Off full-screen Spaces with the bar, so a full-screen app keeps the
+    // clicks in its band.
+    collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
     contentView = StatusBarClickView(frame: .zero)
   }
 

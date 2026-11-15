@@ -98,10 +98,14 @@ extension AppDelegate {
   private func beginHintSession() {
     let secure = IsSecureEventInputEnabled()
     noteSecureInput(secure)
+    // A suspended tap hears no key, as under secure input.
     hintSession.capture = KeyboardCaptureTap.sessionCapture(
-      tapInstalled: keyboardCaptureTap != nil, secureInputEnabled: secure)
-    if secure, keyboardCaptureTap != nil {
-      FlashLog.info("[activation] capture=key_window reason=secure_input")
+      tapInstalled: keyboardCaptureTap != nil && !frontmostAppHidesMenuBar,
+      secureInputEnabled: secure)
+    if keyboardCaptureTap != nil, secure || frontmostAppHidesMenuBar {
+      FlashLog.info(
+        "[activation] capture=key_window reason="
+          + (secure ? "secure_input" : "keyboard_suspended"))
     }
     hintSession.latencyProbe = HintLatencyProbe.arm(Trace.currentTrigger)
   }

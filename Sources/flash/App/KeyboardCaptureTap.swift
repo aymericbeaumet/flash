@@ -194,8 +194,29 @@ final class KeyboardCaptureTap {
     }
   }
 
-  /// Installed and enabled: the system has not switched it off.
+  /// Installed and enabled: neither the system nor a suspension switched it
+  /// off.
   var isEnabled: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
+
+  /// Switched off while a full-screen app that hides the menu bar is
+  /// frontmost: still installed, but the session hands it no key, so that
+  /// app's input never waits on Flash's main run loop.
+  private(set) var isSuspended = false
+
+  /// Switch the tap off or back on. A tap made while suspended starts off.
+  func setSuspended(_ suspended: Bool) {
+    guard suspended != isSuspended else { return }
+    isSuspended = suspended
+    // Releases the tap missed meanwhile leave every pairing stale.
+    swallowedKeys = SwallowedKeys()
+    guard let tap else { return }
+    CGEvent.tapEnable(tap: tap, enable: !suspended)
+    FlashLog.info("[tap] keyboard capture \(suspended ? "suspended" : "resumed")")
+  }
+
+  /// The system switched the tap off (a timeout or user input). Capture
+  /// self-heals by switching it back on, unless Flash switched it off itself.
+  static func reenablesAfterSystemDisable(suspended: Bool) -> Bool { !suspended }
 
   /// Create + install the tap. Returns false if the OS refused it (no
   /// Accessibility grant), so the caller can fall back to key-window capture.
@@ -228,8 +249,8 @@ final class KeyboardCaptureTap {
     let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
     runLoopSource = source
     CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-    CGEvent.tapEnable(tap: port, enable: true)
-    FlashLog.info("[tap] keyboard capture tap installed")
+    CGEvent.tapEnable(tap: port, enable: !isSuspended)
+    FlashLog.info("[tap] keyboard capture tap installed suspended=\(isSuspended)")
     return true
   }
 
@@ -247,6 +268,7 @@ final class KeyboardCaptureTap {
     // past the OS budget — i.e. keyboard input went dead system-wide — so it
     // must leave a trace even though the recovery is automatic.
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+      guard reenablesAfterSystemDisable(suspended: me.isSuspended) else { return passthrough }
       FlashLog.warn(
         "[tap] re-enabled after "
           + "\(type == .tapDisabledByTimeout ? "timeout" : "user_input") disable")

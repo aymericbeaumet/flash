@@ -321,7 +321,7 @@ extension AppDelegate {
   /// | `snapshot_at_unix_ms` | Stamped on each snapshot |
   /// | `runtime.version`, `build`, `pid`, `started_at_unix_ms`, `config_path` | Fixed for the process (uptime is derived client-side) |
   /// | `runtime.accessibility_trusted` | The system's Accessibility trust-list notification; the grant starting the tap |
-  /// | `runtime.keyboard_capture_active`, `secure_input` | The tap installing (`keyboardCaptureTap`); `noteSecureInput` |
+  /// | `runtime.keyboard_capture_active`, `secure_input` | The tap installing (`keyboardCaptureTap`) or suspending (`applyModeOverlay`); `noteSecureInput` |
   /// | `runtime.advanced_mode`, `mode`, `overlay` | `applyModeOverlay`; `refreshOverlayInputRouting` |
   /// | `runtime.config_error`, `config`, `config_sources`, `docs` | Config reload (`configureDebugServer`); plugin state for plugin topics |
   /// | `commands`, `plugins` | `pluginStateDidChange` (lifecycle, status publishes, logs, reloads) |
@@ -459,7 +459,8 @@ extension AppDelegate {
         "pid": ProcessInfo.processInfo.processIdentifier,
         "started_at_unix_ms": Int64(runtimeStartedAt.timeIntervalSince1970 * 1000),
         "accessibility_trusted": PermissionCheck.isAccessibilityTrusted,
-        "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput,
+        "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput
+          && !frontmostAppHidesMenuBar,
         "secure_input": secureInput,
         "advanced_mode": modeBadgeEnabled,
         "config_path": ConfigLoader.resolvePath(

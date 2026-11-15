@@ -21,8 +21,9 @@ struct ModeSurface: Equatable {
   /// The pill's text: the configured label for the mode.
   var label: String
   var style: OverlayModeBadgeStyle
-  /// `[statusbar] enabled`: whether the bar window is on screen. The command
-  /// line and the focus border render whether or not it is.
+  /// `[statusbar] enabled`, unless the frontmost app hides the menu bar:
+  /// whether the bar window is on screen. The command line and the focus
+  /// border render whether or not it is.
   var barVisible: Bool
   /// The overlay owns the keyboard as a command surface (idle NORMAL, the
   /// command line).

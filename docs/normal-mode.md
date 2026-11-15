@@ -1152,6 +1152,18 @@ key, so under secure input `f` walks the window as before.
 A label or configuration refresh preserves native-menu capture suspension; only an explicit
 mode entry resets that interaction context.
 
+## Full-screen games
+
+An app that covers the display and hides the menu bar outright, as a
+full-screen game does, owns the whole keyboard while it is frontmost: Flash
+switches its session tap off and unregisters every global chord, so every
+key reaches the app with no stop in Flash, and no mapping fires in any mode.
+The mode itself does not change, so NORMAL is back as soon as another app
+comes forward. Native full screen auto-hides the menu bar instead of hiding
+it, so a full-screen browser or terminal keeps every mapping. A hint session
+started from outside, such as `flash mouse target` from a script, still reads
+its labels, through the key window.
+
 ## Rejected commands
 
 Unknown commands and unsupported subcommands do nothing visible: no toast, only

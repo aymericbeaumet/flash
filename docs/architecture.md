@@ -629,9 +629,23 @@ silences the wash, previews and pointing hand for as long as the reveal lasts,
 and only then; the top point row, where a pointer thrown at the bar rests,
 hovers like the rest of the band. Enabling the bar also asks macOS to
 auto-hide the native menu bar, and disabling it restores only a menu bar Flash
-itself hid. The overlay panel keeps the focus border at `.floating` and
-transient surfaces at the screen-saver level, so status hints still render
-above the bar and transient teardown never detaches it.
+itself hid. Like the menu bar it replaces, the bar never covers a full-screen
+app. Neither the bar window nor its click windows is a full-screen auxiliary,
+so WindowServer leaves them off a native full-screen Space, display by display,
+and the app keeps the clicks in the band. An app that covers the display
+without such a Space, as games do, hides the menu bar outright through its
+presentation options instead: `MenuBarPresentationObserver` follows
+`NSApp.currentSystemPresentationOptions` by key-value observation, and while
+`.hideMenuBar` is in effect the mode surface takes the bar off screen. Its
+reserved band stays, so no window moves when the app comes and goes. The same
+state hands that app the keyboard: the session tap is switched off, so its
+input never waits on the main run loop the tap callback runs on, the Carbon
+registration sets are emptied, and NORMAL capture and recapture stand down.
+The mode is untouched, and a suspended tap's timeout self-heal never switches
+it back on. The
+overlay panel keeps the focus border at `.floating` and transient surfaces at
+the screen-saver level, so status hints still render above the bar and
+transient teardown never detaches it.
 
 On each display the bar is as tall as that display's own native menu bar, read
 by level and bounds from WindowServer's main-menu window, and `window move`

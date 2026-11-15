@@ -101,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var overlay: OverlayPanel!
   /// Pushes the system appearance to the overlay for `[overlay.dark]`.
   var appearanceObserver: AppearanceObserver?
+  var menuBarPresentationObserver: MenuBarPresentationObserver?
   var statusBarController: FlashStatusBarController?
   /// Samples `flash.top_cpu`, `flash.top_mem` and `flash.focused_app_details`
   /// while the status controller reports a surface showing one of them.
@@ -220,10 +221,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Gates capture and the active-window border, NOT the status bar's
   /// visibility.
   var modeBadgeEnabled: Bool { modeStore.mode.advancedEnabled }
-  /// Whether the persistent top status bar is shown. Mirrors
-  /// `config.statusBar.enabled` and is the sole condition for the bar — set
-  /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
+  /// Whether the persistent top status bar is enabled and reserves its band.
+  /// Mirrors `config.statusBar.enabled`, independent of `modeBadgeEnabled`.
+  /// Only the bar window steps aside while `frontmostAppHidesMenuBar`.
   var statusBarVisible = false
+  /// The frontmost app hides the menu bar outright, as a full-screen game
+  /// does: the bar, which takes its place, is off screen too, and the app owns
+  /// the keyboard (`fullScreenAppOwnsKeyboard`). Pushed by
+  /// `menuBarPresentationObserver`.
+  var frontmostAppHidesMenuBar = false
   var normalModeTargetPID: pid_t?
   /// Vim-style yank/paste registers. The unnamed register is the system
   /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
@@ -710,6 +716,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     appearanceObserver = AppearanceObserver(NSApplication.shared) { [weak self] dark in
       self?.overlay.darkAppearance = dark
     }
+    menuBarPresentationObserver = MenuBarPresentationObserver(NSApplication.shared) {
+      [weak self] hidden in self?.frontmostMenuBarPresentationDidChange(hidden: hidden)
+    }
+    frontmostAppHidesMenuBar = MenuBarPresentationObserver.hidesMenuBar(
+      NSApplication.shared.currentSystemPresentationOptions)
+    mappings.setSuspended(frontmostAppHidesMenuBar)
     overlay.debugConfig = config.debug
     overlay.popupStyle = config.popupStyle
     overlay.statusLinkOpener.schemes = Set(config.statusBar.linkSchemes)
@@ -1727,6 +1739,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       keyUpMatters: { [weak self] keyCode in
         self?.config.mode.resolvedHyperMatcher?.mayMatch(keyCode: keyCode) ?? false
       })
+    tap.setSuspended(frontmostAppHidesMenuBar)
     guard tap.start() else { return }
     keyboardCaptureTap = tap
     overlay.keyboardCaptureActive = true
