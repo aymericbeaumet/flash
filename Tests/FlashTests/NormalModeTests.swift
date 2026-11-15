@@ -1072,35 +1072,48 @@ final class NormalModeTests: XCTestCase {
         configEnabled: true,
         modeBadgeEnabled: true,
         hasHints: false,
-        sessionActive: true))
+        sessionActive: true,
+        fullScreenAppFrontmost: false))
     // `[overlay] window_border = false` opts out wholesale.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: false,
         modeBadgeEnabled: true,
         hasHints: false,
-        sessionActive: true))
+        sessionActive: true,
+        fullScreenAppFrontmost: false))
     // No advanced mode → no normal/insert distinction to draw.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: true,
         modeBadgeEnabled: false,
         hasHints: false,
-        sessionActive: true))
+        sessionActive: true,
+        fullScreenAppFrontmost: false))
     // Lock/session switch/sleep hides the border immediately.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: true,
         modeBadgeEnabled: true,
         hasHints: false,
-        sessionActive: false))
+        sessionActive: false,
+        fullScreenAppFrontmost: false))
     // Hints suppress the border so chips aren't double-framed.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         configEnabled: true,
         modeBadgeEnabled: true,
         hasHints: true,
-        sessionActive: true))
+        sessionActive: true,
+        fullScreenAppFrontmost: false))
+    // A full-screen app is frontmost: Flash stays out of it.
+    XCTAssertFalse(
+      AppDelegate.activeWindowBorderShouldBeVisible(
+        configEnabled: true,
+        modeBadgeEnabled: true,
+        hasHints: false,
+        sessionActive: true,
+        fullScreenAppFrontmost: true))
   }
 
   func testActiveWindowBorderStyleIsGreenInNormalAndBlueInInsert() {

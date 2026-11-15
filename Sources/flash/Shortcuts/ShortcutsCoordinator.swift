@@ -5,8 +5,8 @@ import Foundation
 /// Owns the native modified-key mapping lifecycle.
 ///
 /// All-scope Carbon registrations stay installed across base mode transitions;
-/// terminal focus, and a full-screen app that hides the menu bar
-/// (`setSuspended`), suspend both registration sets. AOT: parsing of the mapping
+/// terminal focus, and a frontmost full-screen app (`setSuspended`), suspend
+/// both registration sets. AOT: parsing of the mapping
 /// lhs and URL value happens at config load, before any keypress arrives. The
 /// hot path on a Carbon callback is one switch over the pre-resolved
 /// `MappingCommand`.
@@ -42,8 +42,8 @@ final class MappingsCoordinator {
     return built
   }
   private var lastAppliedScope: MappingScope = .insert
-  /// A full-screen app that hides the menu bar owns every chord: while
-  /// suspended no registration set holds one, whatever the scope.
+  /// A frontmost full-screen app owns every chord: while suspended no
+  /// registration set holds one, whatever the scope.
   private(set) var isSuspended = false
   private var lastFiredAction: MappingCommand?
   private var lastFireAt: Date = .distantPast

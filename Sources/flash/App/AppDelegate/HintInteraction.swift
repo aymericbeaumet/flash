@@ -100,9 +100,9 @@ extension AppDelegate {
     noteSecureInput(secure)
     // A suspended tap hears no key, as under secure input.
     hintSession.capture = KeyboardCaptureTap.sessionCapture(
-      tapInstalled: keyboardCaptureTap != nil && !frontmostAppHidesMenuBar,
+      tapInstalled: keyboardCaptureTap != nil && !frontmostAppIsFullScreen,
       secureInputEnabled: secure)
-    if keyboardCaptureTap != nil, secure || frontmostAppHidesMenuBar {
+    if keyboardCaptureTap != nil, secure || frontmostAppIsFullScreen {
       FlashLog.info(
         "[activation] capture=key_window reason="
           + (secure ? "secure_input" : "keyboard_suspended"))

@@ -126,8 +126,14 @@ extension OverlayPanel {
   /// window so normal-mode capture cannot hide a separate panel behind the
   /// resident overlay. The title wraps; the value is one monospaced line.
   /// Both are centred in a box as wide as the title or the widest value, so
-  /// `on` and `6%` sit in the middle of their line.
-  func displayAlert(_ alert: StatusAlert) {
+  /// `on` and `6%` sit in the middle of their line. While a full-screen app
+  /// is frontmost the alert waits for it to leave, unless the caller shows it
+  /// regardless: a confirmation owns the keyboard for the command that asked.
+  func displayAlert(_ alert: StatusAlert, heldWhileFullScreen: Bool = true) {
+    if heldWhileFullScreen, fullScreenAppFrontmost {
+      heldAlert = alert
+      return
+    }
     let style = AlertStyle.from(alert.style)
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let frame = snapshot.unionFrame

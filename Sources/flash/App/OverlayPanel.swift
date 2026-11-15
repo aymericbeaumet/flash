@@ -21,7 +21,7 @@ struct ModeSurface: Equatable {
   /// The pill's text: the configured label for the mode.
   var label: String
   var style: OverlayModeBadgeStyle
-  /// `[statusbar] enabled`, unless the frontmost app hides the menu bar:
+  /// `[statusbar] enabled`, unless the frontmost app is full screen:
   /// whether the bar window is on screen. The command line and the focus
   /// border render whether or not it is.
   var barVisible: Bool
@@ -187,6 +187,16 @@ final class OverlayPanel: NSPanel {
   }
   var toast: Toast?
   var toastToken: UInt64 = 0
+  /// A full-screen app is frontmost: an alert waits for it to leave in
+  /// `heldAlert`, the latest one winning, and shows then.
+  var fullScreenAppFrontmost = false {
+    didSet {
+      guard !fullScreenAppFrontmost, let alert = heldAlert else { return }
+      heldAlert = nil
+      displayAlert(alert)
+    }
+  }
+  var heldAlert: StatusAlert?
   /// Whether the shared-clock probe that lowers the bar window and makes the
   /// click windows click-through while the native (auto-hidden) menu bar is
   /// revealed under the pointer is currently registered. macOS publishes no

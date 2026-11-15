@@ -13,7 +13,7 @@ extension AppDelegate {
     guard prepareHintActivation(.confirm(confirmation)) else { return }
     hintSession.phase = .confirming(confirmation)
     applyModeOverlay()
-    overlay.displayAlert(.confirmation(prompt))
+    overlay.displayAlert(.confirmation(prompt), heldWhileFullScreen: false)
     FlashLog.debug("[confirm] ask command=\(command.diagnosticDescription)")
   }
 

@@ -763,26 +763,31 @@ extension AppDelegate {
     debugStateDidChange()
   }
 
-  /// The frontmost app hid or restored the menu bar: take the bar off screen
-  /// and hand that app the keyboard, or take both back. The bar's reserved
-  /// band stays, so no window moves, and the mode stays, so NORMAL resumes
-  /// with the app's departure.
-  func frontmostMenuBarPresentationDidChange(hidden: Bool) {
-    guard hidden != frontmostAppHidesMenuBar else { return }
-    frontmostAppHidesMenuBar = hidden
-    FlashLog.info("[input] frontmost_hides_menu_bar=\(hidden)")
-    keyboardCaptureTap?.setSuspended(hidden)
-    mappings.setSuspended(hidden)
-    if hidden { resetPendingNormalSequence(reason: "keyboard_suspended") }
-    applyModeOverlay(reusesWindowFrame: true)
+  /// The frontmost app's presentation changed. Entering full screen, Flash
+  /// steps aside: the bar and the focus border leave the screen, alerts wait,
+  /// and the app owns the keyboard. Leaving, all of it comes back. The bar's
+  /// reserved band stays, so no window moves, and the mode stays, so NORMAL
+  /// resumes with the app's departure.
+  func frontmostPresentationDidChange(_ options: NSApplication.PresentationOptions) {
+    let fullScreen = FullScreenPresentationObserver.isFullScreen(options)
+    FlashLog.debug("[input] frontmost_presentation options=\(options.rawValue)")
+    guard fullScreen != frontmostAppIsFullScreen else { return }
+    frontmostAppIsFullScreen = fullScreen
+    FlashLog.info(
+      "[input] frontmost_full_screen=\(fullScreen) presentation=\(options.rawValue)")
+    keyboardCaptureTap?.setSuspended(fullScreen)
+    mappings.setSuspended(fullScreen)
+    if fullScreen { resetPendingNormalSequence(reason: "full_screen_app") }
+    applyModeOverlay()
+    overlay.fullScreenAppFrontmost = fullScreen
   }
 
-  /// A full-screen app that hides the menu bar owns the keyboard: the tap is
-  /// off, no chord is registered, and NORMAL captures nothing, so every key
-  /// reaches the app with no stop in Flash. A hint session someone starts
-  /// explicitly still reads its labels, through the key window.
+  /// A full-screen app owns the keyboard: the tap is off, no chord is
+  /// registered, and NORMAL captures nothing, so every key reaches the app
+  /// with no stop in Flash. A hint session someone starts explicitly still
+  /// reads its labels, through the key window.
   var fullScreenAppOwnsKeyboard: Bool {
-    frontmostAppHidesMenuBar && !hintSession.isActive && !activationInFlight
+    frontmostAppIsFullScreen && !hintSession.isActive && !activationInFlight
   }
 
   func applyModeOverlay(captureOverride: Bool? = nil, reusesWindowFrame: Bool = false) {
@@ -817,7 +822,7 @@ extension AppDelegate {
     overlay.setModeSurface(
       ModeSurface(
         label: text, style: mode.badgeStyle,
-        barVisible: statusBarVisible && !frontmostAppHidesMenuBar, capturesInput: capture),
+        barVisible: statusBarVisible && !frontmostAppIsFullScreen, capturesInput: capture),
       render: !entersCommand)
     updateActiveWindowBorder(
       reason: "apply_mode_overlay", read: reusesWindowFrame ? .onlyWithoutCache : .unlessFresh)

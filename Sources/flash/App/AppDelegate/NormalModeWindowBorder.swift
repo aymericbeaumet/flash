@@ -78,7 +78,8 @@ extension AppDelegate {
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: hintSession.isActive,
-        sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
+        sessionActive: activeWindowBorderSessionSuspensions.isEmpty,
+        fullScreenAppFrontmost: frontmostAppIsFullScreen)
     else {
       hideActiveWindowBorder(reason: "hidden_\(reason)")
       return
@@ -208,7 +209,8 @@ extension AppDelegate {
       configEnabled: overlay.overlayConfig.windowBorder,
       modeBadgeEnabled: modeBadgeEnabled,
       hasHints: hintSession.isActive,
-      sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
+      sessionActive: activeWindowBorderSessionSuspensions.isEmpty,
+      fullScreenAppFrontmost: frontmostAppIsFullScreen)
     FlashLog.trace("[mode] active_border_geometry reason=\(notification) visible=\(borderVisible)")
     if !borderVisible { hideActiveWindowBorder(reason: "hidden_\(notification)") }
     activeWindowBorderUpdateGeneration &+= 1
@@ -271,7 +273,8 @@ extension AppDelegate {
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: hintSession.isActive,
-        sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
+        sessionActive: activeWindowBorderSessionSuspensions.isEmpty,
+        fullScreenAppFrontmost: frontmostAppIsFullScreen)
     else { return }
     activeWindowBorderReconciliationGeneration &+= 1
     let generation = activeWindowBorderReconciliationGeneration
@@ -293,7 +296,8 @@ extension AppDelegate {
         configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: hintSession.isActive,
-        sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
+        sessionActive: activeWindowBorderSessionSuspensions.isEmpty,
+        fullScreenAppFrontmost: frontmostAppIsFullScreen)
     else {
       hideActiveWindowBorder(reason: "reconcile_state")
       return
@@ -362,7 +366,8 @@ extension AppDelegate {
     configEnabled: Bool,
     modeBadgeEnabled: Bool,
     hasHints: Bool,
-    sessionActive: Bool
+    sessionActive: Bool,
+    fullScreenAppFrontmost: Bool
   ) -> Bool {
     // The active window carries a frame in BOTH modes — a thin green stroke in
     // normal, a thicker blue one in insert — so the focused window stays
@@ -370,12 +375,14 @@ extension AppDelegate {
     // opt out wholesale (`[overlay] window_border = false`). Advanced mode
     // (an all-mode `mode leave` or `mode normal` binding) is the gate: without it
     // there's no normal/insert distinction to visualise. Suspended while hints
-    // are up (chips aren't double-framed) and whenever the user session or
-    // displays are inactive, so Flash never survives over the lock surface.
+    // are up (chips aren't double-framed), whenever the user session or
+    // displays are inactive, so Flash never survives over the lock surface,
+    // and while a full-screen app is frontmost, which Flash stays out of.
     guard configEnabled else { return false }
     guard modeBadgeEnabled else { return false }
     if hasHints { return false }
     if !sessionActive { return false }
+    if fullScreenAppFrontmost { return false }
     return true
   }
 

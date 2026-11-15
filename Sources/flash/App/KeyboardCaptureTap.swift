@@ -198,9 +198,9 @@ final class KeyboardCaptureTap {
   /// off.
   var isEnabled: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
 
-  /// Switched off while a full-screen app that hides the menu bar is
-  /// frontmost: still installed, but the session hands it no key, so that
-  /// app's input never waits on Flash's main run loop.
+  /// Switched off while a full-screen app is frontmost: still installed, but
+  /// the session hands it no key, so that app's input never waits on Flash's
+  /// main run loop.
   private(set) var isSuspended = false
 
   /// Switch the tap off or back on. A tap made while suspended starts off.

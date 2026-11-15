@@ -128,9 +128,10 @@ tool, remove it rather than maintain both.
    Unmapped NORMAL keys and chords are swallowed, except while a native
    context menu or the Dock's Mission Control or App Exposé owns the screen,
    where only mapped keys are, the one mapped to `app cancel` (Escape) aside;
-   synthesized input must never become stray terminal text. A frontmost app
-   that hides the menu bar (a full-screen game) owns the keyboard: tap off, no
-   Carbon registration, no capture, and no mode change. See the mode guide.
+   synthesized input must never become stray terminal text. A frontmost
+   full-screen app (native, or a game or video hiding the menu bar) owns the
+   keyboard: tap off, no Carbon registration, no capture, and no mode change.
+   See the mode guide.
 10. Dev deployment must use `mise run install:dev`, which owns build,
     signing, replacement and restart order. Do not hand-copy/sign/kill the app.
     The dev bundle is `/Applications/Flash 🧪.app`; release is
@@ -177,9 +178,10 @@ Surface requests that would violate these constraints before implementing them.
 - The status bar draws only in `StatusBarWindow`, ordered above the native menu
   bar and its extras and below transient overlays; never re-parent its layers
   into the overlay panel. It lowers for exactly one case, a reveal under the
-  pointer, via the reveal probe. It never covers a full-screen app: its windows
-  are not full-screen auxiliaries, and it hides while the frontmost app's
-  presentation options hide the menu bar (`MenuBarPresentationObserver`).
+  pointer, via the reveal probe. Flash stays out of a frontmost full-screen
+  app (`FullScreenPresentationObserver`): the bar windows are not full-screen
+  auxiliaries, and the bar and focus border hide and alerts wait until it
+  leaves.
   Enabling the bar auto-hides the native menu bar through
   `NativeMenuBarAutoHide`, which reverses only what Flash set; keep that
   ownership rule when touching any other global preference.

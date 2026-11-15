@@ -460,7 +460,7 @@ extension AppDelegate {
         "started_at_unix_ms": Int64(runtimeStartedAt.timeIntervalSince1970 * 1000),
         "accessibility_trusted": PermissionCheck.isAccessibilityTrusted,
         "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput
-          && !frontmostAppHidesMenuBar,
+          && !frontmostAppIsFullScreen,
         "secure_input": secureInput,
         "advanced_mode": modeBadgeEnabled,
         "config_path": ConfigLoader.resolvePath(
