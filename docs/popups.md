@@ -423,7 +423,13 @@ failure and shutdown remove them with their temporary directories. The pager
 grid is measured from the document: printable ASCII takes one cell per byte
 without sanitizing, and anything else goes through the terminal's width
 tables. `less` keeps its last row for the prompt; a hover preview clips it, a
-focused pager keeps it for `/` search and messages.
+focused pager keeps it for `/` search and messages. A refresh reloads the
+snapshot with `gR`, and `less` repaints the page by scrolling each line up
+from the bottom over several writes, so a frame between two of them shows the
+page shifted. The session holds the frames that redraw causes
+(`TerminalSession.sendRedraw`) until its output has been quiet for three frame
+intervals, half a second at most, and publishes the finished page once; typed
+keys and scrolls keep their leading-edge frames.
 
 ### Stopping
 

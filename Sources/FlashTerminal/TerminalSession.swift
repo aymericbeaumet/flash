@@ -128,6 +128,8 @@ public final class TerminalSession {
   /// continues it first so it can act on its hangup.
   private var paused = false
   private var scheduledFrame = false
+  /// Queue-confined: a redraw's frames wait for its output (`sendRedraw`).
+  private var redrawHold: RedrawHold?
   /// Queue-confined; see `setColors`.
   private var appliedColors: TerminalColors?
 
@@ -263,6 +265,18 @@ public final class TerminalSession {
     }
   }
   public func send(_ data: Data) { queue.async { [self] in encodeInput { enqueue(data) } } }
+  /// Send input that redraws the whole screen, a pager's reload. `less`
+  /// paints a full repaint in several writes, scrolling each line up from the
+  /// bottom, so a frame between two of them shows the page shifted; the
+  /// output this input causes publishes once, when it settles.
+  public func sendRedraw(_ data: Data) {
+    queue.async { [self] in
+      let now = DispatchTime.now().uptimeNanoseconds
+      redrawHold = RedrawHold(startedAt: now, lastOutputAt: now)
+      encodeInput { enqueue(data) }
+      checkRedrawHold()
+    }
+  }
   public func paste(_ text: String) {
     queue.async { [self] in
       var bytes = Array(text.utf8CString)
@@ -476,6 +490,7 @@ public final class TerminalSession {
   }
   private func closeSources() {
     scheduledFrame = false
+    redrawHold = nil
     reader?.cancel()
     reader = nil
     writer?.cancel()
@@ -564,7 +579,7 @@ public final class TerminalSession {
     queue.async { [weak self] in
       guard let self, self.wantsFrames != wants else { return }
       self.wantsFrames = wants
-      if wants { self.publishFrame() }
+      if wants, self.redrawHold == nil { self.publishFrame() }
     }
   }
 
@@ -575,6 +590,10 @@ public final class TerminalSession {
   private var lastFrameUptime: UInt64 = 0
   private var publishedGeneration: UInt64 = 0
   private func scheduleFrame() {
+    if redrawHold != nil {
+      redrawHold?.output(at: DispatchTime.now().uptimeNanoseconds)
+      return
+    }
     guard wantsFrames, !scheduledFrame else { return }
     let elapsed = DispatchTime.now().uptimeNanoseconds &- lastFrameUptime
     guard elapsed < Self.frameInterval else {
@@ -590,6 +609,50 @@ public final class TerminalSession {
       self.publishFrame()
     }
   }
+  /// A redraw's output settles once it has been quiet for `settle`, or at
+  /// `cap` however busy it stays; until then no frame publishes, and then
+  /// one does. Each check re-arms at most until the cap.
+  struct RedrawHold {
+    static let settle: UInt64 = 3 * frameInterval
+    static let cap: UInt64 = 500_000_000
+    let startedAt: UInt64
+    var lastOutputAt: UInt64
+    var sawOutput = false
+    var checkScheduled = false
+
+    mutating func output(at now: UInt64) {
+      lastOutputAt = now
+      sawOutput = true
+    }
+
+    /// When to look again, or nil once the output has settled.
+    func nextCheck(at now: UInt64) -> UInt64? {
+      let deadline = startedAt &+ Self.cap
+      guard now < deadline else { return nil }
+      guard sawOutput else { return min(now &+ Self.settle, deadline) }
+      let settled = lastOutputAt &+ Self.settle
+      return now >= settled ? nil : min(settled, deadline)
+    }
+  }
+
+  private func checkRedrawHold() {
+    guard var hold = redrawHold, !hold.checkScheduled else { return }
+    let now = DispatchTime.now().uptimeNanoseconds
+    guard let next = hold.nextCheck(at: now) else {
+      redrawHold = nil
+      publishFrame()
+      return
+    }
+    hold.checkScheduled = true
+    redrawHold = hold
+    let generation = runGeneration
+    queue.asyncAfter(deadline: .now() + .nanoseconds(Int(next &- now))) { [weak self] in
+      guard let self, self.runGeneration == generation, self.redrawHold != nil else { return }
+      self.redrawHold?.checkScheduled = false
+      self.checkRedrawHold()
+    }
+  }
+
   private func publishFrame() {
     guard wantsFrames, let snapshot = buffer.snapshot() else { return }
     lastFrameUptime = DispatchTime.now().uptimeNanoseconds

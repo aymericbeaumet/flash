@@ -387,7 +387,7 @@ final class StatusTerminalRegistry {
     }
     snapshot.freeze { [weak self, weak session = entry.session] repaint in
       guard let self, let session, self.entries[name]?.session === session else { return }
-      if repaint { session.send(Data("gR".utf8)) }
+      if repaint { session.sendRedraw(Data("gR".utf8)) }
       completion()
     }
   }
@@ -405,7 +405,9 @@ final class StatusTerminalRegistry {
         if case .idle = session.state {
           session.start()
         } else if changed, snapshot.allowsRefresh {
-          session.send(Data("gR".utf8))
+          // `less` repaints the page in several writes; the view gets the
+          // finished page, never one shifted mid-repaint.
+          session.sendRedraw(Data("gR".utf8))
         }
       case .failure(let error):
         FlashLog.warn(
