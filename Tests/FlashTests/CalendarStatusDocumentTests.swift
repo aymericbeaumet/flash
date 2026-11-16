@@ -139,7 +139,12 @@ final class CalendarStatusDocumentTests: XCTestCase {
         "Week 40                  4 days left", "September                   last day",
         "Q3                          last day", "2026                    92 days left",
       ])
-    XCTAssertEqual(left[1], "████████▋                 3/7")
+    XCTAssertEqual(left[1], "████████▋                        3/7")
+    for index in [1, 4, 7, 10] {
+      XCTAssertEqual(
+        left[index].count, 36, "each count ends at the pane's edge, as its days left do")
+      XCTAssertEqual(left[index - 1].count, 36)
+    }
     for row in footer {
       XCTAssertEqual(
         String(row.dropFirst(36).prefix(3)).trimmingCharacters(in: .whitespaces), "│",
@@ -362,14 +367,16 @@ final class CalendarStatusDocumentTests: XCTestCase {
     let lines = lines(at: date(2026, 9, 30, in: paris), in: paris)
     XCTAssertEqual(
       try progressLine("Week 40", in: lines),
-      "Week 40     ████████▋                 3/7  4 days left")
+      "Week 40     ████████▋                        3/7  4 days left")
     XCTAssertEqual(
       try progressLine("September", in: lines),
-      "September   ████████████████████    30/30  last day")
+      "September   ████████████████████           30/30  last day")
     XCTAssertEqual(
-      try progressLine("Q3", in: lines), "Q3          ████████████████████    92/92  last day")
+      try progressLine("Q3", in: lines),
+      "Q3          ████████████████████           92/92  last day")
     XCTAssertEqual(
-      try progressLine("2026", in: lines), "2026        ███████████████       273/365  92 days left"
+      try progressLine("2026", in: lines),
+      "2026        ███████████████              273/365  92 days left"
     )
 
     let leap = self.lines(at: date(2024, 2, 29))
@@ -487,7 +494,7 @@ final class CalendarStatusDocumentTests: XCTestCase {
     XCTAssertTrue(text(before).hasPrefix("╭─ Wednesday, December 31, 2025"))
     XCTAssertEqual(
       try progressLine("2025", in: text(before).components(separatedBy: "\n")),
-      "2025        ████████████████████  365/365  last day")
+      "2025        ████████████████████         365/365  last day")
     XCTAssertTrue(text(after).hasPrefix("╭─ Thursday, January 1, 2026"))
     XCTAssertEqual(before.filter { $0.reverse && !$0.text.isEmpty }.map(\.text), ["31"])
     XCTAssertEqual(after.filter { $0.reverse && !$0.text.isEmpty }.map(\.text), [" 1"])

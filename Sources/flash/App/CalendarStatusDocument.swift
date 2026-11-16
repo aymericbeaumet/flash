@@ -278,7 +278,7 @@ enum CalendarStatusDocument {
   }
 
   /// The label with the days left at the pane's edge, over the meter and its
-  /// count.
+  /// count, the count ending at that same edge.
   private static func progressLines(_ label: String, elapsed: Int, total: Int) -> [Line] {
     let left = total - elapsed
     let remaining = left == 0 ? "last day" : left == 1 ? "1 day left" : "\(left) days left"
@@ -291,7 +291,7 @@ enum CalendarStatusDocument {
       markup: "#[bg=colour238]#[meter=\(barWidth)/\(total)]\(elapsed)#[nometer]#[default]",
       width: barWidth)
     let count = "\(elapsed)/\(total)"
-    meter.pad(to: meter.width + 2 + 7 - count.count)
+    meter.pad(to: footerWidth - count.count)
     meter.append(count)
     return [title, meter]
   }

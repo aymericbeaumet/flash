@@ -171,16 +171,16 @@ time and the zone, the three months, and the day's progress beside its facts:
 ╰─────────────────────────────────────────────────────────────────────────────╯
 ╭─ Progress ───────────────────────────┬─ Today ──────────────────────────────╮
 │ Week 40                  4 days left │ Time zone                            │
-│ ████████▋                 3/7        │ UTC+02:00 · Central European Summer  │
+│ ████████▋                        3/7 │ UTC+02:00 · Central European Summer  │
 │                                      │ Time                                 │
 │ September                   last day │                                      │
-│ ████████████████████    30/30        │ DST                                  │
+│ ████████████████████           30/30 │ DST                                  │
 │                                      │ Ends Sun Oct 25 · 03:00 → 02:00 · in │
 │ Q3                          last day │ 25 days                              │
-│ ████████████████████    92/92        │                                      │
+│ ████████████████████           92/92 │                                      │
 │                                      │ Moon                                 │
 │ 2026                    92 days left │ Waning gibbous · 83% lit · new Oct   │
-│ ███████████████       273/365        │ 10 · full Oct 26                     │
+│ ███████████████              273/365 │ 10 · full Oct 26                     │
 ╰──────────────────────────────────────┴──────────────────────────────────────╯
 ```
 
@@ -207,7 +207,7 @@ appointment/task data are untouched.
   counting today, with the days left after it. The bars are status-format
   meters on a grey track. The footer frame's left pane, `Progress`, gives each
   period two rows: its heading with the days left at the pane's edge, then
-  the meter and its count.
+  the meter with its count ending at that same edge.
 - **Time zone**: the current UTC offset and the zone's English name. This,
   DST and Moon fill the footer frame's right pane, `Today`, with complete
   values wrapped below their headings.
