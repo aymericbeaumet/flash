@@ -1,7 +1,9 @@
 # Observability
 
 Flash records one JSON object per line in `~/Library/Logs/Flash/flash.log`
-(also stderr), rotated at 10 MiB with three older files kept. Each line has
+(also stderr), rotated at 10 MiB with three older files kept. A cleaner that
+deletes the file or its directory, or moves it away, costs only the lines it
+took: the next line recreates the file at its path. Each line has
 `level`, `message`, `source` (`core:<file>.<function>` or `plugin:<id>`),
 `pid`, `time_unix_ms`, optional structured `fields`, and optional `trace`.
 `[debug] log_level` (`trace`, `debug`, `info` by default, `warn`, `error`)
