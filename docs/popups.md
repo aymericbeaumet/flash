@@ -66,7 +66,8 @@ Colours are `#RRGGBB` or `#RRGGBBAA`. The default background is opaque; an alpha
 byte on `bg` still shows through. Terminal text is opaque, so a translucent
 `fg` is mixed over `bg`. At the 13-point font with 10-point padding and a
 one-point border, the 480-point `min_width` fits 50 content columns and the
-750-point `max_width` 80, enough for the three-month [calendar](calendar.md).
+750-point `max_width` 80, enough for the framed three-month
+[calendar](calendar.md)'s 79.
 
 ## Declaring popups
 

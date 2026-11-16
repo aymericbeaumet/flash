@@ -4,15 +4,23 @@ import Foundation
 /// next months side by side, the day's progress through its week, month,
 /// quarter and year, and the time zone, daylight-saving and moon facts of the
 /// day. Everything derives from the date and timezone alone.
+///
+/// Three rounded frames structure it: the clock under a heading of the date,
+/// the time and the zone, the three months, and the day's progress beside its
+/// facts, split by the frame's own divider.
 enum CalendarStatusDocument {
-  /// Content columns of every calendar: three months and the gaps between them.
-  static let columns = 3 * monthWidth + 2 * monthGap
+  /// Columns of every calendar: the content, and a frame and a space on each
+  /// side of it.
+  static let columns = contentColumns + 4
+  /// Content columns inside the frames: three months and the gaps between them.
+  private static let contentColumns = 3 * monthWidth + 2 * monthGap
   private static let monthWidth = 23
   private static let monthGap = 3
   private static let footerWidth = 36
   private static let footerGap = 3
   private static let clockWidth = 33
   private static let barWidth = 20
+  private static let frameStyle = "dim"
   private static let months = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -40,6 +48,10 @@ enum CalendarStatusDocument {
       self.width += width
     }
 
+    mutating func append(_ line: Line) {
+      append(markup: line.markup, width: line.width)
+    }
+
     mutating func pad(to column: Int) {
       append(String(repeating: " ", count: max(0, column - width)))
     }
@@ -65,20 +77,23 @@ enum CalendarStatusDocument {
       let yearDays = calendar.range(of: .day, in: .year, for: now)?.count
     else { return "" }
 
-    var header = Line()
-    header.append("\(weekdays[weekday - 1]), \(months[month - 1]) \(day), \(year)", "bold")
-    header.append("  " + twoDigits(hour) + ":" + twoDigits(minute), "bold")
-    header.pad(to: max(header.width + 2, columns - timeZone.identifier.count))
-    header.append(timeZone.identifier, "dim")
-    var lines = [header, Line()]
+    var title = Line()
+    title.append("\(weekdays[weekday - 1]), \(months[month - 1]) \(day), \(year)", "bold")
+    var time = Line()
+    time.append(twoDigits(hour) + ":" + twoDigits(minute), "bold")
+    time.append(" · " + timeZone.identifier, "dim")
+    var lines = [top(title, trailing: time)]
     for face in clockLines(hour: hour, minute: minute, second: second) {
       var line = Line()
-      line.pad(to: (columns - clockWidth) / 2)
+      line.pad(to: (contentColumns - clockWidth) / 2)
       line.append(markup: face.replacingOccurrences(of: "#", with: "##"), width: face.count)
-      lines.append(line)
+      lines.append(framed(line))
     }
-    lines.append(Line())
+    lines.append(bottom())
 
+    var calendarTitle = Line()
+    calendarTitle.append("Calendar", "bold")
+    lines.append(top(calendarTitle))
     let blocks = [
       monthLines(previous, calendar: calendar),
       monthLines(monthStart, calendar: calendar, today: day, week: week),
@@ -88,12 +103,12 @@ enum CalendarStatusDocument {
       var line = Line()
       for (index, block) in blocks.enumerated() where row < block.count {
         line.pad(to: index * (monthWidth + monthGap))
-        line.append(markup: block[row].markup, width: block[row].width)
+        line.append(block[row])
       }
-      lines.append(line)
+      lines.append(framed(line))
     }
+    lines.append(bottom())
 
-    lines.append(Line())
     var progress: [Line] = []
     for (label, elapsed, total) in [
       ("Week \(twoDigits(week))", (weekday + 5) % 7 + 1, 7),
@@ -117,15 +132,77 @@ enum CalendarStatusDocument {
       if !facts.isEmpty { facts.append(Line()) }
       facts.append(contentsOf: factLines(label, value))
     }
+    var progressTitle = Line()
+    progressTitle.append("Progress", "bold")
+    var factsTitle = Line()
+    factsTitle.append("Today", "bold")
+    lines.append(top(progressTitle, pane: (factsTitle, divider: footerWidth + 1)))
     for row in 0..<max(progress.count, facts.count) {
       var line = row < progress.count ? progress[row] : Line()
+      line.pad(to: footerWidth + 1)
+      line.append("│", frameStyle)
       if row < facts.count, !facts[row].markup.isEmpty {
         line.pad(to: footerWidth + footerGap)
-        line.append(markup: facts[row].markup, width: facts[row].width)
+        line.append(facts[row])
       }
-      lines.append(line)
+      lines.append(framed(line))
     }
+    lines.append(bottom(divider: footerWidth + 1))
     return lines.map(\.markup).joined(separator: "\n")
+  }
+
+  /// A frame's top edge, its title set into it: `╭─ title ───── trailing ─╮`.
+  /// A pane, the bottom frame's second, raises a `┬` over the divider at
+  /// that content column and takes its own title after it.
+  private static func top(
+    _ title: Line, trailing: Line? = nil, pane: (title: Line, divider: Int)? = nil
+  ) -> Line {
+    var line = Line()
+    line.append("╭─", frameStyle)
+    line.append(" ")
+    line.append(title)
+    line.append(" ")
+    if let pane {
+      line.append(String(repeating: "─", count: max(1, 2 + pane.divider - line.width)), frameStyle)
+      line.append("┬─", frameStyle)
+      line.append(" ")
+      line.append(pane.title)
+      line.append(" ")
+    }
+    let tail = trailing.map { $0.width + 3 } ?? 0
+    line.append(String(repeating: "─", count: max(1, columns - 1 - tail - line.width)), frameStyle)
+    if let trailing {
+      line.append(" ")
+      line.append(trailing)
+      line.append(" ─", frameStyle)
+    }
+    line.append("╮", frameStyle)
+    return line
+  }
+
+  /// A frame's bottom edge, with a `┴` under a pane divider.
+  private static func bottom(divider: Int? = nil) -> Line {
+    var line = Line()
+    line.append("╰", frameStyle)
+    if let divider {
+      line.append(String(repeating: "─", count: 1 + divider), frameStyle)
+      line.append("┴", frameStyle)
+    }
+    line.append(String(repeating: "─", count: columns - 1 - line.width), frameStyle)
+    line.append("╯", frameStyle)
+    return line
+  }
+
+  /// One content line between a frame's sides.
+  private static func framed(_ content: Line) -> Line {
+    var line = Line()
+    line.append("│", frameStyle)
+    line.append(" ")
+    line.append(content)
+    line.pad(to: 2 + contentColumns)
+    line.append(" ")
+    line.append("│", frameStyle)
+    return line
   }
 
   private static func clockLines(hour: Int, minute: Int, second: Int) -> [String] {
@@ -200,9 +277,15 @@ enum CalendarStatusDocument {
     return lines
   }
 
+  /// The label with the days left at the pane's edge, over the meter and its
+  /// count.
   private static func progressLines(_ label: String, elapsed: Int, total: Int) -> [Line] {
+    let left = total - elapsed
+    let remaining = left == 0 ? "last day" : left == 1 ? "1 day left" : "\(left) days left"
     var title = Line()
     title.append(label, "bold")
+    title.pad(to: footerWidth - remaining.count)
+    title.append(remaining, "dim")
     var meter = Line()
     meter.append(
       markup: "#[bg=colour238]#[meter=\(barWidth)/\(total)]\(elapsed)#[nometer]#[default]",
@@ -210,10 +293,7 @@ enum CalendarStatusDocument {
     let count = "\(elapsed)/\(total)"
     meter.pad(to: meter.width + 2 + 7 - count.count)
     meter.append(count)
-    let left = total - elapsed
-    var remaining = Line()
-    remaining.append(left == 0 ? "last day" : left == 1 ? "1 day left" : "\(left) days left", "dim")
-    return [title, meter, remaining]
+    return [title, meter]
   }
 
   private static func factLines(_ label: String, _ value: String) -> [Line] {

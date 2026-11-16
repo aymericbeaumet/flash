@@ -136,53 +136,52 @@ clock, at monitor priority when only a monitor reads them. Nothing polls.
 ## Calendar popup
 
 The core `#{flash.calendar}` status value combines the local clock and calendar in one
-text popup:
+text popup, in three rounded frames: the clock under a heading of the date, the
+time and the zone, the three months, and the day's progress beside its facts:
 
 ```text
-Wednesday, September 30, 2026  10:08                           Europe/Paris
-
-                                ....12.....
-                            11..           ..1.
-                          ...                 ...
-                        ..                       ..
-                      10.                     +   .2
-                      .                     ++      .
-                     ..       ###         ++        ..
-                     .           ###   +++           .
-                     9              #o+              3
-                     .             ..                .
-                     ..          ..                 ..
-                      .        ..                   .
-                       8.     .                   .4
-                        ..  ..                   ..
-                          ...                 ...
-                            .7..           ..5.
-                                .....6.....
-
-       August 2026              September 2026             October 2026
-Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su
-31                 1  2   36     1  2  3  4  5  6   40           1  2  3  4
-32  3  4  5  6  7  8  9   37  7  8  9 10 11 12 13   41  5  6  7  8  9 10 11
-33 10 11 12 13 14 15 16   38 14 15 16 17 18 19 20   42 12 13 14 15 16 17 18
-34 17 18 19 20 21 22 23   39 21 22 23 24 25 26 27   43 19 20 21 22 23 24 25
-35 24 25 26 27 28 29 30   40 28 29 30               44 26 27 28 29 30 31
-36 31
-
-Week 40                                Time zone
-████████▋                 3/7          UTC+02:00 · Central European Summer
-4 days left                            Time
-
-September                              DST
-████████████████████    30/30          Ends Sun Oct 25 · 03:00 → 02:00 · in
-last day                               25 days
-
-Q3                                     Moon
-████████████████████    92/92          Waning gibbous · 83% lit · new Oct
-last day                               10 · full Oct 26
-
-2026
-███████████████       273/365
-92 days left
+╭─ Wednesday, September 30, 2026 ────────────────────── 10:08 · Europe/Paris ─╮
+│                                 ....12.....                                 │
+│                             11..     .     ..1.                             │
+│                           ...        .        ...                           │
+│                         ..           .           ..                         │
+│                       10.            .       ++   .2                        │
+│                       .              .     ++       .                       │
+│                      ..       ###    .   ++         ..                      │
+│                      .           ### . ++            .                      │
+│                      9              #o+              3                      │
+│                      .                               .                      │
+│                      ..                             ..                      │
+│                       .                             .                       │
+│                        8.                         .4                        │
+│                         ..                       ..                         │
+│                           ...                 ...                           │
+│                             .7..           ..5.                             │
+│                                 .....6.....                                 │
+╰─────────────────────────────────────────────────────────────────────────────╯
+╭─ Calendar ──────────────────────────────────────────────────────────────────╮
+│        August 2026              September 2026             October 2026     │
+│ Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su │
+│ 31                 1  2   36     1  2  3  4  5  6   40           1  2  3  4 │
+│ 32  3  4  5  6  7  8  9   37  7  8  9 10 11 12 13   41  5  6  7  8  9 10 11 │
+│ 33 10 11 12 13 14 15 16   38 14 15 16 17 18 19 20   42 12 13 14 15 16 17 18 │
+│ 34 17 18 19 20 21 22 23   39 21 22 23 24 25 26 27   43 19 20 21 22 23 24 25 │
+│ 35 24 25 26 27 28 29 30   40 28 29 30               44 26 27 28 29 30 31    │
+│ 36 31                                                                       │
+╰─────────────────────────────────────────────────────────────────────────────╯
+╭─ Progress ───────────────────────────┬─ Today ──────────────────────────────╮
+│ Week 40                  4 days left │ Time zone                            │
+│ ████████▋                 3/7        │ UTC+02:00 · Central European Summer  │
+│                                      │ Time                                 │
+│ September                   last day │                                      │
+│ ████████████████████    30/30        │ DST                                  │
+│                                      │ Ends Sun Oct 25 · 03:00 → 02:00 · in │
+│ Q3                          last day │ 25 days                              │
+│ ████████████████████    92/92        │                                      │
+│                                      │ Moon                                 │
+│ 2026                    92 days left │ Waning gibbous · 83% lit · new Oct   │
+│ ███████████████       273/365        │ 10 · full Oct 26                     │
+╰──────────────────────────────────────┴──────────────────────────────────────╯
 ```
 
 ```toml
@@ -194,7 +193,8 @@ Keep `#[popup=date]...#[nopopup]` around the date in the status template, or
 open it with `mode terminal --name=date`. Existing calendar files and
 appointment/task data are untouched.
 
-- **Header**: today's date, local 24-hour `HH:MM`, and the timezone identifier.
+- **Header**: set into the clock frame's top edge, today's date in bold on
+  the left and local 24-hour `HH:MM` with the timezone identifier on the right.
 - **Clock**: a centred 33-by-17 ASCII face above the three months, labelled with all
   twelve hours. The short `#` hour hand and longer `+` minute hand move between
   hour/minute marks; the longest `.` seconds hand advances each second. The
@@ -205,11 +205,12 @@ appointment/task data are untouched.
   Weekends are dimmed. The rows follow the tallest of the three months.
 - **Progress**: today's place in its ISO week, month, quarter and year,
   counting today, with the days left after it. The bars are status-format
-  meters on a grey track. The footer’s left column groups each period under
-  its heading, with the meter/count and remaining days on separate rows.
+  meters on a grey track. The footer frame's left pane, `Progress`, gives each
+  period two rows: its heading with the days left at the pane's edge, then
+  the meter and its count.
 - **Time zone**: the current UTC offset and the zone's English name. This,
-  DST and Moon occupy the footer’s right column, with complete values wrapped
-  below their headings.
+  DST and Moon fill the footer frame's right pane, `Today`, with complete
+  values wrapped below their headings.
 - **DST**: the next daylight-saving transition as the wall clock sees it, or
   `Not observed` for a zone without one.
 - **Moon**: today's phase, the lit fraction at local noon, and the next new
@@ -219,17 +220,20 @@ appointment/task data are untouched.
   can land on the neighbouring day.
 
 Dates use a Monday-first Gregorian calendar with ISO week numbers,
-English labels, and the current local timezone. The view is 75 content
-columns and at most 44 rows. The footer uses two 36-column groups with a
-three-column gap. Text popups size to their widest line between
+English labels, and the current local timezone. Frames are dim rounded
+box-drawing lines with bold titles. The view is 79 columns, 75 of content
+inside the frames, and at most 44 rows. The footer's two 36-column panes are
+split by the frame's divider. Text popups size to their widest line between
 `[popup] min_width` and `max_width`: the default 750-point `max_width` fits it
-at the 13-point font with 10-point padding (697 points wide). A smaller
+at the 13-point font with 10-point padding (733 points wide). A smaller
 `max_width` or screen wraps it, and smaller screens scroll in the pager, which
 reserves one extra footer row. Right-click the date to pin the popup and
 select or copy text.
 
 The popup runs system `less` in an owned PTY over a private snapshot file.
-Hovered content refreshes when the calendar changes. Focused content and search
+Hovered content refreshes when the calendar changes; `less` repaints the page
+in several writes, so the view shows only the finished page, never one
+shifted by a line mid-repaint. Focused content and search
 stay stable until reopening or Command-R. Dismissal removes the pager and its
 snapshot; see [popups](popups.md).
 

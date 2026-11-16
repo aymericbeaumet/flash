@@ -189,8 +189,12 @@ extension StatusPopupController {
     return regions.filter { $0.name == current.name }.min { distance($0) < distance($1) }
   }
 
+  /// Each segment's SGR starts with a reset, which already restores the
+  /// default colours, so only a set colour is spelled out, and a segment
+  /// styled like the one before it adds no escape.
   static func documentVT(_ segments: [FlashStatusTextSegment]) -> Data {
     var result = ""
+    var previousSGR: String?
     for segment in segments where !segment.ignore {
       var codes = ["0"]
       if segment.bold { codes.append("1") }
@@ -215,7 +219,9 @@ extension StatusPopupController {
       if segment.reverse { codes.append("7") }
       codes.append(contentsOf: Self.colorCodes(segment.foreground, foreground: true))
       codes.append(contentsOf: Self.colorCodes(segment.background, foreground: false))
-      result += "\u{1B}[" + codes.joined(separator: ";") + "m"
+      let sgr = "\u{1B}[" + codes.joined(separator: ";") + "m"
+      if sgr != previousSGR { result += sgr }
+      previousSGR = sgr
       let hyperlink = segment.link.flatMap { target -> String? in
         guard !target.isEmpty, target.utf8.count <= 8192,
           !target.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
@@ -365,7 +371,7 @@ extension StatusPopupController {
 
   private static func underlineColorCodes(_ color: FlashStatusTextColor) -> [String] {
     switch color {
-    case .defaultForeground, .defaultBackground: return ["59"]
+    case .defaultForeground, .defaultBackground: return []
     case .palette(let value): return ["58", "5", String(value)]
     case .rgb(let value):
       return ["58", "2", String(value >> 16 & 255), String(value >> 8 & 255), String(value & 255)]
@@ -377,8 +383,7 @@ extension StatusPopupController {
   private static func colorCodes(_ color: FlashStatusTextColor, foreground: Bool) -> [String] {
     let base = foreground ? "38" : "48"
     switch color {
-    case .defaultForeground: return [foreground ? "39" : "49"]
-    case .defaultBackground: return [foreground ? "39" : "49"]
+    case .defaultForeground, .defaultBackground: return []
     case .palette(let index): return [base, "5", String(index)]
     case .rgb(let rgb):
       return [base, "2", String((rgb >> 16) & 255), String((rgb >> 8) & 255), String(rgb & 255)]

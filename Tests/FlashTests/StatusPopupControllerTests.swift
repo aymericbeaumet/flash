@@ -77,6 +77,25 @@ final class StatusPopupControllerTests: XCTestCase {
     controller.dismiss()
   }
 
+  /// Each segment's SGR resets first, so the colours a reset already restores
+  /// are never repeated, and a segment styled like the one before it adds no
+  /// escape at all: a framed document stays a few kilobytes for the pager.
+  func testDocumentVTEmitsOnlyTheStyleChangesItNeeds() {
+    var dim = FlashStatusTextSegment(text: "│", foreground: .defaultForeground)
+    dim.dim = true
+    var red = FlashStatusTextSegment(text: "!", foreground: .rgb(0xFF0000))
+    red.underlineColor = .palette(3)
+    let document = [
+      FlashStatusTextSegment(text: "a", foreground: .defaultForeground),
+      FlashStatusTextSegment(text: "b", foreground: .defaultForeground),
+      dim, dim, red,
+      FlashStatusTextSegment(text: "c", foreground: .defaultForeground),
+    ]
+    XCTAssertEqual(
+      String(decoding: StatusPopupController.documentVT(document), as: UTF8.self),
+      "\u{1B}[0mab\u{1B}[0;2m││\u{1B}[0;58;5;3;38;2;255;0;0m!\u{1B}[0mc\u{1B}[0m")
+  }
+
   func testDocumentGridUsesTerminalWidthsAndWideCharacterWrap() {
     let grid = StatusPopupController.documentGrid(
       text: "aa界aa", availableColumns: 3, maximumRows: 10)
