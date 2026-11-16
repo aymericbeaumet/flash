@@ -1254,12 +1254,16 @@ extension AppDelegate {
   /// match of the tap or the key window. While NORMAL's interpreter owns the
   /// keys it takes the count and register typed before it and is a NORMAL
   /// step, which `.` repeats and a macro records, as a typed key's mapping
-  /// is (`3 ctrl+d`, `"a cmd+v`); after a half-typed sequence it runs
-  /// nothing (`NormalModeInterpreter.nativeChord`).
+  /// is (`3 ctrl+d`, `"a cmd+v`); a half-typed sequence, mark, macro or
+  /// register name it breaks, closing its which-key list, and runs alone
+  /// (`NormalModeInterpreter.nativeChord`).
   func dispatchNativeMappingAction(_ action: MappingCommand) {
     if flashMode == .normal, overlay.inputMode == .normal {
-      let transition = NormalModeInterpreter.nativeChord(
-        pending: overlay.normalModePending, action: action)
+      let pending = overlay.normalModePending
+      let transition = NormalModeInterpreter.nativeChord(pending: pending, action: action)
+      if NormalModeInterpreter.pendingReadsNextKey(pending) {
+        resetPendingNormalSequence(reason: "native_chord_breaks_pending")
+      }
       overlay.normalModeRepeatAnchor = nil
       normalModePendingCommandToken &+= 1
       guard let chord = transition.action else {

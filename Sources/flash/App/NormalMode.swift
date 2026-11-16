@@ -718,8 +718,7 @@ enum NormalModeInterpreter {
   /// Whether `pending` is something the next key alone completes or
   /// breaks — a half-typed sequence, a mark, macro or register name, a
   /// character search — rather than a count or a register the next command
-  /// takes. A chord mapping reaches the interpreter then, never its native
-  /// dispatch, so it continues the sequence or abandons it, as any key does.
+  /// takes.
   static func pendingReadsNextKey(_ pending: String) -> Bool {
     guard let first = pending.first else { return false }
     if first == macroPendingMark || first == markPendingMark || first == characterPendingMark {
@@ -729,13 +728,40 @@ enum NormalModeInterpreter {
     return state.awaitingRegister || !state.prefix.isEmpty
   }
 
+  /// Whether what is pending reads `event` itself, instead of the event's
+  /// own chord mapping firing. A plain key always does: it continues or
+  /// abandons the sequence, name or search, as in Vim. A modified chord does
+  /// only where a mapping spells a half-typed sequence on with it (`[` then
+  /// `ctrl+x`); a name or character never takes a chord, so anything else
+  /// the chord breaks, and its own mapping runs as if pressed alone (`[`
+  /// then `cmd+space` opens the flashlight).
+  static func pendingClaimsKey(
+    _ pending: String, event: NSEvent, mappings: CompiledMappings
+  ) -> Bool {
+    guard pendingReadsNextKey(pending) else { return false }
+    let independent = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    guard !independent.intersection([.command, .control, .option]).isEmpty else { return true }
+    guard let prefix = continuationMappingPrefix(pending), !prefix.isEmpty else { return false }
+    let keys = mappingKeys(
+      keyCode: event.keyCode,
+      modifierFlags: independent,
+      hasControl: independent.contains(.control),
+      hasShift: independent.contains(.shift),
+      ignoredChar: firstCharacter(event.charactersIgnoringModifiers)?.lowercased().first,
+      actualChar: firstCharacter(event.characters))
+    return keys.contains { key in
+      let sequence = appendKeyAtom(prefix, key)
+      return mappings.mapping(for: sequence) != nil || mappings.hasStrictPrefix(sequence)
+    }
+  }
+
   /// What a single-chord mapping fired natively (a Carbon hotkey, the tap's
   /// or the key window's chord match, `ctrl+d`, `cmd+c`) runs against the
   /// pending state: with the count and register typed before it, as any
-  /// mapping takes them (`3 ctrl+d`). After anything else half-typed the
-  /// chord breaks it and runs nothing, as in Vim.
+  /// mapping takes them (`3 ctrl+d`). Anything else half typed the chord
+  /// breaks (`pendingClaimsKey`), and it runs alone.
   static func nativeChord(pending: String, action: MappingCommand) -> NormalModeTransition {
-    guard !pendingReadsNextKey(pending) else { return .consume }
+    guard !pendingReadsNextKey(pending) else { return .action(action) }
     let state = pendingState(pending)
     if let count = state.typedCount, let picked = countPicking(action, count: count, sequence: "") {
       return .action(picked)

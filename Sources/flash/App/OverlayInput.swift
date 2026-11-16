@@ -783,8 +783,10 @@ extension OverlayPanel {
   private func handleNormalModeKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator else { return false }
     // A half-typed sequence, mark, macro or register name reads the next key
-    // itself, a chord included: it continues or abandons it.
-    if !NormalModeInterpreter.pendingReadsNextKey(normalModePending),
+    // itself, unless a chord no mapping continues it with breaks it
+    // (`NormalModeInterpreter.pendingClaimsKey`).
+    if !NormalModeInterpreter.pendingClaimsKey(
+      normalModePending, event: event, mappings: normalModeMappings),
       coordinator.overlayDidHandleMapping(event)
     {
       return true

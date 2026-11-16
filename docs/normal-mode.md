@@ -53,6 +53,10 @@ timing out, a mapping it already completes (`g` beside `gt`) included. Any
 key takes it down: one that continues nothing drops the half-typed sequence
 and itself, as Vim does, so `gx` closes no tab and `z.` repeats nothing, and
 a click or a scroll drops the sequence too, so the next key starts fresh.
+A modified chord is the exception: unless a mapping continues the sequence
+with it (`]` then `ctrl+x`), it drops the sequence and runs its own mapping as
+if pressed alone, so `[` then `cmd+space` still opens the flashlight. The same
+holds while a register, mark, macro name or character search waits.
 `which_key_ms = 0` never shows it.
 
 The list includes built-in mark continuations, such as `''` and `` '` ``
@@ -432,7 +436,7 @@ replays one from a terminal. Map `q` or `@` yourself to give them back to
 something else. A key that names no register (`q.`, `@/`), Escape included,
 abandons the `q` or `@` and runs nothing, as in Vim; so does one after `"`
 (`".` never repeats, `":` never opens the command line) and after a mark
-key (`'/`).
+key (`'/`). A modified chord abandons them too, then runs its own mapping.
 
 ## Mouse grid
 

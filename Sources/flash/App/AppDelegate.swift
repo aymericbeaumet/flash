@@ -1905,11 +1905,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return
     case .normal:
       // A chord mapping fires natively, with the count typed before it,
-      // unless a half-typed sequence, mark, macro or register name reads
-      // the chord itself (`NormalModeInterpreter.pendingReadsNextKey`).
+      // unless a half-typed sequence continues with the chord
+      // (`NormalModeInterpreter.pendingClaimsKey`); anything else half typed
+      // the chord breaks.
       let strict = event.modifierFlags.intersection([.command, .control, .option])
       if !strict.isEmpty,
-        !NormalModeInterpreter.pendingReadsNextKey(overlay.normalModePending),
+        !NormalModeInterpreter.pendingClaimsKey(
+          overlay.normalModePending, event: event, mappings: overlay.normalModeMappings),
         mappings.handle(event: event)
       {
         return

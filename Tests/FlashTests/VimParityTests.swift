@@ -484,8 +484,8 @@ final class VimParitySeamTests: XCTestCase {
   }
 
   /// A native chord reads the pending state the way a typed key's mapping
-  /// does: the count and register before it, nothing after a half-typed
-  /// sequence, mark, macro or register name.
+  /// does: the count and register before it. A half-typed sequence, mark,
+  /// macro or register name it breaks, and runs alone.
   func testANativeChordReadsThePendingCountAndRegister() {
     let paste = MappingCommand.flashCommand(.paste(register: nil))
     let down = MappingCommand.flashCommand(.move(.halfPageDown))
@@ -497,11 +497,53 @@ final class VimParitySeamTests: XCTestCase {
       NormalModeInterpreter.nativeChord(pending: "\"a", action: paste).command,
       .paste(register: "a"))
     for pending in [key("g"), "\"", "\u{11}q", "\u{12}'", "\u{13}t1"] {
-      XCTAssertEqual(NormalModeInterpreter.nativeChord(pending: pending, action: down), .consume)
+      XCTAssertEqual(
+        NormalModeInterpreter.nativeChord(pending: pending, action: down), .action(down), pending)
       XCTAssertTrue(NormalModeInterpreter.pendingReadsNextKey(pending), pending)
     }
     for pending in ["", "3", "\"a", "\"a2"] {
       XCTAssertFalse(NormalModeInterpreter.pendingReadsNextKey(pending), pending)
+    }
+  }
+
+  /// A modified chord pressed while something is half typed continues it
+  /// only when a mapping spells the sequence on with that chord; otherwise
+  /// it breaks what is pending and runs as if pressed alone (`[` then
+  /// `cmd+space` opens the flashlight). A plain key still reads as the next
+  /// key of whatever is pending.
+  func testAChordBreaksPendingInputItDoesNotContinue() throws {
+    let mappings = CompiledMappings([
+      ModeMapping(key: key("[t"), action: .flashCommand(.dismissHints)),
+      ModeMapping(
+        key: NormalModeInterpreter.appendKeyAtom(key("["), key("ctrl+x")),
+        action: .flashCommand(.tabNext)),
+    ])
+    func event(
+      _ characters: String, _ ignoring: String, _ code: Int, _ flags: NSEvent.ModifierFlags
+    )
+      throws -> NSEvent
+    {
+      try XCTUnwrap(
+        NSEvent.keyEvent(
+          with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+          context: nil, characters: characters, charactersIgnoringModifiers: ignoring,
+          isARepeat: false, keyCode: UInt16(code)))
+    }
+    let space = try event(" ", " ", kVK_Space, .command)
+    let controlX = try event("\u{18}", "x", kVK_ANSI_X, .control)
+    let t = try event("t", "t", kVK_ANSI_T, [])
+    func claims(_ pending: String, _ key: NSEvent) -> Bool {
+      NormalModeInterpreter.pendingClaimsKey(pending, event: key, mappings: mappings)
+    }
+    XCTAssertFalse(claims(key("["), space), "cmd+space breaks `[` and runs")
+    XCTAssertTrue(claims(key("["), controlX), "a sequence spelled on with the chord continues")
+    XCTAssertTrue(claims(key("["), t))
+    for pending in ["\"", "\u{11}q", "\u{12}'", "\u{13}t1"] {
+      XCTAssertFalse(claims(pending, space), "a name or character never takes a chord: \(pending)")
+      XCTAssertTrue(claims(pending, t), pending)
+    }
+    for pending in ["", "3", "\"a"] {
+      XCTAssertFalse(claims(pending, space), "the chord takes a count or register: \(pending)")
     }
   }
 
