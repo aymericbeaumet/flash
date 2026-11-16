@@ -63,7 +63,11 @@ closest style key.
 | `offset` | `8` | Gap between the status bar and a hover popup, 0–64 points |
 
 Colours are `#RRGGBB` or `#RRGGBBAA`. The default background is opaque; an alpha
-byte on `bg` still shows through. Terminal text is opaque, so a translucent
+byte on `bg` still shows through. A terminal popup whose program paints its own
+background over at least half the screen, as btop and tokscale do, gets that
+colour in the padding around its grid too, so it never sits inside a frame of
+`bg`; `bg` stays the terminal's default background, which the program's own
+colours were chosen against. Terminal text is opaque, so a translucent
 `fg` is mixed over `bg`. At the 13-point font with 10-point padding and a
 one-point border, the 480-point `min_width` fits 50 content columns and the
 750-point `max_width` 80, enough for the framed three-month

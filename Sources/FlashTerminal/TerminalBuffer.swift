@@ -217,6 +217,28 @@ public struct TerminalFrame: Equatable, Sendable {
   }
 }
 
+extension TerminalFrame {
+  /// The background a full-screen program paints itself (btop, tokscale):
+  /// the colour of at least half the cells when it is not the terminal's
+  /// default. A surface around the grid can take it, so the program's own
+  /// background never sits inside a frame of another colour. Nil while the
+  /// default background shows, or no colour covers half the screen.
+  public var paintedBackground: TerminalColor? {
+    var counts: [TerminalColor: Int] = [:]
+    var total = 0
+    for row in grid {
+      for cell in row.cells {
+        counts[TerminalColor(cell.background), default: 0] += 1
+      }
+      total += row.cells.count
+    }
+    guard let (color, cells) = counts.max(by: { $0.value < $1.value }),
+      color != background, cells * 2 >= total, total > 0
+    else { return nil }
+    return color
+  }
+}
+
 /// All terminal access, including input encoding, stays on the owning worker queue.
 final class TerminalBuffer {
   let handle: OpaquePointer

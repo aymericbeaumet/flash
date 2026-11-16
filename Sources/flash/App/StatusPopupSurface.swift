@@ -105,7 +105,10 @@ final class StatusPopupSurface {
       }
     }
     terminalView.onFocusRequested = { [weak self] in self?.onFocusRequested?() }
-    terminalView.onFrameReceived = { [weak self] in self?.showAwaitedPreview() }
+    terminalView.onFrameReceived = { [weak self] in
+      self?.showAwaitedPreview()
+      self?.applySurfaceBackground()
+    }
     terminalView.inputInterceptor = { [weak self] event in self?.inputInterceptor?(event) ?? false }
   }
 
@@ -167,6 +170,23 @@ final class StatusPopupSurface {
     firstFrameFallback = fallback
     DispatchQueue.main.asyncAfter(
       deadline: .now() + StatusPopupController.firstFrameWait, execute: fallback)
+  }
+
+  /// The colour around the grid: the background a program paints itself
+  /// (btop, tokscale), so it never sits inside a frame of the popup's own
+  /// colour, else the popup's `bg`. The terminal's default background stays
+  /// `bg` either way: only the surface follows the program.
+  private var surfaceBackground: CGColor {
+    (terminalView.terminalFrame?.paintedBackground?.nsColor ?? terminalView.background).cgColor
+  }
+
+  private func applySurfaceBackground() {
+    let color = surfaceBackground
+    guard container.layer?.backgroundColor != color else { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    container.layer?.backgroundColor = color
+    CATransaction.commit()
   }
 
   private func showAwaitedPreview() {
@@ -495,7 +515,7 @@ final class StatusPopupSurface {
     }
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    container.layer?.backgroundColor = terminalView.background.cgColor
+    container.layer?.backgroundColor = surfaceBackground
     container.layer?.borderColor = colors.border.cgColor
     container.layer?.borderWidth = CGFloat(style.borderWidth)
     container.layer?.cornerRadius = CGFloat(style.cornerRadius)
