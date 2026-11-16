@@ -153,6 +153,33 @@ class PluginPublicationTests(unittest.TestCase):
         self.assertNotEqual(self.destination.stat().st_ino, inode)
         self.assertEqual(subprocess.run([self.destination]).returncode, 3)
 
+    def test_dev_builds_sign_with_the_stable_identity_the_keychain_holds(self):
+        """Every dev build signs like `install:dev`, whichever task runs it.
+
+        An ad-hoc build differs from the signed binaries the dev install
+        published, so it replaced every live plugin and the running resident
+        restarted them all at once. Without the identity a build stays ad hoc.
+        """
+        mock_bin = self.root / "bin"
+        signed = self.root / "signed-with"
+        codesign = mock_bin / "codesign"
+        codesign.write_text(
+            '#!/bin/sh\nif [ "$1" = --force ]; then\n'
+            f'  printf "%s\\n" "$3" >> "{signed}"\n'
+            '  exit 0\nfi\nexec /usr/bin/codesign "$@"\n')
+        security = mock_bin / "security"
+        env = {key: value for key, value in self.env.items()
+               if key != "DEV_PLUGIN_SIGN_IDENTITY"}
+        for listed, expected in [('  1) 0123 "Flash Dev"\n', ["Flash Dev"]), ("", [])]:
+            security.write_text(f"#!/bin/sh\nprintf '%s' '{listed}'\n")
+            security.chmod(0o755)
+            signed.unlink(missing_ok=True)
+            result = subprocess.run(["bash", "Scripts/build-plugins.sh", "dev"],
+                                    cwd=self.root, env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(
+                signed.read_text().splitlines() if signed.exists() else [], expected)
+
     def test_changed_signature_is_replaced(self):
         self.build()
         subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-",

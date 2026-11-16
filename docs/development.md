@@ -112,7 +112,7 @@ else.
 | `test:log-summary` | `Scripts/test-log-summary.py` | Log summary changes |
 | `build` | `swift build`, after `build:ghostty` | A debug build of the package, with the resident's modules optimized (`optimizedInDebug` in `Package.swift`) |
 | `build:ghostty` | `Scripts/build-ghostty.sh` | libghostty-vt for this Mac; `-- --release` builds it universal |
-| `build:plugins` | `Scripts/build-plugins.sh dev` | Dev plugin binaries; `-- <id>` builds only that plugin |
+| `build:plugins` | `Scripts/build-plugins.sh dev` | Dev plugin binaries, signed with the "Flash Dev" identity once `install:dev` created it, so an unchanged plugin is never republished under the running resident; `-- <id>` builds only that plugin |
 | `build:inspector` | `Scripts/build-inspector.sh` | Frontend edits: rebuild the committed `inspector.html` |
 | `build:schema` | `ConfigSchemaTests` with `FLASH_WRITE_SCHEMA=1` | Config key or default changes: rewrite the committed `docs/schema/flash.schema.json` |
 | `build:site` | `Scripts/build-site.sh` | Docs changes: the published documentation and its link check |

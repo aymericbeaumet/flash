@@ -152,9 +152,15 @@ launch_flash_and_check_tap() {
 # stores references the cert, not the binary's cdhash. With ad-hoc signing
 # every rebuild changes the cdhash and invalidates the grant silently —
 # which is why the old flow had to tccutil-reset on every install.
+# Whether the login keychain already holds the dev identity; only
+# `ensure_signing_identity` creates it.
+has_signing_identity() {
+  security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null |
+    grep -q "\"$DEV_SIGN_IDENTITY\""
+}
+
 ensure_signing_identity() {
-  if security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null |
-    grep -q "\"$DEV_SIGN_IDENTITY\""; then
+  if has_signing_identity; then
     return
   fi
   echo "==> Creating self-signed dev code-signing identity: $DEV_SIGN_IDENTITY"

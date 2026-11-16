@@ -136,6 +136,15 @@ for dir in "${build_dirs[@]}"; do
   done < <(crate_binaries "$dir/Cargo.toml" "flash-plugin-$id")
 done
 
+# A dev build signs with the stable identity whenever the keychain holds it,
+# whichever task runs it (`build:plugins`, the plugin gate, `install:dev`): an
+# ad-hoc binary differs from the signed one the dev install published, so it
+# would replace every live plugin and the running dev resident would restart
+# them all at once. Without the identity (CI, before the first dev install)
+# the build stays ad hoc; nothing creates it here.
+if [[ "$MODE" != "release" && -z "${DEV_PLUGIN_SIGN_IDENTITY:-}" ]] && has_signing_identity; then
+  DEV_PLUGIN_SIGN_IDENTITY="$DEV_SIGN_IDENTITY"
+fi
 if [[ "$MODE" != "release" && -n "${DEV_PLUGIN_SIGN_IDENTITY:-}" ]] &&
   ((${#staged_paths[@]} > 0)); then
   codesign --force \
