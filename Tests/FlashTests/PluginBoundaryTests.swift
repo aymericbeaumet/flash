@@ -26,7 +26,7 @@ final class PluginBoundaryTests: XCTestCase {
       contentsOf: root.appendingPathComponent(
         "Plugins/_flash_plugin_rust/fixtures/wire-values.fixture"))
     let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    for group in ["protocol_version", "boolean", "pid", "perform", "hints"] {
+    for group in ["protocol_version", "boolean", "pid", "perform", "hints", "text_grid"] {
       for item in try XCTUnwrap(corpus[group] as? [[String: Any]]) {
         let expected = try XCTUnwrap(item["valid"] as? Bool)
         let accepted: Bool
@@ -39,6 +39,9 @@ final class PluginBoundaryTests: XCTestCase {
           accepted =
             PluginWireCodec.validatedPerformResult(try XCTUnwrap(item["value"] as? [String: Any]))
             != nil
+        case "text_grid":
+          accepted =
+            PluginWireCodec.textGrid(from: try XCTUnwrap(item["value"] as? [String: Any])) != nil
         default:
           accepted =
             PluginWireCodec.hintTargets(
@@ -50,8 +53,9 @@ final class PluginBoundaryTests: XCTestCase {
     }
     for item in try XCTUnwrap(corpus["encoded_rows"] as? [[String: Any]]) {
       let rows = try XCTUnwrap(item["value"] as? [[String: Any]])
+      // Counted from the compact frame, so it is the compact encoding.
       let decoded = try XCTUnwrap(
-        PluginWireCodec.catalogRows(from: rows, sourceID: "plugin:s", allowedSources: ["s"]))
+        PluginWireCodec.publishedRows(rows, sourceID: "plugin:s", allowedSources: ["s"]))
       XCTAssertEqual(decoded.encodedBytes, try XCTUnwrap(item["encoded_bytes"] as? Int))
     }
   }
@@ -175,6 +179,49 @@ final class PluginBoundaryTests: XCTestCase {
     XCTAssertEqual(lifecycle.generation, 3)
   }
 
+  /// A `publish_then_exit` child that exits 0 while running completed its
+  /// run: the reducer rests in `published`, keeps the catalog (no park) and
+  /// records no failure, so there is no backoff and no budget to exhaust.
+  /// Only a reload starts it again; a stale token or a later exit is noise.
+  func testACompletedRunRestsPublishedWithoutAFailure() {
+    var lifecycle = PluginLifecycle()
+    func send(_ event: PluginLifecycle.Event) -> [PluginLifecycle.Effect] {
+      lifecycle.transition(
+        event, now: 0, restartLimit: 2, restartWindow: 10, restartDelay: { _ in 1 })
+    }
+    XCTAssertEqual(send(.start(resident: true)), [.start(1)])
+    XCTAssertEqual(send(.completed(1)), [], "a child that has not initialized has not run")
+    _ = send(.installed(1))
+    _ = send(.initialized(1))
+    XCTAssertEqual(send(.completed(0)), [], "a stale token belongs to no attempt")
+    XCTAssertEqual(send(.completed(1)), [.teardown, .rest])
+    XCTAssertEqual(lifecycle.state, .published)
+    XCTAssertEqual(lifecycle.runtimeState, .published)
+    XCTAssertTrue(lifecycle.failures.isEmpty, "a completed run is not a failure")
+    XCTAssertEqual(lifecycle.generation, 2, "the attempt is over: its late work is invalidated")
+    XCTAssertEqual(send(.interrupted(2)), [], "nothing runs that could be interrupted")
+    XCTAssertEqual(send(.activate), [], "only a reload runs a published plugin again")
+    XCTAssertEqual(send(.start(resident: true)), [])
+    XCTAssertEqual(lifecycle.state, .published)
+    XCTAssertEqual(send(.reload(resident: true)), [.teardown, .start(4)])
+    _ = send(.installed(4))
+    _ = send(.initialized(4))
+    XCTAssertEqual(send(.interrupted(4)), [.teardown, .retry(4, 1)], "a crash still backs off")
+    XCTAssertEqual(send(.stop), [.teardown])
+    XCTAssertEqual(send(.completed(5)), [], "stopped stays stopped")
+    XCTAssertEqual(lifecycle.state, .stopped)
+  }
+
+  /// A published plugin has no child and needs none: its rows carry host
+  /// effects, so a perform is `unhandled` at once rather than queued or
+  /// spawning the child again.
+  func testPublishedPluginsAnswerPerformsUnhandled() {
+    for onDemand in [false, true] {
+      XCTAssertEqual(
+        PluginLifecycle.performRoute(state: .published, onDemand: onDemand), .unhandled)
+    }
+  }
+
   func testStderrFloodBeforeTheInitializeReplyNeverWedgesTheTransport() throws {
     // stderr is diagnostics only and the host drains it on the pipe callback,
     // so a plugin writing far more than the pipe buffer before its first reply
@@ -249,7 +296,11 @@ final class PluginBoundaryTests: XCTestCase {
     }
     process.sendEvent(
       PluginEvent(name: "core:apps.launched", payload: ["sequence": burst], bundleID: nil))
-    settleRunLoop(0.5)
+    // Every event hops to the lifecycle queue before it reaches the outbound
+    // queue; on a busy Mac a fixed pause let the child start reading while
+    // part of the burst was still hopping, so those frames streamed through
+    // uncoalesced.
+    process.drainLifecycleQueue()
     FileManager.default.createFile(
       atPath: fixture.dataDir.appendingPathComponent("go").path, contents: Data())
 
@@ -302,7 +353,7 @@ final class PluginBoundaryTests: XCTestCase {
     }
     XCTAssertNil(key("core:poll:tick"))
     XCTAssertEqual(key("core:focus.changed", ["pid": 1]), key("core:focus.changed", ["pid": 2]))
-    XCTAssertNotEqual(key("core:focus.changed"), key("core:space.changed"))
+    XCTAssertNotEqual(key("core:focus.changed"), key("core:power.changed"))
     let title = key("core:ax.changed", ["pid": 7, "notification": "AXTitleChanged"])
     XCTAssertEqual(title, key("core:ax.changed", ["notification": "AXTitleChanged", "pid": 7]))
     XCTAssertNotEqual(title, key("core:ax.changed", ["pid": 7, "notification": "AXValueChanged"]))

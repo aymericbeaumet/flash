@@ -36,10 +36,6 @@ pub(super) fn tab_key_plan(index: usize, tab_count: usize) -> Option<Vec<Chord>>
     if index == 0 || index > tab_count {
         return None;
     }
-    let digit = |position: usize| Chord {
-        key_code: DIGIT_KEYCODES[position - 1],
-        modifier: "command",
-    };
     if index <= 8 {
         return Some(vec![digit(index)]);
     }
@@ -64,6 +60,14 @@ pub(super) fn tab_key_plan(index: usize, tab_count: usize) -> Option<Vec<Chord>>
     Some(plan)
 }
 
+/// ⌘`position` selects that tab; Firefox's ⌘9 selects the last one.
+fn digit(position: usize) -> Chord {
+    Chord {
+        key_code: DIGIT_KEYCODES[position - 1],
+        modifier: "command",
+    }
+}
+
 /// Post a chord plan to `pid` through the host. Modifier chords dispatch via
 /// the target's key-equivalent path, so Firefox does not need to be
 /// frontmost — the jump runs in parallel with `host.activate`.
@@ -79,13 +83,71 @@ pub(super) async fn post_keys(ctx: &Context, pid: i64, plan: &[Chord]) -> bool {
 /// The 1-based `index`th tab of the focused window, or of the front-most
 /// window holding tabs (`AXWindows` is front to back) when focus is unknown.
 pub(super) fn nth_tab_in_front_window(strip: &Strip, index: usize) -> Option<&Tab> {
-    let front = focused_root(strip, None, &BTreeMap::new(), 0)
-        .or_else(|| strip.tab_roots().first().copied())?;
+    let front = front_root(strip)?;
     strip
         .tabs
         .iter()
         .filter(|tab| tab.root == front)
         .nth(index.checked_sub(1)?)
+}
+
+/// Where `tab next`, `tab previous`, `tab first` and `tab last` go in the
+/// focused window's strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TabStep {
+    Next,
+    Previous,
+    First,
+    Last,
+}
+
+impl TabStep {
+    pub(super) fn parse(subcommand: &str) -> Option<Self> {
+        match subcommand {
+            "next" => Some(Self::Next),
+            "previous" => Some(Self::Previous),
+            "first" => Some(Self::First),
+            "last" => Some(Self::Last),
+            _ => None,
+        }
+    }
+}
+
+/// Firefox's own keys for a step, as the browser binds them: ctrl+PgDn and
+/// ctrl+PgUp walk the strip in order and wrap at its ends, ⌘1 selects the
+/// first tab and ⌘9 the last. Posting these leaves the step itself to
+/// Firefox, so its strip order, its wrap, its tab groups and a sidebar of
+/// vertical tabs all behave exactly as they do without Flash: nothing here
+/// decides which element is the next tab, and nothing presses one.
+pub(super) fn step_keys(step: TabStep) -> Vec<Chord> {
+    match step {
+        TabStep::Next => vec![Chord {
+            key_code: KEY_PAGE_DOWN,
+            modifier: "control",
+        }],
+        TabStep::Previous => vec![Chord {
+            key_code: KEY_PAGE_UP,
+            modifier: "control",
+        }],
+        TabStep::First => vec![digit(1)],
+        TabStep::Last => vec![digit(9)],
+    }
+}
+
+/// The selected tab of the focused window (the front-most window holding
+/// tabs when focus is unknown): where a step landed.
+pub(super) fn selected_tab_in_front_window(strip: &Strip) -> Option<&Tab> {
+    let front = front_root(strip)?;
+    strip
+        .tabs
+        .iter()
+        .find(|tab| tab.root == front && tab.selected)
+}
+
+/// The focused window's `AXWindows` index, else the front-most window
+/// holding tabs.
+fn front_root(strip: &Strip) -> Option<usize> {
+    focused_root(strip, None, &BTreeMap::new(), 0).or_else(|| strip.tab_roots().first().copied())
 }
 
 /// Confirm a keystroke jump once the chord chain has landed, correcting
@@ -298,11 +360,39 @@ mod tests {
         assert_eq!(nth_tab_in_front_window(&tabs, 2).unwrap().title, "Front 2");
         // The front window has 2 tabs: index 3 must not spill into the next.
         assert!(nth_tab_in_front_window(&tabs, 3).is_none());
+        // Where a step landed is read from that window alone.
+        tabs.tabs[1].selected = true;
+        assert_eq!(
+            selected_tab_in_front_window(&tabs).unwrap().title,
+            "Front 2"
+        );
         assert!(nth_tab_in_front_window(&tabs, 0).is_none());
         assert!(nth_tab_in_front_window(&Strip::default(), 1).is_none());
         // The main window wins over AXWindows order.
         tabs.windows[1].main = true;
         assert_eq!(nth_tab_in_front_window(&tabs, 3).unwrap().title, "Back 3");
+    }
+
+    /// A step is Firefox's own key, so the browser owns where it lands: no
+    /// element of the strip is chosen here, and none is pressed.
+    #[test]
+    fn a_step_posts_the_browsers_own_tab_keys() {
+        assert_eq!(
+            step_keys(TabStep::Next),
+            vec![Chord {
+                key_code: KEY_PAGE_DOWN,
+                modifier: "control"
+            }]
+        );
+        assert_eq!(
+            step_keys(TabStep::Previous),
+            vec![Chord {
+                key_code: KEY_PAGE_UP,
+                modifier: "control"
+            }]
+        );
+        assert_eq!(step_keys(TabStep::First), vec![digit(1)]);
+        assert_eq!(step_keys(TabStep::Last), vec![digit(9)]);
     }
 
     #[test]

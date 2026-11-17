@@ -4,8 +4,8 @@ import XCTest
 
 @testable import flash
 
-/// `mouse_notifications` picks the pressable parts of Notification Center's
-/// windows; `mouse_menubar` commits menu titles and status items.
+/// `mouse notifications` picks the pressable parts of Notification Center's
+/// windows; `mouse menubar` commits menu titles and status items.
 final class SystemSurfaceHintsTests: XCTestCase {
   private typealias Node = NotificationCenterSurface.Node<String>
 

@@ -58,7 +58,7 @@ impl Timezones {
 
     pub(crate) fn log_index(&self, ctx: &Context) {
         ctx.log_fields(
-            "info",
+            "debug",
             "[answers] zone index warmed",
             BTreeMap::from([("count".to_string(), self.zones.len().to_string())]),
         );

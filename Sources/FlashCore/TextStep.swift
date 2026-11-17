@@ -1,7 +1,7 @@
 import ApplicationServices
 import CoreGraphics
 
-/// `mouse_step`: the pointer moves one text line or one character, measured
+/// `mouse step`: the pointer moves one text line or one character, measured
 /// from the text under it, as Vim's `j` `k` `h` `l` move the cursor. In HOLD
 /// the held button drags, so the step extends the selection. All coordinates
 /// are Accessibility's: global, top-left origin.
@@ -181,15 +181,16 @@ public enum TextStep {
     return raw as? String
   }
 
-  /// One character under a point, through the system-wide element.
+  /// One character under a point, through the system-wide element. The
+  /// hit-test waits the process-wide timeout, the element it finds
+  /// `messagingTimeout`.
   private struct Probe {
     let systemWide: AXUIElement
     let messagingTimeout: Float
 
     init(messagingTimeout: Float) {
-      systemWide = AXUIElementCreateSystemWide()
+      systemWide = AXApp.systemWide()
       self.messagingTimeout = messagingTimeout
-      AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
     }
 
     func character(at point: CGPoint) -> (element: AXUIElement, index: Int, rect: CGRect)? {

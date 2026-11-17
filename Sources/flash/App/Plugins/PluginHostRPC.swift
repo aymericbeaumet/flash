@@ -6,17 +6,23 @@ import Foundation
 
 /// The plugin→host RPC surface: routing, capability guards, and the
 /// implementations of every native API plugins may reach (AX broker, app
-/// activation, synthesized input, host-side fetch). Split from
+/// activation, synthesized input, host-side fetch and AppleScript). Split from
 /// PluginManager so the manager owns only the plugin set and its indexes.
 final class PluginHostRPC {
   /// Owns the single AX (Accessibility) grant and the handle registry that
   /// backs the `host.ax_*` RPCs. Plugins never touch AX directly; they reach
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
+  var appleScriptRunner: (String, TimeInterval) -> AppleScriptOutput = AppleScriptRunner.run
+
+  /// `pid` quit: the AX handles plugins hold into it are dropped.
+  func appTerminated(pid: pid_t) {
+    axBroker.appTerminated(pid: pid)
+  }
   /// Resolver for the `host.normal_mode_target` RPC: returns the focused
   /// non-Flash app context (pid + bundle id) the host considers the
-  /// normal-mode target. Plugins (notably `marks`) call this to record or
-  /// reactivate the app the user was working on when they typed `m<letter>`
+  /// normal-mode target. Plugins (notably `screenshot`) call this to name the
+  /// app and window the user was working on when they ran the command
   /// — `core:focus.changed` alone is insufficient because Flash itself is
   /// the focused process while normal mode is active. Set by AppDelegate
   /// during plugin setup.
@@ -30,47 +36,22 @@ final class PluginHostRPC {
   /// (`noteSyntheticKey`) — a `postToPid` event can loop back through the
   /// Carbon hotkey path and re-trigger the user's own binding for the combo.
   var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)?
-  /// Executor for a single global modifier chord. Unlike `host.post_keys`,
-  /// this enters the session event stream so macOS can own the shortcut.
-  var onGlobalSyntheticKeyRequested: ((CGKeyCode, CGEventFlags) -> Bool)?
-  /// Executor for the `host.notify` RPC: shows a transient banner with the
-  /// given message and duration. Set by AppDelegate (routes to the overlay's
-  /// banner surface).
-  var onNotifyRequested: ((String, Int) -> Void)?
-  /// The output volume just moved one macOS tick. The argument is the percent
-  /// the system bezel would show, from 0 to 100.
-  var onOutputVolumeChanged: ((Int) -> Void)?
   /// Host-owned Location/CoreWLAN provider for `host.wifi_info`. Set by
   /// AppDelegate so plugins never access either framework directly.
   var wifiInfoProvider: WiFiInfoProviding?
-  var audioDevices: any AudioDeviceProviding = CoreAudioDevices()
-  /// Per-plugin timestamp of the last accepted `host.notify`, enforcing the
-  /// 1-per-second rate limit. Main-thread only (notify hops to main).
-  private var lastNotifyAt: [String: Date] = [:]
 
-  // Testability seams for the three arms whose production bodies fire
-  // irreversible side effects (LaunchServices open, HID media-key post,
-  // SIGTERM). Tests swap these to assert the decoded, capability-checked,
-  // validated call without opening browsers or signaling processes; the
-  // defaults ARE the production behavior.
+  // Testability seams for the arms whose production bodies fire
+  // irreversible side effects (LaunchServices open). Tests swap these to
+  // assert the decoded, capability-checked, validated call without opening
+  // browsers or apps; the defaults ARE the production behavior.
   static var urlOpener: (URL) -> Bool = { NSWorkspace.shared.open($0) }
   /// The bundle id of the app LaunchServices hands `url` to.
   static var urlHandler: (URL) -> String? = { url in
     NSWorkspace.shared.urlForApplication(toOpen: url).flatMap { Bundle(url: $0)?.bundleIdentifier }
   }
   static var appOpener: (String, @escaping (String?) -> Void) -> Void = { bundleID, done in
-    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-    else {
-      done("no app for bundle id \(bundleID)")
-      return
-    }
-    NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration()) {
-      _, error in
-      done(error.map { String(describing: $0) })
-    }
+    ApplicationLauncher.open(bundleID: bundleID, completion: done)
   }
-  static var mediaKeyPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
-  static var signalSender: (pid_t) -> Int32 = { kill($0, SIGTERM) }
 
   /// Routes a plugin→host RPC request to the matching core capability and
   /// delivers the JSON result via `reply`. This is the single entry point
@@ -83,19 +64,11 @@ final class PluginHostRPC {
     pluginID: String,
     capabilities: Set<PluginCapability>,
     fetchURLs: [String] = [],
-    dataDir: URL? = nil,
+    appleEventsTargets: [String] = [],
+    scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
-    let integerFields: [String: [String]] = [
-      "host.notify": ["duration_ms"], "host.process_table": ["sample_window_ms"],
-      "host.post_keys": ["interval_ms"],
-    ]
-    if let key = integerFields[method]?.first(where: {
-      params[$0] != nil && PluginJSON.integer(params[$0]) == nil
-    }) {
-      reply(["ok": false, "error": "\(method) requires an integer \(key)"])
-      return
-    }
+    guard scope.isCurrent() else { return }
     switch method {
     case "host.ping":
       // Round-trip validation of the bidirectional channel.
@@ -105,7 +78,7 @@ final class PluginHostRPC {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("app_control")])
         return
       }
-      DispatchQueue.main.async { [weak self] in
+      scope.enqueue(on: .main) { [weak self] in
         guard let target = self?.onNormalModeTargetRequested?() else {
           reply(["ok": true, "present": false])
           return
@@ -124,31 +97,26 @@ final class PluginHostRPC {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("app_control")])
         return
       }
-      activatePluginApp(params, reply: reply)
+      activatePluginApp(params, scope: scope, reply: reply)
     case "host.post_keys":
       guard capabilities.contains(.accessibility) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
         return
       }
-      postSyntheticKeys(params, reply: reply)
-    case "host.post_global_key":
-      guard capabilities.contains(.accessibility) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
-        return
-      }
-      postGlobalSyntheticKey(params, reply: reply)
+      postSyntheticKeys(params, scope: scope, reply: reply)
     case let method where method.hasPrefix("host.ax_"):
       guard capabilities.contains(.accessibility) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
         return
       }
-      axBroker.handle(method: method, params: params, pluginID: pluginID, reply: reply)
+      axBroker.handle(
+        method: method, params: params, pluginID: pluginID, scope: scope, reply: reply)
     case "host.fetch":
       guard capabilities.contains(.networkFetch) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("network_fetch")])
         return
       }
-      hostFetch(params, allowlist: fetchURLs, pluginID: pluginID, reply: reply)
+      hostFetch(params, allowlist: fetchURLs, pluginID: pluginID, scope: scope, reply: reply)
     case "host.wifi_info":
       guard capabilities.contains(.wifiInfo) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("wifi_info")])
@@ -169,59 +137,29 @@ final class PluginHostRPC {
         reply(["ok": true, "present": false])
         return
       }
-      wifiInfoProvider.fetchSSID(requestAuthorization: requestAuthorization) { ssid in
-        guard let ssid else {
-          reply(["ok": true, "present": false])
-          return
+      scope.enqueue(on: .main) {
+        wifiInfoProvider.fetchSSID(requestAuthorization: requestAuthorization) { ssid in
+          guard let ssid else {
+            reply(["ok": true, "present": false])
+            return
+          }
+          reply(["ok": true, "present": true, "ssid": ssid])
         }
-        reply(["ok": true, "present": true, "ssid": ssid])
       }
     case "host.open":
       guard capabilities.contains(.open) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("open")])
         return
       }
-      hostOpen(params, reply: reply)
-    case "host.post_media_key":
-      guard capabilities.contains(.mediaKeys) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("media_keys")])
+      hostOpen(params, scope: scope, reply: reply)
+    case "host.applescript":
+      guard capabilities.contains(.appleEvents) else {
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("apple_events")])
         return
       }
-      postMediaKey(params, reply: reply)
-    case "host.audio_devices":
-      guard capabilities.contains(.audioDevices) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("audio_devices")])
-        return
-      }
-      hostAudioDevices(params, reply: reply)
-    case "host.process_table":
-      guard capabilities.contains(.processControl) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("process_control")])
-        return
-      }
-      processTable(params, reply: reply)
-    case "host.signal":
-      guard capabilities.contains(.processControl) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("process_control")])
-        return
-      }
-      signalProcess(params, reply: reply)
-    case "host.clipboard_write":
-      guard capabilities.contains(.clipboard) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("clipboard")])
-        return
-      }
-      hostClipboardWrite(params, reply: reply)
-    case "host.notify":
-      guard capabilities.contains(.notify) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("notify")])
-        return
-      }
-      hostNotify(params, pluginID: pluginID, reply: reply)
-    case "host.storage_get":
-      hostStorageGet(params, dataDir: dataDir, reply: reply)
-    case "host.storage_set":
-      hostStorageSet(params, dataDir: dataDir, reply: reply)
+      PluginHostAppleScript.handle(
+        params, targets: appleEventsTargets, pluginID: pluginID, scope: scope,
+        runner: appleScriptRunner, reply: reply)
     default:
       FlashLog.warn(
         "[plugin] unknown host method \(method) from \(pluginID)",
@@ -235,24 +173,22 @@ final class PluginHostRPC {
   /// of UTF-8 text, and the request runs entirely off the main thread on
   /// URLSession's delegate queue with a hard timeout — a slow remote can never
   /// touch tap responsiveness. Telemetry stays content-free (no URL/body).
-  private static let hostFetchBodyCap = PluginProtocol.maxFetchResponseBytes
+  var hostFetchConfiguration = URLSessionConfiguration.ephemeral
 
   /// True when `url` sits inside the allowlisted `prefix` at a URL component
   /// boundary. A raw hasPrefix would let "https://api.example.com" also admit
   /// "https://api.example.com.attacker.tld/".
   static func urlIsAllowed(_ url: String, byPrefix prefix: String) -> Bool {
-    guard !prefix.isEmpty, url.hasPrefix(prefix) else { return false }
-    if url.count == prefix.count || prefix.hasSuffix("/") { return true }
-    let next = url[url.index(url.startIndex, offsetBy: prefix.count)]
-    return next == "/" || next == "?" || next == "#"
+    PluginHostFetch.urlIsAllowed(url, byPrefix: prefix)
   }
 
   private func hostFetch(
     _ params: [String: Any], allowlist: [String], pluginID: String,
+    scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
     guard let urlString = params["url"] as? String,
-      let url = URL(string: urlString),
+      let url = URLParsing.url(urlString),
       url.scheme == "https"
     else {
       reply(["ok": false, "error": "host.fetch requires a valid https url param"])
@@ -265,191 +201,34 @@ final class PluginHostRPC {
     var request = URLRequest(url: url)
     request.timeoutInterval = Double(PluginProtocol.fetchTimeoutMs) / 1_000
     let startedAt = DispatchTime.now()
-    URLSession.shared.dataTask(with: request) { data, response, error in
+    PluginHostFetch.start(
+      request: request, allowlist: allowlist, configuration: hostFetchConfiguration
+    ) { result in
+      guard scope.isCurrent() else { return }
       let elapsedMs = Int(
         Double(DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000)
-      if let error {
+      guard case .success(let payload) = result else {
         FlashLog.warn(
           "[plugin] host.fetch failed elapsed_ms=\(elapsedMs)",
           fields: ["plugin": pluginID, "elapsed_ms": "\(elapsedMs)"])
-        reply(["ok": false, "error": String(describing: error)])
+        if case .failure(let error) = result {
+          reply(["ok": false, "error": error.message])
+        }
         return
       }
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-      let data = data ?? Data()
-      guard data.count <= Self.hostFetchBodyCap else {
-        reply(["ok": false, "error": "response exceeds the 1 MiB host.fetch cap"])
-        return
-      }
+      let status = payload.status
+      let data = payload.data
       guard let body = String(data: data, encoding: .utf8) else {
         reply(["ok": false, "error": "response is not UTF-8 text"])
         return
       }
-      FlashLog.info(
+      FlashLog.debug(
         "[plugin] host.fetch ok status=\(status) elapsed_ms=\(elapsedMs)",
         fields: [
           "plugin": pluginID, "status": "\(status)", "elapsed_ms": "\(elapsedMs)",
           "bytes": "\(data.count)",
         ])
       reply(["ok": true, "status": status, "body": body])
-    }.resume()
-  }
-
-  /// `host.clipboard_write`: replace the system clipboard with `text`. The
-  /// host owns pasteboard access, so a sandboxed plugin needs no pasteboard
-  /// entitlement of its own.
-  static let maxClipboardWriteBytes = PluginProtocol.maxClipboardWriteBytes
-
-  private func hostClipboardWrite(
-    _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let text = params["text"] as? String,
-      text.utf8.count <= Self.maxClipboardWriteBytes
-    else {
-      reply(["ok": false, "error": "host.clipboard_write requires text under 1 MiB"])
-      return
-    }
-    DispatchQueue.main.async {
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(text, forType: .string)
-      reply(["ok": true])
-    }
-  }
-
-  /// `host.notify`: transient banner. Message capped at 1 KiB, duration
-  /// clamped to 0.5–10 s, at most one accepted notify per plugin per second.
-  static let maxNotifyMessageBytes = PluginProtocol.maxNotifyMessageBytes
-
-  private func hostNotify(
-    _ params: [String: Any],
-    pluginID: String,
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let message = params["message"] as? String,
-      !message.isEmpty,
-      message.utf8.count <= Self.maxNotifyMessageBytes
-    else {
-      reply(["ok": false, "error": "host.notify requires a message under 1 KiB"])
-      return
-    }
-    let durationMs = min(max(PluginJSON.integer(params["duration_ms"]) ?? 3000, 500), 10_000)
-    DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      let now = Date()
-      if let last = self.lastNotifyAt[pluginID], now.timeIntervalSince(last) < 1 {
-        reply(["ok": false, "error": "host.notify rate limit: 1 per second"])
-        return
-      }
-      self.lastNotifyAt[pluginID] = now
-      self.onNotifyRequested?(message, durationMs)
-      reply(["ok": true])
-    }
-  }
-
-  /// `host.storage_get` / `host.storage_set`: a tiny host-managed KV store in
-  /// the plugin's own data directory (`storage.json`), so non-Rust plugins
-  /// stop hand-rolling persistence. No capability: the file lives inside the
-  /// directory the plugin's sandbox already grants it.
-  static let maxStorageKeyBytes = PluginProtocol.maxStorageKeyBytes
-  static let maxStorageValueBytes = PluginProtocol.maxStorageValueBytes
-  static let maxStorageEntries = PluginProtocol.maxStorageEntries
-  private static let storageQueue = DispatchQueue(label: "flash.plugin.storage", qos: .utility)
-
-  static func readStorage(at url: URL) -> [String: String] {
-    guard let data = try? Data(contentsOf: url),
-      let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
-    else { return [:] }
-    return object
-  }
-
-  /// Pure merge step for `host.storage_set`: nil `value` deletes. Returns nil
-  /// when the write would violate a bound (oversized value, table full).
-  static func applyingStorageEntry(
-    key: String,
-    value: String?,
-    to store: [String: String]
-  ) -> [String: String]? {
-    var next = store
-    guard let value else {
-      next.removeValue(forKey: key)
-      return next
-    }
-    guard value.utf8.count <= maxStorageValueBytes else { return nil }
-    if next[key] == nil, next.count >= maxStorageEntries { return nil }
-    next[key] = value
-    return next
-  }
-
-  private func hostStorageGet(
-    _ params: [String: Any],
-    dataDir: URL?,
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let dataDir else {
-      reply(["ok": false, "error": "storage unavailable"])
-      return
-    }
-    guard let key = params["key"] as? String,
-      !key.isEmpty, key.utf8.count <= Self.maxStorageKeyBytes
-    else {
-      reply(["ok": false, "error": "host.storage_get requires a key under 128 bytes"])
-      return
-    }
-    let url = dataDir.appendingPathComponent("storage.json")
-    Self.storageQueue.async {
-      let store = Self.readStorage(at: url)
-      if let value = store[key] {
-        reply(["ok": true, "present": true, "value": value])
-      } else {
-        reply(["ok": true, "present": false])
-      }
-    }
-  }
-
-  private func hostStorageSet(
-    _ params: [String: Any],
-    dataDir: URL?,
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let dataDir else {
-      reply(["ok": false, "error": "storage unavailable"])
-      return
-    }
-    guard let key = params["key"] as? String,
-      !key.isEmpty, key.utf8.count <= Self.maxStorageKeyBytes
-    else {
-      reply(["ok": false, "error": "host.storage_set requires a key under 128 bytes"])
-      return
-    }
-    let value: String?
-    if params["value"] == nil || params["value"] is NSNull {
-      value = nil
-    } else if let string = params["value"] as? String {
-      value = string
-    } else {
-      reply(["ok": false, "error": "host.storage_set value must be a string or null"])
-      return
-    }
-    let url = dataDir.appendingPathComponent("storage.json")
-    Self.storageQueue.async {
-      let store = Self.readStorage(at: url)
-      guard let next = Self.applyingStorageEntry(key: key, value: value, to: store) else {
-        reply([
-          "ok": false,
-          "error": "storage bound exceeded (64 KiB value, \(Self.maxStorageEntries) entries)",
-        ])
-        return
-      }
-      do {
-        try FileManager.default.createDirectory(
-          at: dataDir, withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: next, options: [.sortedKeys])
-        try data.write(to: url, options: .atomic)
-        reply(["ok": true])
-      } catch {
-        reply(["ok": false, "error": String(describing: error)])
-      }
     }
   }
 
@@ -459,12 +238,19 @@ final class PluginHostRPC {
   /// that app still has focus before acting on it.
   private func hostOpen(
     _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
+    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
     if let urlString = params["url"] as? String,
-      let url = URL(string: urlString), url.scheme != nil
+      let url = URLParsing.url(urlString), url.scheme != nil
     {
-      DispatchQueue.main.async {
+      // Never a local file: a sandboxed plugin could write a `.command`,
+      // a script or an app into its data directory, and LaunchServices
+      // would run it outside the sandbox.
+      guard url.scheme?.lowercased() != "file" else {
+        reply(["ok": false, "error": "host.open does not open local files"])
+        return
+      }
+      scope.enqueue(on: .main) {
         // Response law: ok:false always carries a non-empty, content-free
         // error (a bare {"ok": false} is a spec violation).
         if Self.urlOpener(url) {
@@ -478,7 +264,7 @@ final class PluginHostRPC {
       return
     }
     if let bundleID = params["bundle_id"] as? String {
-      DispatchQueue.main.async {
+      scope.enqueue(on: .main) {
         Self.appOpener(bundleID) { error in
           if let error {
             reply(["ok": false, "error": error])
@@ -492,434 +278,15 @@ final class PluginHostRPC {
     reply(["ok": false, "error": "host.open requires url or bundle_id"])
   }
 
-  private func hostAudioDevices(
-    _ params: [String: Any], reply: @escaping ([String: Any]) -> Void
-  ) {
-    if params["volume_delta"] != nil || params["mute"] != nil {
-      if params["direction"] != nil || params["select_uid"] != nil {
-        reply([
-          "ok": false,
-          "error": "host.audio_devices volume and mute do not take a direction",
-        ])
-        return
-      }
-      hostOutputVolume(params, reply: reply)
-      return
-    }
-    guard let rawDirection = params["direction"] as? String,
-      let direction = AudioDeviceDirection(rawValue: rawDirection)
-    else {
-      reply(["ok": false, "error": "host.audio_devices requires input or output direction"])
-      return
-    }
-    let uid: String?
-    if let selection = params["select_uid"] {
-      guard let selectedUID = selection as? String, !selectedUID.isEmpty else {
-        reply(["ok": false, "error": "host.audio_devices requires a nonempty select_uid"])
-        return
-      }
-      uid = selectedUID
-    } else {
-      uid = nil
-    }
-    let provider = audioDevices
-    DispatchQueue.global(qos: .userInitiated).async {
-      do {
-        if let uid {
-          try provider.select(uid: uid, direction: direction)
-          reply(["ok": true])
-        } else {
-          let devices = try provider.list(direction: direction)
-          reply([
-            "ok": true,
-            "devices": devices.map {
-              ["uid": $0.uid, "name": $0.name, "default": $0.isDefault] as [String: Any]
-            },
-          ])
-        }
-      } catch {
-        reply(["ok": false, "error": error.localizedDescription])
-      }
-    }
-  }
-
-  /// Volume and mute are the same CoreAudio grant as device selection. They
-  /// do not go through osascript: `set volume` is a scripting addition the
-  /// plugin sandbox cannot load.
-  private func hostOutputVolume(
-    _ params: [String: Any], reply: @escaping ([String: Any]) -> Void
-  ) {
-    let delta = PluginJSON.integer(params["volume_delta"])
-    let mute = params["mute"] as? String
-    if params["volume_delta"] != nil {
-      guard let delta, delta != 0, (-100...100).contains(delta) else {
-        reply([
-          "ok": false,
-          "error": "host.audio_devices volume_delta must be a non-zero integer from -100 to 100",
-        ])
-        return
-      }
-    }
-    if params["mute"] != nil, mute != "toggle" {
-      reply(["ok": false, "error": "host.audio_devices mute must be \"toggle\""])
-      return
-    }
-    guard delta != nil || mute == "toggle" else {
-      reply(["ok": false, "error": "host.audio_devices requires volume_delta or mute"])
-      return
-    }
-    let provider = audioDevices
-    DispatchQueue.global(qos: .userInitiated).async {
-      do {
-        var percent: Int?
-        if let delta {
-          percent = try provider.adjustOutputVolume(deltaPercent: delta)
-        }
-        if mute == "toggle" {
-          try provider.toggleOutputMute()
-        }
-        if let percent {
-          DispatchQueue.main.async { [weak self] in
-            self?.onOutputVolumeChanged?(percent)
-          }
-        }
-        var body: [String: Any] = ["ok": true]
-        if let percent { body["volume_percent"] = percent }
-        reply(body)
-      } catch {
-        reply(["ok": false, "error": error.localizedDescription])
-      }
-    }
-  }
-
-  /// `host.post_media_key`: post an NX_SYSTEM_DEFINED key (play/pause 16,
-  /// next 17, previous 18, …) as down+up. Runs host-side so no plugin needs
-  /// the WindowServer/IOHID mach allowances (`hid`) — the widest seatbelt
-  /// grant any bundled plugin used to hold.
-  private func postMediaKey(
-    _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let keyCode = PluginJSON.integer(params["key_code"]), (0...31).contains(keyCode) else {
-      reply(["ok": false, "error": "host.post_media_key requires key_code 0-31"])
-      return
-    }
-    DispatchQueue.main.async {
-      // NX_KEYDOWN (0x0A) then NX_KEYUP (0x0B), subtype 8
-      // (NX_SUBTYPE_AUX_CONTROL_BUTTONS).
-      for state in [0x0A, 0x0B] {
-        let data1 = (keyCode << 16) | (state << 8)
-        guard
-          let event = NSEvent.otherEvent(
-            with: .systemDefined,
-            location: .zero,
-            modifierFlags: NSEvent.ModifierFlags(rawValue: 0xA00),
-            timestamp: 0,
-            windowNumber: 0,
-            context: nil,
-            subtype: 8,
-            data1: data1,
-            data2: -1),
-          let cgEvent = event.cgEvent
-        else {
-          reply(["ok": false, "error": "media key event synthesis failed"])
-          return
-        }
-        Self.mediaKeyPoster(cgEvent)
-      }
-      reply(["ok": true])
-    }
-  }
-
-  /// One libproc sample of a pid, retained across calls so the next call
-  /// computes CPU % as a delta instead of sleeping to bracket two reads.
-  /// `startAbstime` guards against pid reuse; `comm` is cached because
-  /// `proc_pidpath` is the most expensive per-pid call in the sweep.
-  private struct ProcessSample {
-    var cpuNs: UInt64
-    var sampledAtNs: UInt64
-    var startAbstime: UInt64
-    var comm: String
-  }
-
-  private let processSampleLock = NSLock()
-  private var processSamples: [pid_t: ProcessSample] = [:]
-
-  private struct SampledProcess {
-    var usage: PIDUsage
-    var cpuPercent: Double
-    var comm: String
-  }
-
-  /// `host.process_table`: visible processes with CPU % since the previous
-  /// sample of each pid. Only a pid seen for the first time brackets two
-  /// rusage reads over `sample_window_ms`; a steady poll is one libproc pass
-  /// with no sleep. Host-side so process inspectors need no `process_info`
-  /// seatbelt allowance and no second process model.
-  private func processTable(
-    _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    let windowMs = min(max(PluginJSON.integer(params["sample_window_ms"]) ?? 150, 10), 2_000)
-    let requestedPID: pid_t?
-    if let rawPID = params["pid"] {
-      guard let pid = PluginJSON.pid(rawPID) else {
-        reply(["ok": false, "error": "host.process_table pid must be positive"])
-        return
-      }
-      requestedPID = pid
-    } else {
-      requestedPID = nil
-    }
-    DispatchQueue.global(qos: .utility).async { [weak self] in
-      guard let self else { return }
-      let pids = requestedPID.map(Self.processTree(root:)) ?? Self.allPids()
-      let sampled = self.sampleProcesses(pids, windowMs: windowMs, pruneOthers: requestedPID == nil)
-      let totalMemory = Double(max(ProcessInfo.processInfo.physicalMemory, 1))
-      var rows: [[String: Any]] = []
-      if let rootPID = requestedPID {
-        guard let root = sampled[rootPID] else {
-          reply(["ok": true, "processes": rows])
-          return
-        }
-        var cpuPercent = 0.0
-        var residentBytes: UInt64 = 0
-        var diskReadBytes: UInt64 = 0
-        var diskWriteBytes: UInt64 = 0
-        var processCount = 0
-        var threadCount = 0
-        var socketCount = 0
-        for pid in pids {
-          guard let process = sampled[pid] else { continue }
-          processCount += 1
-          cpuPercent += process.cpuPercent
-          residentBytes = Self.saturatingAdd(residentBytes, process.usage.residentBytes)
-          diskReadBytes = Self.saturatingAdd(diskReadBytes, process.usage.diskReadBytes)
-          diskWriteBytes = Self.saturatingAdd(diskWriteBytes, process.usage.diskWriteBytes)
-          threadCount += Self.processThreadCount(pid)
-          socketCount += Self.socketDescriptorCount(pid)
-        }
-        rows.append([
-          "pid": Int(rootPID),
-          "comm": root.comm,
-          "cpu_percent": cpuPercent,
-          "mem_percent": Double(residentBytes) / totalMemory * 100,
-          "memory_bytes": Self.jsonInt(residentBytes),
-          "disk_read_bytes": Self.jsonInt(diskReadBytes),
-          "disk_write_bytes": Self.jsonInt(diskWriteBytes),
-          "uptime_seconds": Self.processUptimeSeconds(rootPID),
-          "process_count": processCount,
-          "thread_count": threadCount,
-          "socket_count": socketCount,
-        ])
-      } else {
-        for pid in pids {
-          guard let process = sampled[pid] else { continue }
-          rows.append([
-            "pid": Int(pid),
-            "comm": process.comm,
-            "cpu_percent": process.cpuPercent,
-            "mem_percent": Double(process.usage.residentBytes) / totalMemory * 100,
-          ])
-        }
-      }
-      reply(["ok": true, "processes": rows])
-    }
-  }
-
-  /// Read every pid once; pids without a usable prior sample are read a
-  /// second time after `windowMs` so their first CPU figure is real rather
-  /// than zero. Prior samples come from the cache regardless of which caller
-  /// (full table or a process tree) produced them.
-  private func sampleProcesses(
-    _ pids: [pid_t], windowMs: Int, pruneOthers: Bool
-  ) -> [pid_t: SampledProcess] {
-    var out: [pid_t: SampledProcess] = [:]
-    var needsBracket: [pid_t: PIDUsage] = [:]
-    let now = DispatchTime.now().uptimeNanoseconds
-    processSampleLock.lock()
-    for pid in pids {
-      guard let usage = Self.pidUsage(pid) else { continue }
-      if let prior = processSamples[pid], prior.startAbstime == usage.startAbstime,
-        now > prior.sampledAtNs
-      {
-        let elapsedNs = Double(now - prior.sampledAtNs)
-        let cpuPercent = Double(usage.cpuNs &- min(prior.cpuNs, usage.cpuNs)) / elapsedNs * 100
-        out[pid] = SampledProcess(usage: usage, cpuPercent: cpuPercent, comm: prior.comm)
-        processSamples[pid] = ProcessSample(
-          cpuNs: usage.cpuNs, sampledAtNs: now, startAbstime: usage.startAbstime,
-          comm: prior.comm)
-      } else {
-        needsBracket[pid] = usage
-      }
-    }
-    if pruneOthers {
-      let live = Set(pids)
-      processSamples = processSamples.filter { live.contains($0.key) }
-    }
-    processSampleLock.unlock()
-    guard !needsBracket.isEmpty else { return out }
-
-    Thread.sleep(forTimeInterval: Double(windowMs) / 1_000)
-    let after = DispatchTime.now().uptimeNanoseconds
-    let windowNs = Double(after - now)
-    processSampleLock.lock()
-    for (pid, first) in needsBracket {
-      guard let usage = Self.pidUsage(pid), usage.startAbstime == first.startAbstime,
-        let comm = Self.executableBasename(pid)
-      else { continue }
-      let cpuPercent = Double(usage.cpuNs &- min(first.cpuNs, usage.cpuNs)) / windowNs * 100
-      out[pid] = SampledProcess(usage: usage, cpuPercent: cpuPercent, comm: comm)
-      processSamples[pid] = ProcessSample(
-        cpuNs: usage.cpuNs, sampledAtNs: after, startAbstime: usage.startAbstime, comm: comm)
-    }
-    processSampleLock.unlock()
-    return out
-  }
-
-  /// `host.signal`: SIGTERM a pid without a `/bin/kill` subprocess. Errors
-  /// carry the OS message (EPERM: not this uid's process; ESRCH: gone).
-  private func signalProcess(
-    _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let pid = PluginJSON.pid(params["pid"]), pid > 1 else {
-      reply(["ok": false, "error": "host.signal requires pid > 1"])
-      return
-    }
-    if Self.signalSender(pid) == 0 {
-      reply(["ok": true])
-    } else {
-      reply(["ok": false, "error": String(cString: strerror(errno))])
-    }
-  }
-
-  private static func allPids() -> [pid_t] {
-    let count = proc_listallpids(nil, 0)
-    guard count > 0 else { return [] }
-    let capacity = Int(count) + 64
-    var pids = [pid_t](repeating: 0, count: capacity)
-    let filled = proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size))
-    guard filled > 0 else { return [] }
-    return Array(pids.prefix(Int(filled))).filter { $0 > 0 }
-  }
-
-  /// Snapshot the root process and every currently reachable descendant.
-  /// Browser and Electron resource use lives primarily in helpers, so an
-  /// exact root-only sample would materially under-report the focused app.
-  private static func processTree(root: pid_t) -> [pid_t] {
-    var ordered = [root]
-    var seen: Set<pid_t> = [root]
-    var index = 0
-    while index < ordered.count {
-      let parent = ordered[index]
-      index += 1
-      let count = proc_listchildpids(parent, nil, 0)
-      guard count > 0 else { continue }
-      let capacity = Int(count) + 16
-      var children = [pid_t](repeating: 0, count: capacity)
-      let filled = proc_listchildpids(
-        parent, &children, Int32(capacity * MemoryLayout<pid_t>.size))
-      guard filled > 0 else { continue }
-      for child in children.prefix(Int(filled)) where child > 0 && seen.insert(child).inserted {
-        ordered.append(child)
-      }
-    }
-    return ordered
-  }
-
-  private struct PIDUsage {
-    var cpuNs: UInt64
-    var residentBytes: UInt64
-    var diskReadBytes: UInt64
-    var diskWriteBytes: UInt64
-    var startAbstime: UInt64
-  }
-
-  private static func pidUsage(_ pid: pid_t) -> PIDUsage? {
-    var info = rusage_info_current()
-    let ok = withUnsafeMutablePointer(to: &info) { pointer in
-      pointer.withMemoryRebound(to: (rusage_info_t?).self, capacity: 1) {
-        proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0) == 0
-      }
-    }
-    guard ok else { return nil }
-    return PIDUsage(
-      cpuNs: MachTime.nanoseconds(fromTicks: info.ri_user_time &+ info.ri_system_time),
-      residentBytes: info.ri_resident_size,
-      diskReadBytes: info.ri_diskio_bytesread,
-      diskWriteBytes: info.ri_diskio_byteswritten,
-      startAbstime: info.ri_proc_start_abstime)
-  }
-
-  private static func jsonInt(_ value: UInt64) -> Int {
-    Int(min(value, UInt64(Int.max)))
-  }
-
-  private static func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
-    let (sum, overflow) = lhs.addingReportingOverflow(rhs)
-    return overflow ? UInt64.max : sum
-  }
-
-  private static func processUptimeSeconds(_ pid: pid_t) -> Int {
-    var info = proc_bsdinfo()
-    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-    let read = withUnsafeMutablePointer(to: &info) {
-      proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, $0, size)
-    }
-    guard read == size else { return 0 }
-    return max(0, Int(Date().timeIntervalSince1970) - jsonInt(info.pbi_start_tvsec))
-  }
-
-  private static func processThreadCount(_ pid: pid_t) -> Int {
-    var info = proc_taskinfo()
-    let size = Int32(MemoryLayout<proc_taskinfo>.size)
-    let read = withUnsafeMutablePointer(to: &info) {
-      proc_pidinfo(pid, PROC_PIDTASKINFO, 0, $0, size)
-    }
-    guard read == size else { return 0 }
-    return max(0, Int(info.pti_threadnum))
-  }
-
-  /// Count open socket descriptors from the descriptor list alone. Resolving
-  /// each socket's address family costs one `proc_pidfdinfo` per descriptor —
-  /// tens of thousands of syscalls per sample for a browser's helper tree —
-  /// so the count includes unix-domain sockets and stays two syscalls per pid.
-  private static func socketDescriptorCount(_ pid: pid_t) -> Int {
-    let required = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-    guard required > 0 else { return 0 }
-    let stride = MemoryLayout<proc_fdinfo>.stride
-    let capacity = Int(required) / stride + 16
-    var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: capacity)
-    let filled = descriptors.withUnsafeMutableBytes { buffer in
-      proc_pidinfo(
-        pid, PROC_PIDLISTFDS, 0, buffer.baseAddress,
-        Int32(buffer.count))
-    }
-    guard filled > 0 else { return 0 }
-    let count = min(Int(filled) / stride, descriptors.count)
-    return descriptors.prefix(count).reduce(into: 0) { total, descriptor in
-      if descriptor.proc_fdtype == PROX_FDTYPE_SOCKET { total += 1 }
-    }
-  }
-
-  private static func executableBasename(_ pid: pid_t) -> String? {
-    var buffer = [CChar](repeating: 0, count: 4 * 1024)
-    guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
-    let path = String(cString: buffer)
-    guard !path.isEmpty else { return nil }
-    return (path as NSString).lastPathComponent
-  }
-
   private func activatePluginApp(
     _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
+    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
     guard let pid = PluginJSON.pid(params["pid"]) else {
       reply(["ok": false, "error": "host.activate requires pid"])
       return
     }
-    DispatchQueue.main.async {
+    scope.enqueue(on: .main) {
       guard let app = NSRunningApplication(processIdentifier: pid) else {
         reply(["ok": false, "error": "no running app for pid"])
         return
@@ -936,44 +303,6 @@ final class PluginHostRPC {
     "shift": .maskShift,
   ]
 
-  static func globalSyntheticKeyChord(
-    from params: [String: Any]
-  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    guard let rawCode = PluginJSON.integer(params["key_code"]), rawCode >= 0, rawCode < 0x80,
-      let names = params["modifiers"] as? [String], !names.isEmpty
-    else { return nil }
-    var flags: CGEventFlags = []
-    for name in names {
-      guard let flag = syntheticKeyModifierNames[name.lowercased()] else { return nil }
-      flags.insert(flag)
-    }
-    return (CGKeyCode(rawCode), flags)
-  }
-
-  private func postGlobalSyntheticKey(
-    _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let chord = Self.globalSyntheticKeyChord(from: params) else {
-      reply([
-        "ok": false,
-        "error": "host.post_global_key requires key_code and valid non-empty modifiers",
-      ])
-      return
-    }
-    guard let post = onGlobalSyntheticKeyRequested else {
-      reply(["ok": false, "error": "global key posting unavailable"])
-      return
-    }
-    DispatchQueue.main.async {
-      if post(chord.key, chord.flags) {
-        reply(["ok": true])
-      } else {
-        reply(["ok": false, "error": "global key event synthesis failed"])
-      }
-    }
-  }
-
   /// `host.post_keys`: post a short synthesized chord sequence to a pid
   /// (plugin fast paths like the browsers plugin's Firefox tab jump: ⌘8 + n×ctrl+PgDn).
   /// Modifier chords dispatch through the target's key-equivalent path, so
@@ -983,8 +312,12 @@ final class PluginHostRPC {
   /// text into the target.
   private func postSyntheticKeys(
     _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
+    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
+    if let interval = params["interval_ms"], PluginJSON.integer(interval) == nil {
+      reply(["ok": false, "error": "host.post_keys requires an integer interval_ms"])
+      return
+    }
     guard let pid = PluginJSON.pid(params["pid"]), pid > 0,
       let steps = params["keys"] as? [[String: Any]],
       !steps.isEmpty, steps.count <= 32
@@ -1015,7 +348,7 @@ final class PluginHostRPC {
       reply(["ok": false, "error": "key posting unavailable"])
       return
     }
-    DispatchQueue.main.async {
+    scope.enqueue(on: .main) {
       post(pid, chords, intervalMs)
       reply(["ok": true])
     }

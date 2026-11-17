@@ -191,7 +191,12 @@ final class PollScheduler {
     var owner: UInt64? = nil
   }
 
-  private let queue = DispatchQueue(label: "flash.poll", qos: .utility)
+  /// The clock only plans and dispatches; handlers run where they were
+  /// registered, at that queue's QoS. `.userInitiated` so a `system` or
+  /// `high` wake-up is not planned on a utility thread the kernel starves
+  /// under load (the reveal probe fired at 150–1,800 ms gaps when it was),
+  /// and so a handler queue without a QoS of its own inherits this one.
+  private let queue = DispatchQueue(label: "flash.poll", qos: .userInitiated)
   private var clients: [String: Client] = [:]
   private var timer: DispatchSourceTimer?
   private var armedForMs: Int?
@@ -287,6 +292,14 @@ final class PollScheduler {
   /// Every registered id, for diagnostics.
   func registeredIDs(completion: @escaping ([String]) -> Void) {
     queue.async { [weak self] in completion((self?.clients.keys).map { $0.sorted() } ?? []) }
+  }
+
+  /// Every registered id with the clock reading it is next due at, for
+  /// diagnostics.
+  func deadlines(completion: @escaping ([String: Int]) -> Void) {
+    queue.async { [weak self] in
+      completion((self?.clients ?? [:]).mapValues(\.state.nextAtMs))
+    }
   }
 
   private func finish(_ id: String) {

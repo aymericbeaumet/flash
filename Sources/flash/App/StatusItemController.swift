@@ -1,5 +1,19 @@
 import AppKit
 
+/// What the About window's update line shows after a check or an install.
+struct AboutUpdateStatus: Equatable {
+  var message: String
+  /// The release the button installs next, when there is one.
+  var installVersion: String?
+}
+
+/// The About window's update button, wired by `AppDelegate` to the same
+/// check and install the `updates` commands run.
+struct AboutUpdateActions {
+  var check: (@escaping (AboutUpdateStatus) -> Void) -> Void
+  var install: (@escaping (AboutUpdateStatus) -> Void) -> Void
+}
+
 /// The one sanctioned NSStatusItem: a menu-bar bolt with exactly three
 /// entries — About, Open Configuration, Quit. `[app] menu_bar_icon = false`
 /// removes it; everything Flash does stays reachable through the CLI and
@@ -10,6 +24,12 @@ import AppKit
 final class StatusItemController: NSObject {
   private var statusItem: NSStatusItem?
   var aboutVisibilityDidChange: ((Bool) -> Void)?
+  /// The About window became or stopped being the key window.
+  var aboutKeyDidChange: (() -> Void)?
+  var updateActions: AboutUpdateActions?
+  private var updateButton: NSButton?
+  private var updateLabel: NSTextField?
+  private var aboutInstallVersion: String?
 
   func apply(enabled: Bool) {
     if enabled {
@@ -38,6 +58,13 @@ final class StatusItemController: NSObject {
 
   private var aboutPanel: NSWindow?
   private static let repoURL = URL(string: "https://github.com/aymericbeaumet/flash")!
+  /// `[app] hide_from_capture` for the About window, made or not yet.
+  var hidesFromCapture = false {
+    didSet {
+      guard hidesFromCapture != oldValue else { return }
+      aboutPanel?.sharingType = CaptureSharing.sharingType(hidden: hidesFromCapture)
+    }
+  }
 
   var focusedAboutWindowFrame: CGRect? {
     guard NSApp.isActive, let aboutPanel, aboutPanel.isVisible, aboutPanel.isKeyWindow else {
@@ -57,11 +84,12 @@ final class StatusItemController: NSObject {
     // Flash returns to its headless accessory policy. This transient flip
     // is the sanctioned exception to the no-Dock-presence rule.
     aboutVisibilityDidChange?(true)
-    if let panel = aboutPanel {
-      presentAboutPanel(panel)
-      return
-    }
+    presentAboutPanel(aboutWindow())
+  }
 
+  /// The one About window, made on first use and kept; never shown here.
+  func aboutWindow() -> NSWindow {
+    if let panel = aboutPanel { return panel }
     let name =
       Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Flash"
     let version =
@@ -96,7 +124,23 @@ final class StatusItemController: NSObject {
     repoButton.bezelStyle = .inline
     repoButton.focusRingType = .none
 
-    let stack = NSStackView(views: [icon, title, versionLabel, commitLabel, repoButton])
+    let updateButton = NSButton(
+      title: "Check for Updates…", target: self, action: #selector(updateButtonClicked))
+    updateButton.bezelStyle = .rounded
+    updateButton.isHidden = updateActions == nil
+    self.updateButton = updateButton
+
+    let updateLabel = NSTextField(wrappingLabelWithString: "")
+    updateLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    updateLabel.textColor = .secondaryLabelColor
+    updateLabel.alignment = .center
+    updateLabel.preferredMaxLayoutWidth = 280
+    updateLabel.isHidden = true
+    self.updateLabel = updateLabel
+
+    let stack = NSStackView(views: [
+      icon, title, versionLabel, commitLabel, updateButton, updateLabel, repoButton,
+    ])
     stack.orientation = .vertical
     stack.alignment = .centerX
     stack.spacing = 8
@@ -111,6 +155,7 @@ final class StatusItemController: NSObject {
       backing: .buffered,
       defer: false)
     panel.title = "About"
+    panel.sharingType = CaptureSharing.sharingType(hidden: hidesFromCapture)
     panel.contentView = stack
     var contentSize = stack.fittingSize
     contentSize.width = max(contentSize.width, 340)
@@ -126,19 +171,22 @@ final class StatusItemController: NSObject {
     NotificationCenter.default.addObserver(
       self, selector: #selector(aboutPanelResignedKey(_:)),
       name: NSWindow.didResignKeyNotification, object: panel)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(aboutPanelBecameKey(_:)),
+      name: NSWindow.didBecomeKeyNotification, object: panel)
     aboutPanel = panel
-    presentAboutPanel(panel)
+    return panel
   }
 
   private func presentAboutPanel(_ panel: NSWindow) {
-    NSApp.setActivationPolicy(.regular)
+    AppActivation.setPolicy(.regular)
     panel.center()
     panel.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
+    AppActivation.activate(ignoringOtherApps: true)
     panel.makeKeyAndOrderFront(nil)
     DispatchQueue.main.async { [weak panel] in
       guard let panel, panel.isVisible else { return }
-      NSApp.activate(ignoringOtherApps: true)
+      AppActivation.activate(ignoringOtherApps: true)
       panel.makeKeyAndOrderFront(nil)
     }
   }
@@ -147,14 +195,57 @@ final class StatusItemController: NSObject {
     FlashLog.debug(
       "[about] resigned_key visible=\(aboutPanel?.isVisible ?? false) "
         + "occluded=\(!(aboutPanel?.occlusionState.contains(.visible) ?? true))")
+    aboutKeyDidChange?()
+  }
+
+  @objc private func aboutPanelBecameKey(_ note: Notification) {
+    aboutKeyDidChange?()
+  }
+
+  /// Whether the About window is shown and is the key window: then it owns
+  /// the keyboard, as any window does. AppKit state only, no IPC.
+  var aboutWindowIsKey: Bool {
+    guard let panel = aboutPanel else { return false }
+    return panel.isVisible && panel.isKeyWindow
   }
 
   @objc private func aboutPanelWillClose(_ note: Notification) {
     FlashLog.debug("[about] will_close")
     // Leave the app switcher again — Flash is headless outside the About
     // window's lifetime.
-    NSApp.setActivationPolicy(.accessory)
+    AppActivation.setPolicy(.accessory)
     aboutVisibilityDidChange?(false)
+  }
+
+  /// One check, or the install it found, at a time; the line under the
+  /// button says what happened.
+  @objc private func updateButtonClicked() {
+    guard let actions = updateActions, let button = updateButton, let label = updateLabel else {
+      return
+    }
+    let installing = aboutInstallVersion != nil
+    button.isEnabled = false
+    label.isHidden = false
+    label.stringValue = installing ? "Installing…" : "Checking…"
+    fitAboutPanel()
+    let done: (AboutUpdateStatus) -> Void = { [weak self] status in
+      guard let self else { return }
+      self.aboutInstallVersion = status.installVersion
+      self.updateLabel?.stringValue = status.message
+      self.updateLabel?.isHidden = status.message.isEmpty
+      self.updateButton?.title =
+        status.installVersion.map { "Install \($0)…" } ?? "Check for Updates…"
+      self.updateButton?.isEnabled = true
+      self.fitAboutPanel()
+    }
+    if installing { actions.install(done) } else { actions.check(done) }
+  }
+
+  private func fitAboutPanel() {
+    guard let panel = aboutPanel, let content = panel.contentView else { return }
+    var size = content.fittingSize
+    size.width = max(size.width, 340)
+    panel.setContentSize(size)
   }
 
   @objc private func openRepo() {
@@ -162,14 +253,10 @@ final class StatusItemController: NSObject {
       Self.repoURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
   }
 
+  /// The file may have been deleted since launch: `config edit` re-seeds the
+  /// starter so the editor opens something to save into.
   @objc private func openConfiguration() {
-    let environment = ProcessInfo.processInfo.environment
-    // The file may have been deleted since launch: re-seed the starter so the
-    // editor opens something to save into.
-    StarterConfig.seedIfNeeded(environment: environment)
-    let url = ConfigLoader.resolvePath(environment: environment)
-    NSWorkspace.shared.open(
-      url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+    AppDelegate.openConfigurationFile()
   }
 
   @objc private func quit() {

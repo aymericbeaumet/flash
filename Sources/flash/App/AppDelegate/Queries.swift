@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import FlashCore
 
-/// The resident's answers to `flash status` and `flash doctor`, and `:doctor`.
+/// The resident's answers to `flash resident status` and `flash resident doctor`, and `:doctor`.
 extension AppDelegate {
   func statusReport() -> FlashStatusReport {
     let info = Bundle.main.infoDictionary ?? [:]
@@ -13,7 +13,7 @@ extension AppDelegate {
       version: info["CFBundleShortVersionString"] as? String ?? "unknown",
       build: info["CFBundleVersion"] as? String ?? "unknown",
       mode: FlashStatusReport.modeName(modeStore.mode),
-      mappingScope: mappings.appliedScope.rawValue,
+      mappingScope: mappings.appliedScope.name,
       hintSession: FlashStatusReport.hintSessionPhase(
         route: hintSession.keyRoute, active: hintSession.isActive,
         discovering: activationInFlight),
@@ -71,7 +71,15 @@ extension AppDelegate {
           for: definition, environment: FlashProcessEnvironment.shared.environment
         ).command.first
       },
-      popupPath: FlashProcessEnvironment.shared.environment["PATH"])
+      popupPath: FlashProcessEnvironment.shared.environment["PATH"],
+      statusSegmentsRead: config.observedStatusSegments(),
+      statusSegmentsDeclared: pluginManager.declaredStatusSegments(),
+      disabledPlugins: config.plugins.disabled,
+      refusedLinkSchemes: overlay.statusLinkOpener.refusedSchemes,
+      telemetryReceiver: Doctor.TelemetryReceiverState(
+        enabled: config.telemetry.receiver.enabled, port: config.telemetry.receiver.port,
+        hasToken: !config.telemetry.receiver.token.isEmpty,
+        monitorsRunOnReceivedMetrics: config.monitorsRunOnReceivedMetrics()))
     let statuses = pluginManager.pluginStatuses()
     let screenshotEnabled = pluginManager.statusBarInfos().contains { $0.id == "screenshot" }
     let bundleURL = Bundle.main.bundleURL
@@ -96,7 +104,7 @@ extension AppDelegate {
       let summary =
         report.issues == 0
         ? "doctor: no issues" + (report.warnings == 0 ? "" : ", \(report.warnings) warning(s)")
-        : "doctor: \(report.issues) issue(s) — run flash doctor for details"
+        : "doctor: \(report.issues) issue(s) — run flash resident doctor for details"
       self?.overlay.displayBanner(summary, durationMs: 4000)
     }
   }

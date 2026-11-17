@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildIndex, plainText, search, sections } from "./src/lib/search.ts";
+import { buildIndex, search, sections } from "./src/lib/search.ts";
 import type { DocTopic } from "./src/lib/types.ts";
 
 const hints: DocTopic = {
@@ -11,8 +11,9 @@ const hints: DocTopic = {
 };
 const grid: DocTopic = { name: "mouse-grid", title: "Mouse grid", summary: "Reach any position.", body: "# Grid\n\nThe keyboard-shaped grid. Press a key, then refine." };
 
-test("plain text drops URLs, code marks and link targets", () => {
-  assert.equal(plainText("see [the repo](https://github.com/x) and `cf` **now**"), "see the repo and cf now");
+test("a heading inside a code block is not a section", () => {
+  const doc: DocTopic = { name: "x", title: "X", summary: "", body: "# X\n\n```toml\n## not a heading\n```\n\n## Real\n\nBody." };
+  assert.deepEqual(sections(doc).map((part) => part.heading), [undefined, "Real"].filter(Boolean));
 });
 
 test("sections split at headings with GitHub-style ids", () => {
@@ -38,4 +39,12 @@ test("title matches rank before body matches", () => {
   const index = buildIndex([hints, grid], [], [], []);
   const results = search(index, "grid");
   assert.equal(results[0].href, "/docs/mouse-grid");
+});
+
+test("manual sections search on both sites and land on their heading", () => {
+  const manual = [{ path: "normal-mode", title: "Normal mode", heading: "Input capture", id: "input-capture", text: "The session tap swallows keys." }];
+  const index = buildIndex([], [], [], [], manual);
+  const results = search(index, "tap swallows");
+  assert.equal(results[0].kind, "Docs");
+  assert.equal(results[0].href, "/docs/normal-mode#input-capture");
 });

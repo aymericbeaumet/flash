@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Encoded frames waiting for one child's stdin, in send order. Its owner
@@ -17,6 +18,30 @@ struct PluginOutboundQueue {
     let coalescingKey: String?
     let handle: FileHandle
     let reservation: PluginTransportBudget.Reservation
+
+    init(
+      data: Data, label: String, coalescingKey: String?, handle: FileHandle,
+      reservation: PluginTransportBudget.Reservation
+    ) throws {
+      // Teardown closes the lifecycle's stdin handle while a dequeued write
+      // may still be running. Foundation raises an Objective-C exception if
+      // that same handle is closed during write, outside Swift's do/catch.
+      // Keep this frame's writer alive until its final write has returned.
+      let descriptor = fcntl(handle.fileDescriptor, F_DUPFD_CLOEXEC, 0)
+      guard descriptor >= 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+      }
+      guard fcntl(descriptor, F_SETNOSIGPIPE, 1) == 0 else {
+        let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        close(descriptor)
+        throw error
+      }
+      self.data = data
+      self.label = label
+      self.coalescingKey = coalescingKey
+      self.handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+      self.reservation = reservation
+    }
   }
 
   private var frames: [Frame] = []

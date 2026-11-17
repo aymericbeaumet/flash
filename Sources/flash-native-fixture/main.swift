@@ -27,6 +27,7 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelega
   private let rows = ["Row Alpha", "Row Beta", "Row Gamma"]
   private var state: [String: Int] = [
     "context_menu": 0,
+    "context_menu_closed": 0,
     "duplicate": 0,
     "icon": 0,
     "primary": 0,
@@ -336,6 +337,13 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelega
   func menuWillOpen(_ menu: NSMenu) {
     if menu.title == "Fixture Context Menu" {
       state["context_menu", default: 0] += 1
+      writeState()
+    }
+  }
+
+  func menuDidClose(_ menu: NSMenu) {
+    if menu.title == "Fixture Context Menu" {
+      state["context_menu_closed", default: 0] += 1
       writeState()
     }
   }

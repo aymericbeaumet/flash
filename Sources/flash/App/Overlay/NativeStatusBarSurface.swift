@@ -1,4 +1,5 @@
 import AppKit
+import FlashCore
 import QuartzCore
 
 /// A screen's native tmux cell layout: the bar's lanes, notch and pill sizing,
@@ -74,15 +75,16 @@ final class NativeStatusBarSurface {
     availableColumns = max(
       0, Int((barFrame.width - OverlayPanel.statusBarEdgePadding * 2) / cellWidth))
     var sizingLabels = labels
-    // Transient TERMINAL and HYPER labels must not widen the persistent
-    // base-mode pill. Holding the leader should not resize the bar.
+    // Transient TERMINAL, HYPER, HOLD and layer labels must not widen the
+    // persistent base-mode pill. Holding the leader or entering a layer
+    // should not resize the bar.
     sizingLabels.terminal = ""
     sizingLabels.hyper = ""
     sizingLabels.hold = ""
     let longestPill =
       document.runs.filter {
         $0.pill && !$0.isStyleBoundary && $0.text != labels.terminal && $0.text != labels.hyper
-          && $0.text != labels.hold
+          && $0.text != labels.hold && !($0.isModeLabel && modeStyle == .layer)
       }
       .map { $0.text.count }.max() ?? 0
     let pillWidth = max(
@@ -666,7 +668,7 @@ final class NativeStatusBarSurface {
   )
     -> (
       links: [(rect: CGRect, url: URL)], popups: [StatusBarPopupRegion],
-      hints: [StatusBarHintRegion]
+      hints: [StatusBarHintRegion], cycles: [StatusBarCycleRegion]
     )
   {
     let bar = backgroundLayer.frame
@@ -678,6 +680,7 @@ final class NativeStatusBarSurface {
     }
     var links: [(rect: CGRect, url: URL)] = []
     var popups: [StatusBarPopupRegion] = []
+    var cycles: [StatusBarCycleRegion] = []
     func append(_ bounds: CGRect, _ url: URL, to targets: inout [(rect: CGRect, url: URL)]) {
       if let previous = targets.last, previous.url == url,
         abs(previous.rect.maxX - bounds.minX) < 0.01
@@ -689,8 +692,19 @@ final class NativeStatusBarSurface {
     }
     for (index, run) in visibleRuns.enumerated() {
       let bounds = rect(runFrames[index])
-      if let target = run.segment.link, let url = URL(string: target) {
+      if let target = run.segment.link, let url = URLParsing.url(target) {
         append(bounds, url, to: &links)
+      }
+      if let key = run.segment.cycleKey {
+        // One carousel's runs are one scroll target, however its line is styled.
+        if var previous = cycles.last, previous.key == key,
+          abs(previous.rect.maxX - bounds.minX) < 0.01
+        {
+          previous.rect.size.width += bounds.width
+          cycles[cycles.count - 1] = previous
+        } else {
+          cycles.append(.init(rect: bounds, key: key))
+        }
       }
       if let name = run.segment.popup, let content = run.segment.popupContent ?? popupTexts[name] {
         if var previous = popups.last, previous.name == name, previous.content == content,
@@ -735,6 +749,6 @@ final class NativeStatusBarSurface {
     let hints = OverlayPanel.statusBarHintRegions(links: links, popups: popups) {
       hoverTextBounds(in: local($0)).map(rect)
     }
-    return (links, popups, hints)
+    return (links, popups, hints, cycles)
   }
 }

@@ -32,9 +32,9 @@ public final class DeclaredApps: @unchecked Sendable {
 /// Apps that host terminal sessions (manifest `terminal_emulators`; the
 /// bundled `terminals` plugin lists the common ones). The host applies its
 /// terminal rules to exactly those apps: an unbound Command chord is refused
-/// rather than typed, pixel wheels are refused, and a primary hint or grid
-/// click anywhere in one enters INSERT. A terminal link hint stays in NORMAL.
-/// `only_terminals` plugin selectors match them.
+/// rather than typed, pixel wheels are refused, and NORMAL's moves, motions
+/// and VISUAL send no cursor keys there. `only_terminals` plugin selectors
+/// match them.
 public enum TerminalEmulators {
   public static let declared = DeclaredApps()
 
@@ -47,6 +47,20 @@ public enum TerminalEmulators {
 /// (manifest `on_demand_hints`): Flash walks them only when hints are asked
 /// for and observes only the notifications that drive mode, border and focus.
 public enum OnDemandHintApps {
+  public static let declared = DeclaredApps()
+
+  public static func contains(_ bundleIdentifier: String?) -> Bool {
+    declared.contains(bundleIdentifier)
+  }
+}
+
+/// Apps with their own modal editing or partial Accessibility text (manifest
+/// `own_text_editing`; the bundled `defaults` plugin lists VS Code and its
+/// forks, the JetBrains IDEs, Zed and Sublime Text). NORMAL never engages a
+/// field there (`TextScope`): its keys keep their page meaning, `v` / `V` do
+/// nothing and the text table never applies, unless
+/// `[mode.apps."<bundle>".text] enabled = true` forces the app.
+public enum OwnTextEditingApps {
   public static let declared = DeclaredApps()
 
   public static func contains(_ bundleIdentifier: String?) -> Bool {

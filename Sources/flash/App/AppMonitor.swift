@@ -50,13 +50,21 @@ final class AppMonitor {
   /// Every observed AX notification: the app's pid, its bundle id as known
   /// at observer install, and the notification name.
   var focusedElementDidChange: ((pid_t, String?, String) -> Void)?
+  /// App `pid` reported a change to what it shows: one that schedules a
+  /// prepared-model refresh, outside an AX storm. A click chain waiting for
+  /// its next pick walks again on it (`ClickChain.refreshes`).
+  var uiDidChange: ((pid_t) -> Void)?
   /// A menu of app `pid` opened (`true`) or closed, with the element the
   /// notification named: the one handle on a menu that is not a child of
   /// its application element (Firefox's context menus).
   var menuDidChange: ((pid_t, Bool, AXUIElement) -> Void)?
+  /// Focus may have moved in app `pid`: it was activated, or it reported a
+  /// focus or window change (`notificationMovesFocus`).
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
   var activeWindowMayHaveChanged: ((pid_t, String, AXUIElement?) -> Void)?
   var focusedWindowDidResolve: ((pid_t, AXUIElement) -> Void)?
+  /// Every application launch the workspace reports, on main.
+  var applicationDidLaunch: ((NSRunningApplication) -> Void)?
 
   // MARK: Config (shared between main + axQueue)
   //
@@ -84,10 +92,12 @@ final class AppMonitor {
       // A configuration change may add or drop the provider that owned a
       // gated app's hints: give every app a fresh look.
       self.backgroundWalkGate.reset()
+      // Providers may have changed with it, and walk costs with them.
+      self.modelIntervalsMs.removeAll()
       guard let app = NSWorkspace.shared.frontmostApplication else { return }
       let pid = app.processIdentifier
       guard pid > 0 else { return }
-      self.invalidatePreparedModel(for: pid)
+      self.invalidatePreparedModel(for: pid, because: .config)
       self.scheduleModelRefresh(for: pid, reason: .config)
     }
   }
@@ -105,14 +115,49 @@ final class AppMonitor {
   static let modelDebounceMs: Int = 80
   static let modelMaintenanceLeadMs: Int = 250
   static let backgroundModelMinIntervalMs: Int = 2500
-  /// Automatic warming that costs this much is no longer a background win:
-  /// repeating it every freshness cycle burns a visible fraction of a core.
-  /// Keep the completed model, then let focus/config reassess and activation
-  /// perform a full on-demand walk when the model becomes stale.
-  static let slowAutomaticModelRefreshThresholdMs: Double = 50
+  /// A walk is slow when repeating it every maintenance interval would cost
+  /// more than this fraction of a core: the budget is a fraction of the
+  /// model's freshness window, never an absolute number of milliseconds. The
+  /// apps hints matter for (Electron, Gecko, Catalyst) walk in 50–100 ms, and
+  /// a flat 50 ms budget switched the prepared model off for every one of
+  /// them — 72% of hint activations walked on the key path.
+  static let slowAutomaticModelRefreshFraction: Double = 0.10
+  /// Below this a walk is never slow, whatever the interval.
+  static let slowAutomaticModelRefreshFloorMs: Double = 50
 
-  static func automaticModelRefreshIsSlow(elapsedMs: Double) -> Bool {
-    elapsedMs >= slowAutomaticModelRefreshThresholdMs
+  /// 150 ms at the 1.5 s floor, 3 s at the 30 s ceiling.
+  static func slowAutomaticModelRefreshThresholdMs(intervalMs: Int) -> Double {
+    max(slowAutomaticModelRefreshFloorMs, slowAutomaticModelRefreshFraction * Double(intervalMs))
+  }
+
+  static func automaticModelRefreshIsSlow(elapsedMs: Double, intervalMs: Int) -> Bool {
+    elapsedMs >= slowAutomaticModelRefreshThresholdMs(intervalMs: intervalMs)
+  }
+
+  /// The app's next maintenance interval after a walk that took `elapsedMs`
+  /// at the `current` one. A slow walk doubles it toward the ceiling — the
+  /// backoff, instead of cancelling maintenance and letting the model expire
+  /// — and so does a maintenance walk that reproduced the model `unchanged`
+  /// (a static app). Otherwise the interval shrinks back toward the floor,
+  /// halving as long as the walk is cheap for the halved interval, so it
+  /// settles where the walk's duty cycle stays under the fraction. A
+  /// `degenerate` walk is fast because there was nothing to read, so it
+  /// never shrinks the interval.
+  static func nextModelIntervalMs(
+    current: Int, elapsedMs: Double, unchanged: Bool, degenerate: Bool
+  ) -> Int {
+    let current = max(current, modelFreshnessMs)
+    if automaticModelRefreshIsSlow(elapsedMs: elapsedMs, intervalMs: current) || unchanged {
+      return min(current * 2, modelFreshnessMaxMs)
+    }
+    guard !degenerate else { return current }
+    var next = current
+    while next > modelFreshnessMs {
+      let halved = max(next / 2, modelFreshnessMs)
+      guard !automaticModelRefreshIsSlow(elapsedMs: elapsedMs, intervalMs: halved) else { break }
+      next = halved
+    }
+    return next
   }
 
   /// AX event storm visibility. `onAXEvent` is otherwise silent, so a
@@ -178,10 +223,12 @@ final class AppMonitor {
   /// threshold. Their dirty tokens still advance on every event, but automatic
   /// background warming pauses until a quiet window proves the burst ended.
   var axEventStormingPIDs: Set<pid_t> = []
-  /// Pids whose last focus/config-driven automatic walk exceeded the useful
-  /// background-work budget. AX/queued/maintenance warming stays paused for
-  /// them until another explicit focus/config refresh measures a cheap tree.
-  var slowAutomaticModelRefreshPIDs: Set<pid_t> = []
+  /// Each app's maintenance interval: how long its models are served and how
+  /// far apart its speculative walks run (`nextModelIntervalMs`). It outlives
+  /// the models — an AX event discards a model, not the evidence that the
+  /// app walks slowly — and is forgotten when the app quits or the
+  /// configuration changes. Absent means the 1.5 s floor.
+  var modelIntervalsMs: [pid_t: Int] = [:]
   var modelScheduler = PreparedModelScheduler(
     debounceMs: modelDebounceMs,
     minimumIntervalMs: backgroundModelMinIntervalMs,
@@ -215,7 +262,7 @@ final class AppMonitor {
     /// Exactly the notifications registered at install time, so teardown
     /// removes the same set (full vs light differs per bundle).
     let notifications: [String]
-    /// Accessed only on `axQueue`. Move/resize/minimize/destruction
+    /// Accessed only on `observerQueue`. Move/resize/minimize/destruction
     /// notifications are emitted by the window element, not the application
     /// element, so the focused window needs its own registrations.
     var focusedWindow: AXUIElement?
@@ -246,6 +293,7 @@ final class AppMonitor {
     let bundleIdentifier: String?
     private let focusedWindowLock = NSLock()
     private var focusedWindow: AXUIElement?
+    private var active = true
 
     init(monitor: AppMonitor, pid: pid_t, bundleIdentifier: String?) {
       self.monitor = monitor
@@ -255,14 +303,29 @@ final class AppMonitor {
 
     func setFocusedWindow(_ window: AXUIElement?) {
       focusedWindowLock.lock()
-      focusedWindow = window
+      if active { focusedWindow = window }
       focusedWindowLock.unlock()
+    }
+
+    /// Main revokes ownership before removing the run-loop source. A callback
+    /// already in flight or queued on main must not outlive its observer.
+    func invalidate() {
+      focusedWindowLock.lock()
+      active = false
+      focusedWindow = nil
+      focusedWindowLock.unlock()
+    }
+
+    var isActive: Bool {
+      focusedWindowLock.lock()
+      defer { focusedWindowLock.unlock() }
+      return active
     }
 
     func isFocusedWindow(_ element: AXUIElement) -> Bool {
       focusedWindowLock.lock()
       defer { focusedWindowLock.unlock() }
-      guard let focusedWindow else { return false }
+      guard active, let focusedWindow else { return false }
       return CFEqual(focusedWindow, element)
     }
   }
@@ -272,15 +335,14 @@ final class AppMonitor {
   static let observerCallback: AXObserverCallback = { _, element, notification, refcon in
     guard let refcon else { return }
     let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
-    guard let monitor = ctx.monitor else { return }
+    guard ctx.isActive, let monitor = ctx.monitor else { return }
     let isFocusedWindow = ctx.isFocusedWindow(element)
     let name = notification as String
     let isMenu =
       name == kAXMenuOpenedNotification as String || name == kAXMenuClosedNotification as String
     monitor.enqueueAXEvent(
       PendingAXEvent(
-        pid: ctx.pid,
-        bundleIdentifier: ctx.bundleIdentifier,
+        context: ctx,
         notification: name,
         observedElementIsFocusedWindow: isFocusedWindow,
         observedWindow: isFocusedWindow ? element : nil,
@@ -288,8 +350,7 @@ final class AppMonitor {
   }
 
   struct PendingAXEvent {
-    var pid: pid_t
-    var bundleIdentifier: String? = nil
+    let context: ObserverContext
     var notification: String
     var observedElementIsFocusedWindow: Bool
     var observedWindow: AXUIElement?
@@ -320,9 +381,10 @@ final class AppMonitor {
     axDrainArmed = false
     pendingAXEventsLock.unlock()
     for event in batch {
+      guard event.context.isActive else { continue }
       onAXEvent(
-        pid: event.pid,
-        bundleIdentifier: event.bundleIdentifier,
+        pid: event.context.pid,
+        bundleIdentifier: event.context.bundleIdentifier,
         notification: event.notification,
         observedElementIsFocusedWindow: event.observedElementIsFocusedWindow,
         observedWindow: event.observedWindow,
@@ -438,6 +500,16 @@ final class AppMonitor {
       || notification == kAXUIElementDestroyedNotification
   }
 
+  /// The notifications after which the focused element is re-read for its
+  /// region (`FocusRegionTracker`): focus moving, never an element's
+  /// destruction, which a busy web app posts by the hundred while focus
+  /// stays where it is.
+  static func notificationMovesFocus(_ notification: String) -> Bool {
+    notification == kAXFocusedUIElementChangedNotification as String
+      || notification == kAXFocusedWindowChangedNotification as String
+      || notification == kAXMainWindowChangedNotification as String
+  }
+
   static func notificationMayChangeFocusedElement(_ notification: String) -> Bool {
     notification == kAXFocusedUIElementChangedNotification as String
       || notification == kAXFocusedWindowChangedNotification as String
@@ -474,9 +546,9 @@ final class AppMonitor {
   }
 
   func stop() {
-    teardownAllObservers()
     preparedModels.removeAll()
     cancelAllRefreshWork()
+    teardownAllObservers()
     // Focus is no longer reported, so no Gecko mode may linger. Stop runs at
     // quit, when a deferred switch-off would never run: wait for it, bounded
     // by a walk still holding the process.
@@ -495,11 +567,21 @@ final class AppMonitor {
   /// window included: another app's window moving over or off it is window
   /// list state no AX event reports, so the lookup recomputes the region
   /// from `windowEntries` — the activation's own read — or one read here,
-  /// on main, through the same builder the walk used.
-  func lookupPreparedModel(
-    for pid: pid_t, windowEntries: [WindowSnapshot.Entry]? = nil
-  ) -> PreparedModel? {
-    guard let model = preparedModels.current(pid: pid) else { return nil }
+  /// on main, through the same builder the walk used. A miss says why,
+  /// `suppressed` when there is no model because Flash chose not to warm the
+  /// app (a storm, the empty-walk gate, an on-demand declaration).
+  func resolvePreparedModel(
+    for pid: pid_t, bundleIdentifier: String, windowEntries: [WindowSnapshot.Entry]? = nil
+  ) -> PreparedModelStore.Resolution {
+    guard let model = preparedModels.current(pid: pid) else {
+      let resolution = preparedModels.resolve(
+        pid: pid, dirtyToken: dirtyTokens[pid] ?? 0, configRevision: configRevision,
+        now: DispatchTime.now(), occlusion: nil)
+      guard case .miss(let miss) = resolution, [.absent, .focus, .invalidated].contains(miss),
+        automaticWarmingIsSuppressed(pid: pid, bundleIdentifier: bundleIdentifier)
+      else { return resolution }
+      return .miss(.suppressed)
+    }
     let entries =
       windowEntries
       ?? WindowSnapshot.windowList().map {
@@ -512,12 +594,19 @@ final class AppMonitor {
         ignoringPids: [getpid()], walkedWindowFrame: model.occlusion?.frame)
       return WindowSnapshot.OcclusionSignature(snapshot: snapshot, pid: pid)
     }
-    return preparedModels.lookup(
+    return preparedModels.resolve(
       pid: pid,
       dirtyToken: dirtyTokens[pid] ?? 0,
       configRevision: configRevision,
       now: DispatchTime.now(),
       occlusion: occlusion)
+  }
+
+  /// Flash is not warming `pid`: its speculative walks are held by an AX
+  /// event storm, the empty-walk gate or an on-demand declaration.
+  func automaticWarmingIsSuppressed(pid: pid_t, bundleIdentifier: String) -> Bool {
+    backgroundWalkGate.isGated(pid) || axEventStormingPIDs.contains(pid)
+      || !Self.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: bundleIdentifier)
   }
 
 }

@@ -18,7 +18,12 @@ function currentAnchor() {
  * heading has not rendered yet is revealed once it appears.
  */
 class Router {
-  route = $state<Route>(parseRoute(location));
+  route = $state<Route>(typeof location === "undefined" ? { page: "home", param: "" } : parseRoute(location));
+  /**
+   * Whether a click on a page link stays in the app. The published site
+   * lets the browser load a prerendered page until the whole manual is here.
+   */
+  handles: (route: Route) => boolean = () => true;
   private main: HTMLElement | null = null;
   private onNavigate = () => {};
   private key = "";
@@ -26,15 +31,26 @@ class Router {
   private anchor = "";
   private positions = new Map<string, number>();
 
+  /** The page a server render or a hydration starts from. */
+  prime(url: { pathname: string; search: string }) {
+    this.route = parseRoute(url);
+  }
+
   start(main: HTMLElement, onNavigate: () => void) {
     this.main = main;
     this.onNavigate = onNavigate;
+    // A prerendered page hydrates as rendered (a search page without its
+    // query); the address can say more.
+    const actual = parseRoute(location);
+    if (actual.page !== this.route.page || actual.param !== this.route.param) this.route = actual;
     history.scrollRestoration = "manual";
     this.key = this.entryKey();
     this.url = location.href;
     this.anchor = currentAnchor();
     const onScroll = () => this.positions.set(this.key, main.scrollTop);
-    onScroll();
+    // A page starts at the top; reading `scrollTop` here would force a
+    // layout of the page before its content has arrived.
+    this.positions.set(this.key, 0);
     main.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("click", this.onClick);
     // A fragment navigation fires both; `sync` handles an entry once.
@@ -91,7 +107,8 @@ class Router {
     const url = new URL(anchor.href);
     if (url.origin !== location.origin) return;
     if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
-    if (parseRoute(url).page === "not-found") return;
+    const route = parseRoute(url);
+    if (route.page === "not-found" || !this.handles(route)) return;
     event.preventDefault();
     this.navigate(url.href);
   };
@@ -110,10 +127,16 @@ class Router {
     this.settle(saved !== undefined ? { top: saved } : location.hash ? "anchor" : samePage ? "keep" : { top: 0 });
   };
 
+  /**
+   * Scrolls and focuses once the new page has rendered, in the frame that
+   * shows it: setting `scrollTop` or focusing lays the page out, and done
+   * there, that layout is the frame's own rather than one more.
+   */
   private settle(scroll: Settle) {
     this.anchor = scroll === "anchor" ? currentAnchor() : "";
     const key = this.key;
-    void tick().then(() => {
+    void tick().then(() => requestAnimationFrame(() => {
+      if (key !== this.key) return;
       if (typeof scroll === "object" && this.main) {
         this.main.scrollTop = scroll.top;
         this.positions.set(key, this.main.scrollTop);
@@ -121,7 +144,7 @@ class Router {
         // from the top of the new page rather than from the document body.
         if (scroll.top === 0 && !(document.activeElement instanceof HTMLInputElement)) this.main.focus({ preventScroll: true });
       } else if (scroll === "anchor") this.revealAnchor();
-    });
+    }));
   }
 
   private entryKey() {

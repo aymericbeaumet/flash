@@ -8,7 +8,8 @@ import Foundation
 /// `invalidate` bumps the generation and queues the wipe. It does not wait on
 /// the queue: the keyboard loop must not block behind the walk. `start` is
 /// queued after that wipe, so a replaced session cannot present the previous
-/// window's text.
+/// window's text. A plugin's text grid arrives later, off the queue; its
+/// reply hops back on and is dropped unless its generation is still current.
 final class BigramSearch {
   struct Result {
     let generation: UInt64
@@ -21,13 +22,19 @@ final class BigramSearch {
     let windowFrame: CGRect
   }
 
+  /// Asks for the text grid of a context; the reply may come on any queue,
+  /// exactly once.
+  typealias TextGridRequest = (AppContext, @escaping (PluginTextGrid?) -> Void) -> Void
+
   private let queue: DispatchQueue
   private let lock = NSLock()
   private var generation: UInt64 = 0
   private var corpus: BigramTextCollector.Corpus?
   private var focusedPID: pid_t = 0
   private var windowFrame: CGRect = .null
-  private var tmuxGrid: TmuxBigramGrid.Grid?
+  private var textGrid: TerminalTextGrid.Grid?
+  /// A text grid was asked for and has not answered: the letter waits.
+  private var awaitingTextGrid = false
   private var query = ""
   private var resolvedQuery: String?
   private var deliver: ((Result) -> Void)?
@@ -52,7 +59,8 @@ final class BigramSearch {
       guard let self else { return }
       self.corpus = nil
       self.windowFrame = .null
-      self.tmuxGrid = nil
+      self.textGrid = nil
+      self.awaitingTextGrid = false
       self.query = ""
       self.resolvedQuery = nil
       self.deliver = nil
@@ -70,6 +78,7 @@ final class BigramSearch {
   func start(
     context: AppContext, screenH: CGFloat,
     discoverFrame: @escaping (AppContext) -> CGRect,
+    requestTextGrid: @escaping TextGridRequest,
     deliver: @escaping (Result) -> Void
   ) {
     let generation = currentGeneration
@@ -83,14 +92,23 @@ final class BigramSearch {
       let window = Self.hintWindow(discoverFrame(context), fallback: context.frontWindowFrame)
       self.windowFrame = window
       // A terminal such as Alacritty draws its own glyphs and publishes no
-      // text to Accessibility. The tmux client attached to that window does,
-      // on the same window rectangle `f` uses.
-      self.tmuxGrid =
-        corpus.runCount == 0
-        ? TmuxBigramGrid.capture(
-          pid: context.processID, bundleIdentifier: context.bundleIdentifier,
-          window: window)
-        : nil
+      // text to Accessibility. The plugin that hints it (tmux) reads its
+      // cells instead, laid out on the same window rectangle `f` uses. The
+      // request never blocks this queue.
+      if corpus.runCount == 0 {
+        self.awaitingTextGrid = true
+        requestTextGrid(context) { [weak self] reply in
+          self?.queue.async { [weak self] in
+            guard let self, self.currentGeneration == generation else { return }
+            self.awaitingTextGrid = false
+            self.textGrid = reply.flatMap {
+              TerminalTextGrid.grid(
+                $0, bundleIdentifier: context.bundleIdentifier, window: window)
+            }
+            self.resolveIfReady(generation: generation)
+          }
+        }
+      }
       self.resolveIfReady(generation: generation)
     }
   }
@@ -106,18 +124,16 @@ final class BigramSearch {
   }
 
   private func resolveIfReady(generation: UInt64) {
-    guard query.count == 1, let corpus, resolvedQuery != query else { return }
+    guard query.count == 1, let corpus, !awaitingTextGrid, resolvedQuery != query else { return }
     resolvedQuery = query
     let targets: [JumpTarget]
     let runCount: Int
     if corpus.runCount > 0 {
       targets = corpus.targets(matching: query)
       runCount = corpus.runCount
-    } else if let tmuxGrid {
-      targets = tmuxGrid.targets(
-        matching: query, pid: focusedPID, bundleIdentifier: corpus.bundleIdentifier)
-      runCount =
-        tmuxGrid.panes.reduce(0) { $0 + $1.lines.count } + tmuxGrid.chrome.count
+    } else if let textGrid {
+      targets = textGrid.targets(matching: query, pid: focusedPID)
+      runCount = textGrid.lines.count
     } else {
       targets = []
       runCount = 0

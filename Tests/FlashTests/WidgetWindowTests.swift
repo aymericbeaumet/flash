@@ -171,7 +171,7 @@ final class WidgetWindowTests: XCTestCase {
     widget.hideFromCapture = true
     controller.apply(
       widgets: ["w": widget], statusBarReservesSpace: true, statusBarMonitor: .all,
-      screenCapture: .show)
+      hideFromCapture: false)
     func windows() -> [[String: Any]] {
       controller.diagnostics()["windows"] as? [[String: Any]] ?? []
     }
@@ -185,7 +185,7 @@ final class WidgetWindowTests: XCTestCase {
     controller.show("unknown", lines: StatusFormatDocument.parse("x").lines())
     XCTAssertEqual(windows().count, 1)
     controller.apply(
-      widgets: [:], statusBarReservesSpace: true, statusBarMonitor: .all, screenCapture: .show)
+      widgets: [:], statusBarReservesSpace: true, statusBarMonitor: .all, hideFromCapture: false)
     XCTAssertEqual(windows().count, 0)
     XCTAssertTrue(reported.isEmpty, "a widget starts visible; nothing occluded it")
   }

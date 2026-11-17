@@ -1,12 +1,12 @@
 {
-  "$comment": "THE machine-readable Flash plugin protocol contract — the single source of truth for version, deadlines, quotas, error strings, the capability registry and transport limits. Normativity order: this file > docs/plugin-protocol.md prose > any implementation. Swift asserts its constants equal this file (PluginProtocolParityTests); the Rust SDK asserts its transport limits against it (wire.rs) and pins the behaviour in its runtime tests and probe crate. Changing anything here is a protocol change: update the host, SDK, affected plugins, tests, and docs in the same commit (repo rule 7 — no compatibility shims, no version bump while Flash has no external users).",
+  "$comment": "THE machine-readable Flash plugin protocol contract \u2014 the single source of truth for version, deadlines, quotas, error strings, the capability registry and transport limits. Normativity order: this file > docs/plugin-protocol.md prose > any implementation. Swift asserts its constants equal this file (PluginProtocolParityTests); the Rust SDK asserts its transport limits against it (wire.rs) and pins the behaviour in its runtime tests and probe crate. Changing anything here is a protocol change: update the host, SDK, affected plugins, tests, and docs in the same commit (repo rule 7 \u2014 no compatibility shims, no version bump while Flash has no external users).",
   "protocol_version": 1,
   "deadlines_ms": {
-    "$comment": "One deadline table. startup: initialize must be answered immediately (no warm-catalog wait; config [plugins] startup_timeout tunes it). query: per-keystroke evaluate. live: search (late replies dropped, non-fatal). hints: activation hint pull; it blocks the AX queue ahead of the prepared model, so it is a fixed latency ceiling. perform: all four kinds; a manifest commands[] entry timeout_ms overrides for that entry. ping: reply budget for the idle-liveness probe (sent only after idle_before_ping_ms of inbound silence with no request in flight; ONE miss tears down). shutdown_grace: stdin-close -> SIGTERM; +500ms -> SIGKILL.",
+    "$comment": "One deadline table. startup: initialize must be answered immediately (no warm-catalog wait; config [plugins] startup_timeout tunes it). query: per-keystroke evaluate. hints: activation hint pull; it blocks the AX queue ahead of the prepared model, so it is a fixed latency ceiling. text_grid: the letter-search grid pull, asked asynchronously only when the focused app publishes no Accessibility text; the search waits on it, so it shares the hints ceiling. perform: all three kinds. ping: reply budget for the idle-liveness probe (sent only after idle_before_ping_ms of inbound silence with no request in flight; ONE miss tears down). shutdown_grace: stdin-close -> SIGTERM; +500ms -> SIGKILL.",
     "startup": 5000,
     "query": 50,
-    "live": 1000,
     "hints": 500,
+    "text_grid": 500,
     "perform": 10000,
     "ping": 10000,
     "idle_before_ping": 60000,
@@ -17,34 +17,26 @@
       "initialize": "request {protocol_version} -> {ok, protocol_version}; reply immediately, once ever; ok:false or a version mismatch is terminal (flush, exit 0)",
       "ping": "request {} -> {ok:true}",
       "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`; `core:status.observed` carries {segments: [name]}, the complete set of unique nonempty manifest `status` names of this plugin that a status surface shows (empty = none), sent once after initialize and again on every change",
-      "evaluate": "request {query, scope, surface} -> {ok, answers}; CPU-only over pre-warmed state",
-      "search": "request {query, scope} -> {ok, rows}; live sources only, may do real work",
-      "hints": "request {bundle_id, pid, front_window_frame} -> {ok, targets, context_pid?}; always live",
-      "perform": "request {kind: resolve|command|action|navigate, ...} -> {ok, target_pid?, navigation_url?, message?} | {ok:false, unhandled:true} | {ok:false, error}"
+      "evaluate": "request {query} -> {ok, answers}; CPU-only over pre-warmed state",
+      "hints": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, targets, context_pid?}; always live",
+      "text_grid": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, columns, rows, lines}; always live; sent to the focused app's hint providers in hint order, first non-empty grid wins; each line is one text_grid_line shape; empty lines = no grid",
+      "perform": "request {kind: resolve|command|navigate, ...} -> {ok, target_pid?, navigation_url?, message?} | {ok:false, unhandled:true} | {ok:false, error}; a command is one perform_command shape: a core command the manifest declares under one of Flash's topics (with context), the plugin's own command or a bang (without)"
     },
     "plugin_to_host_notifications": {
-      "publish": "{rows} — full-replacement catalog; host-owned store; empty rows = authoritative empty; transient failure = don't publish (host keeps last-good)",
-      "status": "{segments: {name: value}} — manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
-      "poll": "{registrations: {name: {every: seconds, priority} | {after: seconds, priority}}} — full-replacement set of the cadences (`every`) and one-shot deadlines (`after`, measured from receipt) the host should drive for this plugin; empty clears. Plugins must not arm their own timers or sleep to schedule work: the host folds every registration in the app onto one clock and sends `event {name: \"core:poll:<name>\"}` when one is due, regardless of manifest `listen`. A deadline fires once; repeating it unchanged in a later set neither re-arms nor re-fires it, and a changed or new name arms it afresh. Ticks are one-way and unacknowledged, so a plugin still running its previous callback drops the ones it missed instead of catching up. Bounds live in the `poll` section; a malformed or over-bound frame is rejected whole.",
-      "log": "{level, message, fields, trace?} — content-free; trace names the interaction of the request being served"
+      "publish": "{rows, source?} \u2014 the plugin's catalog, host-owned store. Without `source`: a full replacement of every source's rows. With `source` (a manifest sources[].name that every row carries): a replacement of that source's rows alone, the other sources keeping theirs \u2014 a publish stays proportional to the change when volatile and static rows are separate sources. Quotas apply to the whole catalog after the merge; empty rows = authoritative empty (of the catalog, or of that source); transient failure = don't publish (host keeps last-good). The host decodes publishes on a queue that carries no replies, so a publish and a later reply are not ordered host-side; publishes of one plugin keep their order.",
+      "status": "{segments: {name: value}} \u2014 manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
+      "poll": "{registrations: {name: {every: seconds, priority} | {after: seconds, priority}}} \u2014 full-replacement set of the cadences (`every`) and one-shot deadlines (`after`, measured from receipt) the host should drive for this plugin; empty clears. Plugins must not arm their own timers or sleep to schedule work: the host folds every registration in the app onto one clock and sends `event {name: \"core:poll:<name>\"}` when one is due, regardless of manifest `listen`. A deadline fires once; repeating it unchanged in a later set neither re-arms nor re-fires it, and a changed or new name arms it afresh. Ticks are one-way and unacknowledged, so a plugin still running its previous callback drops the ones it missed instead of catching up. Bounds live in the `poll` section; a malformed or over-bound frame is rejected whole.",
+      "log": "{level, message, fields, trace?} \u2014 content-free; trace names the interaction of the request being served"
     },
     "plugin_to_host_rpcs": {
       "host.ping": null,
       "host.fetch": "network_fetch",
       "host.wifi_info": "wifi_info",
+      "host.applescript": "apple_events",
       "host.normal_mode_target": "app_control",
       "host.activate": "app_control",
       "host.open": "open",
-      "host.post_media_key": "media_keys",
-      "host.audio_devices": "audio_devices",
-      "host.process_table": "process_control",
-      "host.signal": "process_control",
-      "host.clipboard_write": "clipboard",
-      "host.notify": "notify",
-      "host.storage_get": null,
-      "host.storage_set": null,
       "host.post_keys": "accessibility",
-      "host.post_global_key": "accessibility",
       "host.ax_snapshot": "accessibility",
       "host.ax_perform": "accessibility",
       "host.ax_set": "accessibility",
@@ -52,9 +44,8 @@
     }
   },
   "host_events": {
-    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen`. `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each key. core:ax.changed (payload {pid, notification, bundle_id?}; both pid and a non-empty notification are required) reports one AX notification an observed app posted, one of `ax_notifications`: the value change of each keystroke is AXValueChanged, so match the notification instead of debouncing every change alike. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need.",
+    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen`. `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each key. core:apps.changed (payload {running_applications: [{bundle_id, pid, localized_name}]}) carries the complete snapshot of running regular apps. core:window.focus.changed (payload {pid, bundle_id}) names the app whose focused or main window changed. core:ax.changed (payload {pid, notification, bundle_id?}; both pid and a non-empty notification are required) reports one AX notification an observed app posted, one of `ax_notifications`: the value change of each keystroke is AXValueChanged, so match the notification instead of debouncing every change alike. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need. core:system.slept and core:system.woke bracket a system sleep, core:displays.slept and core:displays.woke a display sleep, core:screen.locked and core:screen.unlocked the lock screen; all payload {}. core:displays.changed (payload {added: [name], removed: [name], displays: [name]}) reports a display connected or removed. core:space.changed (payload {}) follows the active Space. core:user.idle (payload {seconds}) reports that nobody touched the keyboard, mouse or trackpad for one of the subscribers' idle thresholds (300 s for a plugin), once per away episode and threshold; core:user.active (payload {idle_seconds}) follows when input comes back after an announced episode. core:usb.attached and core:usb.detached (payload {vendor_id?, product_id?, name?}, never a serial number) report a USB device connected or removed; devices already connected are not announced. core:clock.minute (payload {time: \"HH:MM\", weekday: \"mon\"\u2026\"sun\", date: \"YYYY-MM-DD\", late_seconds}, in the local time zone) reports that a wall-clock minute began; a plugin listener hears every minute. After a sleep or a locked screen it hears only the current minute, with how late it is. core:workspace.changed (payload {workspace, previous?, workspaces: [name]}) follows the focused tiling workspace while [tiling] is on. core:mode.changed (payload {mode, previous, layer?}: normal, insert, command, terminal, hyper, hold, visual, layer or disabled; layer names the active layer) follows Flash's mode. core:hints.shown (payload {surface, targets}) reports a hint session's first labels on screen, core:hints.committed (payload {surface}) each target it commits and core:hints.cancelled (payload {surface}) a session that ended without committing; never which target, its text or its label. core:monitor.triggered (payload {monitor, level: warning|error}) reports a value monitor rising into warning or error; never the value. Every event but core:apps.changed, core:ax.changed, core:session.opened and core:status.observed, the plugin plumbing, also reaches the clients of the resident's socket that subscribe to it (docs/ipc-protocol.md).",
     "names": [
-      "core:flash.started",
       "core:apps.changed",
       "core:apps.launched",
       "core:apps.terminated",
@@ -65,9 +56,27 @@
       "core:power.changed",
       "core:network.changed",
       "core:volumes.changed",
-      "core:space.changed",
       "core:status.observed",
-      "core:session.opened"
+      "core:session.opened",
+      "core:system.slept",
+      "core:system.woke",
+      "core:displays.slept",
+      "core:displays.woke",
+      "core:screen.locked",
+      "core:screen.unlocked",
+      "core:displays.changed",
+      "core:space.changed",
+      "core:user.idle",
+      "core:user.active",
+      "core:usb.attached",
+      "core:usb.detached",
+      "core:clock.minute",
+      "core:workspace.changed",
+      "core:mode.changed",
+      "core:hints.shown",
+      "core:hints.committed",
+      "core:hints.cancelled",
+      "core:monitor.triggered"
     ],
     "replacement": [
       "core:apps.changed",
@@ -78,8 +87,10 @@
       "core:power.changed",
       "core:network.changed",
       "core:volumes.changed",
+      "core:status.observed",
       "core:space.changed",
-      "core:status.observed"
+      "core:workspace.changed",
+      "core:mode.changed"
     ],
     "ax_notifications": [
       "AXFocusedUIElementChanged",
@@ -117,14 +128,57 @@
     "max_registrations": 64,
     "max_name_bytes": 64
   },
+  "applescript": {
+    "$comment": "Typed host-owned AppleScript templates; no source code, script field, raw terminology or evaluated strings are accepted. Requests carry operation, timeout_ms and the operation-specific data fields. All strings enter templates only as escaped literals. Supported browser IDs use fixed Chromium/Safari dialects. Every operation checks its actual target against manifest apple_events_targets; shortcuts use com.apple.shortcuts.events and chat_submit uses com.apple.systemevents. The plugin needs apple_events. script_bytes bounds generated source; result_bytes bounds the UTF-8 result; deadlines and per-plugin concurrency include queue admission. The host returns {ok:true,result} or {ok:false,error,status?}; source/results never enter diagnostics.",
+    "script_bytes": 65536,
+    "result_bytes": 1048576,
+    "default_timeout_ms": 10000,
+    "max_timeout_ms": 30000,
+    "concurrency": 4,
+    "operations": [
+      "browser_tabs",
+      "browser_select",
+      "browser_tab_index",
+      "browser_tab_move",
+      "shortcuts_list",
+      "shortcut_run",
+      "chat_submit"
+    ]
+  },
   "perform_kinds": [
     "resolve",
     "command",
-    "action",
     "navigate"
   ],
+  "publish": {
+    "$comment": "The publish notification's params: `rows` always; `source` names the one manifest sources[].name whose rows these replace (every row must carry it), absent for a whole-catalog replacement. Any other key rejects the publish whole.",
+    "params": {
+      "required": [
+        "rows"
+      ],
+      "optional": [
+        "source"
+      ]
+    }
+  },
+  "perform_command": {
+    "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words as a mapping writes them (--index=3, --force, or a bang's query words). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang.",
+    "required": [
+      "command",
+      "subcommand",
+      "args"
+    ],
+    "optional": [
+      "context"
+    ],
+    "context": [
+      "bundle_id",
+      "pid",
+      "front_window_frame"
+    ]
+  },
   "row": {
-    "$comment": "Catalog row shape for publish and search. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
+    "$comment": "Catalog row shape for publish. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
     "required": [
       "source",
       "title"
@@ -134,6 +188,61 @@
       "metadata",
       "effect"
     ]
+  },
+  "lifecycle": {
+    "$comment": "The manifest `lifecycle` key. Absent, the surfaces decide (resident, on-demand, status-bound; see docs/plugin-protocol.md Activation). `publish_then_exit` is a catalog-only plugin: `exec` and `sources`, none of the surfaces a live child serves (`forbids`). Its run is `on_start`: it publishes its catalog and exits 0 on its own, and the host keeps the catalog, reports the plugin as `published`, counts that exit as success (no restart, no failure budget) and answers its performs `unhandled` (its rows carry host effects). A non-zero exit or a signal is still a crash. The host runs it again when its `[plugins.<id>]` settings change, when a file named by one of its `watch_settings` changes (`watch_settings` lists setting names whose string value is a path: `~` expands to the home, a relative path is under the plugin root; the key needs this lifecycle), on `plugins reload`, and when its own files change. Such a plugin receives no events, the running-apps snapshot included.",
+    "values": [
+      "publish_then_exit"
+    ],
+    "publish_then_exit": {
+      "requires": [
+        "exec",
+        "sources"
+      ],
+      "forbids": [
+        "hints",
+        "query",
+        "status",
+        "listen",
+        "commands",
+        "bangs",
+        "navigation"
+      ],
+      "respawn": [
+        "settings_changed",
+        "watched_file_changed",
+        "plugins_reload",
+        "plugin_files_changed"
+      ],
+      "state": "published"
+    }
+  },
+  "source_types": {
+    "$comment": "Every manifest sources[] entry declares one `type`, the one word users filter the flashlight by (`@tabs`). A type matches `pattern`. `core` types are fed by Flash alone; a plugin declaring one fails to load. A `shared` type fixes the `kind` every source of it declares. Any other matching word is a new type, and every plugin declaring it must agree on its kind. The plugin! macro checks each manifest against this table at build time; the host checks again at load.",
+    "pattern": "^[a-z][a-z0-9]*$",
+    "core": [
+      "apps",
+      "windows",
+      "clipboard",
+      "notes",
+      "reminders",
+      "contacts",
+      "files",
+      "processes",
+      "menus",
+      "system"
+    ],
+    "shared": {
+      "tabs": "locations",
+      "history": "default",
+      "bookmarks": "default",
+      "emojis": "default",
+      "bangs": "default",
+      "snippets": "default",
+      "shortcuts": "default",
+      "terminals": "locations",
+      "network": "default"
+    }
   },
   "hint_target": {
     "$comment": "The host revalidates geometry and target identity before clicking. context_id is an optional non-empty opaque string identifying the containing live source context; a changed context cancels the captured target. Omitted or null means unspecified.",
@@ -146,13 +255,26 @@
       "label",
       "url",
       "pid",
-      "enters_insert_mode",
       "priority",
       "context_id"
     ]
   },
+  "text_grid_line": {
+    "$comment": "The two exact key sets of a text_grid line; rows and columns are cells, row 0 at the top, row < rows and column < columns. text is captured cell text, one UTF-16 unit per cell from column on (a terminal capture's addressing). format is an expanded tmux status format the host lays out across width >= 1 cells (column + width <= columns) with its status-line rules; style markers are not text and a blank layout is dropped. One malformed line rejects the whole reply.",
+    "text": [
+      "row",
+      "column",
+      "text"
+    ],
+    "format": [
+      "row",
+      "column",
+      "width",
+      "format"
+    ]
+  },
   "effects": {
-    "$comment": "Closed union. copy_text/insert_text everywhere; open on rows only (answers cannot manufacture navigation). There is deliberately no run effect — argv side effects belong in perform, inside the sandbox.",
+    "$comment": "Closed union. copy_text/insert_text everywhere; open on rows only (answers cannot manufacture navigation). There is deliberately no run effect \u2014 argv side effects belong in perform, inside the sandbox.",
     "rows": [
       "copy_text",
       "insert_text",
@@ -164,7 +286,7 @@
     ]
   },
   "quotas": {
-    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated.",
+    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated. catalog_rows and catalog_bytes bound the plugin's whole catalog after a per-source merge. catalog_bytes counts the `rows` array as written on the wire \u2014 each row object's span in the publish frame, one separator byte per row and the two brackets \u2014 measured by the host from the frame it received, never by re-encoding: the compact encoding is the floor, and a plugin pays for whitespace or escaping it adds inside a row (the Rust SDK writes compact rows, so its count is the compact encoding exactly). answers_bytes counts the compact encoding of `answers`.",
     "frame_bytes": 10485760,
     "catalog_rows": 10000,
     "catalog_bytes": 4194304,
@@ -177,16 +299,12 @@
     "answers": 16,
     "answers_bytes": 262144,
     "answer_field_bytes": 16384,
-    "clipboard_write_bytes": 1048576,
-    "notify_message_bytes": 1024,
-    "storage_key_bytes": 128,
-    "storage_value_bytes": 65536,
-    "storage_entries": 256,
     "fetch_response_bytes": 1048576,
-    "fetch_timeout_ms": 8000
+    "fetch_timeout_ms": 8000,
+    "text_grid_dimension": 10000
   },
   "errors": {
-    "$comment": "Canonical EXACT protocol-level error strings (spec-pinned; domain failures stay free-form and content-free). The response law: every result carries boolean `ok`; ok:false carries a non-empty `error` — except perform's {ok:false, unhandled:true} (not mine; host MAY fall back). A perform {ok:false, error} means mine-but-broke: the host MUST NOT fall back.",
+    "$comment": "Canonical EXACT protocol-level error strings (spec-pinned; domain failures stay free-form and content-free). The response law: every result carries boolean `ok`; ok:false carries a non-empty `error` \u2014 except perform's {ok:false, unhandled:true} (not mine; host MAY fall back). A perform {ok:false, error} means mine-but-broke: the host MUST NOT fall back.",
     "unknown_method": "unknown method: <method>",
     "protocol_mismatch": "protocol version mismatch: host v<H>, plugin v1",
     "initialize_repeated": "initialize may only be called once",
@@ -200,27 +318,22 @@
   },
   "capabilities": [
     "accessibility",
-    "audio_devices",
     "app_control",
-    "clipboard",
-    "media_keys",
+    "apple_events",
     "network",
     "network_fetch",
-    "notify",
     "open",
-    "process_control",
-    "subprocess",
     "wifi_info"
   ],
   "id_semantics": "positive monotonic integers per sender; host and plugin counters are independent and may overlap (an inbound id+method frame is always a request). Exactly one reply per id'd request. Responses to unknown ids are dropped silently. There is no cancellation: late replies are dropped and the deadline table is the contract.",
   "trace": {
     "pattern": "^[0-9a-z]{1,16}$",
-    "host_to_plugin": "optional `trace` key on a request envelope (hints, search, evaluate, perform) naming the user interaction that caused it",
+    "host_to_plugin": "optional `trace` key on a request envelope (hints, text_grid, evaluate, perform) naming the user interaction that caused it",
     "plugin_to_host": "a `log` notification emitted while serving that request carries it back as params.trace; a malformed id is ignored"
   },
   "deadline": {
     "host_to_plugin": "optional `deadline_ms` on a request envelope: the milliseconds the host still waits for the reply as it writes the request, a positive integer",
-    "plugin": "a search or hints handler still running a tenth of the deadline (at most 50 ms) before it is dropped and answers errors.deadline_exceeded; evaluate and perform run to completion"
+    "plugin": "a hints or text_grid handler still running a tenth of the deadline (at most 50 ms) before it is dropped and answers errors.deadline_exceeded; evaluate and perform run to completion"
   },
   "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
   "transport_limits": {

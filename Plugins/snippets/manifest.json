@@ -2,18 +2,18 @@
   "id": "snippets",
   "name": "Snippets",
   "version": "0.1.0",
-  "description": "User-defined text snippets typed into the focused app via @snippets.items.",
-  "sandbox": {},
+  "description": "User-defined text snippets typed into the focused app via @snippets.",
   "exec": [
     "./flash-plugin-snippets"
   ],
-  "listen": [
-    "core:config.changed"
+  "lifecycle": "publish_then_exit",
+  "watch_settings": [
+    "file"
   ],
   "sources": [
     {
       "name": "snippets.items",
-      "kind": "default",
+      "type": "snippets",
       "priority": "normal"
     }
   ]

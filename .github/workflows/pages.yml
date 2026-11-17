@@ -1,24 +1,35 @@
 name: Docs
 
+# docs/*.md is the one source of the manual. The resident serves it at
+# /docs/<page>; this publishes the same docs view, prerendered page by page
+# by `mise run build:site` (Scripts/build-site.sh), at
+# https://aymericbeaumet.github.io/flash/.
 on:
   push:
     branches: [main]
     paths:
       - "docs/**"
-      - "mkdocs.yml"
+      - "Inspector/**"
+      - "Scripts/build-site.sh"
+      - "Scripts/_common.sh"
       - "mise.toml"
-      - "pyproject.toml"
-      - "uv.lock"
+      - "mise.lock"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
       - "docs/**"
-      - "mkdocs.yml"
+      - "Inspector/**"
+      - "Scripts/build-site.sh"
+      - "Scripts/_common.sh"
       - "mise.toml"
-      - "pyproject.toml"
-      - "uv.lock"
+      - "mise.lock"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+
+env:
+  # Each job's mise-action installs only the tools its tasks need.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_LOCKED: "true"
 
 concurrency:
   group: pages
@@ -31,14 +42,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5.1.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          version: 2026.10.11
-          install_args: python uv
-      - name: Build with mkdocs
-        run: uv run --locked mkdocs build
-      - uses: actions/upload-pages-artifact@v4
+          version: 2026.11.6
+          install_args: node pnpm
+      - name: Build the site
+        run: mise run build:site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: build/site
 
@@ -55,4 +66,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

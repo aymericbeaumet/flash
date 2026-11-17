@@ -28,7 +28,7 @@ extension AppDelegate {
           return
         }
         // A finished report has no process left to read keys: a key press
-        // closes it instead, as leave_mode does.
+        // closes it instead, as mode leave does.
         if self.modeStore.mode.isTerminal,
           self.overlay.statusPopupController.focusedName == origin.name,
           self.overlay.statusTerminals.hasEnded(origin.name),
@@ -62,9 +62,6 @@ extension AppDelegate {
       if case .terminal = self.modeStore.mode {
         self.dispatchMode(.closeTerminal(restoresApp: reason == "terminal_removed"))
       }
-    }
-    overlay.statusBarPopupDismissHandler = { [weak self] restoreApplication in
-      self?.dismissPopup(restoreApplication: restoreApplication)
     }
     overlay.statusBarTerminalNeedsSpawnHandler = { [weak self] name in
       guard let self else { return false }
@@ -117,7 +114,16 @@ extension AppDelegate {
       invalid: config.invalidPopupNames, prewarm: config.prewarmedPopupNames)
   }
 
-  /// `enter_terminal_mode`: the named popup standalone, centred on the
+  /// The display the focused app's front window is on, else the primary:
+  /// where a standalone popup is centred.
+  func focusedAppScreen() -> (scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)?
+  {
+    let front = currentNonFlashContext()?.frontWindowFrame
+    return OverlayPanel.currentScreenSnapshot().screen(
+      around: front.map { CGPoint(x: $0.midX, y: $0.midY) })
+  }
+
+  /// `mode terminal`: the named popup standalone, centred on the
   /// focused app's screen and focused, which enters TERMINAL mode through the
   /// popup's focus; no name opens `terminal`. The popup already focused is a
   /// no-op; another one replaces it. A text popup shows the document the
@@ -125,15 +131,7 @@ extension AppDelegate {
   func enterTerminalMode(named requested: String?) {
     let name = requested ?? Config.defaultPopupName
     if modeStore.mode.isTerminal, overlay.statusPopupController.focusedName == name { return }
-    let snapshot = OverlayPanel.currentScreenSnapshot()
-    let context = currentNonFlashContext()
-    let screen =
-      snapshot.screens.first { screen in
-        context.map {
-          screen.frame.contains(CGPoint(x: $0.frontWindowFrame.midX, y: $0.frontWindowFrame.midY))
-        } ?? false
-      } ?? snapshot.screens.first { $0.frame == snapshot.mainFrame } ?? snapshot.screens.first
-    guard let screen else { return }
+    guard let screen = focusedAppScreen() else { return }
     let fields = ["popup_id": StatusFormatDocument.stableID(name)]
     let terminals = overlay.statusTerminals
     let document: [FlashStatusTextSegment]?
@@ -142,16 +140,20 @@ extension AppDelegate {
     } else if case .text? = config.popups[name] {
       guard config.statusBar.enabled, let evaluated = overlay.statusBarPopupDocuments[name] else {
         FlashLog.warn(
-          "Text popup needs the status bar: [statusbar] enabled = true evaluates its text",
-          fields: fields, source: "core:TerminalPopup.enterTerminalMode")
+          "[popup] text_needs_statusbar", fields: fields,
+          source: "core:TerminalPopup.enterTerminalMode")
         return
       }
       document = evaluated
     } else {
-      FlashLog.warn(
-        config.terminalPopups[name] == nil
-          ? "Popup not found" : "Popup starts once the login environment resolves",
-        fields: fields, source: "core:TerminalPopup.enterTerminalMode")
+      if config.terminalPopups[name] == nil {
+        FlashLog.warn(
+          "[popup] not_found", fields: fields, source: "core:TerminalPopup.enterTerminalMode")
+      } else {
+        FlashLog.debug(
+          "[popup] waits_for_login_environment", fields: fields,
+          source: "core:TerminalPopup.enterTerminalMode")
+      }
       return
     }
     dismissPopup(restoreApplication: false)
@@ -163,7 +165,9 @@ extension AppDelegate {
 
   func suppressDismissedPopupHover() {
     let popup = overlay.statusPopupController
-    if let name = popup.presentation.name, !popup.presentation.isStandalone {
+    if let name = popup.previewName ?? overlay.statusBarSpawnDwell.pendingName
+      ?? (popup.presentation.isStandalone ? nil : popup.presentation.name)
+    {
       overlay.statusBarHoverGate = .dismissed(name)
     }
   }
@@ -180,7 +184,30 @@ extension AppDelegate {
   func restartPopup(named name: String?) {
     guard let key = popupSessionName(name) else { return }
     terminalInputMappings?.flush()
-    overlay.statusTerminals.restart(name: key)
+    let registry = overlay.statusTerminals
+    guard registry.isPager(key), let controller = statusBarController else {
+      registry.restart(name: key)
+      return
+    }
+    guard let session = registry.session(named: key),
+      let generation = registry.inputGenerations[key]
+    else { return }
+    controller.refreshPopupDocument(named: key) {
+      [weak self, weak controller, weak registry, weak session] document in
+      // A close, configuration reload or another restart may win while the
+      // status queue evaluates. Only the original run may consume the reply.
+      guard let self, let controller, self.statusBarController === controller,
+        let registry, self.overlay.statusTerminals === registry,
+        let session, registry.session(named: key) === session,
+        registry.inputGenerations[key] == generation
+      else { return }
+      // Inline popups have no named template; their latest staged bytes are
+      // already the source of truth, as when the status controller is absent.
+      if let document {
+        registry.stagePopup(name: key, data: StatusPopupController.documentVT(document))
+      }
+      registry.restart(name: key)
+    }
   }
 
   func quitPopup(named name: String?) {
@@ -201,6 +228,12 @@ extension AppDelegate {
     let popup = overlay.statusPopupController
     return [
       "focused": popup.focusedName as Any? ?? NSNull(),
+      "preview": popup.previewName as Any? ?? NSNull(),
+      "standalone": popup.presentation.isStandalone,
+      "visible_names": popup.visibleNames.sorted(),
+      "preview_frame": popup.previewFrame.map { frame in
+        ["x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height]
+      } as Any? ?? NSNull(),
       "visible": popup.isVisible,
       "frame": [
         "x": popup.frame.minX, "y": popup.frame.minY,

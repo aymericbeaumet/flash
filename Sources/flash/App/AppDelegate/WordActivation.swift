@@ -2,7 +2,7 @@ import AppKit
 import FlashCore
 import FlashProviders
 
-/// `mouse_target --words`: a hint on every visible word of the focused
+/// `mouse target --words`: a hint on every visible word of the focused
 /// window's text, from the same Accessibility text walk EasyMotion uses. The
 /// click lands on the word's leading edge, so a click places the caret at a
 /// word boundary and `--select` highlights the text between two words.
@@ -18,7 +18,13 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    let context = monitor.coveringInteractionContext(inFrontOf: base) ?? base
+    guard let context = monitor.hintContext(inFrontOf: base) else {
+      // An authentication prompt is in front: nothing is walked or clicked.
+      endHintActivationEmpty(
+        bundleIdentifier: base.bundleIdentifier, path: "refused_surface", surface: "words")
+      applyModeOverlay()
+      return
+    }
     guard !context.frontWindowFrame.isNull, !context.frontWindowFrame.isInfinite,
       !context.frontWindowFrame.isEmpty
     else {

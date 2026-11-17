@@ -213,7 +213,8 @@ struct StatusFormatDocument: Equatable {
       }
       style.append(run.pill ? "pill" : "nopill")
       style.append(run.shrink ? "shrink" : "noshrink")
-      style.append(run.cycle ? "cyc" : "nocyc")
+      style.append(run.cycle ? run.cycleKey.map { "cyc=\($0)" } ?? "cyc" : "nocyc")
+      if run.cycle && run.cycleBackward { style.append("cycback") }
       return "#[\(style.joined(separator: ","))]"
         + run.text.replacingOccurrences(of: "#", with: "##")
     }.joined()
@@ -381,7 +382,8 @@ struct StatusFormatStyleState {
             let content = encoded.removingPercentEncoding, !content.isEmpty
           else {
             FlashLog.debug(
-              "Status inline popup rejected", fields: ["encoded_bytes": String(encoded.utf8.count)],
+              "[statusbar] inline_popup_rejected",
+              fields: ["encoded_bytes": String(encoded.utf8.count)],
               source: "core:StatusFormatDocument.popup")
             return false
           }
@@ -405,8 +407,24 @@ struct StatusFormatStyleState {
         candidate.shrink = false
       } else if token == "cyc" {
         candidate.cycle = true
+        candidate.cycleKey = nil
+        candidate.cycleBackward = false
+      } else if token.hasPrefix("cyc=") {
+        // The host names the carousel a scroll steps (`StatusCycleKey`),
+        // case and all.
+        let key = String(raw.dropFirst(4))
+        guard !key.isEmpty else { return false }
+        candidate.cycle = true
+        candidate.cycleKey = key
+        candidate.cycleBackward = false
+      } else if token == "cycback" {
+        // Host-set after a carousel marker: the line was stepped back to.
+        guard candidate.cycle else { return false }
+        candidate.cycleBackward = true
       } else if token == "nocyc" {
         candidate.cycle = false
+        candidate.cycleKey = nil
+        candidate.cycleBackward = false
       } else if token.hasPrefix("meter=") || token == "spark" || token.hasPrefix("spark=") {
         guard let kind = StatusFormatGauge.kind(token: token) else { return false }
         regions += 1

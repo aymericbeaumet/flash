@@ -12,7 +12,6 @@
   "fetch_urls": [
     "https://www.ecb.europa.eu/"
   ],
-  "sandbox": {},
   "query": {
     "prefixes": [
       "="

@@ -92,6 +92,8 @@ enum FlashLog {
 
   private static let lock = NSLock()
   private static var minLevel: Level = .info
+  /// The last state `changed(_:to:)` saw per key.
+  private static var conditionStates: [String: String] = [:]
   private static var sinks: [UUID: SinkEntry] = [:]
   private static let pid = Int(getpid())
   /// Serial queue owning every byte of log output (stderr and file).
@@ -149,6 +151,31 @@ enum FlashLog {
     let fileID = fileID.description
     let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
     return "core:\(file).\(function)"
+  }
+
+  /// Whether `state` differs from the last one recorded under `key`, which
+  /// it then becomes. A condition that persists across many events warns
+  /// when it starts or changes and logs its repeats a level lower, so it
+  /// never storms (`docs/observability.md`); recording its cleared state
+  /// lets the next occurrence warn again.
+  static func changed(_ key: String, to state: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard conditionStates[key] != state else { return false }
+    conditionStates[key] = state
+    return true
+  }
+
+  /// A line at a level chosen at run time.
+  static func log(
+    _ level: Level,
+    _ message: @autoclosure () -> String,
+    fields: @autoclosure () -> [String: String] = [:],
+    source: String? = nil,
+    fileID: StaticString = #fileID,
+    function: StaticString = #function
+  ) {
+    emit(level, source: source, fileID: fileID, function: function, fields: fields, message)
   }
 
   static func debug(
@@ -275,6 +302,9 @@ final class FlashLogFileWriter {
   private let rotationKeep: Int
   private let queue: DispatchQueue
   private var handle: FileHandle?
+  /// Watches the open file for leaving its path: a cleaner deleting the logs
+  /// directory or moving the file away, and this writer's own rotation.
+  private var removalWatch: DispatchSourceFileSystemObject?
   private var bytesWritten: UInt64 = 0
 
   init(
@@ -314,9 +344,29 @@ final class FlashLogFileWriter {
     try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     let descriptor = Darwin.open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600)
     guard descriptor >= 0 else { return }
-    handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    let opened = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    handle = opened
     let attributes = try? fm.attributesOfItem(atPath: url.path)
     bytesWritten = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+    // A file that leaves its path takes every later line with it until the
+    // process ends, so drop it then: the next line recreates the file (and
+    // its directory) at the path. The descriptor closes only once the watch
+    // is cancelled, and an old watch never closes a newer file.
+    let watch = DispatchSource.makeFileSystemObjectSource(
+      fileDescriptor: descriptor, eventMask: [.delete, .rename, .revoke], queue: queue)
+    watch.setEventHandler { [weak self, weak watch] in
+      guard let self, let watch, self.removalWatch === watch else { return }
+      self.closeHandle()
+    }
+    watch.setCancelHandler { try? opened.close() }
+    removalWatch = watch
+    watch.resume()
+  }
+
+  private func closeHandle() {
+    handle = nil
+    removalWatch?.cancel()
+    removalWatch = nil
   }
 
   private func rotate() {
@@ -336,8 +386,7 @@ final class FlashLogFileWriter {
       bytesWritten = 0
       return
     }
-    try? handle?.close()
-    handle = nil
+    closeHandle()
     openIfNeeded()
   }
 }

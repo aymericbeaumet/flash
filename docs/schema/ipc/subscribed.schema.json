@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/subscribed.schema.json",
+  "title": "subscribed",
+  "description": "Resident to client, the answer to subscribe: the events the patterns named. Every event emitted after it is sent, subject to the subscriber's queue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "id",
+    "events"
+  ],
+  "properties": {
+    "type": {
+      "const": "subscribed"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Chosen by the client, 1 to 128 bytes; the reply carries it back. Distinct among the connection's requests in flight."
+    },
+    "events": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "core:apps.launched",
+          "core:apps.terminated",
+          "core:focus.changed",
+          "core:window.focus.changed",
+          "core:config.changed",
+          "core:power.changed",
+          "core:network.changed",
+          "core:volumes.changed",
+          "core:system.slept",
+          "core:system.woke",
+          "core:displays.slept",
+          "core:displays.woke",
+          "core:screen.locked",
+          "core:screen.unlocked",
+          "core:displays.changed",
+          "core:space.changed",
+          "core:user.idle",
+          "core:user.active",
+          "core:usb.attached",
+          "core:usb.detached",
+          "core:clock.minute",
+          "core:workspace.changed",
+          "core:mode.changed",
+          "core:hints.shown",
+          "core:hints.committed",
+          "core:hints.cancelled",
+          "core:monitor.triggered"
+        ]
+      },
+      "description": "Sorted event names; empty after an unsubscribe."
+    }
+  }
+}

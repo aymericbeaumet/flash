@@ -68,7 +68,7 @@ final class MappingExplanationTests: XCTestCase {
     let row = NormalModeDispatcher.mappingsJSON(mode: mode).first {
       $0["scope"] == "hyper" && $0["key"] == "h"
     }
-    XCTAssertEqual(row?["action"], "flash arrow --direction=left")
+    XCTAssertEqual(row?["action"], "flash key arrow --direction=left")
     XCTAssertEqual(row?["explanation"], "Posts the Left arrow.")
   }
 }

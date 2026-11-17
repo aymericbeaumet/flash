@@ -26,7 +26,7 @@ enum InputSources {
     }
   }
 
-  /// The layout the current source types with; for `flash doctor`.
+  /// The layout the current source types with; for `flash resident doctor`.
   static func currentLayout() -> KeyboardLayout? {
     TISCopyCurrentKeyboardLayoutInputSource().flatMap { layout(of: $0.takeRetainedValue()) }
   }

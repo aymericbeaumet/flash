@@ -1,7 +1,7 @@
 import CoreGraphics
 import FlashCore
 
-/// What `mouse_target --scope=screen` walks besides each app's front window:
+/// What `mouse target --scope=screen` walks besides each app's front window:
 /// Picture in Picture players and the Stage Manager strip. Chosen from
 /// WindowServer geometry alone (owner, level, bounds; never content), then
 /// walked by frame through Accessibility (`AppContext.WalkRoot.elementsInFrame`).
@@ -93,7 +93,7 @@ enum ScreenScopeSurfaces {
       id: "\(surface.kind.rawValue)-\(ordinal)-\(target.id)", frame: target.frame,
       role: target.role, accessibilityLabel: target.accessibilityLabel, url: target.url,
       contextID: target.contextID, pid: keepsPID ? target.pid : nil,
-      resolveClickPoint: target.resolveClickPoint, entersInsertMode: target.entersInsertMode,
+      resolveClickPoint: target.resolveClickPoint, isTextInput: target.isTextInput,
       priority: target.priority, providerID: target.providerID)
   }
 }

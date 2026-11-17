@@ -12,7 +12,7 @@ flash_plugin = { git = "https://github.com/aymericbeaumet/flash", rev = "<sha>" 
 
 The proc-macro crate and the bounded-subprocess layer are internal details of
 `flash_plugin`; never name them. Scaffold a new bundled plugin with
-`Scripts/new-plugin.sh <id> "<Name>" "<description>"` — it generates the
+`mise run new:plugin -- <id> "<Name>" "<description>"` — it generates the
 manifest, a hermetic standalone crate (path dep on the SDK, per-crate build
 profiles, the canonical `clippy.toml` copy, a committed `Cargo.lock`), and a
 working `:<id> ping` command, requiring zero manual edits to reach green.
@@ -41,14 +41,28 @@ fn main() {
 ```
 
 `plugin!` generates a `FlashPlugin` trait whose *required* methods follow the
-manifest: warm `sources` ⇒ `on_start` (runs AFTER the immediate initialize
-reply; build the catalog and `ctx.publish(...)` when ready), `live: true`
-sources ⇒ `on_search`, `query` ⇒ a synchronous `evaluate`, `commands` /
-`bangs` ⇒ `on_command`, `actions` ⇒ `on_action`,
+manifest: `sources` ⇒ `on_start` (runs AFTER the immediate initialize
+reply; build the catalog and `ctx.publish(...)` when ready), `query` ⇒ a
+synchronous `evaluate`, `commands` / `bangs` ⇒ `on_command`, which also
+receives the core commands the manifest declares under Flash's topics (a
+`CommandRequest` whose `context` is then the focused app; match on
+`(command.command, command.subcommand)`, read `--index=N` with `index()`,
+a bool flag with `has_flag("force")`, a value with `flag("key")`),
 `navigation` ⇒ `on_navigate`, `hints` ⇒ `on_hints`. Optional: `on_event`,
-`on_resolve`, `on_shutdown` (runs on stdin EOF before exit). Forgetting a
-required handler is a compile error, not a runtime surprise. On the wire,
-resolve/command/action/navigate all arrive as the single `perform` method —
+`on_resolve`, `on_text_grid` (a hint provider's visible text as a
+`TextGridResponse` of `TextGridLine::text` / `TextGridLine::format` lines,
+for letter search; the default is no grid), `on_shutdown` (runs on stdin EOF
+before exit). Forgetting a required handler is a compile error, not a runtime
+surprise. A manifest `"lifecycle": "publish_then_exit"` makes `on_start` the
+whole run: publish from it and return, and the runtime runs `on_shutdown`,
+writes every frame the run emitted and exits 0 on its own, without waiting
+for stdin to close; the host keeps the catalog and spawns the plugin again
+only when its settings, a `watch_settings` file or its plugin definition
+change, or you run `plugins reload`. The macro rejects
+that lifecycle beside any surface a live child serves, as the host does
+([process model](plugin-protocol.md#process-model-and-lifecycle)). The
+`emojis` and `snippets` plugins are the examples. On the wire,
+resolve/command/navigate all arrive as the single `perform` method —
 the SDK routes kinds to your handlers, and every one of them answers with the
 `PerformResponse` trichotomy: `ok()` (+ `.target_pid()` / `.navigation_url()`
 / `.message()`), `unhandled()` ("not my context" — the host may fall back),
@@ -62,14 +76,19 @@ Handed to every handler; cheap to clone. Key surface:
 
 - Catalog: `publish(candidates)` pushes the complete replacement row set to
   the host-owned store (rows carry a first-class `source` naming a manifest
-  `sources[].name`). Publish an authoritative empty `Vec` when the source is
-  truly empty; on transient failure simply don't publish — the host keeps
-  the last-good catalog, across restarts.
+  `sources[].name`); `publish_source(name, candidates)` replaces that one
+  source's rows and leaves the others as last published, so rows that
+  change often and rows that rarely do live in separate sources and a
+  publish stays proportional to the change. Publish an authoritative empty
+  `Vec` when the source is truly empty; on transient failure simply don't
+  publish — the host keeps the last-good catalog, across restarts. The
+  testing `Harness` reads them back with `drain_published_rows()` (the last
+  catalog) and `drain_publishes()` (every publish as `(source, rows)`).
 - Dirs: `data_dir`, `home_dir()`, `config_dir()`, `cache_dir()`,
-  `share_dir()`, `bin_dir()` — all under the plugin's sandboxed data dir.
+  `share_dir()`, `bin_dir()` — all under the plugin's own data dir.
   `FLASH_PLUGIN_DATA_DIR` is required; there is no cwd fallback.
 - Settings: `config_str(key)` / `config_json(key)` read the user's
-  `[plugin.<id>]` table.
+  `[plugins.<id>]` table.
 - Events: `running_applications()` is the host-maintained app snapshot (fed
   by `core:apps.changed`, delivered right after initialize). `RefreshGate`
   serializes refresh producers against it. A `static AppWatch` answers whether an event
@@ -87,8 +106,7 @@ Handed to every handler; cheap to clone. Key surface:
   windows changed) once it has been quiet for its settle period, or at its
   ceiling when it never is. The wait is one host deadline at `priority`,
   re-armed for the remainder when later events extended the burst, and it
-  costs nothing between bursts (the windows, kitty, browsers and tmux
-  plugins). With `settle == max_wait` it is a plain window: the first event
+  costs nothing between bursts (the browsers and terminals plugins). With `settle == max_wait` it is a plain window: the first event
   opens it and the rest join one refresh.
   `core:status.observed` carries
   `Event::segments`: the complete set of this plugin's status segments a
@@ -99,8 +117,8 @@ Handed to every handler; cheap to clone. Key surface:
   cadences that tick only while a segment is
   observed — `observe(segments)` cancels or re-arms them and returns true
   when they were just re-armed, so you sample at once; `observed()` tells a
-  command to sample first, since nothing sampled meanwhile (the cpu, memory,
-  and disks plugins).
+  command to sample first, since nothing sampled meanwhile (the `sysinfo`
+  plugin's cpu, memory and disks domains, each over its own segments).
 - Status values: `status(segments)` takes anything `Into<StatusSegment>` —
   a plain string is ready-made markup, build `StatusValue::text(visible)`
   and attach a hover document with `.with_preview(Preview)`, or publish a
@@ -123,28 +141,37 @@ Handed to every handler; cheap to clone. Key surface:
   `duration_hours_minutes`, `duration_compact`, `duration_uptime`,
   `progress_bar`), the `Published<T>` publish-if-changed gate, and the
   bounded `History<N>` sample window.
-- Subprocess: `run_command(&ctx, argv, timeout)` and `run_osascript` —
+- Subprocess: `run_command(&ctx, argv, timeout)` —
   bounded capture (4 MiB stdout / 256 KiB stderr caps, process-group kill on
   timeout), cwd = data dir, scrubbed env with the plugin `bin/` on PATH.
   Use `run_command_with_slow_threshold` only when the command deliberately
   waits while sampling; it preserves timeout warnings while moving that call's
   default one-second slow warning. `.into_perform()` turns a capture into a
   `PerformResponse`.
-- Managed subprocess: `spawn_managed(&ctx, argv)` returns a `ManagedChild`
-  for long-lived helpers such as `/usr/bin/caffeinate`. It uses the same
-  scrubbed environment/directories, null stdio, and a dedicated process
-  group. Own it in explicit plugin state and call `terminate(grace).await`
-  during replacement and `on_shutdown`; kill-on-drop is only a backstop.
+- AppleScript: `ctx.applescript(&AppleScriptOperation::…, timeout)` returns
+  `Result<String, String>` through `host.applescript`. Named operations cover
+  browser tab listing/selection/moves, listing/running shortcuts and sending
+  Return to a chat's focused browser. The host owns every script template and
+  escapes string values; no plugin-supplied source is accepted. Declare
+  `apple_events` together with `apple_events_targets`: supported browser IDs
+  for browser operations, `com.apple.shortcuts.events` for shortcuts, or
+  `com.apple.systemevents` for chat submit. The resident owns the OSA runtime,
+  so plugin senders can remain sandboxed. Generated source is limited to
+  64 KiB, results to 1 MiB, timeouts to 30 seconds, and outstanding requests
+  to four per plugin. Complete OSA lifetimes execute one at a time in the
+  resident, with queueing included in the request deadline. The returned text
+  has no trailing newline; diagnostics record counts,
+  durations and error numbers, never operation values or results. An open
+  Automation prompt can hold an execution slot after its caller's deadline.
 - Host RPC: `call_host(method, params)` / `call_host_timeout` never error —
   the result object carries `{"ok": false, "error": ...}` sentinels for
   capability NAKs, timeouts, and host death. Typed wrappers exist for the
-  full `host.*` surface (`fetch`, `open_url`, `open_app`, `activate_app`,
+  full `host.*` surface (`fetch`, `open_url` (`Ok` names the app the URL
+  went to, when the host can tell; `Err` carries the host's error),
+  `open_app`, `activate`,
   `normal_mode_target` (pid, bundle id and the focused window's id),
-  `wifi_ssid(request_authorization)`, `clipboard_write`, `notify`,
-  `storage_get`/`set`, `post_media_key`, `process_table` / `process_metrics`,
-  `signal`, `post_keys`,
-  `post_global_key`, `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`,
-  `ping`).
+  `wifi_ssid(request_authorization)`, `post_keys`,
+  `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`, `ping`).
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.
@@ -168,9 +195,10 @@ Handed to every handler; cheap to clone. Key surface:
   idle backend) or `cancel`; dropping it leaves the cadence running. A
   cancelled handle re-arms with `set_period`, so keep one handle to toggle a
   cadence with observation instead of registering a new one each time: the
-  processes plugin arms its top-N sample when `core:status.observed` first
-  lists `top_cpu` or `top_mem`, cancels it when neither is listed, and clears
-  the table nobody shows. A callback that overruns its period simply misses
+  `sysinfo` plugin arms its network traffic sample when `core:status.observed`
+  first lists a rate segment such as `network_down_bps`, cancels it when none
+  is listed, and
+  clears the rates nobody shows. A callback that overruns its period simply misses
   ticks, and no tick arrives while the displays sleep or the session is
   locked (one catch-up tick follows). Tests play the host with
   `Harness::drain_poll_registrations` and `Harness::deliver_poll_tick`.
@@ -189,11 +217,11 @@ Handed to every handler; cheap to clone. Key surface:
   as `PreviewTooLarge`, and `status` then logs a content-free warning
   (segment name and encoded size only) and publishes the visible text alone
   rather than losing the segment.
-- Deadlines: an `on_search` / `on_hints` handler still running a tenth of the
-  request's `deadline_ms` (at most 50 ms) before it is dropped, with the
-  subprocesses and host calls it awaits, and the request answers `deadline
-  exceeded`. Bound inner waits below that budget to answer partially instead
-  (the vscode plugin gives `host.ax_snapshot` a `deadline_ms`).
+- Deadlines: an `on_hints` / `on_text_grid` handler still running a tenth
+  of the request's `deadline_ms` (at most 50 ms) before it is dropped, with
+  the subprocesses and host calls it awaits, and the request answers
+  `deadline exceeded`. Bound inner waits below that budget (for host calls,
+  `call_host_timeout`) to answer partially instead.
 - Timers: none of your own — `interval`, `after` and `wait` above, all on
   the host clock; plugins may `tokio::spawn` freely.
 
@@ -210,7 +238,7 @@ outright by each crate's
 `clippy.toml` (`std::fs::*`, `std::process::Command`) with no `#[allow]`
 escape: use `tokio::fs`, `tokio::process`, and `tokio::time::timeout` to
 bound one awaited operation. Scheduling is the host's: `tokio::time::sleep`,
-`sleep_until` and `interval` are rejected by `Scripts/check-guardrails.sh`
+`sleep_until` and `interval` are rejected by the guardrails (`mise run guardrails`)
 outside test code, along with any `interval`/`after`/`wait`/`Settle::new`
 call that does not name its `PollPriority`. The SDK builds the
 runtime in `run()` — never build your own. Do async startup work in
@@ -234,8 +262,8 @@ The runtime owns finite admission queues, pinned in `protocol.json`:
   queue is exhausted the transport closes so the host can recover.
 - Ordinary events have a 256-frame/16-MiB backlog. Under overload, each of
   `apps.changed`, `focus.changed`, `window.focus.changed`, `ax.changed`,
-  `clipboard.changed`, `config.changed`, `power.changed`, `network.changed`,
-  `volumes.changed`, `space.changed`, and `status.observed` (all prefixed
+  `config.changed`, `power.changed`, `network.changed`,
+  `volumes.changed`, and `status.observed` (all prefixed
   `core:`; `protocol.json` `host_events.replacement`) retains one latest
   replacement slot per coalescing key — the event name, plus the app and
   notification for `ax.changed` — each bounded by the frame cap, at most 256
@@ -266,7 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_publishes_the_catalog() {
-        let harness = Harness::new("processes");
+        let harness = Harness::new("shortcuts");
         let ctx = harness.context();
         assert!(refresh_candidates(&ctx).await);
         assert!(!harness.drain_published_rows().is_empty());
@@ -274,7 +302,7 @@ mod tests {
 }
 ```
 
-`Harness::with_config` injects a `[plugin.<id>]` settings object; `drain()`
+`Harness::with_config` injects a `[plugins.<id>]` settings object; `drain()`
 returns every emitted frame decoded to JSON (publishes, status, logs);
 `drain_published_rows()` shortcuts to the last catalog; `drain_status()`
 returns each status notification's rendered segment map in order;
@@ -309,7 +337,7 @@ restart a process parked by its restart budget.
 ## Iteration loop
 
 ```bash
-./Scripts/build-plugins.sh dev <id>   # build + sign + stage just this plugin
+mise run build:plugins -- <id>   # build + sign + stage just this plugin
 ```
 
 The staged `mv -f` lands as a rename in the plugin root; the host watches only
@@ -317,8 +345,8 @@ that root directory (`manifest.json` and the binary live there — source edits
 under `src/` change nothing the host loads) and restarts only that plugin
 (~300 ms debounce) while the other plugins keep their published catalogs. If
 watching is disabled, run `:plugins reload`.
-`CARGO_TARGET_DIR=build/plugin-target cargo test --manifest-path
-Plugins/<id>/Cargo.toml` needs no built binaries at all (always set
-`CARGO_TARGET_DIR` for manual cargo runs so no `Plugins/<id>/target/` tree
-appears in the checkout). Debug any plugin by running its binary in a
+`mise run test:plugin <id>` needs no built binaries at all. mise points
+`CARGO_TARGET_DIR` at `build/plugin-target` for every task, so no
+`Plugins/<id>/target/` tree appears in the checkout; set it yourself for a
+cargo run outside mise. Debug any plugin by running its binary in a
 terminal and typing NDJSON at it — no host required.

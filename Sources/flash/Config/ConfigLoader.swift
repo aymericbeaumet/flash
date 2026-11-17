@@ -1,3 +1,4 @@
+import FlashCore
 import Foundation
 import TOMLKit
 
@@ -159,6 +160,8 @@ enum ConfigLoader {
     config.mode.refreshLeaderDerivedDefaults()
     applyPendingModeMappings(pendingModeMappings, into: &config)
     applyStatusBarTemplates(into: &config)
+    diagnoseMonitors(into: &config)
+    diagnoseTelemetry(into: &config)
     config.prepareDerivedValues()
     return config
   }
@@ -363,6 +366,8 @@ enum ConfigLoader {
   private struct PendingModeMapping {
     var scope: ModeScope
     var bundleID: String?
+    /// The `[mode.layers.<name>]` table it belongs to; `scope` is then unused.
+    var layer: String?
     var rawKey: String
     var key: String
     var value: ParsedModeMappingValue
@@ -391,18 +396,17 @@ enum ConfigLoader {
       case .invalidShape:
         return
           "mapping \"\(mappingKey)\" must be a non-empty string array, "
-          + "{ command = [\"flash\", \"<verb>\", ...], repeat = true }, or false to remove it"
+          + "{ command = [\"flash\", \"<topic>\", \"<action>\", ...], repeat = true }, "
+          + "or false to remove it"
       case .invalidCommandValue:
         return
           "mapping \"\(mappingKey)\".command must be a non-empty string array — "
-          + "[\"flash\", \"<verb>\", ...] or [<argv>...]; write "
+          + "[\"flash\", \"<topic>\", \"<action>\", ...] or [<argv>...]; write "
           + "\"\(mappingKey)\" = false to remove it"
       case .invalidCommand(let command):
         return "mapping \"\(mappingKey)\": " + URLEventHandler.rejectionMessage(command)
-      case .queryCommand(let verb):
-        return
-          "mapping \"\(mappingKey)\": \(FlashQuery.reservationMessage(verb) ?? verb), "
-          + "not from a mapping"
+      case .queryCommand(let message):
+        return "mapping \"\(mappingKey)\": \(message), not from a mapping"
       case .invalidRepeat:
         return "mapping \"\(mappingKey)\".repeat must be true or false"
       case .unknownOption(let option):
@@ -429,13 +433,17 @@ enum ConfigLoader {
     applyApp(section("app"), locations: locations, into: &config)
     applyKeyboard(section("keyboard"), locations: locations, into: &config)
     applyClipboard(section("clipboard"), locations: locations, into: &config)
+    applyCalendar(section("calendar"), locations: locations, into: &config)
+    applyTiling(section("tiling"), locations: locations, into: &config)
     applyHints(section("hints"), locations: locations, into: &config)
-    applyPlugins(section("plugins"), locations: locations, sourceURL: sourceURL, into: &config)
-    applyPluginSettings(section("plugin"), locations: locations, into: &config)
+    let plugins = section("plugins")
+    applyPlugins(plugins, locations: locations, sourceURL: sourceURL, into: &config)
+    applyPluginSettings(plugins, locations: locations, into: &config)
     applyStatusBar(
       section("statusbar"), locations: locations, sourceURL: sourceURL, into: &config)
     applyPopups(section("popup"), locations: locations, sourceURL: sourceURL, into: &config)
     applyWidgets(section("widgets"), locations: locations, into: &config)
+    applyMonitors(section("monitors"), locations: locations, sourceURL: sourceURL, into: &config)
     applyFlashlight(section("flashlight"), locations: locations, into: &config)
     applyMode(
       section("mode"),
@@ -446,8 +454,23 @@ enum ConfigLoader {
     applyWindowRules(root["window_rules"], locations: locations, into: &config)
     applyOverlay(section("overlay"), locations: locations, into: &config)
     applyDebug(section("debug"), locations: locations, into: &config)
+    applyTelemetry(section("telemetry"), locations: locations, into: &config)
+    applyStartup(section("startup"), locations: locations, sourceURL: sourceURL, into: &config)
+    for name in removedSections.keys.sorted() where root[name] != nil {
+      config.addDiagnostic(
+        "[\(name)] was removed; \(removedSections[name] ?? "")",
+        location: locations.location(for: [name]))
+    }
     warnUnknownConfigKeys(root: root, locations: locations, into: &config)
   }
+
+  /// Top-level tables Flash no longer reads, with what replaced them. A
+  /// file still declaring one is diagnosed where it does, never applied.
+  static let removedSections: [String: String] = [
+    "macos":
+      "Flash no longer writes macOS preferences. Run defaults write (and killall Dock, "
+      + "Finder or SystemUIServer) from [startup] run instead; see docs/startup.md"
+  ]
 
   /// A section's table, or a located diagnostic when the key exists with a
   /// non-table value. nil when absent or invalid.
@@ -471,7 +494,7 @@ enum ConfigLoader {
   /// recognize so a typo surfaces (located, with a suggestion) instead of being
   /// silently dropped — the single biggest config UX cliff: `[hint]` for
   /// `[hints]`, `mouse_grid_step` for `mouse_grid_steps`, a stray top-level key.
-  /// Sections with user-defined keys (`[plugin.<id>]`, and the
+  /// Sections with user-defined keys (`[plugins.<id>]`, and the
   /// `flashlight.aliases`/`flashlight.precedence` subtables) are deliberately
   /// not enumerated. The schema map lives here, in one place, so it can't drift
   /// across the scattered appliers.
@@ -480,57 +503,79 @@ enum ConfigLoader {
     locations: ConfigSourceLocationIndex,
     into config: inout Config
   ) {
-    let sectionKeys: [String: Set<String>] = [
-      "app": ["menu_bar_icon", "autostart", "keyboard_layout"],
-      "keyboard": ["layout"],
-      "clipboard": ["history_size"],
-      "hints": [
-        "keys", "min_length", "magic_modifiers", "key_priority", "label_order", "adjust_digits",
-        "position_history_size", "position_history_scope", "pointer_follows_focus",
-        "pointer_step", "pointer_acceleration", "pointer_max_step",
-        "mouse_grid_steps", "mouse_grid_opacity", "mouse_grid_keys", "mouse_grid_cursor_follow",
-        "mouse_grid_preview", "restore_pointer",
-      ],
-      "plugins": [
-        "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
-      ],
-      "statusbar": [
-        "enabled", "template", "monitor", "interval", "click", "font_size",
-        "command_timeout", "notch_margin", "sources",
-      ],
-      "flashlight": [
-        "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
-        "frecency_half_life_days", "frecency_max_boost",
-        "live_query_timeout_ms", "ignored_apps", "app_directories",
-      ],
-      "mode": [
-        "labels", "sequence_timeout_ms", "normal", "all", "insert", "command", "terminal", "hyper",
-        "hold",
-        "apps",
-        "scroll_step", "scroll_step_lines", "scroll_page_lines", "scroll_smooth_ms",
-        "click_hold_ms", "send_key_interval_ms",
-      ],
-      "overlay": [
-        "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
-        "important_hint_fg", "important_hint_bg_top", "important_hint_bg_bottom",
-        "important_hint_border", "window_border", "window_border_size",
-        "window_border_color", "alert_duration", "banner_duration_ms", "hint_placement",
-        "dark", "click_feedback", "screen_capture",
-      ],
-      "debug": [
-        "show_hints_bounds", "hints_bounds_bg", "hints_bounds_fg", "log_level",
-        "http_inspector_enabled", "http_inspector_host", "http_inspector_port",
-      ],
-    ]
-    // Plugin settings, popups and widgets use user-defined table names;
-    // `applyPopups` and `applyWidgets` check their own keys.
-    let knownSections = Set(sectionKeys.keys).union(["plugin", "popup", "widgets", "window_rules"])
-    warnUnknownKeys(in: root, known: knownSections, path: [], locations: locations, into: &config)
+    warnUnknownKeys(
+      in: root, known: topLevelSections.union(removedSections.keys), path: [],
+      locations: locations, into: &config)
     for (section, known) in sectionKeys {
       guard let table = root[section]?.table else { continue }
+      // A table under `[plugins]` is a plugin's settings, checked by
+      // `applyPluginSettings`.
+      let known =
+        section == "plugins"
+        ? known.union(table.keys.filter { table[$0]?.table != nil }) : known
       warnUnknownKeys(in: table, known: known, path: [section], locations: locations, into: &config)
     }
   }
+
+  /// The keys of every section whose keys are fixed. One table for the
+  /// loader's unknown-key check and the JSON Schema (`ConfigSchema`).
+  static let sectionKeys: [String: Set<String>] = [
+    "app": ["menu_bar_icon", "autostart", "keyboard_layout", "updates", "hide_from_capture"],
+    "keyboard": ["layout"],
+    "clipboard": ["history_size"],
+    "tiling": [
+      "enabled", "persist", "layout", "orientation", "accordion_padding", "workspaces", "gaps",
+      "monitors",
+      "rules",
+    ],
+    "calendar": ["calendars", "all_day", "declined", "lookahead_hours"],
+    "hints": [
+      "keys", "min_length", "magic_modifiers", "key_priority", "label_order", "adjust_digits",
+      "position_history_size", "position_history_scope", "pointer_follows_focus",
+      "pointer_step", "pointer_acceleration", "pointer_max_step",
+      "mouse_grid_steps", "mouse_grid_opacity", "mouse_grid_keys", "mouse_grid_cursor_follow",
+      "mouse_grid_preview", "restore_pointer",
+    ],
+    "plugins": pluginsSettingKeys,
+    "statusbar": [
+      "enabled", "template", "monitor", "interval", "click", "font_size",
+      "command_timeout", "notch_margin", "top_count", "link_schemes", "sources",
+    ],
+    "flashlight": [
+      "suggestion_count", "precedence_alive_bonus", "aliases", "bangs", "precedence",
+      "frecency_half_life_days", "frecency_max_boost",
+      "live_query_timeout_ms", "ignored_apps", "app_directories",
+    ],
+    "mode": [
+      "labels", "sequence_timeout_ms", "which_key_ms", "normal", "all", "insert", "command",
+      "terminal", "hyper",
+      "hold", "text", "visual",
+      "apps", "layers",
+      "scroll_step", "scroll_step_lines", "scroll_page_lines", "move_page_lines",
+      "scroll_smooth_ms",
+      "click_hold_ms", "send_key_interval_ms",
+    ],
+    "overlay": [
+      "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
+      "important_hint_fg", "important_hint_bg_top", "important_hint_bg_bottom",
+      "important_hint_border", "window_border", "window_border_size",
+      "window_border_color", "alert_duration", "banner_duration_ms", "hint_placement",
+      "dark", "click_feedback",
+    ],
+    "debug": [
+      "show_hints_bounds", "hints_bounds_bg", "hints_bounds_fg", "log_level",
+      "http_inspector_enabled", "http_inspector_host", "http_inspector_port",
+    ],
+    "startup": ["run", "timeout"],
+  ]
+
+  /// Every top-level table. Plugin settings, popups, widgets and monitors use
+  /// user-defined table names; `applyPopups`, `applyWidgets` and
+  /// `applyMonitors` check their own keys, as `applyTelemetry` does for its
+  /// two subtables.
+  static let topLevelSections: Set<String> = Set(sectionKeys.keys).union([
+    "popup", "widgets", "monitors", "window_rules", "telemetry",
+  ])
 
   /// Emit a located "unknown config key" diagnostic for every key in `table`
   /// not in `known`, with a Levenshtein "did you mean" when a close match exists.
@@ -553,7 +598,7 @@ enum ConfigLoader {
 
   /// The known key closest to `typo` by edit distance, when within a small
   /// budget — so we suggest only on plausible misspellings, not unrelated keys.
-  private static func closestKnownKey(to typo: String, in known: Set<String>) -> String? {
+  static func closestKnownKey(to typo: String, in known: Set<String>) -> String? {
     var best: (key: String, distance: Int)?
     for candidate in known {
       let distance = levenshtein(typo, candidate)
@@ -742,7 +787,7 @@ enum ConfigLoader {
   }
 
   /// `[flashlight]`'s installed-app catalog: `ignored_apps` and
-  /// `app_directories`, which also scope the `app_open` verb.
+  /// `app_directories`, which also scope the `app open` command.
   private static func applyFlashlightAppCatalog(
     _ table: TOMLTable,
     locations: ConfigSourceLocationIndex,
@@ -799,6 +844,211 @@ enum ConfigLoader {
       message: "clipboard.history_size must be an integer between 1 and 10000",
       locations: locations, into: &config, validate: { (1...10_000).contains($0) },
       assign: { value, config in config.clipboard.historySize = value })
+  }
+
+  private static func applyCalendar(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    guard let table else { return }
+    applyStringArray(
+      table["calendars"], path: ["calendar", "calendars"],
+      message: "calendar.calendars must be an array of calendar titles", locations: locations,
+      into: &config
+    ) { value, config in
+      config.calendar.calendars = value
+    }
+    applyBool(
+      table["all_day"], path: ["calendar", "all_day"],
+      message: "calendar.all_day must be true or false", locations: locations, into: &config
+    ) { value, config in
+      config.calendar.allDay = value
+    }
+    applyBool(
+      table["declined"], path: ["calendar", "declined"],
+      message: "calendar.declined must be true or false", locations: locations, into: &config
+    ) { value, config in
+      config.calendar.declined = value
+    }
+    let hours = CalendarSettings.lookaheadHoursRange
+    applyInt(
+      table["lookahead_hours"], path: ["calendar", "lookahead_hours"],
+      message:
+        "calendar.lookahead_hours must be an integer between \(hours.lowerBound) and \(hours.upperBound)",
+      locations: locations, into: &config, validate: { hours.contains($0) },
+      assign: { value, config in config.calendar.lookaheadHours = value })
+  }
+
+  /// `[tiling]`, `[tiling.gaps]`, `[tiling.monitors]` and `[[tiling.rules]]`.
+  private static func applyTiling(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    guard let table else { return }
+    applyBool(
+      table["enabled"], path: ["tiling", "enabled"],
+      message: "tiling.enabled must be true or false", locations: locations, into: &config
+    ) { value, config in config.tiling.enabled = value }
+    applyBool(
+      table["persist"], path: ["tiling", "persist"],
+      message: "tiling.persist must be true or false", locations: locations, into: &config
+    ) { value, config in config.tiling.persist = value }
+    applyString(
+      table["layout"], path: ["tiling", "layout"],
+      message: "tiling.layout must be \"tiles\" or \"accordion\"", locations: locations,
+      into: &config, validate: { TilingLayoutKind(rawValue: $0) != nil },
+      assign: { value, config in config.tiling.layout = TilingLayoutKind(rawValue: value)! })
+    applyString(
+      table["orientation"], path: ["tiling", "orientation"],
+      message: "tiling.orientation must be \"auto\", \"horizontal\" or \"vertical\"",
+      locations: locations, into: &config,
+      validate: { $0 == "auto" || TilingOrientation(rawValue: $0) != nil },
+      assign: { value, config in config.tiling.orientation = TilingOrientation(rawValue: value) })
+    let padding = TilingSettings.accordionPaddingRange
+    applyInt(
+      table["accordion_padding"], path: ["tiling", "accordion_padding"],
+      message:
+        "tiling.accordion_padding must be an integer between \(padding.lowerBound) and \(padding.upperBound) (points)",
+      locations: locations, into: &config, validate: { padding.contains($0) },
+      assign: { value, config in config.tiling.accordionPadding = CGFloat(value) })
+    applyStringArray(
+      table["workspaces"], path: ["tiling", "workspaces"],
+      message: "tiling.workspaces must be an array of workspace names", locations: locations,
+      into: &config
+    ) { value, config in
+      let invalid = value.filter { !TilingSettings.isValidWorkspaceName($0) }
+      guard invalid.isEmpty, Set(value).count == value.count else {
+        config.addDiagnostic(
+          "tiling.workspaces names must be unique words without spaces, at most 32 characters",
+          location: locations.location(for: ["tiling", "workspaces"]))
+        return
+      }
+      config.tiling.workspaces = value
+    }
+    if let value = table["gaps"] {
+      if let gaps = value.table {
+        let keys = [
+          "inner", "inner_horizontal", "inner_vertical", "outer", "outer_left", "outer_right",
+          "outer_top", "outer_bottom",
+        ]
+        for key in gaps.keys where !keys.contains(key) {
+          config.addDiagnostic(
+            "tiling.gaps: unknown key '\(key)'; known keys: \(keys.joined(separator: ", "))",
+            location: locations.location(for: ["tiling", "gaps", key]))
+        }
+        var values: [String: CGFloat] = [:]
+        let range = TilingSettings.gapRange
+        for key in keys {
+          applyInt(
+            gaps[key], path: ["tiling", "gaps", key],
+            message:
+              "tiling.gaps.\(key) must be an integer between \(range.lowerBound) and \(range.upperBound) (points)",
+            locations: locations, into: &config, validate: { range.contains($0) },
+            assign: { value, _ in values[key] = CGFloat(value) })
+        }
+        // A side's own value wins over its group's.
+        func side(_ key: String, _ group: String) -> CGFloat { values[key] ?? values[group] ?? 0 }
+        config.tiling.gaps = TilingGaps(
+          innerHorizontal: side("inner_horizontal", "inner"),
+          innerVertical: side("inner_vertical", "inner"),
+          outerLeft: side("outer_left", "outer"), outerRight: side("outer_right", "outer"),
+          outerTop: side("outer_top", "outer"), outerBottom: side("outer_bottom", "outer"))
+      } else {
+        config.addDiagnostic(
+          "tiling.gaps must be a table ([tiling.gaps])",
+          location: locations.location(for: ["tiling", "gaps"]))
+      }
+    }
+    if let value = table["monitors"] {
+      if let monitors = value.table {
+        var pinned: [String: TilingMonitorPattern] = [:]
+        for (name, raw) in monitors {
+          guard TilingSettings.isValidWorkspaceName(name),
+            let text = raw.string ?? raw.int.map(String.init),
+            let pattern = TilingMonitorPattern(text)
+          else {
+            config.addDiagnostic(
+              "tiling.monitors.\(name) must be \"main\", \"secondary\" or a display number "
+                + "from 1, counted left to right",
+              location: locations.location(for: ["tiling", "monitors", name]))
+            continue
+          }
+          pinned[name] = pattern
+        }
+        config.tiling.pinned = pinned
+      } else {
+        config.addDiagnostic(
+          "tiling.monitors must be a table of workspace = display ([tiling.monitors])",
+          location: locations.location(for: ["tiling", "monitors"]))
+      }
+    }
+    if let value = table["rules"] {
+      guard let rules = value.array else {
+        config.addDiagnostic(
+          "tiling.rules must be an array of tables ([[tiling.rules]])",
+          location: locations.location(for: ["tiling", "rules"]))
+        return
+      }
+      let known: Set<String> = ["bundle_id", "title_contains", "float", "workspace"]
+      var parsed: [TilingRule] = []
+      for (index, value) in rules.enumerated() {
+        let path = ["tiling", "rules", String(index)]
+        guard let rule = value.table else {
+          config.addDiagnostic(
+            "tiling.rules[\(index)] must be a table", location: locations.location(for: path))
+          continue
+        }
+        for key in rule.keys where !known.contains(key) {
+          config.addDiagnostic(
+            "tiling.rules[\(index)]: unknown key '\(key)'; known keys: bundle_id, "
+              + "title_contains, float, workspace",
+            location: locations.location(for: path + [key]))
+        }
+        guard let bundleID = rule["bundle_id"]?.string, isValidBundleID(bundleID) else {
+          config.addDiagnostic(
+            "tiling.rules[\(index)].bundle_id must be an exact bundle ID",
+            location: locations.location(for: path + ["bundle_id"])
+              ?? locations.location(for: path))
+          continue
+        }
+        var entry = TilingRule(bundleID: bundleID)
+        if let title = rule["title_contains"] {
+          guard let text = title.string, !text.isEmpty else {
+            config.addDiagnostic(
+              "tiling.rules[\(index)].title_contains must be a non-empty string",
+              location: locations.location(for: path + ["title_contains"]))
+            continue
+          }
+          entry.titleContains = text
+        }
+        if let floats = rule["float"] {
+          guard let flag = floats.bool else {
+            config.addDiagnostic(
+              "tiling.rules[\(index)].float must be true or false",
+              location: locations.location(for: path + ["float"]))
+            continue
+          }
+          entry.floats = flag
+        }
+        if let workspace = rule["workspace"] {
+          guard let name = workspace.string ?? workspace.int.map(String.init),
+            TilingSettings.isValidWorkspaceName(name)
+          else {
+            config.addDiagnostic(
+              "tiling.rules[\(index)].workspace must be a workspace name without spaces",
+              location: locations.location(for: path + ["workspace"]))
+            continue
+          }
+          entry.workspace = name
+        }
+        guard entry.floats != nil || entry.workspace != nil else {
+          config.addDiagnostic(
+            "tiling.rules[\(index)] needs float or workspace",
+            location: locations.location(for: path))
+          continue
+        }
+        parsed.append(entry)
+      }
+      config.tiling.rules = parsed
+    }
   }
 
   private static func applyPlugins(
@@ -890,6 +1140,34 @@ enum ConfigLoader {
     }
   }
 
+  /// `[plugins]`' own settings. Every other key of the table is a plugin id
+  /// naming its `[plugins.<id>]` settings, so no plugin may take one of these
+  /// as its id (`PluginManifest`).
+  static let pluginsSettingKeys: Set<String> = [
+    "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
+  ]
+
+  /// `[plugins.<id>]` tables of bundled plugins that no longer exist, with
+  /// where their settings went. A stale table is diagnosed and dropped, never
+  /// applied under a name nothing reads.
+  static let removedPluginSettingsTables: [String: String] = [
+    "clipboard": "use [clipboard] history_size",
+    "github": "the github plugin was removed",
+    "kitty": "the kitty plugin was removed",
+    "spotify": "the spotify plugin was removed",
+    "windows": "the windows plugin was removed",
+    "reference": "the plugin is now emojis and has no settings",
+    "tmux": "use [plugins.terminals]",
+    "history": "its browser history sources are now the browsers plugin",
+    "cpu": "use [plugins.sysinfo]",
+    "memory": "use [plugins.sysinfo]",
+    "disks": "use [plugins.sysinfo]",
+    "network": "use [plugins.sysinfo]",
+    "power": "use [plugins.sysinfo]",
+    "marks": "marks are core now and have no settings",
+    "vscode": "its VS Code action bindings are now the defaults plugin",
+  ]
+
   private static func applyPluginSettings(
     _ table: TOMLTable?,
     locations: ConfigSourceLocationIndex,
@@ -897,11 +1175,14 @@ enum ConfigLoader {
   ) {
     guard let table else { return }
     let allowedIDChars = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
-    for (pluginID, value) in table {
-      if pluginID == "clipboard" {
+    for (pluginID, value) in table where !pluginsSettingKeys.contains(pluginID) {
+      // A non-table key is not a plugin's settings; the unknown-key check
+      // reports it.
+      guard let settings = value.table else { continue }
+      if let replacement = Self.removedPluginSettingsTables[pluginID] {
         config.addDiagnostic(
-          "[plugin.clipboard] was removed; use [clipboard] history_size",
-          location: locations.location(for: ["plugin", pluginID]))
+          "[plugins.\(pluginID)] was removed; \(replacement)",
+          location: locations.location(for: ["plugins", pluginID]))
         continue
       }
       guard
@@ -909,27 +1190,21 @@ enum ConfigLoader {
         pluginID.unicodeScalars.allSatisfy({ allowedIDChars.contains($0) })
       else {
         config.addDiagnostic(
-          "[plugin.\(pluginID)] plugin ids must be lowercase [a-z0-9._-]",
-          location: locations.location(for: ["plugin", pluginID]))
-        continue
-      }
-      guard let settings = value.table else {
-        config.addDiagnostic(
-          "plugin.\(pluginID) must be a [plugin.\(pluginID)] table of settings, not a single value",
-          location: locations.location(for: ["plugin", pluginID]))
+          "[plugins.\(pluginID)] plugin ids must be lowercase [a-z0-9._-]",
+          location: locations.location(for: ["plugins", pluginID]))
         continue
       }
       for (key, settingValue) in settings where !key.isEmpty {
-        let locationPath = ["plugin", pluginID, key]
+        let locationPath = ["plugins", pluginID, key]
         let location = locations.location(for: locationPath)
         guard let parsed = pluginConfigValue(settingValue) else {
           config.addDiagnostic(
-            "plugin.\(pluginID).\(key) must be a string, number, boolean, or array of strings",
+            "plugins.\(pluginID).\(key) must be a string, number, boolean, or array of strings",
             location: location)
           continue
         }
         config.plugins.settings[pluginID, default: [:]][key] = parsed
-        config.recordLocation(path: "plugin.\(pluginID).\(key)", location: location)
+        config.recordLocation(path: "plugins.\(pluginID).\(key)", location: location)
       }
     }
   }
@@ -976,6 +1251,19 @@ enum ConfigLoader {
       locations: locations, into: &config,
       validate: { KeyboardLayout.Setting($0) != nil },
       assign: { value, config in config.app.keyboardLayout = value })
+    applyString(
+      table["updates"], path: ["app", "updates"],
+      message: "app.updates must be \"install\", \"check\" or \"off\"",
+      locations: locations, into: &config,
+      validate: { UpdateMode(rawValue: $0) != nil },
+      assign: { value, config in config.app.updates = UpdateMode(rawValue: value) ?? .install })
+    applyBool(
+      table["hide_from_capture"], path: ["app", "hide_from_capture"],
+      message: "app.hide_from_capture must be true or false", locations: locations,
+      into: &config
+    ) { value, config in
+      config.app.hideFromCapture = value
+    }
   }
 
   private static func applyKeyboard(
@@ -1042,6 +1330,29 @@ enum ConfigLoader {
       assign: { value, config in
         config.statusBar.notchMargin = value
       })
+    applyInt(
+      table["top_count"], path: ["statusbar", "top_count"],
+      message: "statusbar.top_count must be an integer between 1 and 20 (rows)",
+      locations: locations, into: &config,
+      validate: { ProcessStatusFormat.topCountRange.contains($0) },
+      assign: { value, config in
+        config.statusBar.topCount = value
+      })
+    // An allowlist: a misspelt entry must not slip in as a different scheme,
+    // so the whole array is rejected when one entry is not an exact name.
+    applyStringArray(
+      table["link_schemes"], path: ["statusbar", "link_schemes"],
+      message:
+        "statusbar.link_schemes must be an array of lowercase URL scheme names "
+        + "(\"slack\", \"x-apple.systempreferences\"), each once; http, https and mailto "
+        + "are always allowed",
+      locations: locations, into: &config,
+      validate: { schemes in
+        schemes.allSatisfy(StatusLinkPolicy.isSchemeName) && Set(schemes).count == schemes.count
+      },
+      assign: { value, config in
+        config.statusBar.linkSchemes = value
+      })
     applyStatusBarSources(table, locations: locations, sourceURL: sourceURL, into: &config)
     if let click = sectionTable(
       table["click"], name: "statusbar.click", locations: locations, into: &config)
@@ -1051,12 +1362,12 @@ enum ConfigLoader {
         let location = locations.location(for: ["statusbar", "click", name])
         guard !trimmedName.isEmpty else { continue }
         if let url = value.string {
-          if URL(string: url) != nil, !url.isEmpty {
+          if URLParsing.url(url) != nil, !url.isEmpty {
             config.statusBar.clickActions[trimmedName] = .url(url)
             config.recordLocation(path: "statusbar.click.\(trimmedName)", location: location)
           } else {
             config.addDiagnostic(
-              "statusbar.click.\(name) must be a valid URL or a [\"flash\", \"<verb>\", …] action array",
+              "statusbar.click.\(name) must be a valid URL or a [\"flash\", \"<topic>\", \"<action>\", …] action array",
               location: location)
           }
         } else if let action = parseMappingCommandValue(value, sourceURL: sourceURL) {
@@ -1064,7 +1375,7 @@ enum ConfigLoader {
           config.recordLocation(path: "statusbar.click.\(trimmedName)", location: location)
         } else {
           config.addDiagnostic(
-            "statusbar.click.\(name) must be a URL string or a [\"flash\", \"<verb>\", …] action array",
+            "statusbar.click.\(name) must be a URL string or a [\"flash\", \"<topic>\", \"<action>\", …] action array",
             location: location)
         }
       }
@@ -1162,13 +1473,24 @@ enum ConfigLoader {
         config.addDiagnostic("\(path) must be a table with command argv", location: location)
         continue
       }
+      // Without a command the source is pushed (`status set`): it runs
+      // nothing, so only what shapes its value applies.
+      if definition["command"] == nil {
+        if let key = definition.keys.sorted().first(where: { !pushedStatusSourceKeys.contains($0) })
+        {
+          config.addDiagnostic(
+            "\(path).\(key) needs a command; a source without one is set by `status set`",
+            location: location)
+          continue
+        }
+      }
       guard
-        let parsed = parseStatusProcess(
-          definition, path: path, sourceURL: sourceURL,
-          allowedKeys: [
-            "command", "working_directory", "env", "interval", "cycle_interval", "history",
-          ],
-          location: location, into: &config),
+        let parsed = definition["command"] == nil
+          ? (command: [String](), workingDirectory: String?.none, environment: [String: String]())
+          : parseStatusProcess(
+            definition, path: path, sourceURL: sourceURL,
+            allowedKeys: statusSourceKeys,
+            location: location, into: &config),
         let interval = statusProcessInteger(
           definition, key: "interval",
           fallback: Int(config.statusBar.refreshIntervalSeconds), range: 0...86400,
@@ -1183,6 +1505,16 @@ enum ConfigLoader {
           location: location)
         continue
       }
+      var output = FlashStatusBarSourceOutput.text
+      if let raw = definition["output"] {
+        let names = FlashStatusBarSourceOutput.allCases.map { "\"\($0.rawValue)\"" }
+        guard let name = raw.string, let parsed = FlashStatusBarSourceOutput(rawValue: name) else {
+          config.addDiagnostic(
+            "\(path).output must be one of \(names.joined(separator: ", "))", location: location)
+          continue
+        }
+        output = parsed
+      }
       var cycle: Double?
       if definition["cycle_interval"] != nil {
         guard
@@ -1196,7 +1528,7 @@ enum ConfigLoader {
         command: parsed.command, workingDirectory: parsed.workingDirectory,
         environment: parsed.environment, intervalSeconds: Double(interval),
         cycleIntervalSeconds: cycle, timeoutSeconds: config.statusBar.commandTimeoutSeconds,
-        historyLength: history > 0 ? history : nil)
+        historyLength: history > 0 ? history : nil, output: output)
       config.recordLocation(path: path, location: location)
       if definition["interval"] == nil {
         config.statusBar.sourcesUsingDefaultInterval.insert(name)
@@ -1207,13 +1539,13 @@ enum ConfigLoader {
   }
 
   /// The `[popup]` style keys; every other `[popup]` key is a named popup.
-  private static let popupStyleKeys: Set<String> = [
+  static let popupStyleKeys: Set<String> = [
     "fg", "bg", "border", "border_size", "corner_radius", "padding", "min_width", "max_width",
     "offset",
   ]
-  private static let textPopupKeys: Set<String> = ["text"]
-  private static let terminalPopupKeys: Set<String> = [
-    "command", "cwd", "env", "size", "persistent",
+  static let textPopupKeys: Set<String> = ["text"]
+  static let terminalPopupKeys: Set<String> = [
+    "command", "cwd", "env", "size", "persistent", "pause_hidden",
   ]
 
   /// `[popup]`: TOML types tell the keys apart. A table is a named popup
@@ -1338,6 +1670,18 @@ enum ConfigLoader {
       invalid(".persistent must be true or false", at: "persistent")
       return
     }
+    guard definition["pause_hidden"] == nil || definition["pause_hidden"]?.bool != nil else {
+      invalid(".pause_hidden must be true or false", at: "pause_hidden")
+      return
+    }
+    let persistent = definition["persistent"]?.bool == true
+    let pauseHidden = definition["pause_hidden"]?.bool == true
+    guard persistent || !pauseHidden else {
+      invalid(
+        ".pause_hidden needs persistent = true: a fresh popup's process stops when it hides",
+        at: "pause_hidden")
+      return
+    }
     guard
       let parsed = parseStatusProcess(
         definition, path: dotted, sourceURL: sourceURL, allowedKeys: terminalPopupKeys,
@@ -1350,13 +1694,13 @@ enum ConfigLoader {
       Config.Terminal(
         command: parsed.command, workingDirectory: parsed.workingDirectory,
         environment: parsed.environment, size: size,
-        lifecycle: definition["persistent"]?.bool == true ? .persistent : .fresh))
+        lifecycle: persistent ? .persistent : .fresh, pauseHidden: pauseHidden))
     config.popupSourceURLs.removeValue(forKey: name)
     config.invalidPopupNames.remove(name)
     config.recordLocation(path: dotted, location: location)
   }
 
-  private static let widgetKeys: Set<String> = [
+  static let widgetKeys: Set<String> = [
     "enabled", "template", "screen", "anchor", "gap_x", "gap_y", "columns", "max_columns",
     "font", "font_size", "line_spacing", "fg", "bg", "border", "border_size", "corner_radius",
     "padding", "interval", "hide_from_capture",
@@ -1507,6 +1851,314 @@ enum ConfigLoader {
     }
   }
 
+  static let monitorKeys: Set<String> = [
+    "enabled", "value", "message", "detail", "warning", "error", "direction", "interval",
+    "event", "app", "usb", "idle", "at", "days", "run", "alert", "notify", "timeout", "cooldown",
+  ]
+
+  /// `[monitors.<name>]` tables. A later layer overrides only the keys it
+  /// sets, so a user file can retune or disable a built-in monitor; a
+  /// threshold set to `false` removes it. Whether the result is complete is
+  /// judged once every layer is applied (`diagnoseMonitors`).
+  private static func applyMonitors(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, sourceURL: URL?,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    for (name, value) in table {
+      let path = ["monitors", name]
+      let dotted = "monitors.\(name)"
+      guard !name.isEmpty,
+        name.unicodeScalars.allSatisfy({
+          $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-")
+        })
+      else {
+        config.addDiagnostic(
+          "monitor name '\(name)' must use only letters, digits, '_' and '-'",
+          location: locations.location(for: path))
+        continue
+      }
+      guard let definition = value.table else {
+        config.addDiagnostic(
+          "\(dotted) must be a table of keys ([\(dotted)] on its own line)",
+          location: locations.location(for: path))
+        continue
+      }
+      warnUnknownKeys(
+        in: definition, known: monitorKeys, path: path, locations: locations, into: &config)
+      if config.monitors[name] == nil { config.monitors[name] = Config.Monitor() }
+      func key(_ key: String) -> [String] { path + [key] }
+      applyBool(
+        definition["enabled"], path: key("enabled"),
+        message: "\(dotted).enabled must be true or false", locations: locations, into: &config
+      ) { value, config in config.monitors[name]?.enabled = value }
+      applyString(
+        definition["value"], path: key("value"),
+        message: "\(dotted).value must be a non-empty status format string",
+        locations: locations, into: &config, validate: { !$0.isEmpty },
+        assign: { value, config in config.monitors[name]?.value = value })
+      applyString(
+        definition["message"], path: key("message"),
+        message: "\(dotted).message must be a status format string", locations: locations,
+        into: &config
+      ) { value, config in config.monitors[name]?.message = value }
+      applyString(
+        definition["detail"], path: key("detail"),
+        message: "\(dotted).detail must be a status format string", locations: locations,
+        into: &config
+      ) { value, config in config.monitors[name]?.detail = value }
+      for (field, keyPath) in [
+        ("warning", \Config.Monitor.warning), ("error", \Config.Monitor.error),
+      ] {
+        guard let raw = definition[field] else { continue }
+        let location = locations.location(for: key(field))
+        if raw.bool == false {
+          config.monitors[name]?[keyPath: keyPath] = nil
+        } else if let number = raw.double ?? raw.int.map(Double.init), number.isFinite {
+          config.monitors[name]?[keyPath: keyPath] = number
+        } else {
+          config.addDiagnostic(
+            "\(dotted).\(field) must be a number, or false to remove it", location: location)
+          continue
+        }
+        config.recordLocation(path: "\(dotted).\(field)", location: location)
+      }
+      applyString(
+        definition["direction"], path: key("direction"),
+        message: "\(dotted).direction must be \"above\" or \"below\"", locations: locations,
+        into: &config, validate: { MonitorDirection(rawValue: $0) != nil },
+        assign: { value, config in
+          config.monitors[name]?.direction = MonitorDirection(rawValue: value) ?? .above
+        })
+      applyInt(
+        definition["interval"], path: key("interval"),
+        message: "\(dotted).interval must be an integer between 1 and 86400 (seconds)",
+        locations: locations, into: &config, validate: { (1...86_400).contains($0) },
+        assign: { value, config in config.monitors[name]?.intervalSeconds = Double(value) })
+      if let raw = definition["event"] {
+        let location = locations.location(for: key("event"))
+        let patterns = raw.string.map { [$0] } ?? stringArrayValue(raw)
+        if let patterns, !patterns.isEmpty, patterns.allSatisfy({ !$0.trimmed.isEmpty }) {
+          config.monitors[name]?.event = patterns
+          config.recordLocation(path: "\(dotted).event", location: location)
+        } else {
+          config.addDiagnostic(
+            "\(dotted).event must be a host event name or glob (\"core:system.woke\"), or a list",
+            location: location)
+        }
+      }
+      applyString(
+        definition["app"], path: key("app"),
+        message: "\(dotted).app must be a bundle identifier", locations: locations,
+        into: &config, validate: { !$0.isEmpty },
+        assign: { value, config in config.monitors[name]?.app = value })
+      if let raw = definition["usb"] {
+        let location = locations.location(for: key("usb"))
+        if let filter = parseUSBDeviceFilter(
+          raw, path: key("usb"), dotted: "\(dotted).usb", location: location,
+          locations: locations, into: &config)
+        {
+          config.monitors[name]?.usb = filter
+          config.recordLocation(path: "\(dotted).usb", location: location)
+        }
+      }
+      applyBool(
+        definition["alert"], path: key("alert"),
+        message: "\(dotted).alert must be true or false", locations: locations, into: &config
+      ) { value, config in config.monitors[name]?.alert = value }
+      applyBool(
+        definition["notify"], path: key("notify"),
+        message: "\(dotted).notify must be true or false", locations: locations, into: &config
+      ) { value, config in config.monitors[name]?.notify = value }
+      applyInt(
+        definition["timeout"], path: key("timeout"),
+        message: "\(dotted).timeout must be an integer between 1 and 86400 (seconds)",
+        locations: locations, into: &config,
+        validate: { MonitorRunDefaults.timeoutRange.contains($0) },
+        assign: { value, config in config.monitors[name]?.timeoutSeconds = value })
+      applyInt(
+        definition["idle"], path: key("idle"),
+        message: "\(dotted).idle must be an integer between 1 and 86400 (seconds)",
+        locations: locations, into: &config,
+        validate: { IdleWatch.secondsRange.contains($0) },
+        assign: { value, config in config.monitors[name]?.idleSeconds = value })
+      if let raw = definition["at"] {
+        let location = locations.location(for: key("at"))
+        let times = (raw.string.map { [$0] } ?? stringArrayValue(raw))?.map(ClockTime.init)
+        if let times, !times.isEmpty, times.allSatisfy({ $0 != nil }) {
+          config.monitors[name]?.at = times.compactMap { $0 }
+          config.recordLocation(path: "\(dotted).at", location: location)
+        } else {
+          config.addDiagnostic(
+            "\(dotted).at must be a time of day as \"HH:MM\" (\"09:55\"), or a list of them",
+            location: location)
+        }
+      }
+      if let raw = definition["days"] {
+        let location = locations.location(for: key("days"))
+        let days = (raw.string.map { [$0] } ?? stringArrayValue(raw))?.map(Weekday.init)
+        if let days, !days.isEmpty, days.allSatisfy({ $0 != nil }) {
+          config.monitors[name]?.days = days.compactMap { $0 }
+          config.recordLocation(path: "\(dotted).days", location: location)
+        } else {
+          config.addDiagnostic(
+            "\(dotted).days must be a day of the week (\"mon\" through \"sun\"), or a list of them",
+            location: location)
+        }
+      }
+      applyInt(
+        definition["cooldown"], path: key("cooldown"),
+        message: "\(dotted).cooldown must be an integer between 0 and 604800 (seconds)",
+        locations: locations, into: &config,
+        validate: { MonitorRunDefaults.cooldownRange.contains($0) },
+        assign: { value, config in config.monitors[name]?.cooldownSeconds = value })
+      if let raw = definition["run"] {
+        let location = locations.location(for: key("run"))
+        if raw.bool == false {
+          config.monitors[name]?.run = []
+        } else if let steps = parseMonitorRun(raw, sourceURL: sourceURL) {
+          config.monitors[name]?.run = steps
+        } else {
+          config.addDiagnostic(
+            "\(dotted).run must be a command array, [\"flash\", \"<topic>\", \"<action>\", …] "
+              + "or an executable with its arguments, a list of such commands run in order, "
+              + "or false to remove it",
+            location: location)
+          continue
+        }
+        config.recordLocation(path: "\(dotted).run", location: location)
+      }
+    }
+  }
+
+  /// A monitor's `usb` table, `{ vendor_id = 0x05ac, product_id = 0x024f,
+  /// name = "Keyboard" }` or `[monitors.<name>.usb]`: any subset, never
+  /// empty. An inline table's keys share its line, so their diagnostics
+  /// fall back to the table's location.
+  private static func parseUSBDeviceFilter(
+    _ raw: any TOMLValueConvertible, path: [String], dotted: String,
+    location: ConfigLocation?, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) -> USBDeviceFilter? {
+    guard let table = raw.table else {
+      config.addDiagnostic(
+        "\(dotted) must be a table naming the device: "
+          + "{ vendor_id = 0x05ac, product_id = 0x024f, name = \"Keyboard\" }, any subset",
+        location: location)
+      return nil
+    }
+    let keys = ["vendor_id", "product_id", "name"]
+    var valid = true
+    for key in table.keys.sorted() where !keys.contains(key) {
+      config.addDiagnostic(
+        "\(dotted): unknown key '\(key)'; known keys: \(keys.joined(separator: ", "))",
+        location: locations.location(for: path + [key]) ?? location)
+      valid = false
+    }
+    var filter = USBDeviceFilter()
+    for (key, keyPath) in [
+      ("vendor_id", \USBDeviceFilter.vendorID), ("product_id", \USBDeviceFilter.productID),
+    ] {
+      guard let value = table[key] else { continue }
+      if let id = value.int, (0...0xFFFF).contains(id) {
+        filter[keyPath: keyPath] = id
+      } else {
+        config.addDiagnostic(
+          "\(dotted).\(key) must be an integer between 0 and 65535 (0x05ac)",
+          location: locations.location(for: path + [key]) ?? location)
+        valid = false
+      }
+    }
+    if let value = table["name"] {
+      if let text = value.string, !text.isEmpty {
+        filter.name = text
+      } else {
+        config.addDiagnostic(
+          "\(dotted).name must be a non-empty string, a part of the product name",
+          location: locations.location(for: path + ["name"]) ?? location)
+        valid = false
+      }
+    }
+    guard valid else { return nil }
+    guard !filter.isEmpty else {
+      config.addDiagnostic(
+        "\(dotted) must name the device: a vendor_id, a product_id or a name", location: location)
+      return nil
+    }
+    return filter
+  }
+
+  /// A monitor's `run`: one command, or a non-empty list of commands run in
+  /// order. A list mixing commands and words, or holding an empty command,
+  /// is malformed.
+  private static func parseMonitorRun(_ raw: any TOMLValueConvertible, sourceURL: URL?)
+    -> [MappingCommand]?
+  {
+    guard let items = raw.array, !items.isEmpty else { return nil }
+    guard items.allSatisfy({ $0.array != nil }) else {
+      return parseMappingCommandValue(raw, sourceURL: sourceURL).map { [$0] }
+    }
+    var steps: [MappingCommand] = []
+    for item in items {
+      guard let step = parseMappingCommandValue(item, sourceURL: sourceURL) else { return nil }
+      steps.append(step)
+    }
+    return steps
+  }
+
+  /// `[startup]`: `run` is a monitor's `run` (one command, or a list run in
+  /// order), or `[]` for none; a later layer replaces the whole list. A list
+  /// with any malformed command is rejected whole, so a layer never runs part
+  /// of what it declared.
+  private static func applyStartup(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, sourceURL: URL?,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    if let raw = table["run"] {
+      let location = locations.location(for: ["startup", "run"])
+      if raw.array?.isEmpty == true {
+        config.startup.run = []
+        config.recordLocation(path: "startup.run", location: location)
+      } else if let steps = parseMonitorRun(raw, sourceURL: sourceURL) {
+        if steps.contains(.flashCommand(.startup(.run))) {
+          config.addDiagnostic(
+            "startup.run cannot run startup run: it would start itself again", location: location)
+        } else {
+          config.startup.run = steps
+          config.recordLocation(path: "startup.run", location: location)
+        }
+      } else {
+        config.addDiagnostic(
+          "startup.run must be a list of commands run in order, each [\"flash\", \"<topic>\", "
+            + "\"<action>\", …] or an executable with its arguments ([\"killall\", \"Dock\"])",
+          location: location)
+      }
+    }
+    applyInt(
+      table["timeout"], path: ["startup", "timeout"],
+      message: "startup.timeout must be an integer between 1 and 86400 (seconds per command)",
+      locations: locations, into: &config,
+      validate: { MonitorRunDefaults.timeoutRange.contains($0) },
+      assign: { value, config in config.startup.timeoutSeconds = value })
+  }
+
+  /// After every layer: an enabled monitor without a value or a threshold,
+  /// or with thresholds in the wrong order, is reported and does not run.
+  private static func diagnoseMonitors(into config: inout Config) {
+    for name in config.monitors.keys.sorted() {
+      guard let monitor = config.monitors[name], monitor.enabled,
+        let problem = monitor.problem
+      else { continue }
+      let locations = config.valueLocations
+      let location = [
+        "value", "event", "warning", "error", "run", "app", "usb", "direction", "timeout",
+        "cooldown", "notify", "enabled",
+      ]
+      .compactMap { locations["monitors.\(name).\($0)"] }.first
+      config.addDiagnostic("monitors.\(name)\(problem)", location: location)
+    }
+  }
+
   private static func applyFlashlight(
     _ table: TOMLTable?,
     locations: ConfigSourceLocationIndex,
@@ -1560,12 +2212,33 @@ enum ConfigLoader {
         let locationPath = ["flashlight", "aliases", key]
         let location = locations.location(for: locationPath)
         if let parsed = value.string, !parsed.isEmpty, !trimmedKey.isEmpty {
+          if let invalid = ResourceTypes.firstInvalidToken(in: parsed) {
+            config.addDiagnostic(
+              "flashlight.aliases.\(key): \(ResourceTypes.invalidTokenMessage(invalid))",
+              location: location)
+            continue
+          }
           config.flashlight.aliases[trimmedKey] = parsed
           config.recordLocation(path: "flashlight.aliases.\(trimmedKey)", location: location)
         } else {
           config.addDiagnostic(
             "flashlight.aliases.\(key) must be a non-empty quoted string",
             location: location)
+        }
+      }
+    }
+
+    if let bangs = sectionTable(
+      table["bangs"], name: "flashlight.bangs", locations: locations, into: &config)
+    {
+      for (name, value) in bangs {
+        let location = locations.location(for: ["flashlight", "bangs", name])
+        if let bang = parseUserBang(
+          name: name, value, dotted: "flashlight.bangs.\(name)", location: location,
+          into: &config)
+        {
+          config.flashlight.bangs[name] = bang
+          config.recordLocation(path: "flashlight.bangs.\(name)", location: location)
         }
       }
     }
@@ -1577,6 +2250,15 @@ enum ConfigLoader {
         let trimmedKey = key.trimmingCharacters(in: .whitespaces).lowercased()
         let locationPath = ["flashlight", "precedence", key]
         let location = locations.location(for: locationPath)
+        // Weights are per resource type, the word `@<type>` filters by.
+        guard ResourceTypes.isValidName(trimmedKey) else {
+          config.addDiagnostic(
+            "flashlight.precedence.\(key): "
+              + ResourceTypes.invalidTokenMessage(trimmedKey)
+              .replacingOccurrences(of: "@\(trimmedKey) is", with: "\(trimmedKey) is"),
+            location: location)
+          continue
+        }
         // Bounded so the ranking sum (base + alive bonus) can never
         // overflow Int and trap on the first flashlight query.
         if let parsed = value.int, !trimmedKey.isEmpty,
@@ -1591,6 +2273,71 @@ enum ConfigLoader {
         }
       }
     }
+  }
+
+  /// One `[flashlight.bangs]` entry: `name = "<url>"` or
+  /// `name = { url = "<url>", description = "…" }`. The name is one word of
+  /// lowercase letters and digits nobody else owns, the URL http or https
+  /// with `{query}` as its only braces. An inline table's keys share its
+  /// line, so their diagnostics carry the entry's location.
+  private static func parseUserBang(
+    name: String, _ value: any TOMLValueConvertible, dotted: String,
+    location: ConfigLocation?, into config: inout Config
+  ) -> Config.Flashlight.Bang? {
+    var bang: Config.Flashlight.Bang
+    if let url = value.string {
+      bang = Config.Flashlight.Bang(url: url)
+    } else if let table = value.table {
+      let keys = ["url", "description"]
+      var valid = true
+      for key in table.keys.sorted() where !keys.contains(key) {
+        config.addDiagnostic(
+          "\(dotted): unknown key '\(key)'; known keys: \(keys.joined(separator: ", "))",
+          location: location)
+        valid = false
+      }
+      guard let url = table["url"]?.string else {
+        config.addDiagnostic(
+          "\(dotted) needs url = \"https://…\", with {query} where the query goes",
+          location: location)
+        return nil
+      }
+      bang = Config.Flashlight.Bang(url: url)
+      if let description = table["description"] {
+        if let text = description.string {
+          bang.description = text
+        } else {
+          config.addDiagnostic("\(dotted).description must be a string", location: location)
+          valid = false
+        }
+      }
+      guard valid else { return nil }
+    } else {
+      config.addDiagnostic(
+        "\(dotted) must be a URL string or a table { url = \"https://…\", description = \"…\" }",
+        location: location)
+      return nil
+    }
+    guard UserBangs.isValidName(name) else {
+      config.addDiagnostic(
+        "\(dotted): a bang name is lowercase letters and digits (jira, gh2)", location: location)
+      return nil
+    }
+    if let problem = UserBangs.templateProblem(bang.url) {
+      config.addDiagnostic(
+        "\(dotted) \(problem) (\"https://example.com/search?q={query}\")", location: location)
+      return nil
+    }
+    if CoreBangs.bang(token: name) != nil {
+      let own = CoreBangs.all.map { "!\($0.token)" }.joined(separator: ", ")
+      config.addDiagnostic("\(dotted) is one of Flash's own bangs (\(own))", location: location)
+      return nil
+    }
+    if let owner = PluginRepository.declaredBangOwners[name] {
+      config.addDiagnostic("\(dotted) is the \(owner) plugin's bang", location: location)
+      return nil
+    }
+    return bang
   }
 
   /// Precedence values are user-tunable ranking weights, not magnitudes —
@@ -1620,12 +2367,13 @@ enum ConfigLoader {
         (1...32).contains(command.count),
         (1...32).contains((parsed["terminal"] ?? config.mode.labels.terminal).count),
         (1...32).contains((parsed["hyper"] ?? config.mode.labels.hyper).count),
-        (1...32).contains((parsed["hold"] ?? config.mode.labels.hold).count)
+        (1...32).contains((parsed["hold"] ?? config.mode.labels.hold).count),
+        (1...32).contains((parsed["visual"] ?? config.mode.labels.visual).count),
+        (1...32).contains((parsed["visual_line"] ?? config.mode.labels.visualLine).count)
       {
-        for key in parsed.keys
-        where !["normal", "insert", "command", "terminal", "hyper", "hold"].contains(key) {
+        for key in parsed.keys where !modeLabelKeys.contains(key) {
           config.addDiagnostic(
-            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, hold)",
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command, terminal, hyper, hold, visual, visual_line)",
             location: location)
         }
         config.mode.labels = Config.Mode.Labels(
@@ -1634,7 +2382,9 @@ enum ConfigLoader {
           command: command,
           terminal: parsed["terminal"] ?? config.mode.labels.terminal,
           hyper: parsed["hyper"] ?? config.mode.labels.hyper,
-          hold: parsed["hold"] ?? config.mode.labels.hold)
+          hold: parsed["hold"] ?? config.mode.labels.hold,
+          visual: parsed["visual"] ?? config.mode.labels.visual,
+          visualLine: parsed["visual_line"] ?? config.mode.labels.visualLine)
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
@@ -1652,6 +2402,12 @@ enum ConfigLoader {
       assign: { value, config in
         config.mode.sequenceTimeoutMs = value
       })
+    applyInt(
+      table["which_key_ms"], path: ["mode", "which_key_ms"],
+      message: "mode.which_key_ms must be an integer between 0 and 10000 (ms; 0 turns it off)",
+      locations: locations,
+      into: &config, validate: { (0...10_000).contains($0) },
+      assign: { value, config in config.mode.whichKeyMs = value })
     applyInt(
       table["scroll_step"], path: ["mode", "scroll_step"],
       message: "mode.scroll_step must be an integer between 10 and 500 (pixels)",
@@ -1672,6 +2428,13 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { (1...1000).contains($0) },
       assign: { value, config in
         config.mode.scrollPageLines = value
+      })
+    applyInt(
+      table["move_page_lines"], path: ["mode", "move_page_lines"],
+      message: "mode.move_page_lines must be an integer between 1 and 200 (arrows)",
+      locations: locations, into: &config, validate: { (1...200).contains($0) },
+      assign: { value, config in
+        config.mode.movePageLines = value
       })
     applyInt(
       table["scroll_smooth_ms"], path: ["mode", "scroll_smooth_ms"],
@@ -1741,7 +2504,7 @@ enum ConfigLoader {
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in normal where key != "leader" && key != "hyper" && key != "mappings" {
+      for (key, _) in normal where !modeNormalKeys.contains(key) {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
             + "[mode.normal.mappings]; valid keys are leader, hyper, mappings",
@@ -1767,7 +2530,35 @@ enum ConfigLoader {
       }
     }
 
-    for scope in [ModeScope.insert, .terminal, .hyper, .hold] {
+    // `[mode.text]` carries the engagement switch beside its table.
+    if let text = sectionTable(
+      table["text"], name: "mode.text", locations: locations, into: &config)
+    {
+      applyBool(
+        text["enabled"], path: ["mode", "text", "enabled"],
+        message: "mode.text.enabled must be true or false",
+        locations: locations, into: &config,
+        assign: { value, config in
+          config.mode.textEnabled = value
+        })
+      applyModeMappingTable(
+        sectionTable(
+          text["mappings"], name: "mode.text.mappings", locations: locations, into: &config),
+        scope: .text,
+        path: ["mode", "text", "mappings"],
+        locations: locations,
+        sourceURL: sourceURL,
+        pendingModeMappings: &pendingModeMappings,
+        into: &config)
+      for (key, _) in text where !modeTextKeys.contains(key) {
+        config.addDiagnostic(
+          "mode.text: unknown key '\(key)' — mappings belong under [mode.text.mappings]; "
+            + "valid keys are enabled, mappings",
+          location: locations.location(for: ["mode", "text", key]))
+      }
+    }
+
+    for scope in [ModeScope.insert, .terminal, .hyper, .hold, .visual] {
       let name = scope.rawValue
       guard
         let scoped = sectionTable(
@@ -1809,6 +2600,13 @@ enum ConfigLoader {
       }
     }
 
+    applyLayers(
+      sectionTable(table["layers"], name: "mode.layers", locations: locations, into: &config),
+      locations: locations,
+      sourceURL: sourceURL,
+      pendingModeMappings: &pendingModeMappings,
+      into: &config)
+
     if let apps = sectionTable(
       table["apps"], name: "mode.apps", locations: locations, into: &config)
     {
@@ -1828,7 +2626,7 @@ enum ConfigLoader {
           let scopePath = appPath + [scopeName]
           guard let scope = ModeScope(rawValue: scopeName) else {
             config.addDiagnostic(
-              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, hold",
+              "mode.apps.\(bundleID): unknown scope '\(scopeName)' — valid scopes are all, normal, insert, command, terminal, hyper, hold, text, visual",
               location: locations.location(for: scopePath))
             continue
           }
@@ -1837,6 +2635,15 @@ enum ConfigLoader {
               scopeValue, name: "mode.apps.\(bundleID).\(scopeName)",
               locations: locations, into: &config)
           else { continue }
+          if scope == .text {
+            applyBool(
+              scoped["enabled"], path: scopePath + ["enabled"],
+              message: "mode.apps.\(bundleID).text.enabled must be true or false",
+              locations: locations, into: &config,
+              assign: { value, config in
+                config.mode.appMappings[bundleID, default: .init()].engagesText = value
+              })
+          }
           let mappingsPath = scopePath + ["mappings"]
           applyModeMappingTable(
             sectionTable(
@@ -1849,7 +2656,8 @@ enum ConfigLoader {
             sourceURL: sourceURL,
             pendingModeMappings: &pendingModeMappings,
             into: &config)
-          for (key, _) in scoped where key != "mappings" {
+          let knownKeys: Set<String> = scope == .text ? modeTextKeys : ["mappings"]
+          for (key, _) in scoped where !knownKeys.contains(key) {
             config.addDiagnostic(
               "mode.apps.\(bundleID).\(scopeName): unknown key '\(key)' — mappings belong under [mode.apps.\"\(bundleID)\".\(scopeName).mappings]",
               location: locations.location(for: scopePath + [key]))
@@ -1859,7 +2667,68 @@ enum ConfigLoader {
     }
   }
 
-  private static func isValidBundleID(_ value: String) -> Bool {
+  /// `[mode.layers.<name>]`: each table declares a layer, with an optional
+  /// `label`, `sticky` and its `mappings`. Declaring it is what lets
+  /// `mode layer --name=<name>` enter it, so a table with no mappings is
+  /// still a layer (one that only Escape and `[mode.all]` act in).
+  private static func applyLayers(
+    _ table: TOMLTable?,
+    locations: ConfigSourceLocationIndex,
+    sourceURL: URL?,
+    pendingModeMappings: inout [PendingModeMapping],
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    for (name, value) in table {
+      let path = ["mode", "layers", name]
+      let dotted = path.joined(separator: ".")
+      guard Config.Mode.isValidLayerName(name) else {
+        config.addDiagnostic(
+          "\(dotted): a layer name is 1–32 characters of a-z, 0-9, _ and -",
+          location: locations.location(for: path))
+        continue
+      }
+      guard !Config.Mode.reservedLayerNames.contains(name) else {
+        config.addDiagnostic(
+          "\(dotted): \(name) is a built-in mode or mapping scope; name the layer otherwise",
+          location: locations.location(for: path))
+        continue
+      }
+      guard let layer = sectionTable(value, name: dotted, locations: locations, into: &config)
+      else { continue }
+      if config.mode.layers[name] == nil { config.mode.layers[name] = .init() }
+      applyString(
+        layer["label"], path: path + ["label"],
+        message: "\(dotted).label must be a string of 1-32 characters", locations: locations,
+        into: &config, validate: { (1...32).contains($0.count) },
+        assign: { value, config in config.mode.layers[name]?.label = value })
+      applyBool(
+        layer["sticky"], path: path + ["sticky"],
+        message:
+          "\(dotted).sticky must be true (stay after a mapping) or false (leave after one)",
+        locations: locations, into: &config,
+        assign: { value, config in config.mode.layers[name]?.sticky = value })
+      applyModeMappingTable(
+        sectionTable(
+          layer["mappings"], name: "\(dotted).mappings", locations: locations, into: &config),
+        scope: .normal,
+        layer: name,
+        path: path + ["mappings"],
+        locations: locations,
+        sourceURL: sourceURL,
+        pendingModeMappings: &pendingModeMappings,
+        into: &config)
+      for (key, _) in layer where !layerKeys.contains(key) {
+        config.addDiagnostic(
+          "\(dotted): unknown key '\(key)' — valid keys are label, sticky and mappings",
+          location: locations.location(for: path + [key]))
+      }
+    }
+  }
+
+  /// A bundle identifier as LaunchServices spells one: at least two
+  /// dot-separated, non-empty runs of ASCII letters, digits and hyphens.
+  static func isValidBundleID(_ value: String) -> Bool {
     let parts = value.split(separator: ".", omittingEmptySubsequences: false)
     guard parts.count >= 2, parts.allSatisfy({ !$0.isEmpty }) else { return false }
     let allowed = CharacterSet(
@@ -1879,9 +2748,7 @@ enum ConfigLoader {
         location: locations.location(for: ["window_rules"]))
       return
     }
-    let known: Set<String> = [
-      "bundle_id", "title_contains", "position", "x", "y", "width", "height", "screen",
-    ]
+    let known = windowRuleKeys
     for (index, value) in rules.enumerated() {
       let path = ["window_rules", String(index)]
       guard let rule = value.table else {
@@ -1985,62 +2852,27 @@ enum ConfigLoader {
       assign: { value, config in
         config.overlay.fontSize = value
       })
-    applyString(
-      table["hint_fg"], path: ["overlay", "hint_fg"],
-      message: "overlay.hint_fg must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.hintFG = value
-      })
-    applyString(
-      table["hint_bg_top"], path: ["overlay", "hint_bg_top"],
-      message: "overlay.hint_bg_top must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.hintBGTop = value
-      })
-    applyString(
-      table["hint_bg_bottom"], path: ["overlay", "hint_bg_bottom"],
-      message: "overlay.hint_bg_bottom must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.hintBGBottom = value
-      })
-    applyString(
-      table["hint_border"], path: ["overlay", "hint_border"],
-      message: "overlay.hint_border must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.hintBorder = value
-      })
-    applyString(
-      table["important_hint_fg"], path: ["overlay", "important_hint_fg"],
-      message: "overlay.important_hint_fg must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.importantHintFG = value
-      })
-    applyString(
-      table["important_hint_bg_top"], path: ["overlay", "important_hint_bg_top"],
-      message: "overlay.important_hint_bg_top must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.importantHintBGTop = value
-      })
-    applyString(
-      table["important_hint_bg_bottom"], path: ["overlay", "important_hint_bg_bottom"],
-      message: "overlay.important_hint_bg_bottom must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.importantHintBGBottom = value
-      })
-    applyString(
-      table["important_hint_border"], path: ["overlay", "important_hint_border"],
-      message: "overlay.important_hint_border must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.overlay.importantHintBorder = value
-      })
+    applyHexColor(
+      table, ["overlay", "hint_fg"], locations: locations, into: &config, \.overlay.hintFG)
+    applyHexColor(
+      table, ["overlay", "hint_bg_top"], locations: locations, into: &config, \.overlay.hintBGTop)
+    applyHexColor(
+      table, ["overlay", "hint_bg_bottom"], locations: locations, into: &config,
+      \.overlay.hintBGBottom)
+    applyHexColor(
+      table, ["overlay", "hint_border"], locations: locations, into: &config, \.overlay.hintBorder)
+    applyHexColor(
+      table, ["overlay", "important_hint_fg"], locations: locations, into: &config,
+      \.overlay.importantHintFG)
+    applyHexColor(
+      table, ["overlay", "important_hint_bg_top"], locations: locations, into: &config,
+      \.overlay.importantHintBGTop)
+    applyHexColor(
+      table, ["overlay", "important_hint_bg_bottom"], locations: locations, into: &config,
+      \.overlay.importantHintBGBottom)
+    applyHexColor(
+      table, ["overlay", "important_hint_border"], locations: locations, into: &config,
+      \.overlay.importantHintBorder)
     applyBool(
       table["window_border"], path: ["overlay", "window_border"],
       message: "overlay.window_border must be true or false", locations: locations, into: &config
@@ -2094,16 +2926,6 @@ enum ConfigLoader {
     ) { value, config in
       config.overlay.clickFeedback = value
     }
-    applyString(
-      table["screen_capture"], path: ["overlay", "screen_capture"],
-      message: "overlay.screen_capture must be \"show\" or \"hide\"",
-      locations: locations, into: &config,
-      validate: { ScreenCaptureVisibility(rawValue: $0) != nil },
-      assign: { value, config in
-        if let visibility = ScreenCaptureVisibility(rawValue: value) {
-          config.overlay.screenCapture = visibility
-        }
-      })
     applyDarkOverlay(
       sectionTable(table["dark"], name: "overlay.dark", locations: locations, into: &config),
       locations: locations, into: &config)
@@ -2151,20 +2973,12 @@ enum ConfigLoader {
     ) { value, config in
       config.debug.showHintsBounds = value
     }
-    applyString(
-      table["hints_bounds_bg"], path: ["debug", "hints_bounds_bg"],
-      message: "debug.hints_bounds_bg must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.debug.hintsBoundsBG = value
-      })
-    applyString(
-      table["hints_bounds_fg"], path: ["debug", "hints_bounds_fg"],
-      message: "debug.hints_bounds_fg must be a hex color like #RRGGBB or #RRGGBBAA",
-      locations: locations, into: &config, validate: { isValidHexColor($0) },
-      assign: { value, config in
-        config.debug.hintsBoundsFG = value
-      })
+    applyHexColor(
+      table, ["debug", "hints_bounds_bg"], locations: locations, into: &config,
+      \.debug.hintsBoundsBG)
+    applyHexColor(
+      table, ["debug", "hints_bounds_fg"], locations: locations, into: &config,
+      \.debug.hintsBoundsFG)
 
     let logLevelPath = ["debug", "log_level"]
     if let value = table["log_level"] {
@@ -2209,10 +3023,235 @@ enum ConfigLoader {
       })
   }
 
+  /// `[mode.labels]`, `[mode.normal]`, `[mode.layers.<name>]`, a
+  /// `[[window_rules]]` entry, and a `[statusbar.sources.<name>]` with a
+  /// command or (pushed, `status set`) without one.
+  static let modeLabelKeys: Set<String> = [
+    "normal", "insert", "command", "terminal", "hyper", "hold", "visual", "visual_line",
+  ]
+  static let modeNormalKeys: Set<String> = ["leader", "hyper", "mappings"]
+  static let modeTextKeys: Set<String> = ["enabled", "mappings"]
+  static let layerKeys: Set<String> = ["label", "sticky", "mappings"]
+  static let windowRuleKeys: Set<String> = [
+    "bundle_id", "title_contains", "position", "x", "y", "width", "height", "screen",
+  ]
+  static let statusSourceKeys: Set<String> = [
+    "command", "working_directory", "env", "interval", "cycle_interval", "history", "output",
+  ]
+  static let pushedStatusSourceKeys: Set<String> = ["history", "cycle_interval"]
+
+  static let telemetryReceiverKeys: Set<String> = [
+    "enabled", "port", "max_series", "max_points", "max_logs", "max_spans", "token",
+  ]
+  static let telemetryExporterKeys: Set<String> = [
+    "endpoint", "protocol", "compression", "headers", "service_name", "signals", "interval",
+  ]
+  /// Headers Flash sets itself; a configured one would contradict the body.
+  static let reservedTelemetryHeaders: Set<String> = [
+    "content-type", "content-length", "content-encoding", "transfer-encoding", "host",
+    "connection", "user-agent",
+  ]
+
+  /// `[telemetry.receiver]` and `[telemetry.exporter]`. Each key validates
+  /// alone, in every layer; checks across keys and layers run once all
+  /// layers are applied (`diagnoseTelemetry`).
+  private static func applyTelemetry(
+    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    guard let table else { return }
+    warnUnknownKeys(
+      in: table, known: ["receiver", "exporter"], path: ["telemetry"], locations: locations,
+      into: &config)
+    if let value = table["receiver"] {
+      if let receiver = value.table {
+        applyTelemetryReceiver(receiver, locations: locations, into: &config)
+      } else {
+        config.addDiagnostic(
+          "telemetry.receiver must be a table ([telemetry.receiver] on its own line)",
+          location: locations.location(for: ["telemetry", "receiver"]))
+      }
+    }
+    if let value = table["exporter"] {
+      if let exporter = value.table {
+        applyTelemetryExporter(exporter, locations: locations, into: &config)
+      } else {
+        config.addDiagnostic(
+          "telemetry.exporter must be a table ([telemetry.exporter] on its own line)",
+          location: locations.location(for: ["telemetry", "exporter"]))
+      }
+    }
+  }
+
+  private static func applyTelemetryReceiver(
+    _ table: TOMLTable, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    let path = ["telemetry", "receiver"]
+    warnUnknownKeys(
+      in: table, known: telemetryReceiverKeys, path: path, locations: locations, into: &config)
+    applyBool(
+      table["enabled"], path: path + ["enabled"],
+      message: "telemetry.receiver.enabled must be true or false", locations: locations,
+      into: &config
+    ) { value, config in config.telemetry.receiver.enabled = value }
+    applyInt(
+      table["port"], path: path + ["port"],
+      message: "telemetry.receiver.port must be an integer in 1..65535", locations: locations,
+      into: &config, validate: { (1...65535).contains($0) },
+      assign: { value, config in config.telemetry.receiver.port = value })
+    applyString(
+      table["token"], path: path + ["token"],
+      message:
+        "telemetry.receiver.token must be printable text of at most 1024 bytes, without spaces",
+      locations: locations, into: &config,
+      validate: { token in
+        token.utf8.count <= 1024
+          && !token.unicodeScalars.contains {
+            CharacterSet.whitespacesAndNewlines.contains($0)
+              || CharacterSet.controlCharacters.contains($0)
+          }
+      },
+      assign: { value, config in config.telemetry.receiver.token = value })
+    let bounds: [(String, ClosedRange<Int>, WritableKeyPath<Config.Telemetry.Receiver, Int>)] = [
+      ("max_series", 1...10_000, \.maxSeries),
+      ("max_points", 2...1000, \.maxPoints),
+      ("max_logs", 0...100_000, \.maxLogs),
+      ("max_spans", 0...100_000, \.maxSpans),
+    ]
+    for (key, range, keyPath) in bounds {
+      applyInt(
+        table[key], path: path + [key],
+        message:
+          "telemetry.receiver.\(key) must be an integer in \(range.lowerBound)..\(range.upperBound)",
+        locations: locations, into: &config, validate: { range.contains($0) },
+        assign: { value, config in config.telemetry.receiver[keyPath: keyPath] = value })
+    }
+  }
+
+  private static func applyTelemetryExporter(
+    _ table: TOMLTable, locations: ConfigSourceLocationIndex, into config: inout Config
+  ) {
+    let path = ["telemetry", "exporter"]
+    warnUnknownKeys(
+      in: table, known: telemetryExporterKeys, path: path, locations: locations, into: &config)
+    applyString(
+      table["endpoint"], path: path + ["endpoint"],
+      message:
+        "telemetry.exporter.endpoint must be empty or an http(s) URL with a host and no "
+        + "credentials, query or fragment",
+      locations: locations, into: &config, validate: { $0.isEmpty || isValidExportEndpoint($0) },
+      assign: { value, config in config.telemetry.exporter.endpoint = value })
+    applyString(
+      table["protocol"], path: path + ["protocol"],
+      message: "telemetry.exporter.protocol must be \"http/protobuf\" or \"http/json\"",
+      locations: locations, into: &config, validate: { OTLPEncoding(rawValue: $0) != nil },
+      assign: { value, config in
+        config.telemetry.exporter.encoding = OTLPEncoding(rawValue: value) ?? .protobuf
+      })
+    applyString(
+      table["compression"], path: path + ["compression"],
+      message: "telemetry.exporter.compression must be \"none\" or \"gzip\"",
+      locations: locations, into: &config, validate: { ["none", "gzip"].contains($0) },
+      assign: { value, config in config.telemetry.exporter.gzip = value == "gzip" })
+    if let value = table["headers"] {
+      let location = locations.location(for: path + ["headers"])
+      if let headers = stringTableValue(value),
+        headers.allSatisfy({ isValidHeaderName($0.key) && isValidHeaderValue($0.value) }),
+        headers.keys.allSatisfy({ !reservedTelemetryHeaders.contains($0.lowercased()) })
+      {
+        config.telemetry.exporter.headers = headers
+        config.recordLocation(path: "telemetry.exporter.headers", location: location)
+      } else {
+        config.addDiagnostic(
+          "telemetry.exporter.headers must be a table of header names to string values "
+            + "(no line breaks, and not \(reservedTelemetryHeaders.sorted().joined(separator: ", ")))",
+          location: location)
+      }
+    }
+    applyString(
+      table["service_name"], path: path + ["service_name"],
+      message: "telemetry.exporter.service_name must be a non-empty string of at most 255 bytes",
+      locations: locations, into: &config,
+      validate: { !$0.isEmpty && $0.utf8.count <= 255 },
+      assign: { value, config in config.telemetry.exporter.serviceName = value })
+    if let value = table["signals"] {
+      let location = locations.location(for: path + ["signals"])
+      let names = stringArrayValue(value) ?? ["?"]
+      let signals = names.compactMap(TelemetrySignal.init(rawValue:))
+      if signals.count == names.count, Set(signals).count == signals.count {
+        config.telemetry.exporter.signals = Set(signals)
+        config.recordLocation(path: "telemetry.exporter.signals", location: location)
+      } else {
+        config.addDiagnostic(
+          "telemetry.exporter.signals must be an array naming each of \"metrics\", \"logs\" "
+            + "and \"traces\" at most once",
+          location: location)
+      }
+    }
+    applyInt(
+      table["interval"], path: path + ["interval"],
+      message: "telemetry.exporter.interval must be an integer between 1 and 3600 (seconds)",
+      locations: locations, into: &config, validate: { (1...3600).contains($0) },
+      assign: { value, config in config.telemetry.exporter.intervalSeconds = value })
+  }
+
+  /// An http(s) URL with a host and nothing that could carry a secret the
+  /// help page would show: no user, password, query or fragment.
+  static func isValidExportEndpoint(_ raw: String) -> Bool {
+    guard let components = URLParsing.components(raw),
+      let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+      let host = components.host, !host.isEmpty,
+      components.user == nil, components.password == nil, components.query == nil,
+      components.fragment == nil
+    else { return false }
+    return true
+  }
+
+  /// An RFC 9110 token.
+  static func isValidHeaderName(_ name: String) -> Bool {
+    !name.isEmpty
+      && name.unicodeScalars.allSatisfy {
+        $0.isASCII
+          && (CharacterSet.alphanumerics.contains($0)
+            || "!#$%&'*+-.^_`|~".unicodeScalars.contains($0))
+      }
+  }
+
+  static func isValidHeaderValue(_ value: String) -> Bool {
+    value.utf8.count <= 4096
+      && !value.unicodeScalars.contains { $0 == "\r" || $0 == "\n" || $0 == "\0" }
+  }
+
+  /// After every layer: an exporter aimed at Flash's own receiver, an empty
+  /// signal list, and a receiver port taken by the help server.
+  private static func diagnoseTelemetry(into config: inout Config) {
+    let telemetry = config.telemetry
+    let locations = config.valueLocations
+    if !telemetry.exporter.endpoint.isEmpty, let url = URLParsing.url(telemetry.exporter.endpoint),
+      Config.Telemetry.targetsReceiver(url, receiver: telemetry.receiver)
+    {
+      config.addDiagnostic(
+        "telemetry.exporter.endpoint is Flash's own receiver; the exporter stays off rather "
+          + "than feed Flash's telemetry back into itself",
+        location: locations["telemetry.exporter.endpoint"])
+    }
+    if !telemetry.exporter.endpoint.isEmpty, telemetry.exporter.signals.isEmpty {
+      config.addDiagnostic(
+        "telemetry.exporter.signals is empty, so the exporter has nothing to send",
+        location: locations["telemetry.exporter.signals"])
+    }
+    if telemetry.receiver.enabled, telemetry.receiver.port == config.debug.httpInspectorPort {
+      config.addDiagnostic(
+        "telemetry.receiver.port \(telemetry.receiver.port) is the help server's "
+          + "debug.http_inspector_port; pick another",
+        location: locations["telemetry.receiver.port"])
+    }
+  }
+
   private static func applyModeMappingTable(
     _ table: TOMLTable?,
     scope: ModeScope,
     bundleID: String? = nil,
+    layer: String? = nil,
     path: [String],
     locations: ConfigSourceLocationIndex,
     sourceURL: URL?,
@@ -2228,12 +3267,24 @@ enum ConfigLoader {
           location: location)
         continue
       }
+      // `f12` is valid grammar, the keys f, 1, 2, but almost always meant
+      // the function key; the spaced-out spelling keeps the sequence.
+      if let name = NormalModeInterpreter.bareFunctionKeyName(key) {
+        let keys = key.map(String.init)
+        config.addDiagnostic(
+          "mapping \"\(key)\" is the keys \(keys.joined(separator: ", ")); write \"<\(name)>\" "
+            + "for the \(name.uppercased()) key, or \"\(keys.joined(separator: " "))\" for "
+            + "those keys in turn",
+          location: location)
+        continue
+      }
       switch parseMappingValue(value, sourceURL: sourceURL) {
       case .success(let parsed):
         pendingModeMappings.append(
           PendingModeMapping(
             scope: scope,
             bundleID: bundleID,
+            layer: layer,
             rawKey: key,
             key: canonical,
             value: parsed,
@@ -2280,17 +3331,31 @@ enum ConfigLoader {
     config.recordLocation(path: path.joined(separator: "."), location: location)
   }
 
+  /// A `#RRGGBB` or `#RRGGBBAA` color key, rejected with the one message
+  /// every color key shares.
+  private static func applyHexColor(
+    _ table: TOMLTable, _ path: [String], locations: ConfigSourceLocationIndex,
+    into config: inout Config, _ keyPath: WritableKeyPath<Config, String>
+  ) {
+    applyString(
+      table[path[path.count - 1]], path: path,
+      message: "\(path.joined(separator: ".")) must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in config[keyPath: keyPath] = value })
+  }
+
   private static func applyStringArray(
     _ value: (any TOMLValueConvertible)?,
     path: [String],
     message: String,
     locations: ConfigSourceLocationIndex,
     into config: inout Config,
+    validate: ([String]) -> Bool = { _ in true },
     assign: ([String], inout Config) -> Void
   ) {
     guard let value else { return }
     let location = locations.location(for: path)
-    guard let parsed = stringArrayValue(value) else {
+    guard let parsed = stringArrayValue(value), validate(parsed) else {
       config.addDiagnostic(message, location: location)
       return
     }
@@ -2431,11 +3496,18 @@ enum ConfigLoader {
     case .hold:
       config.mode.hold.removeAll { $0.key == key }
       config.mode.hold.append(mapping)
+    case .text:
+      config.mode.text.removeAll { $0.key == key }
+      config.mode.text.append(mapping)
+    case .visual:
+      config.mode.visual.removeAll { $0.key == key }
+      config.mode.visual.append(mapping)
     }
   }
 
   /// `"<key>" = false`: delete the key from its table, including a chord
-  /// spelled another way, and remember it so plugin mappings stay off it.
+  /// spelled another way, and remember it so plugin mappings, and derived and
+  /// inherited entries (HYPER arrows, HOLD, terminal popups), stay off it.
   private static func removeModeMapping(scope: ModeScope, key: String, into config: inout Config) {
     config.mode.unmapped[scope, default: []].insert(key)
     let chord = ModeMapping.parseNativeHotkey(key)
@@ -2450,6 +3522,8 @@ enum ConfigLoader {
     case .command: config.mode.command.removeAll(where: removed)
     case .hyper: config.mode.hyper.removeAll(where: removed)
     case .hold: config.mode.hold.removeAll(where: removed)
+    case .text: config.mode.text.removeAll(where: removed)
+    case .visual: config.mode.visual.removeAll(where: removed)
     }
   }
 
@@ -2460,6 +3534,19 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     for mapping in mappings {
+      if case .mapping(.flashCommand(.layerMode(let name)), _) = mapping.value,
+        config.mode.layers[name] == nil
+      {
+        config.addDiagnostic(
+          "mapping \"\(mapping.rawKey)\" enters layer \(name), but no [mode.layers.\(name)] "
+            + "declares it",
+          location: mapping.location, file: mapping.file)
+        continue
+      }
+      if let layer = mapping.layer {
+        applyPendingLayerMapping(mapping, layer: layer, into: &config)
+        continue
+      }
       if mapping.key.contains("<leader>"), mapping.scope != .normal {
         config.addDiagnostic(
           "mapping \"\(mapping.rawKey)\" uses <leader> outside a normal mappings table",
@@ -2504,6 +3591,29 @@ enum ConfigLoader {
     }
   }
 
+  /// A `[mode.layers.<name>.mappings]` entry. `<leader>` is NORMAL's prefix,
+  /// so a layer cannot use it; `false` takes a key out of what the layer
+  /// inherits (Escape's `mode leave`, an `[mode.all]` chord).
+  private static func applyPendingLayerMapping(
+    _ mapping: PendingModeMapping, layer: String, into config: inout Config
+  ) {
+    guard !mapping.key.contains("<leader>") else {
+      config.addDiagnostic(
+        "mapping \"\(mapping.rawKey)\" uses <leader> outside a normal mappings table",
+        location: mapping.location, file: mapping.file)
+      return
+    }
+    switch mapping.value {
+    case .mapping(let action, let repeatsOnFinalKey):
+      config.mode.layers[layer, default: .init()].set(
+        ModeMapping(
+          key: mapping.key, action: action, repeatsOnFinalKey: repeatsOnFinalKey,
+          origin: ModeMapping.configOrigin(file: mapping.file)))
+    case .removal:
+      config.mode.layers[layer, default: .init()].remove(mapping.key)
+    }
+  }
+
   private static func applyStatusBarTemplates(into config: inout Config) {
     for name in config.statusBar.sources.keys {
       if config.statusBar.sourcesUsingDefaultInterval.contains(name) {
@@ -2534,6 +3644,9 @@ enum ConfigLoader {
           case "loaded_count": source = .plugin(.loadedCount)
           case "ready_count": source = .plugin(.readyCount)
           case "error_count": source = .plugin(.errorCount)
+          case "errors": source = .plugin(.errors)
+          case "spawn_ms": source = .plugin(.spawnMs)
+          case "spawn_id": source = .plugin(.spawnID)
           default:
             if let dot = field.lastIndex(of: "."), dot != field.startIndex,
               field.index(after: dot) < field.endIndex
@@ -2555,6 +3668,24 @@ enum ConfigLoader {
             diagnose("references undefined source \(name)")
           } else if history, config.statusBar.sources[name]?.historyLength == nil {
             diagnose("reads \(token), but statusbar.sources.\(name) sets no history")
+          }
+        } else if TelemetryQuery.isTelemetryKey(token) {
+          source = nil
+          if TelemetryQuery(key: token) == nil {
+            diagnose(
+              "has invalid telemetry value \(token); write #{flash.otel[.<field>]:<metric>"
+                + "[<attribute>=<value>]…}")
+          } else if !config.telemetry.receiver.enabled {
+            diagnose("reads \(token), but [telemetry.receiver] is not enabled")
+          }
+        } else if token.hasPrefix("flash.calendar.") {
+          // The next-meeting values: the controller supplies them from the
+          // events `CalendarEvents` reads while a surface reads one.
+          source = nil
+          if !CalendarStatusValue.isCalendarValue(token) {
+            diagnose(
+              "has unknown Flash value \(token); the next-meeting values are "
+                + CalendarStatusValue.allCases.map(\.rawValue).joined(separator: ", "))
           }
         } else if token.hasPrefix("flash.widget.") {
           source = nil
@@ -2605,6 +3736,16 @@ enum ConfigLoader {
           "\(path) uses \(Set(interactive).sorted().joined(separator: ", ")) but widgets are "
             + "click-through; links, popups and click ranges do nothing there",
           location: config.valueLocations["\(path).template"])
+      }
+    }
+    // Monitors compile in the controller; here their formats are only
+    // checked for unknown values and undefined sources.
+    for name in config.monitors.keys.sorted() {
+      guard let monitor = config.monitors[name] else { continue }
+      for (field, text) in [
+        ("value", monitor.value), ("message", monitor.message), ("detail", monitor.detail),
+      ] where !text.isEmpty {
+        _ = compiled(text, path: "monitors.\(name).\(field)", into: &config)
       }
     }
   }
@@ -2675,12 +3816,12 @@ enum ConfigLoader {
   }
 
   /// Why a non-empty argv did not resolve: a CLI query named as a Flash
-  /// verb, or an unknown verb or invalid arguments.
+  /// command, or an unknown command or invalid arguments.
   private static func commandError(_ argv: [String]) -> ModeMappingValueError {
-    if argv.count >= 2, mappingCommandHeadNamesFlash(argv[0]),
-      FlashQuery(rawValue: argv[1]) != nil
+    if argv.count >= 3, mappingCommandHeadNamesFlash(argv[0]),
+      let message = FlashQuery.reservationMessage(topic: argv[1], action: argv[2])
     {
-      return .queryCommand(argv[1])
+      return .queryCommand(message)
     }
     return .invalidCommand(argv.joined(separator: " "))
   }
@@ -2695,7 +3836,7 @@ enum ConfigLoader {
       !head.isEmpty
     else { return nil }
     // Resolve only the executable head before Flash-command classification.
-    // Flash verb args may legitimately contain slashes (`--input=...`,
+    // Flash command args may legitimately contain slashes (`--input=...`,
     // `--name=/Applications/...`) and must not be path-resolved.
     let resolvedHead = resolveCommandArgument(head, sourceURL: sourceURL)
     return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())

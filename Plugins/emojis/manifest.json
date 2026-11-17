@@ -1,0 +1,17 @@
+{
+  "id": "emojis",
+  "name": "Emojis",
+  "version": "0.1.0",
+  "description": "Emoji glyphs with their shortcodes and CLDR keywords, as @emojis",
+  "exec": [
+    "./flash-plugin-emojis"
+  ],
+  "lifecycle": "publish_then_exit",
+  "sources": [
+    {
+      "name": "emojis.glyphs",
+      "type": "emojis",
+      "priority": "normal"
+    }
+  ]
+}

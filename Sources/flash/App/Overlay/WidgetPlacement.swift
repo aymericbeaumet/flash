@@ -7,7 +7,8 @@ import Foundation
 /// space there — in AppKit's y-up global coordinates.
 enum WidgetPlacement {
   /// The displays a widget shows on. Display numbers count left to right
-  /// (ties top to bottom); a number past the last display shows nothing.
+  /// (ties top to bottom), as `mouse screens` labels them; a number past the
+  /// last display shows nothing.
   static func screens(
     _ selection: Config.Widget.Screen, layouts: [WindowScreenLayout], widget name: String
   ) -> [WindowScreenLayout] {
@@ -17,9 +18,7 @@ enum WidgetPlacement {
     case .primary:
       return (layouts.first { $0.frame.origin == .zero } ?? layouts.first).map { [$0] } ?? []
     case .index(let number):
-      let ordered = layouts.sorted {
-        ($0.frame.minX, -$0.frame.maxY) < ($1.frame.minX, -$1.frame.maxY)
-      }
+      let ordered = ScreenSelect.arranged(layouts)
       guard ordered.indices.contains(number - 1) else {
         FlashLog.debug(
           "[widgets] no display \(number) name=\(name) displays=\(layouts.count)",

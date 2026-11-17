@@ -3,7 +3,7 @@ import ApplicationServices
 import FlashCore
 import FlashProviders
 
-/// `mouse_notifications`: the pressable parts of what Notification Center
+/// `mouse notifications`: the pressable parts of what Notification Center
 /// shows — banners and alerts, their close, options and action buttons, and
 /// the panel's controls while it is open — read from its AX windows under the
 /// existing Accessibility grant. Only windows are read: the process also
@@ -112,6 +112,7 @@ enum NotificationCenterSurface {
       AXValueGetValue(sizeRef as! AXValue, .cgSize, &extent),
       extent.width >= 3, extent.height >= 3
     else { return nil }
-    return ScreenSpace.flip(CGRect(origin: origin, size: extent), height: screenH)
+    return ScreenRect<AXSpace>(CGRect(origin: origin, size: extent)).toNS(primaryHeight: screenH)
+      .cgRect
   }
 }

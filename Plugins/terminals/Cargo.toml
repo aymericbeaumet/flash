@@ -1,0 +1,45 @@
+[package]
+name = "flash-plugin-terminals"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-terminals"
+path = "src/main.rs"
+
+[dependencies]
+flash_plugin = { path = "../_flash_plugin_rust" }
+nix = { version = "0.31.3", default-features = false, features = ["event", "hostname", "user"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+regex = "1.13.1"
+unicode-width = "0.2.3"
+toml = "1.2.1"
+tokio = { version = "1.54.1", default-features = false, features = [
+  "rt",
+  "macros",
+  "io-std",
+  "io-util",
+  "fs",
+  "net",
+  "process",
+  "time",
+  "sync",
+] }
+
+# Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
+# (fully-unoptimized tokio is visibly slow under the plugin latency contracts),
+# line-tables-only debuginfo keeps the shared target dir small.
+[profile.plugin-dev]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+
+# Long-lived resident child process: optimize for size and cold start.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

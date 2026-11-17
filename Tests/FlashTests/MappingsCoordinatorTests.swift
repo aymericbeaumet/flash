@@ -29,4 +29,40 @@ final class MappingsCoordinatorTests: XCTestCase {
     XCTAssertTrue(coordinator.handle(event: event))
     XCTAssertEqual(fired.count, 3, "a physical press is never an echo")
   }
+
+  /// A full-screen app that hides the menu bar owns every chord: suspension
+  /// unregisters the whole Carbon set, a table applied meanwhile registers
+  /// nothing, and resuming registers the current table again.
+  func testSuspensionReleasesEveryChordUntilItResumes() {
+    _ = NSApplication.shared
+    let coordinator = MappingsCoordinator()
+    coordinator.start { _ in }
+    defer { coordinator.setSuspended(true) }
+    let chord = "ctrl+alt+shift+cmd+f19"
+    var mode = Config.Mode()
+    mode.all = [ModeMapping(key: chord, action: .flashCommand(.normalMode))]
+    mode.recompileMappings()
+    coordinator.apply(mode: mode)
+    coordinator.apply(scope: .normal)
+    drainMain()
+    let registered = coordinator.registeredHotkeys
+    XCTAssertTrue(registered.contains(chord))
+
+    coordinator.setSuspended(true)
+    XCTAssertEqual(coordinator.registeredHotkeys, [])
+    coordinator.apply(mode: mode)
+    coordinator.apply(scope: .insert)
+    coordinator.apply(scope: .normal)
+    drainMain()
+    XCTAssertEqual(coordinator.registeredHotkeys, [], "nothing registers while suspended")
+
+    coordinator.setSuspended(false)
+    XCTAssertEqual(coordinator.registeredHotkeys, registered)
+  }
+
+  private func drainMain() {
+    let drained = expectation(description: "main queue drained")
+    DispatchQueue.main.async { DispatchQueue.main.async { drained.fulfill() } }
+    wait(for: [drained], timeout: 5)
+  }
 }

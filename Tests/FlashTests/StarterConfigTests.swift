@@ -41,12 +41,12 @@ final class StarterConfigTests: XCTestCase {
       command(config, "cmd+shift+alt+space"), .mouseGrid(.init(.click(.leftClick, modifiers: []))))
     XCTAssertEqual(command(config, "cmd+ctrl+["), .normalMode)
     XCTAssertEqual(command(config, "cmd+ctrl+i"), .insertMode)
-    guard
-      case .enterCommand(input: let input, restoreMode: false)? = command(
-        config, "cmd+ctrl+alt+space")
-    else { return XCTFail("the search suggestion must be enter_command_mode") }
-    // The trailing space opens flashlight search, not command completion.
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":" + input), "")
+    XCTAssertEqual(
+      command(config, "cmd+ctrl+alt+space"), .flashlight(query: nil, restoreMode: false))
+    // It opens on the flashlight's search, not on command completion.
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCandidateQuery(":" + URLCommand.flashlightInput(query: nil)),
+      "")
   }
 
   func testSeedsOnlyWithoutFlashConfigOrAnExistingFile() {

@@ -46,7 +46,7 @@ extension Candidate {
   }
   var navigationURL: URL? {
     guard let raw = metadata[CandidateMetadataKey.navigationURL], !raw.isEmpty else { return nil }
-    return URL(string: raw)
+    return URLParsing.url(raw)
   }
   var bundleIdentifier: String { metadata[CandidateMetadataKey.bundleID] ?? "" }
   var subtitle: String { metadata[CandidateMetadataKey.subtitle] ?? "" }

@@ -106,6 +106,33 @@ final class PollSchedulerTests: XCTestCase {
     wait(for: [empty], timeout: 5)
   }
 
+  /// Priority is only the wake-up's slack; the thread that runs a handler
+  /// is the registering queue's. A handler runs at that queue's QoS, and a
+  /// queue with none inherits the clock's own user-initiated class — never
+  /// a utility one that the kernel starves under load.
+  func testHandlersRunAtTheirRegisteringQueuesQoS() {
+    let scheduler = PollScheduler()
+    let queues: [(String, DispatchQueue, qos_class_t)] = [
+      (
+        "core:qos-user", DispatchQueue(label: "poll.qos.user", qos: .userInitiated),
+        QOS_CLASS_USER_INITIATED
+      ),
+      (
+        "core:qos-utility", DispatchQueue(label: "poll.qos.utility", qos: .utility),
+        QOS_CLASS_UTILITY
+      ),
+      ("core:qos-inherited", DispatchQueue(label: "poll.qos.inherited"), QOS_CLASS_USER_INITIATED),
+    ]
+    for (id, queue, expected) in queues {
+      let ran = expectation(description: "\(id) ran")
+      scheduler.scheduleOnce(id, afterMs: 0, priority: .system, on: queue) {
+        XCTAssertEqual(qos_class_self(), expected, id)
+        ran.fulfill()
+      }
+      wait(for: [ran], timeout: 5)
+    }
+  }
+
   func testADeadlineRegistrationRunsOnceAndIsDropped() {
     // A client whose wake-ups are irregular — the status bar's next deadline
     // is the earliest of its job intervals, cycle rotations and pending
@@ -257,9 +284,18 @@ final class PollSchedulerTests: XCTestCase {
     queue.sync { deadline.cancel() }
     XCTAssertEqual(registeredIDs(scheduler), [])
 
-    queue.sync { deadline.arm(afterMs: 0) { dropped.fulfill() } }
-    // Cancel from the handler queue while the zero-delay fire is in flight.
-    queue.async { deadline.cancel() }
+    // Cancel from the handler queue while the zero-delay fire is in flight:
+    // holding the queue, arm, wait until the scheduler fired (dropping the
+    // one-shot registration and handing the fire to this very queue, where
+    // it waits behind this block), then cancel. Ordering the race this way
+    // is what made it deterministic; a cancel sent afterwards could lose it.
+    queue.sync {
+      deadline.arm(afterMs: 0) { dropped.fulfill() }
+      let fired = Date().addingTimeInterval(5)
+      while !registeredIDs(scheduler).isEmpty, Date() < fired { usleep(1_000) }
+      XCTAssertEqual(registeredIDs(scheduler), [], "the fire is in flight")
+      deadline.cancel()
+    }
     wait(for: [dropped], timeout: 0.3)
   }
 

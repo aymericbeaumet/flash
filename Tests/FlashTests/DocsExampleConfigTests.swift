@@ -5,7 +5,7 @@ import XCTest
 
 /// Every TOML file under `docs/examples/` is a configuration a reader pastes
 /// into `flash.toml`: it must load over the bundled defaults, exactly as the
-/// resident and `flash config_check` load it, without a single diagnostic.
+/// resident and `flash config check` load it, without a single diagnostic.
 final class DocsExampleConfigTests: XCTestCase {
   private static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent()
@@ -37,13 +37,19 @@ final class DocsExampleConfigTests: XCTestCase {
   }
 
   /// The README's snippets are the first configuration most people paste,
-  /// the getting-started guide's the next, and the alternatives pages'
-  /// migration snippets the first for someone coming from another tool.
+  /// the install and getting-started guides' the next, and the alternatives
+  /// pages' migration snippets the first for someone coming from another
+  /// tool; the tiling guide's are what someone leaving AeroSpace or yabai
+  /// pastes, and the calendar guide's what someone leaving MeetingBar or
+  /// Itsycal does.
   func testEveryReadmeTOMLSnippetLoadsOverTheDefaultsWithoutDiagnostics() throws {
     let defaults = ConfigLoader.Layer(
       text: try String(
         contentsOf: Self.root.appendingPathComponent("config.default.toml"), encoding: .utf8))
-    var pages = ["README.md", "docs/getting-started.md"]
+    var pages = [
+      "README.md", "docs/install.md", "docs/getting-started.md", "docs/tiling.md",
+      "docs/calendar.md", "docs/startup.md",
+    ]
     let alternatives = Self.root.appendingPathComponent("docs/alternatives")
     pages += try FileManager.default.contentsOfDirectory(atPath: alternatives.path)
       .filter { $0.hasSuffix(".md") }.sorted().map { "docs/alternatives/\($0)" }
@@ -61,6 +67,72 @@ final class DocsExampleConfigTests: XCTestCase {
       }
     }
     XCTAssertGreaterThanOrEqual(total, 20)
+  }
+
+  /// Modes are opt-in: NORMAL, layer, TEXT, VISUAL and HOLD keys act only
+  /// once a `[mode.all.mappings]` shortcut has run `mode normal` or
+  /// `mode leave`. A page whose TOML binds such keys shows that shortcut in
+  /// the same snippet or an earlier one, so a reader who copies the snippet
+  /// gets working keys. A reference page that would only repeat it writes
+  /// `<!-- modes: assumed on -->` as the last line before the snippet instead
+  /// (see docs/development.md); the help renders an HTML comment as nothing.
+  func testEveryPageBindingModeKeysShowsHowToTurnTheModesOn() throws {
+    let marker = "<!-- modes: assumed on -->"
+    let modeKeyTable = try NSRegularExpression(
+      pattern: #"^\[mode\.(apps\."[^"]+"\.)?((normal|text|visual|hold)\.mappings|layers\.)"#,
+      options: .anchorsMatchLines)
+    let enablingCommand = try NSRegularExpression(
+      pattern: #""flash",\s*"mode",\s*"(normal|leave)""#)
+    func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+      regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+    func turnsModesOn(_ snippet: String) -> Bool {
+      var inAllMappings = false
+      for raw in snippet.components(separatedBy: "\n") {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        if line.hasPrefix("[") { inAllMappings = line.hasPrefix("[mode.all.mappings]") }
+        if inAllMappings, !line.hasPrefix("#"), matches(enablingCommand, line) { return true }
+      }
+      return false
+    }
+
+    var pages = ["README.md"]
+    let docs = Self.root.appendingPathComponent("docs")
+    let enumerator = try XCTUnwrap(
+      FileManager.default.enumerator(at: docs, includingPropertiesForKeys: nil))
+    pages += enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "md" }
+      .map { "docs/" + $0.path.dropFirst(docs.path.count + 1) }.sorted()
+    var bindingPages = 0
+    var markedPages = 0
+    for page in pages {
+      let text = try String(contentsOf: Self.root.appendingPathComponent(page), encoding: .utf8)
+      let segments = text.components(separatedBy: "```toml\n")
+      var enabled = false
+      var binds = false
+      for index in segments.indices.dropFirst() {
+        let snippet = segments[index].components(separatedBy: "\n```").first ?? segments[index]
+        // The prose right before this snippet: after the previous closing fence.
+        let prose = segments[index - 1].components(separatedBy: "\n```").last ?? ""
+        if prose.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(marker) {
+          enabled = true
+          markedPages += 1
+        }
+        if turnsModesOn(snippet) { enabled = true }
+        guard matches(modeKeyTable, snippet) else { continue }
+        binds = true
+        XCTAssertTrue(
+          enabled,
+          """
+          \(page) snippet \(index) binds NORMAL, layer, TEXT, VISUAL or HOLD keys before the \
+          page shows how to turn the modes on: add `[mode.all.mappings]` entries running \
+          `mode normal` (and `mode insert`) to it or an earlier snippet, or write \
+          `\(marker)` as the last line before the snippet on a reference page
+          """)
+      }
+      if binds { bindingPages += 1 }
+    }
+    XCTAssertGreaterThanOrEqual(bindingPages, 10)
+    XCTAssertGreaterThanOrEqual(markedPages, 1)
   }
 
   func testEveryExampleWidgetEvaluatesWithoutAnEmptyLine() throws {

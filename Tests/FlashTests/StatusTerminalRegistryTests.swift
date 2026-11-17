@@ -16,12 +16,20 @@ final class StatusTerminalRegistryTests: XCTestCase {
   }
 
   private func terminal(
-    _ command: [String], persistent: Bool = false, size: Config.PopupSize = .default,
-    environment: [String: String] = [:]
+    _ command: [String], persistent: Bool = false, pauseHidden: Bool = false,
+    size: Config.PopupSize = .default, environment: [String: String] = [:]
   ) -> Config.Terminal {
     Config.Terminal(
       command: command, environment: environment, size: size,
-      lifecycle: persistent ? .persistent : .fresh)
+      lifecycle: persistent ? .persistent : .fresh, pauseHidden: pauseHidden)
+  }
+
+  /// Whether the kernel holds `pid` stopped (SIGSTOP), from its BSD info.
+  private func isStopped(_ pid: Int32) -> Bool {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return false }
+    return info.pbi_status == UInt32(SSTOP)
   }
 
   private func apply(
@@ -189,8 +197,8 @@ final class StatusTerminalRegistryTests: XCTestCase {
     var prewarms = 0
     var restartsScheduled = 0
     let sink = FlashLog.addSink { record in
-      if record.message == "Status popup prewarmed" { prewarms += 1 }
-      if record.message == "Status terminal restart scheduled" { restartsScheduled += 1 }
+      if record.message == "[popup] prewarmed" { prewarms += 1 }
+      if record.message == "[popup] restart_scheduled" { restartsScheduled += 1 }
     }
     defer { FlashLog.removeSink(sink) }
     let report = terminal(["/bin/sh", "-c", "printf 'report-%s' \"$$\""])
@@ -237,7 +245,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     defer { registry.shutdown() }
     var restartsScheduled = 0
     let sink = FlashLog.addSink { record in
-      if record.message == "Status terminal restart scheduled" { restartsScheduled += 1 }
+      if record.message == "[popup] restart_scheduled" { restartsScheduled += 1 }
     }
     defer { FlashLog.removeSink(sink) }
     apply(registry, ["shell": terminal(["/bin/sh"])], prewarm: ["shell"])
@@ -354,6 +362,97 @@ final class StatusTerminalRegistryTests: XCTestCase {
     XCTAssertTrue(registry.session(named: "process") === session)
     XCTAssertEqual(kill(originalPID, 0), -1)
     XCTAssertEqual(errno, ESRCH)
+  }
+
+  /// The pause decision from the facts alone: a persistent popup's running
+  /// process is stopped while nothing shows it and `pause_hidden` is on,
+  /// continued when it shows or the policy goes, and a fresh popup is never
+  /// paused whatever the facts.
+  func testPauseHiddenDecidesFromLifecycleShowingAndState() {
+    typealias Pause = StatusPopupPause
+    let pausing = terminal(["/bin/sleep", "30"], persistent: true, pauseHidden: true)
+    let running = TerminalSessionState.running(pid: 1)
+    XCTAssertEqual(Pause.action(for: pausing, state: running, shown: false, paused: false), .pause)
+    XCTAssertNil(Pause.action(for: pausing, state: running, shown: false, paused: true))
+    XCTAssertEqual(Pause.action(for: pausing, state: running, shown: true, paused: true), .resume)
+    XCTAssertNil(Pause.action(for: pausing, state: running, shown: true, paused: false))
+    for state in [
+      TerminalSessionState.idle, .exited(code: 0), .failed(.invalidCommand), .stopped,
+    ] {
+      XCTAssertNil(
+        Pause.action(for: pausing, state: state, shown: false, paused: false),
+        "nothing to signal in \(state)")
+    }
+    let plain = terminal(["/bin/sleep", "30"], persistent: true)
+    XCTAssertEqual(
+      Pause.action(for: plain, state: running, shown: false, paused: true), .resume,
+      "the policy turned off continues a paused process")
+    XCTAssertNil(Pause.action(for: plain, state: running, shown: false, paused: false))
+    let fresh = terminal(["/bin/sleep", "30"], pauseHidden: true)
+    for shown in [false, true] {
+      for paused in [false, true] {
+        XCTAssertNil(
+          Pause.action(for: fresh, state: running, shown: shown, paused: paused),
+          "a fresh popup is never paused")
+      }
+    }
+  }
+
+  /// `pause_hidden` stops the process group while the popup is hidden and
+  /// continues it when the popup shows; a policy change applies in place
+  /// without restarting; a quit continues the process first so it can act
+  /// on its hangup, and its restart is paused again.
+  func testPauseHiddenStopsAPersistentProcessWhileHiddenAndContinuesItWhenShown() throws {
+    let registry = StatusTerminalRegistry()
+    defer { registry.shutdown() }
+    let pausing = terminal(["/bin/sleep", "30"], persistent: true, pauseHidden: true)
+    apply(registry, ["monitor": pausing])
+    let session = try XCTUnwrap(registry.session(named: "monitor"))
+    waitUntil { self.running(session) != nil }
+    let pid = try XCTUnwrap(running(session))
+    waitUntil { self.isStopped(pid) }
+    XCTAssertTrue(registry.pausedNames.contains("monitor"), "paused as soon as it runs hidden")
+    XCTAssertTrue(registry.open("monitor") === session)
+    waitUntil { !self.isStopped(pid) }
+    XCTAssertFalse(registry.pausedNames.contains("monitor"))
+    registry.hide("monitor")
+    waitUntil { self.isStopped(pid) }
+    XCTAssertEqual(running(session), pid, "hiding keeps the process")
+
+    apply(registry, ["monitor": terminal(["/bin/sleep", "30"], persistent: true)])
+    XCTAssertEqual(running(session), pid, "a policy change keeps the process")
+    waitUntil { !self.isStopped(pid) }
+    apply(registry, ["monitor": pausing])
+    waitUntil { self.isStopped(pid) }
+
+    registry.quit(name: "monitor")
+    waitUntil { self.running(session).map { $0 != pid } ?? false }
+    let next = try XCTUnwrap(running(session))
+    waitUntil { kill(pid, 0) == -1 && errno == ESRCH }
+    waitUntil { self.isStopped(next) }
+    XCTAssertTrue(registry.open("monitor") === session)
+    waitUntil { !self.isStopped(next) }
+    registry.hide("monitor")
+    waitUntil { self.isStopped(next) }
+  }
+
+  func testAPausePolicyChangeKeepsTheProcessWhileALifecycleChangeReplacesIt() {
+    let plain = terminal(["/bin/sleep", "30"], persistent: true)
+    let pausing = terminal(["/bin/sleep", "30"], persistent: true, pauseHidden: true)
+    XCTAssertEqual(
+      StatusTerminalChange.reconcile(current: ["a": plain], desired: ["a": pausing], invalid: []),
+      [.pause("a")])
+    XCTAssertEqual(
+      StatusTerminalChange.reconcile(current: ["a": pausing], desired: ["a": plain], invalid: []),
+      [.pause("a")])
+    XCTAssertEqual(
+      StatusTerminalChange.reconcile(
+        current: ["a": pausing], desired: ["a": pausing], invalid: []), [])
+    XCTAssertEqual(
+      StatusTerminalChange.reconcile(
+        current: ["a": pausing], desired: ["a": terminal(["/bin/sleep", "30"], pauseHidden: true)],
+        invalid: []),
+      [.replace("a")])
   }
 
   func testQuitReleasesAFreshPopupWithoutAnAutomaticRestart() throws {
@@ -761,7 +860,7 @@ final class StatusTerminalRegistryTests: XCTestCase {
     fixed.setWantsFrames(true)
     waitUntil { session.frame != nil && fixed.frame != nil }
     screen = CGSize(width: 1600, height: 800)
-    registry.refitHidden(except: nil)
+    registry.refitHidden(excluding: [])
     waitUntil { session.frame?.columns == 100 && session.frame?.rows == 25 }
     XCTAssertEqual(fixed.frame?.columns, 100)
     XCTAssertEqual(fixed.frame?.rows, 28, "a size in cells ignores the screen")

@@ -90,14 +90,12 @@ public enum BigramTextCollector {
         }
       }
       let kept = BigramMatcher.dedupe(measured(located))
-      let targets = kept.enumerated().map { ordinal, item in
+      return kept.enumerated().map { ordinal, item in
         BigramTextCollector.target(
           hit: item.value, rect: item.rect, run: runs[item.value.runIndex], query: query,
           ordinal: ordinal, pid: pid, bundleIdentifier: bundleIdentifier, screenH: screenH,
           clip: clip)
       }
-      return AccessibilityProvider.settlingInsertIntent(
-        targets, bundleIdentifier: bundleIdentifier)
     }
 
     /// One target per visible word, in tree order then left to right, at most
@@ -122,14 +120,12 @@ public enum BigramTextCollector {
         if located.count >= limit { break }
       }
       let kept = BigramMatcher.dedupe(measured(located))
-      let targets = kept.enumerated().map { ordinal, item in
+      return kept.enumerated().map { ordinal, item in
         BigramTextCollector.wordTarget(
           hit: item.value, rect: item.rect, run: runs[item.value.runIndex],
           ordinal: ordinal, pid: pid, bundleIdentifier: bundleIdentifier, screenH: screenH,
           clip: clip)
       }
-      return AccessibilityProvider.settlingInsertIntent(
-        targets, bundleIdentifier: bundleIdentifier)
     }
   }
 
@@ -581,7 +577,7 @@ public enum BigramTextCollector {
       accessibilityLabel: hit.label,
       pid: pid,
       resolveClickPoint: resolve,
-      entersInsertMode: JumpTarget.isTextInput(role: role, subrole: run.subrole),
+      isTextInput: JumpTarget.isTextInput(role: role, subrole: run.subrole),
       providerID: providerID)
   }
 

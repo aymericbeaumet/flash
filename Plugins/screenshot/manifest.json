@@ -3,12 +3,12 @@
   "name": "Screenshot",
   "version": "0.1.0",
   "description": "Capture the screen or the focused window to the clipboard, without a click.",
+  "sandbox": false,
   "exec": [
     "./flash-plugin-screenshot"
   ],
   "capabilities": [
-    "app_control",
-    "subprocess"
+    "app_control"
   ],
   "commands": [
     {

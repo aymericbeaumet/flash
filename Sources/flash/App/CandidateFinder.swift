@@ -15,6 +15,47 @@ struct CommandLineCompletionMatch {
   var score: Int
 }
 
+/// The highlighted command-line completion row and why: the row the resolver
+/// picked for the typed words (`implied`, shown but not what Return runs),
+/// the row the user moved or tabbed to (`chosen`, which Return runs), or none
+/// (an ambiguous or unknown word, the empty prompt).
+enum CommandLineCompletionSelection: Equatable {
+  case none
+  case implied(Int)
+  case chosen(Int)
+
+  var index: Int? {
+    switch self {
+    case .none: return nil
+    case .implied(let index), .chosen(let index): return index
+    }
+  }
+
+  var isChosen: Bool {
+    if case .chosen = self { return true }
+    return false
+  }
+
+  /// `delta` rows on over `count` rows: from no row the first move down lands
+  /// on the first one, and the selection stays within the list.
+  func moved(by delta: Int, count: Int) -> Self {
+    guard count > 0 else { return .none }
+    return .chosen(min(max((index ?? -1) + delta, 0), count - 1))
+  }
+
+  /// Tab inserts the highlighted row, or the first one when none is.
+  func tabbed(count: Int) -> Self {
+    guard count > 0 else { return .none }
+    return .chosen(min(index ?? 0, count - 1))
+  }
+
+  /// Whether up from here leaves the list for history: at the top row, or
+  /// with none highlighted.
+  func entersHistory(movingBy delta: Int) -> Bool {
+    NormalModeDispatcher.commandLineListTopEntersHistory(delta: delta, selectedIndex: index ?? 0)
+  }
+}
+
 enum CandidateFinder {
   /// Coarse match quality against the candidate's own name (title and
   /// aliases) or its source label. Strictly ordered ahead of source
@@ -48,13 +89,13 @@ enum CandidateFinder {
   /// Synthetic flashlight rows for registered plugin bangs (`!<token>`);
   /// selecting one dispatches the bang instead of resolving a candidate.
   static let bangKind = CandidateKind.plugin("bang")
-  /// Synthetic flashlight rows for `@<source>` source-filter completion.
-  /// Selecting one rewrites the buffer with the canonical `@source `
-  /// token; it never "opens" anything on its own.
+  /// Synthetic flashlight rows for `@<type>` completion. Selecting one
+  /// rewrites the buffer with the `@type ` token; it never "opens" anything
+  /// on its own.
   static let sourceKind = CandidateKind.plugin("source")
 
   /// Candidates whose "open" action inserts their payload as text rather than
-  /// activating an app or target. `app_open?name=` matching must skip these:
+  /// activating an app or target. `app open --name=` matching must skip these:
   /// otherwise an emoji whose searchable name contains the query would get
   /// typed into the focused field instead of switching apps.
   static func insertsText(_ candidate: Candidate) -> Bool {
@@ -93,7 +134,7 @@ enum CandidateFinder {
     if candidate.kind == sourceKind { return false }
     if isFinalDestination(candidate) { return true }
     if candidate.finishesCommand || insertsText(candidate) { return true }
-    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
+    let parsed = NormalModeDispatcher.candidateFinderQuery(query)
     let normalizedQuery = normalize(parsed.text.trimmed)
     guard !normalizedQuery.isEmpty else { return false }
     return normalizedQuery == normalize(candidate.title)
@@ -136,7 +177,8 @@ enum CandidateFinder {
   }
 
   static func displayTitle(_ candidate: Candidate) -> String {
-    if candidate.effect != nil {
+    // A `menu choose` row is the line as given, nothing more.
+    if candidate.effect != nil || candidate.kind == MenuChoice.kind {
       return candidate.title
     }
     if candidate.kind == bangKind {
@@ -238,11 +280,23 @@ enum CandidateFinder {
     return (parsed.token, parsed.remainder, confirmed, bangIndex..<tokenEnd)
   }
 
+  /// A confirmed `!token ` whose bang lists candidates (`!f report`,
+  /// `!clip `, as `scope` answers for the token): the scope it narrows the
+  /// flashlight to, and the rest of the query. Read from the raw query, whose
+  /// trailing space confirms the bang.
+  static func boundBangScope(
+    _ query: String, scope: (String) -> SourceScope?
+  ) -> (scope: SourceScope, remainder: String)? {
+    guard let bang = parseBangState(query), bang.confirmed, let bound = scope(bang.token)
+    else { return nil }
+    return (bound, bang.remainder)
+  }
+
   /// Detect "in-progress `@<source>` completion": the last `@` in the
   /// query is not yet followed by whitespace, so the user is still
   /// typing the source token and wants completion suggestions. The
   /// caller swaps the candidate pool for a list of known sources. A
-  /// confirmed `@source ` (trailing whitespace already present) is
+  /// confirmed `@type ` (trailing whitespace already present) is
   /// the normal source-filter case and falls through this check —
   /// the existing filter parser applies it to the data candidates.
   static func parseAtSourceCompletion(_ query: String)
@@ -298,39 +352,16 @@ enum CandidateFinder {
     return typed.token.localizedCaseInsensitiveCompare(selectedToken) == .orderedSame
   }
 
-  /// Decide whether `candidate.source` satisfies a `@<source>` narrow. Exact
-  /// match wins; otherwise the typed token is treated as a prefix on dotted
-  /// source labels (`firefox` matches `firefox.tabs`), so a user can narrow
-  /// by short name without having to type the full canonical label.
-  static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
-    sourceLabel(candidate.source, matchesFilter: filter)
-      || (candidate.kind == .app && filter.lowercased() == "apps")
-  }
-
-  /// Source-label form of ``candidateMatchesSourceFilter``. Snapshot routing
-  /// uses manifest-declared labels before any candidate rows have crossed the
-  /// plugin boundary, so it needs the exact same dotted-prefix semantics
-  /// without manufacturing a throwaway `Candidate`.
-  static func sourceLabel(_ label: String, matchesFilter filter: String) -> Bool {
-    let needle = filter.lowercased()
-    guard !needle.isEmpty else { return true }
-    let source = label.lowercased()
-    if source == needle { return true }
-    if source.hasPrefix(needle + ".") { return true }
-    return false
-  }
-
-  /// Build a synthetic completion candidate for a `@<source>` token.
-  /// Mirrors the shape of the bang completion rows so the same render
-  /// path (`displayTitle`, `bangDisplayTitle`-style label) shows
-  /// `[source] @firefox.tabs` in the flashlight list.
-  static func sourceCompletionCandidate(_ source: String) -> Candidate {
+  /// A synthetic completion row for `@<type>`: `[type] @tabs`, with what
+  /// feeds the type (`firefox, chrome, safari`) as its dimmed detail.
+  static func sourceCompletionCandidate(type: String, providers: [String]) -> Candidate {
     Candidate(
       kind: sourceKind,
-      sourceID: "source:\(source)",
-      source: "source",
-      title: "@\(source)",
-      sourcePayload: source)
+      sourceID: "source:\(type)",
+      source: "type",
+      title: "@\(type)",
+      subtitle: providers.joined(separator: ", "),
+      sourcePayload: type)
   }
 
   /// Expand a `[flashlight.aliases]` shorthand in the command-line
@@ -402,18 +433,24 @@ enum CandidateFinder {
     prepared.frecencyKey = FrecencyMapper.itemKey(for: candidate) ?? ""
     let display = displayTitle(candidate)
     prepared.displayTitle = display
-    let normalizedSearchText = normalize(searchText(candidate))
+    // A bang is named by its trigger and described by its site: every bang
+    // row shares the source label and the `[source] !trigger (site)` display,
+    // so scoring them would only let every query letter of the label pass the
+    // prefilter for all ten thousand rows (`!goo` scored the whole list).
+    let isBang = candidate.kind == bangKind
+    let normalizedSearchText = normalize(isBang ? bangSearchText(candidate) : searchText(candidate))
     prepared.normalizedSearchText = normalizedSearchText
     let normalizedTitle = normalize(candidate.title)
     let titleTokens: [String] =
       normalizedTitle.isEmpty
       ? []
       : normalizedTitle.split(separator: " ").map(String.init)
-    let normalizedSource = normalize(candidate.source)
-    let normalizedSourceTitle = normalize("\(candidate.source) \(candidate.title)")
+    let normalizedSource = isBang ? "" : normalize(candidate.source)
+    let normalizedSourceTitle =
+      isBang ? "" : normalize("\(candidate.source) \(candidate.title)")
     let normalizedURL = normalize(urlSearchText(candidate))
     let normalizedSecondary = normalize(secondarySearchText(candidate))
-    let normalizedDisplay = normalize(display)
+    let normalizedDisplay = isBang ? "" : normalize(display)
     let normalizedAliases = normalize(candidate.searchAliases)
     let aliasTokens: [String] =
       normalizedAliases.isEmpty
@@ -806,7 +843,7 @@ enum CandidateFinder {
     /// How the query hit the row's own name; see `MatchTier`.
     var tier: MatchTier
     /// The row belongs to the default flashlight pool (a location source).
-    /// Only matters for mixed pools: explicit `@source` sets are homogeneous.
+    /// Only matters for mixed pools: explicit `@type` sets are homogeneous.
     var inDefaultBand: Bool
     /// Precedence weight from `PrecedenceTable`: source kind + manifest
     /// `sources[].priority` + `[flashlight.precedence]` override + alive
@@ -818,6 +855,8 @@ enum CandidateFinder {
     /// textual match.
     var priority: FlashPriority
     var alive: Bool
+    /// The source's own order (`Candidate.sourceOrder`), lowest first.
+    var order: Int
     var key: String
     var sourceID: String
   }
@@ -840,6 +879,7 @@ enum CandidateFinder {
         weight: precedence.weight(for: match.candidate),
         priority: match.candidate.priority,
         alive: isAlive(match.candidate),
+        order: match.candidate.sourceOrder,
         key: key,
         sourceID: match.candidate.sourceID)
     }
@@ -906,7 +946,8 @@ enum CandidateFinder {
     //    tmux windows, running apps, tabs and installed apps.
     //
     // 5. Match score (fine-grained field tiers plus frecency), then the
-    //    row's own `priority`, alive before dead, and the stable key.
+    //    row's own `priority`, alive before dead, the source's own order
+    //    (clipboard history newest first), and the stable key.
     let lhsIsBang = lhs.weight == PrecedenceTable.bangWeight
     let rhsIsBang = rhs.weight == PrecedenceTable.bangWeight
     if lhsIsBang != rhsIsBang { return lhsIsBang }
@@ -916,6 +957,7 @@ enum CandidateFinder {
     if lhs.score != rhs.score { return lhs.score > rhs.score }
     if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
     if lhs.alive != rhs.alive { return lhs.alive }
+    if lhs.order != rhs.order { return lhs.order < rhs.order }
     if lhs.key != rhs.key { return lhs.key < rhs.key }
     return lhs.sourceID < rhs.sourceID
   }
@@ -1002,7 +1044,7 @@ enum CandidateFinder {
     /// Default flashlight band membership. Live source descriptors are the
     /// primary signal; location metadata covers offline tests and sources that
     /// have not registered descriptors. Location-kind sources are in the band;
-    /// standard sources are hidden until named with `@source`.
+    /// standard sources are hidden until their type is named with `@type`.
     public func isDefaultFlashlightSource(_ candidate: Candidate) -> Bool {
       let lowered = Self.loweredSource(of: candidate)
       for entry in entries {
@@ -1116,6 +1158,12 @@ enum CandidateFinder {
 
   private static func searchText(_ candidate: Candidate) -> String {
     "\(candidate.source) \(candidate.title) \(secondarySearchText(candidate)) \(candidate.searchAliases)"
+  }
+
+  /// A bang's searchable text: its trigger, site and aliases, without the
+  /// source label every bang shares.
+  private static func bangSearchText(_ candidate: Candidate) -> String {
+    "\(candidate.title) \(secondarySearchText(candidate)) \(candidate.searchAliases)"
   }
 
   private static func secondarySearchText(_ candidate: Candidate) -> String {

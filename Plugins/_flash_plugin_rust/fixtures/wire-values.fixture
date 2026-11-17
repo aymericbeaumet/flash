@@ -1,5 +1,5 @@
 {
-  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, AX-change and status-observation event payloads, poll registration sets, and encoded byte accounting",
+  "contract": "Strict JSON scalars, checked process identifiers, exclusive perform outcomes, canonical atomic hint replies, bounded text-grid replies, AX-change and status-observation event payloads, poll registration sets, and encoded byte accounting",
   "protocol_version": [
     {
       "name": "current",
@@ -401,8 +401,7 @@
             "context_id": null,
             "url": null,
             "pid": null,
-            "priority": null,
-            "enters_insert_mode": null
+            "priority": null
           }
         ]
       },
@@ -472,6 +471,25 @@
       "valid": false
     },
     {
+      "name": "insert-intent-field",
+      "value": {
+        "ok": true,
+        "targets": [
+          {
+            "id": "target",
+            "frame": {
+              "x": 1,
+              "y": 2,
+              "width": 3,
+              "height": 4
+            },
+            "enters_insert_mode": true
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
       "name": "unknown-frame-field",
       "value": {
         "ok": true,
@@ -503,6 +521,379 @@
               "width": 1e+308,
               "height": 4
             }
+          }
+        ]
+      },
+      "valid": false
+    }
+  ],
+  "text_grid": [
+    {
+      "name": "empty",
+      "value": {
+        "ok": true,
+        "columns": 0,
+        "rows": 0,
+        "lines": []
+      },
+      "valid": true
+    },
+    {
+      "name": "empty-sized",
+      "value": {
+        "ok": true,
+        "columns": 80,
+        "rows": 24,
+        "lines": []
+      },
+      "valid": true
+    },
+    {
+      "name": "canonical",
+      "value": {
+        "ok": true,
+        "columns": 20,
+        "rows": 6,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "width": 20,
+            "format": "#[fg=colour178]za"
+          },
+          {
+            "row": 1,
+            "column": 10,
+            "width": 9,
+            "format": "#[align=centre] a"
+          },
+          {
+            "row": 2,
+            "column": 10,
+            "text": "xa"
+          },
+          {
+            "row": 5,
+            "column": 0,
+            "text": ""
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "last-cell",
+      "value": {
+        "ok": true,
+        "columns": 3,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 1,
+            "column": 2,
+            "text": "z"
+          },
+          {
+            "row": 1,
+            "column": 0,
+            "width": 3,
+            "format": "a"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "missing-lines",
+      "value": {
+        "ok": true,
+        "columns": 1,
+        "rows": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-columns",
+      "value": {
+        "ok": true,
+        "rows": 1,
+        "lines": []
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-key",
+      "value": {
+        "ok": true,
+        "columns": 1,
+        "rows": 1,
+        "lines": [],
+        "context_pid": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "fractional-columns",
+      "value": {
+        "ok": true,
+        "columns": 1.5,
+        "rows": 1,
+        "lines": []
+      },
+      "valid": false
+    },
+    {
+      "name": "boolean-rows",
+      "value": {
+        "ok": true,
+        "columns": 1,
+        "rows": true,
+        "lines": []
+      },
+      "valid": false
+    },
+    {
+      "name": "negative-rows",
+      "value": {
+        "ok": true,
+        "columns": 1,
+        "rows": -1,
+        "lines": []
+      },
+      "valid": false
+    },
+    {
+      "name": "oversized-columns",
+      "value": {
+        "ok": true,
+        "columns": 10001,
+        "rows": 1,
+        "lines": []
+      },
+      "valid": false
+    },
+    {
+      "name": "maximum-dimension",
+      "value": {
+        "ok": true,
+        "columns": 10000,
+        "rows": 10000,
+        "lines": []
+      },
+      "valid": true
+    },
+    {
+      "name": "row-outside-grid",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 2,
+            "column": 0,
+            "text": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "column-outside-grid",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 4,
+            "text": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "format-past-right-edge",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 1,
+            "width": 4,
+            "format": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "zero-width-format",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "width": 0,
+            "format": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "int-max-width",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 1,
+            "width": 9223372036854775807,
+            "format": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "u64-max-width",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 1,
+            "width": 18446744073709551615,
+            "format": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "text-and-format",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "width": 1,
+            "text": "a",
+            "format": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "text-with-width",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "width": 1,
+            "text": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "format-without-width",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "format": "a"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "numeric-text",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "text": 1
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-line-key",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "text": "a",
+            "bold": true
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "line-not-object",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          "a"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "one-malformed-line-rejects-all",
+      "value": {
+        "ok": true,
+        "columns": 4,
+        "rows": 2,
+        "lines": [
+          {
+            "row": 0,
+            "column": 0,
+            "text": "a"
+          },
+          {
+            "row": "1",
+            "column": 0,
+            "text": "b"
           }
         ]
       },

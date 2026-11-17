@@ -17,7 +17,7 @@
 {:else if kind === "config"}
   <a class="badge neutral" href="/state#config-editor" aria-label={`Open ${label || "configuration"} in Runtime & config`}>{text} <Icon name="chevron" size={11} /></a>
 {:else if kind === "builtin"}
-  <span class="badge">{text}</span>
+  <span class="badge neutral">{text}</span>
 {:else}
   <span class="badge neutral">{text}</span>
 {/if}

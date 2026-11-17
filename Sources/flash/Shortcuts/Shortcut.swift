@@ -10,6 +10,13 @@ enum ModeScope: String, CaseIterable, Hashable {
   /// Read before NORMAL in HOLD (a held button dragging); NORMAL answers
   /// every key HOLD leaves unmapped.
   case hold
+  /// Read before NORMAL while a field is engaged (`TextScope`): Vim's text
+  /// motions. NORMAL answers every key it leaves unmapped, and with no
+  /// field engaged it is not read at all.
+  case text
+  /// VISUAL's operators and keys, read before the text table's motions;
+  /// any other key is swallowed.
+  case visual
 }
 
 /// One entry from `[mode.all.mappings]`, `[mode.normal.mappings]`,
@@ -84,10 +91,10 @@ struct ModeMapping: Equatable {
 /// The command's TOML form is always an array of strings, either directly as a
 /// compact mapping value or under `command` in an inline mapping table. If
 /// `argv[0]` names Flash (`"flash"` or a path whose basename is `flash`), the
-/// remainder is parsed against the resident verb table
-/// (``URLEventHandler/parse(verb:args:)``) and dispatched in-process. Otherwise
-/// the array is executed as argv (no shell wrap, just env / `~` expansion on
-/// each element).
+/// remainder is `<topic> <action> [--name=value ...]`, parsed against the
+/// resident command table (``URLEventHandler/parse(words:)``) and dispatched
+/// in-process. Otherwise the array is executed as argv (no shell wrap, just
+/// env / `~` expansion on each element).
 enum MappingCommand: Hashable {
   case flashCommand(URLCommand)
   case shellCommand([String])
@@ -95,46 +102,39 @@ enum MappingCommand: Hashable {
 
 /// Build a mapping action from a TOML array.
 ///
-///     ["flash", "mouse_target"]                    → in-process mouseTarget
-///     ["flash", "mouse_target", "--modifiers=cmd"] → preset Command-click
-///     ["flash", "mouse_grid", "--secondary"]       → in-process mouseGrid (bool flag)
-///     ["flash", "app_open", "--name=Alacritty"]    → in-process openApp
-///     ["sh", "-c", "echo hi"]                      → exec sh -c "echo hi"
-///     ["~/dotfiles/toggle.sh", "off"]              → exec the expanded path
+///     ["flash", "mouse", "target"]                    → in-process mouseTarget
+///     ["flash", "mouse", "target", "--modifiers=cmd"] → preset Command-click
+///     ["flash", "mouse", "grid", "--secondary"]       → in-process mouseGrid (bool flag)
+///     ["flash", "app", "open", "--name=Alacritty"]    → in-process openApp
+///     ["flash", "screenshot", "window"]               → plugin command
+///     ["sh", "-c", "echo hi"]                         → exec sh -c "echo hi"
+///     ["~/dotfiles/toggle.sh", "off"]                 → exec the expanded path
 ///
-/// Returns nil when the array is empty, the verb is unknown, or required
-/// verb args are missing. A plugin command is `flash <command> <subcommand>`
-/// (`caffeinate toggle`), never a one-word name.
+/// Returns nil when the array is empty, the command is unknown, or required
+/// arguments are missing. Every Flash command is `flash <topic> <action>`; a
+/// plugin command is `flash <command> <subcommand>`, never one word.
 func parseMappingCommand(argv: [String]) -> MappingCommand? {
   guard let first = argv.first else { return nil }
   if mappingCommandHeadNamesFlash(first) {
     let tail = Array(argv.dropFirst())
-    guard let verb = tail.first, !verb.isEmpty else { return nil }
-    // `flash media volumedown` before flag parsing. The tail is the command
+    // `flash screenshot window` before flag parsing. The tail is the command
     // bar's words, not `--name=value` flags.
     if let git = PluginGitInvocation.command(argvAfterFlash: tail) {
       return .flashCommand(git)
     }
-    guard let args = try? CommandArguments.parse(tail.dropFirst()) else { return nil }
-    if let cmd = URLEventHandler.parse(verb: verb, args: args) {
-      return .flashCommand(cmd)
-    }
-    // A one-word name is only a Flash verb. Plugin commands are
-    // `flash <command> <subcommand>` and were handled above.
-    return nil
+    return URLEventHandler.parse(words: tail).map(MappingCommand.flashCommand)
   }
   return .shellCommand(argv)
 }
 
 /// `flash <command> <subcommand> [word ...]`, the same words as
 /// `:command subcommand word …`. Both words are required. Nil when the
-/// command is not declared, or the subcommand is neither an exact
-/// registration nor a `*` wildcard.
+/// command is one of Flash's topics or not declared, or the subcommand is
+/// neither an exact registration nor a `*` wildcard.
 enum PluginGitInvocation {
   static func command(argvAfterFlash tail: [String]) -> URLCommand? {
     guard let name = tail.first?.lowercased(), !name.isEmpty,
-      !URLEventHandler.isBuiltInVerb(name),
-      FlashQuery(rawValue: name) == nil,
+      !URLEventHandler.isTopic(name),
       PluginRepository.declaresCommand(name)
     else { return nil }
     let rest = Array(tail.dropFirst())
@@ -168,8 +168,9 @@ extension MappingCommand {
     }
   }
 
-  /// Canonical argv. A Flash verb is `["flash", "<verb>", ...]`, including
-  /// flags the parser filled in. A shell mapping keeps the argv that was written.
+  /// Canonical argv. A Flash command is `["flash", "<topic>", "<action>", ...]`,
+  /// including flags the parser filled in. A shell mapping keeps the argv that
+  /// was written.
   var argv: [String] {
     switch self {
     case .flashCommand(let command):

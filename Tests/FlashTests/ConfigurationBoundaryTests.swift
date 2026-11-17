@@ -36,31 +36,32 @@ final class ConfigurationBoundaryTests: XCTestCase {
   }
 
   func testInvalidBuiltinCannotFallThroughToAPlugin() {
-    XCTAssertNil(
-      URLEventHandler.parseOrPluginVerb(
-        verb: "mouse_target", args: ["scope": "bogus"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse", "target", "--scope=bogus"]))
   }
 
   func testMappingsRejectMalformedAndDuplicateArguments() {
     for tail in [["secondary=1"], ["--"], ["--=x"], ["--double", "--double=0"]] {
-      XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target"] + tail), "\(tail)")
+      XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse", "target"] + tail), "\(tail)")
     }
   }
 
   func testBuiltinsRejectUnknownAndMalformedTypedArguments() {
-    XCTAssertNil(URLEventHandler.parse(verb: "mouse_target", args: ["secondary": "perhaps"]))
-    XCTAssertNil(URLEventHandler.parse(verb: "app_reload", args: ["force": "perhaps"]))
-    XCTAssertNil(URLEventHandler.parse(verb: "scroll_down", args: ["typo": "1"]))
-    XCTAssertNil(URLEventHandler.parse(verb: "tab_select", args: ["index": "invalid"]))
+    XCTAssertNil(
+      URLEventHandler.parse(topic: "mouse", action: "target", args: ["secondary": "perhaps"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "app", action: "reload", args: ["force": "perhaps"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "scroll", action: "down", args: ["typo": "1"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "tab", action: "select", args: ["index": "invalid"]))
     for variant in ["secondary", "double", "middle", "triple"] {
-      XCTAssertNil(URLEventHandler.parse(verb: "mouse_target", args: ["move": "1", variant: "1"]))
+      XCTAssertNil(
+        URLEventHandler.parse(topic: "mouse", action: "target", args: ["move": "1", variant: "1"]))
     }
-    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["adjust": "1"]))
-    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["search": "1"]))
-    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["zoom_to_depth": "0"]))
-    XCTAssertNil(URLEventHandler.parse(verb: "mouse_grid", args: ["bisect": "perhaps"]))
-    for retired in ["mouse_snipe", "mouse_click"] {
-      XCTAssertNil(URLEventHandler.parse(verb: retired, args: [:]), retired)
+    XCTAssertNil(URLEventHandler.parse(topic: "mouse", action: "grid", args: ["adjust": "1"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "mouse", action: "grid", args: ["search": "1"]))
+    XCTAssertNil(
+      URLEventHandler.parse(topic: "mouse", action: "grid", args: ["zoom_to_depth": "0"]))
+    XCTAssertNil(URLEventHandler.parse(topic: "mouse", action: "grid", args: ["bisect": "perhaps"]))
+    for retired in ["snipe", "click"] {
+      XCTAssertNil(URLEventHandler.parse(topic: "mouse", action: retired, args: [:]), retired)
     }
   }
 
@@ -102,6 +103,26 @@ final class ConfigurationBoundaryTests: XCTestCase {
     XCTAssertTrue(config.warnings.isEmpty, "\(config.warnings)")
     XCTAssertEqual(config.statusBar.sources["news"]?.command, ["sh", "-c", "cat /tmp/news"])
     XCTAssertEqual(config.terminalPopups["docs"]?.command, ["open", "https://example.com/docs"])
+  }
+
+  /// A source without a command is pushed by `status set`: it takes what
+  /// shapes its value, never what would run it.
+  func testASourceWithoutACommandIsPushed() {
+    let config = ConfigLoader.parse(
+      """
+      [statusbar.sources.workspace]
+      [statusbar.sources.load]
+      history = 30
+      """)
+    XCTAssertTrue(config.warnings.isEmpty, "\(config.warnings)")
+    XCTAssertEqual(config.statusBar.sources["workspace"]?.isPushed, true)
+    XCTAssertEqual(config.statusBar.sources["load"]?.historyLength, 30)
+    for key in ["interval = 5", "env = { A = \"1\" }", "working_directory = \".\""] {
+      let rejected = ConfigLoader.parse("[statusbar.sources.workspace]\n\(key)")
+      XCTAssertNil(rejected.statusBar.sources["workspace"], key)
+      XCTAssertTrue(
+        rejected.warnings.contains { $0.contains("needs a command") }, "\(rejected.warnings)")
+    }
   }
 
   func testWorkingDirectoriesResolveDotPathsAgainstTheirConfigurationFile() {
@@ -163,15 +184,19 @@ final class ConfigurationBoundaryTests: XCTestCase {
     session.onStateChange = nil
   }
 
+  /// An ex command's description is what it runs.
   func testCommandCatalogDescriptionsCoverEveryDeclaredCommand() {
     let catalog = NormalModeDispatcher.coreCommandCatalog()
     XCTAssertTrue(catalog.allSatisfy { ($0["description"] as? String)?.isEmpty == false })
     XCTAssertEqual(
       catalog.first { $0["name"] as? String == ":quit" }?["description"] as? String,
-      "Close the focused window")
+      "app close")
     XCTAssertEqual(
       catalog.first { $0["name"] as? String == ":qall" }?["description"] as? String,
-      "Quit the focused app")
+      "app quit")
+    XCTAssertEqual(
+      catalog.first { $0["name"] as? String == ":doctor" }?["description"] as? String,
+      "Check permissions, key capture, config, hotkeys and plugins")
   }
 
   func testMappingsAndTerminalsShareEnvironmentExpansionWithoutShellEvaluation() throws {

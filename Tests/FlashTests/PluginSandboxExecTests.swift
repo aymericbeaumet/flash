@@ -2,7 +2,8 @@ import XCTest
 
 @testable import flash
 
-/// Every sandboxed bundled manifest's RESOLVED seatbelt profile, against the
+/// Every sandboxed bundled manifest's RESOLVED seatbelt profile (each plugin
+/// that runs a process and does not declare `"sandbox": false`), against the
 /// real `sandbox-exec`. The compile test catches a profile with a syntax error
 /// (which used to ship green — the old tests asserted substrings of the string,
 /// never compilability — and fail only at user runtime as an unlaunchable
@@ -14,6 +15,8 @@ import XCTest
 /// sandbox-exec exit codes, pinned empirically: 65 = profile failed to
 /// compile, 71 = compiled but exec of the target denied, 0 = ran.
 final class PluginSandboxExecTests: XCTestCase {
+  private static let browserBookmarkURL = "https://example.invalid/sandbox-bookmark"
+
   /// We append a narrow allowance for `/usr/bin/true` to the profile under
   /// test (append-only rules can only widen, so the original text still has
   /// to compile) and require a clean 0.
@@ -34,7 +37,9 @@ final class PluginSandboxExecTests: XCTestCase {
     for root in roots {
       do {
         let manifest = try PluginManifest.load(from: root)
-        if manifest.sandbox != nil { manifests.append((root, manifest)) }
+        if manifest.exec != nil, manifest.sandboxSpec != nil {
+          manifests.append((root, manifest))
+        }
       } catch {
         XCTFail("unloadable manifest at \(root.path): \(error)")
       }
@@ -74,13 +79,12 @@ final class PluginSandboxExecTests: XCTestCase {
     // Regression floor: the bundled tree carries a large sandboxed majority;
     // a collapse of this number means manifest loading or spec resolution
     // broke, not that plugins legitimately dropped their sandboxes.
-    XCTAssertGreaterThanOrEqual(checked, 20, "only \(checked) sandboxed manifests checked")
+    XCTAssertGreaterThanOrEqual(checked, 8, "only \(checked) sandboxed manifests checked")
   }
 
   /// Boots every built sandboxed plugin under its resolved profile. Host RPCs
-  /// are answered like a host that grants nothing, except `host.process_table`,
-  /// which gets one scripted row so `processes` can build its catalog without
-  /// a host. Skips when no binary is built (`Scripts/build-plugins.sh dev`).
+  /// are answered like a host that grants nothing. Skips when no binary is
+  /// built (`mise run build:plugins`).
   func testEveryBuiltSandboxedPluginBootsUnderItsProfile() throws {
     var booted = 0
     var unbuilt: [String] = []
@@ -101,7 +105,7 @@ final class PluginSandboxExecTests: XCTestCase {
     }
     if booted == 0 {
       throw XCTSkip(
-        "no built sandboxed plugin binaries (\(unbuilt.count) unbuilt) — run Scripts/build-plugins.sh dev"
+        "no built sandboxed plugin binaries (\(unbuilt.count) unbuilt) — run `mise run build:plugins`"
       )
     }
   }
@@ -135,15 +139,28 @@ final class PluginSandboxExecTests: XCTestCase {
     process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
     process.arguments = ["-p", profile, executablePath] + execTail
     process.currentDirectoryURL = root
+    var environment = [
+      "FLASH_PLUGIN_ID": manifest.id,
+      "FLASH_PLUGIN_VERSION": manifest.version,
+      "FLASH_PLUGIN_DATA_DIR": canonicalDataDir.path,
+      "FLASH_PLUGIN_CONFIG": "{}",
+    ]
+    if manifest.id == "browsers" {
+      // Empty profiles correctly publish nothing. Seed one known row so this
+      // proves sandboxed discovery without depending on the user's history.
+      let home = canonicalDataDir.appendingPathComponent("fixture-home")
+      let profile = home.appendingPathComponent("Library/Application Support/Google/Chrome/Default")
+      try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+      let bookmarks = """
+        {"roots":{"bookmark_bar":{"children":[
+          {"type":"url","name":"Sandbox bookmark","url":"\(Self.browserBookmarkURL)"}
+        ]}}}
+        """
+      try Data(bookmarks.utf8).write(to: profile.appendingPathComponent("Bookmarks"))
+      environment["HOME"] = home.path
+    }
     process.environment = PluginProcess.sanitizedPluginEnvironment(
-      base: ProcessInfo.processInfo.environment,
-      overrides: [
-        "FLASH_PLUGIN_ID": manifest.id,
-        "FLASH_PLUGIN_VERSION": manifest.version,
-        "FLASH_PLUGIN_DATA_DIR": canonicalDataDir.path,
-        "FLASH_PLUGIN_CONFIG": "{}",
-        "FLASH_PLUGIN_PARENT_PID": String(getpid()),
-      ])
+      base: ProcessInfo.processInfo.environment, overrides: environment)
     let stdin = Pipe()
     let stdout = Pipe()
     let stderr = Pipe()
@@ -154,7 +171,10 @@ final class PluginSandboxExecTests: XCTestCase {
     process.terminationHandler = { _ in finished.signal() }
     try process.run()
 
-    let driver = SandboxBootDriver(stdin: stdin.fileHandleForWriting)
+    let driver = SandboxBootDriver(
+      stdin: stdin.fileHandleForWriting,
+      allowShortcutListing: manifest.capabilities.contains(.appleEvents)
+        && manifest.appleEventsTargets.contains("com.apple.shortcuts.events"))
     stdout.fileHandleForReading.readabilityHandler = { handle in
       driver.ingestStdout(handle.availableData)
     }
@@ -177,13 +197,19 @@ final class PluginSandboxExecTests: XCTestCase {
     XCTAssertEqual(
       reply?["protocol_version"] as? Int, PluginProtocol.version,
       "\(manifest.id): \(driver.stderrText())")
-    if manifest.sources.contains(where: { !$0.live }) {
+    if !manifest.sources.isEmpty {
       XCTAssertTrue(
         driver.waitForNotification(method: "publish", timeout: 10),
         """
         \(manifest.id): warm sources must publish under the profile — \
         logs: \(driver.logText()) stderr: \(driver.stderrText())
         """)
+    }
+    if manifest.id == "browsers" {
+      XCTAssertTrue(
+        driver.waitForPublishedRow(
+          source: "chrome.bookmarks", url: Self.browserBookmarkURL, timeout: 10),
+        "browsers: seeded bookmark must publish under the profile — \(driver.logText())")
     }
 
     // Shutdown is stdin EOF, nothing else.
@@ -203,12 +229,14 @@ final class PluginSandboxExecTests: XCTestCase {
 private final class SandboxBootDriver {
   private let lock = NSLock()
   private let stdin: FileHandle
+  private let allowShortcutListing: Bool
   private var buffer = Data()
   private var frames: [[String: Any]] = []
   private var stderr = Data()
 
-  init(stdin: FileHandle) {
+  init(stdin: FileHandle, allowShortcutListing: Bool) {
     self.stdin = stdin
+    self.allowShortcutListing = allowShortcutListing
   }
 
   func send(_ object: [String: Any]) {
@@ -261,18 +289,21 @@ private final class SandboxBootDriver {
       .joined(separator: " | ")
   }
 
-  /// The scripted host: one process-table row, every other capability denied.
+  /// A declared shortcut listing uses an empty host fixture, so the test
+  /// verifies RPC and publication under seatbelt without Automation prompts.
+  /// Every other host request is denied.
   private func answer(_ request: [String: Any]) {
-    let result: [String: Any]
-    if request["method"] as? String == "host.process_table" {
-      result = [
-        "ok": true,
-        "processes": [["pid": 1, "comm": "launchd", "cpu_percent": 0.4, "mem_percent": 0.1]],
-      ]
-    } else {
-      result = ["ok": false, "error": "not available in the sandbox boot test"]
+    if allowShortcutListing, request["method"] as? String == "host.applescript",
+      let params = request["params"] as? [String: Any],
+      params["operation"] as? String == "shortcuts_list"
+    {
+      send(["id": request["id"]!, "result": ["ok": true, "result": ""]])
+      return
     }
-    send(["id": request["id"]!, "result": result])
+    send([
+      "id": request["id"]!,
+      "result": ["ok": false, "error": "not available in the sandbox boot test"],
+    ])
   }
 
   func waitForResponse(id: Int, timeout: TimeInterval) -> [String: Any]? {
@@ -285,6 +316,19 @@ private final class SandboxBootDriver {
   func waitForNotification(method: String, timeout: TimeInterval) -> Bool {
     wait(timeout: timeout) { frames in
       frames.contains { $0["id"] == nil && $0["method"] as? String == method } ? true : nil
+    } ?? false
+  }
+
+  func waitForPublishedRow(source: String, url: String, timeout: TimeInterval) -> Bool {
+    wait(timeout: timeout) { frames in
+      let published = frames.contains { frame in
+        guard frame["id"] == nil, frame["method"] as? String == "publish",
+          let params = frame["params"] as? [String: Any], params["source"] as? String == source,
+          let rows = params["rows"] as? [[String: Any]]
+        else { return false }
+        return rows.contains { $0["url"] as? String == url }
+      }
+      return published ? true : nil
     } ?? false
   }
 

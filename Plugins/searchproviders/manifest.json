@@ -1,0 +1,29 @@
+{
+  "id": "searchproviders",
+  "name": "Search Providers",
+  "version": "0.1.0",
+  "description": "Search bangs: !<bang> <query> opens the site's own search, resolved locally from DuckDuckGo's bang list (refreshed weekly) and Kagi's community list.",
+  "exec": [
+    "./flash-plugin-searchproviders"
+  ],
+  "bangs": [
+    {
+      "token": "*",
+      "description": "Search bang: !<bang> <query>"
+    }
+  ],
+  "sources": [
+    {
+      "name": "searchproviders.bangs",
+      "type": "bangs",
+      "priority": "normal"
+    }
+  ],
+  "listen": [
+    "core:session.opened"
+  ],
+  "capabilities": [
+    "open",
+    "network"
+  ]
+}

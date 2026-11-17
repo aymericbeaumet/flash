@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ansiRows, alphabetHeat, bindingsByCap, capsAt, categoryOf, keycapLabel, keySteps, stepsToKey, mappingModes, mappingSnippet, parseKey, phaseKeys, rowsForMode, rowsUnder, scopesForMode, zoneOf } from "./src/lib/keyboard.ts";
+import { ansiRows, alphabetHeat, bindingsByCap, capsAt, categoryOf, keycapLabel, keySteps, stepsToKey, layerModes, mappingModes, mappingSnippet, parseKey, phaseKeys, rowsForMode, rowsUnder, scopesForMode, zoneOf } from "./src/lib/keyboard.ts";
 import type { KeyboardState, MappingRow } from "./src/lib/types.ts";
 
 const keyboard: KeyboardState = {
@@ -33,22 +33,51 @@ test("a sequence starts on its first token", () => {
   assert.equal(parseKey("", ""), null);
 });
 
+test("a function key is its own cap, bare in a sequence or held in a chord", () => {
+  assert.deepEqual(parseKey("<f12>", ""), { cap: "f12", modifiers: [], rest: "" });
+  assert.deepEqual(parseKey("<f20>g", ""), { cap: "f20", modifiers: [], rest: "g" });
+  assert.deepEqual(parseKey("cmd+<f5>", ""), { cap: "f5", modifiers: ["cmd"], rest: "" });
+  assert.deepEqual(parseKey("cmd+f5", ""), { cap: "f5", modifiers: ["cmd"], rest: "" });
+  assert.deepEqual(keySteps("g<f1>", ""), [{ cap: "g", modifiers: [] }, { cap: "f1", modifiers: [] }]);
+  assert.equal(stepsToKey([{ cap: "f12", modifiers: [] }]), "<f12>", "bare, f12 is the keys f, 1, 2");
+  assert.equal(stepsToKey([{ cap: "f12", modifiers: ["cmd", "shift"] }]), "cmd+shift+f12");
+});
+
 test("the live mode reads its own scope and all", () => {
   assert.deepEqual(scopesForMode("normal"), ["normal", "all"]);
   assert.deepEqual(scopesForMode("hyper"), ["hyper"]);
   assert.deepEqual(scopesForMode("insert"), ["insert", "all"]);
   assert.deepEqual(scopesForMode(undefined), ["all"]);
   assert.deepEqual(scopesForMode("hold"), ["hold", "normal", "all"]);
+  assert.deepEqual(scopesForMode("text"), ["text", "normal", "all"]);
+  assert.deepEqual(scopesForMode("visual"), ["visual", "all"]);
+  assert.deepEqual(scopesForMode("layers.resize"), ["layers.resize", "all"]);
+});
+
+test("each layer is a mode button of its own, reading its keys and all", () => {
+  const rows: MappingRow[] = [
+    { scope: "layers.resize", key: "h", action: "flash window move --position=lefthalf" },
+    { scope: "layers.resize", key: "<escape>", action: "flash mode leave" },
+    { scope: "layers.media", key: "p", action: "flash key system --key=media_play" },
+    { scope: "all", key: "cmd+space", action: "flash app switch" },
+    { scope: "normal", key: "f", action: "flash mouse target" },
+  ];
+  assert.deepEqual(layerModes(rows).map((mode) => [mode.id, mode.label]), [["layers.media", "media"], ["layers.resize", "resize"]]);
+  assert.deepEqual(rowsForMode(rows, "layers.resize").map((row) => row.key), ["h", "<escape>", "cmd+space"]);
+  assert.equal(
+    mappingSnippet(rows[0]),
+    '[mode.layers.resize.mappings]\n"h" = ["flash", "window", "move", "--position=lefthalf"]  # change the command\n# "h" = false  # or remove the key',
+  );
 });
 
 test("the mode buttons pick what the keyboard lights and the list shows", () => {
-  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "hold", "hyper", "insert", "command", "terminal"]);
+  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "text", "visual", "hold", "hyper", "insert", "command", "terminal"]);
   const rows: MappingRow[] = [
-    { scope: "normal", key: "f", action: "flash mouse_target" },
-    { scope: "hold", key: "j", action: "flash mouse_nudge --direction=down --distance=16" },
-    { scope: "all", key: "cmd+space", action: "flash candidate_finder" },
-    { scope: "insert", key: "ctrl+[", action: "flash enter_normal_mode" },
-    { scope: "hyper", key: "1", action: "flash system_key --key=brightness_down" },
+    { scope: "normal", key: "f", action: "flash mouse target" },
+    { scope: "hold", key: "j", action: "flash mouse nudge --direction=down --distance=16" },
+    { scope: "all", key: "cmd+space", action: "flash app switch" },
+    { scope: "insert", key: "ctrl+[", action: "flash mode normal" },
+    { scope: "hyper", key: "1", action: "flash key system --key=brightness_down" },
   ];
   assert.deepEqual(rowsForMode(rows, "all").length, 5);
   assert.deepEqual(rowsForMode(rows, "hold").map((row) => row.key), ["f", "j", "cmd+space"]);
@@ -66,13 +95,13 @@ test("a key is the steps you press, a capital being its shift layer", () => {
 });
 
 const drillRows: MappingRow[] = [
-  { scope: "normal", key: "f", action: "flash mouse_target" },
-  { scope: "normal", key: "F", action: "flash mouse_target --insert" },
+  { scope: "normal", key: "f", action: "flash mouse target" },
+  { scope: "normal", key: "F", action: "flash mouse target --insert" },
   { scope: "normal", key: "c", action: "flash noop" },
-  { scope: "normal", key: "cf", action: "flash mouse_target --secondary" },
-  { scope: "normal", key: "ctrl+d", action: "flash scroll_half_page_down" },
-  { scope: "normal", key: "g1", action: "flash tab_select --index=1" },
-  { scope: "normal", key: "gg", action: "flash scroll_top" },
+  { scope: "normal", key: "cf", action: "flash mouse target --secondary" },
+  { scope: "normal", key: "ctrl+d", action: "flash scroll half_page_down" },
+  { scope: "normal", key: "g1", action: "flash tab select --index=1" },
+  { scope: "normal", key: "gg", action: "flash scroll top" },
 ];
 
 test("the keyboard shows what each key does at a prefix, in one modifier layer", () => {
@@ -99,22 +128,25 @@ test("the list keeps the bindings under a prefix and a picked key", () => {
 });
 
 test("an action falls in a category by what it does", () => {
-  assert.equal(categoryOf("flash mouse_target --secondary"), "pointer");
-  assert.equal(categoryOf("flash mouse_bigram --move"), "pointer");
-  assert.equal(categoryOf("flash scroll_top"), "scroll");
-  assert.equal(categoryOf("flash tab_next"), "tabs");
-  assert.equal(categoryOf("flash app_previous"), "tabs");
-  assert.equal(categoryOf("flash window_focus --direction=left"), "windows");
-  assert.equal(categoryOf("flash system_key --key=mute"), "system");
-  assert.equal(categoryOf("flash enter_insert_mode"), "modes");
-  assert.equal(categoryOf("flash caffeinate toggle"), "plugins");
+  assert.equal(categoryOf("flash mouse target --secondary"), "pointer");
+  assert.equal(categoryOf("flash mouse bigram --move"), "pointer");
+  assert.equal(categoryOf("flash scroll top"), "scroll");
+  assert.equal(categoryOf("flash tab next"), "tabs");
+  assert.equal(categoryOf("flash app previous"), "tabs");
+  assert.equal(categoryOf("flash mark jump --letter=a"), "tabs");
+  assert.equal(categoryOf("flash window focus --direction=left"), "windows");
+  assert.equal(categoryOf("flash key system --key=mute"), "system");
+  assert.equal(categoryOf("flash mode insert"), "modes");
+  assert.equal(categoryOf("flash clipboard paste"), "other");
+  assert.equal(categoryOf("flash screenshot window"), "plugins");
+  assert.equal(categoryOf("flash tmux session main"), "plugins");
   assert.equal(categoryOf("open -a Safari"), "programs");
 });
 
 test("a keycap names its action briefly", () => {
-  assert.equal(keycapLabel("flash mouse_target --secondary"), "mouse target secondary");
-  assert.equal(keycapLabel("flash scroll_half_page_down"), "scroll half page down");
-  assert.equal(keycapLabel("flash tab_select --index=1"), "tab select 1");
+  assert.equal(keycapLabel("flash mouse target --secondary"), "mouse target secondary");
+  assert.equal(keycapLabel("flash scroll half_page_down"), "scroll half page down");
+  assert.equal(keycapLabel("flash tab select --index=1"), "tab select 1");
   assert.equal(keycapLabel("open -a Safari"), "open -a Safari");
 });
 
@@ -128,21 +160,21 @@ test("steps read back as flash.toml key syntax", () => {
 
 test("a binding's snippet remaps or removes it in its own table", () => {
   assert.equal(
-    mappingSnippet({ scope: "normal", key: "f", action: "flash mouse_target" }),
-    '[mode.normal.mappings]\n"f" = ["flash", "mouse_target"]  # change the command\n# "f" = false  # or remove the key',
+    mappingSnippet({ scope: "normal", key: "f", action: "flash mouse target" }),
+    '[mode.normal.mappings]\n"f" = ["flash", "mouse", "target"]  # change the command\n# "f" = false  # or remove the key',
   );
   assert.equal(
-    mappingSnippet({ scope: "hold", key: "j", action: "flash mouse_nudge --direction=down --distance=16" }),
-    '[mode.hold.mappings]\n"j" = ["flash", "mouse_nudge", "--direction=down", "--distance=16"]  # change the command\n# "j" = false  # or remove the key',
+    mappingSnippet({ scope: "hold", key: "j", action: "flash mouse nudge --direction=down --distance=16" }),
+    '[mode.hold.mappings]\n"j" = ["flash", "mouse", "nudge", "--direction=down", "--distance=16"]  # change the command\n# "j" = false  # or remove the key',
   );
 });
 
 test("bindings group by the key cap they start on, sorted", () => {
   const rows: MappingRow[] = [
-    { scope: "normal", key: "cf", action: "flash mouse_target --secondary" },
+    { scope: "normal", key: "cf", action: "flash mouse target --secondary" },
     { scope: "normal", key: "c", action: "flash noop" },
-    { scope: "all", key: "cmd+shift+space", action: "flash mouse_target" },
-    { scope: "insert", key: "x", action: "flash tab_close" },
+    { scope: "all", key: "cmd+shift+space", action: "flash mouse target" },
+    { scope: "insert", key: "x", action: "flash tab close" },
   ];
   const byCap = bindingsByCap(rows, ["normal", "all"], "space");
   assert.deepEqual([...byCap.keys()].sort(), ["c", "space"]);
@@ -163,6 +195,10 @@ test("phase keys name what every key does", () => {
   const pointer = phaseKeys("pointer", keyboard);
   assert.equal(pointer.keys.get("h"), "move left");
   assert.equal(pointer.keys.get("v"), "hold or release the button (drag)");
+  const switcher = phaseKeys("window_switcher", keyboard);
+  assert.equal(switcher.keys.get("f"), "switch to that window");
+  assert.match(switcher.specials.get("tab") ?? "", /next window/);
+  assert.equal(switcher.heat.get("f"), 1);
   assert.equal(phaseKeys("idle", keyboard).keys.size, 0);
   assert.equal(phaseKeys("labels", undefined).keys.size, 0);
 });
@@ -182,6 +218,7 @@ test("the board is a US ANSI keyboard whatever the layout", () => {
   const rows = ansiRows(keyboard);
   assert.equal(rows.length, 6, "escape, numbers, top, home, bottom, modifiers");
   for (const row of rows.slice(1)) assert.equal(width(row), 15);
+  assert.deepEqual(rows[0].map((slot) => slot.cap).join(" "), "esc f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12");
   assert.deepEqual(rows[1].map((slot) => slot.cap).join(" "), "` 1 2 3 4 5 6 7 8 9 0 - = backspace");
   assert.deepEqual(rows[2].map((slot) => slot.cap).join(" "), "tab q w e r t y u i o p [ ] \\");
   assert.deepEqual(rows[3].map((slot) => slot.cap).join(" "), "caps a s d f g h j k l ; ' return");

@@ -1,38 +1,57 @@
 <script lang="ts">
+  import { commandDoc, commandOfAction } from "./command-docs";
   import Icon from "./Icon.svelte";
+  import { paths } from "./routes";
+  import PageHeader from "./PageHeader.svelte";
   import SourceBadge from "./SourceBadge.svelte";
   import { sourceFromCommand } from "./source";
-  import type { CommandInfo } from "./types";
+  import type { CommandInfo, MappingRow } from "./types";
 
-  let { commands, filter = "" }: { commands: CommandInfo[]; filter?: string } = $props();
+  let { commands, rows = [], filter = "" }: { commands: CommandInfo[]; rows?: MappingRow[]; filter?: string } = $props();
+
+  /** The keys bound to each command, in the modes they act in. */
+  const keysByCommand = $derived.by(() => {
+    const out = new Map<string, MappingRow[]>();
+    for (const row of rows) {
+      const name = commandOfAction(row.action);
+      if (!name) continue;
+      out.set(name, [...(out.get(name) ?? []), row]);
+    }
+    return out;
+  });
+  /** A built-in command's page of the documentation; a plugin command's plugin. */
+  function docHref(command: CommandInfo): string {
+    if (command.source_kind === "plugin") return paths.plugins(command.source);
+    const target = commandDoc(command.name);
+    return paths.docs(target.page, target.anchor);
+  }
+  const shown = 3;
   let query = $state("");
   let source = $state("all");
 
   $effect(() => { query = filter; source = "all"; });
 
   const coreCount = $derived(commands.filter((command) => command.source_kind === "core").length);
+  const byName = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+  const bySource = new Intl.Collator(undefined, { sensitivity: "base" });
+  /** Every command in order with its search text, once per catalog rather than per keystroke. */
+  const catalog = $derived(
+    [...commands]
+      .sort((a, b) => byName.compare(a.name, b.name) || bySource.compare(a.source, b.source))
+      .map((command) => ({ command, text: [command.name, command.syntax, command.source, command.description, ...(command.aliases ?? [])].join(" ").toLowerCase() })),
+  );
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    return commands.filter((command) =>
-      (source === "all" || command.source_kind === source) &&
-      (!q || [command.name, command.syntax, command.source, command.description, ...(command.aliases ?? [])].join(" ").toLowerCase().includes(q)),
-    ).sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true })
-      || a.source.localeCompare(b.source, undefined, { sensitivity: "base" }));
+    return catalog.filter((entry) => (source === "all" || entry.command.source_kind === source) && (!q || entry.text.includes(q))).map((entry) => entry.command);
   });
 </script>
 
 <div class="page">
-  <div class="page-heading">
-    <p class="eyebrow">Your Flash</p>
-    <h1>Commands</h1>
-    <p>Everything you can ask Flash to do, including commands contributed by your loaded plugins.</p>
-  </div>
-  <div class="command-guide">
-    <span class="guide-icon"><Icon name="commands" size={22} /></span>
-    <div><strong>Open the command line.</strong><p>Run <code>flash enter_command_mode</code> from a terminal, or bind <kbd>:</kbd> to <code>enter_command_mode</code> in NORMAL. Enter a command and press <kbd>Return</kbd>; <kbd>Tab</kbd> completes command names.</p></div>
-    <a href="/docs/verbs">Command guide <Icon name="arrow" size={15} /></a>
-  </div>
+  <PageHeader id="commands" title="Commands" purpose="Everything you can ask Flash to do, with your plugins' commands." manual={paths.docs("commands")}>
+    {#snippet help()}
+      <p>Open the command line with <code>flash mode command</code> from a terminal, or bind <kbd>:</kbd> to <code>mode command</code> in NORMAL. Enter a command and press <kbd>Return</kbd>; <kbd>Tab</kbd> completes the topic, then the action. Every command also runs from a shell as <code>flash &lt;topic&gt; &lt;action&gt;</code>.</p>
+    {/snippet}
+  </PageHeader>
   <div class="surface catalog">
     <div class="toolbar">
       <input type="search" aria-label="Search commands" placeholder="Search commands, aliases, or descriptions…" bind:value={query} />
@@ -46,12 +65,13 @@
     {#if filtered.length}
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Command & usage</th><th>What it does</th><th>Source</th></tr></thead>
+          <thead><tr><th>Command & usage</th><th>What it does</th><th>Keys</th><th>Source</th></tr></thead>
           <tbody>
             {#each filtered as command, index (command.name + command.source + index)}
               <tr>
-                <td class="command-cell"><code class="command-name">{command.name}</code>{#if command.syntax && command.syntax !== command.name}<code class="syntax">{command.syntax}</code>{/if}{#if command.aliases?.length}<span class="aliases">Also {command.aliases.join(", ")}</span>{/if}</td>
+                <td class="command-cell"><code class="command-name">{command.name}</code><a class="doc-link" href={docHref(command)} aria-label="Documentation for {command.name}" title="Documentation for {command.name}"><Icon name="docs" size={13} /></a>{#if command.syntax && command.syntax !== command.name}<code class="syntax">{command.syntax}</code>{/if}{#if command.aliases?.length}<span class="aliases">Also {command.aliases.join(", ")}</span>{/if}</td>
                 <td class="description">{command.description || "No description provided."}</td>
+                <td class="keys">{#each (keysByCommand.get(command.name) ?? []).slice(0, shown) as row}<span class="bound"><kbd>{row.key}</kbd><span class="scope">{row.scope}</span></span>{/each}{#if (keysByCommand.get(command.name)?.length ?? 0) > shown}<a class="more" href={paths.mappings(command.name)}>+{(keysByCommand.get(command.name)?.length ?? 0) - shown} more</a>{/if}</td>
                 <td><SourceBadge {...sourceFromCommand(command.source_kind, command.source)} /></td>
               </tr>
             {/each}
@@ -65,27 +85,24 @@
 </div>
 
 <style>
-  .command-guide { display: flex; align-items: center; gap: 15px; padding: 19px 22px; margin-bottom: 25px; background: #edf2e7; border: 1px solid #dfe7d7; border-radius: 10px; }
-  .guide-icon { color: var(--accent); flex-shrink: 0; }
-  .command-guide strong { font-size: 13px; font-weight: 600; }
-  .command-guide p { margin-top: 4px; color: var(--muted); font-size: 12px; }
-  .command-guide kbd { font-size: 10px; padding: 0 5px; }
-  .command-guide a { margin-left: auto; display: flex; align-items: center; gap: 7px; font-size: 12px; white-space: nowrap; }
   .catalog { overflow: hidden; }
-  .segmented button span { color: var(--muted); margin-left: 4px; font-size: 10px; }
+  .segmented button span { color: var(--faint); margin-left: 4px; font: 12px var(--mono); }
+  .segmented button.active span { color: inherit; opacity: .8; }
   .data-table { min-width: 590px; }
-  .command-cell { width: 36%; }
-  .command-name { color: var(--accent); font-weight: 600; white-space: nowrap; }
-  .syntax { display: block; color: var(--muted); margin-top: 6px; font-size: 10px; overflow-wrap: anywhere; }
-  .aliases { display: block; font-size: 10px; margin-top: 5px; color: var(--muted); }
-  .description { width: 48%; color: #58655c; font-size: 12px; }
+  .command-cell { width: 32%; }
+  .doc-link { display: inline-flex; vertical-align: -2px; margin-left: 6px; color: var(--muted); }
+  .doc-link:hover { color: var(--accent); }
+  .keys { width: 16%; font-size: 12px; }
+  .bound { display: flex; align-items: center; gap: 5px; margin: 1px 0; white-space: nowrap; }
+  .bound .scope { color: var(--muted); font: 11px var(--mono); }
+  .more { font-size: 12px; }
+  .command-name { color: var(--accent); font-weight: 600; white-space: nowrap; font-size: 13px; }
+  .syntax { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+  .aliases { display: block; font-size: 12px; margin-top: 4px; color: var(--muted); }
+  .description { width: 40%; color: var(--text); font-size: 13px; }
   .empty button { margin-top: 16px; font-size: 12px; }
-  @media (max-width: 900px) { .command-guide { align-items: flex-start; flex-wrap: wrap; }.command-guide a { margin-left: 37px; } }
   @media print {
-    .command-guide { padding: 0 0 14px; background: none; border: 0; }
-    .command-guide a, .guide-icon { display: none; }
     .catalog { overflow: visible; border: 0; }
     .data-table { min-width: 0; }
-    .description { color: var(--text); }
   }
 </style>

@@ -123,11 +123,21 @@ struct PreparedModelScheduler {
     entries[Key(pid: pid, kind: .readiness)] != nil
   }
 
-  mutating func scheduleRefresh(pid: pid_t, reason: ModelRefreshReason, now: UInt64) -> Arm? {
+  /// The pending refresh's deadline, if one is armed.
+  func refreshDeadline(pid: pid_t) -> UInt64? {
+    entries[Key(pid: pid, kind: .refresh)]?.deadline
+  }
+
+  /// `minimumIntervalNs` is the app's own spacing for throttled reasons —
+  /// its maintenance interval, grown by slow walks — and never shortens the
+  /// fixed minimum.
+  mutating func scheduleRefresh(
+    pid: pid_t, reason: ModelRefreshReason, now: UInt64, minimumIntervalNs: UInt64? = nil
+  ) -> Arm? {
     let key = Key(pid: pid, kind: .refresh)
     var deadline = now + debounceNs
     if reason.isThrottled, let last = lastStartedAt[pid] {
-      deadline = max(deadline, last + minimumIntervalNs)
+      deadline = max(deadline, last + max(minimumIntervalNs ?? 0, self.minimumIntervalNs))
     }
     if var existing = entries[key], case .refresh(let previousReason) = existing.request {
       // AX events may invalidate the model while a focus/config refresh is

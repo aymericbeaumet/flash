@@ -1,10 +1,260 @@
+# Flash's single developer environment. Tools, shared environment and every
+# developer entry point live in this file: `mise run` lists the tasks, each
+# task runs with the pinned tools first on PATH, and docs/development.md
+# describes them. Implementations stay in Scripts/; a new entry point is a task
+# here, never a Makefile, justfile, Taskfile or wrapper script (the guardrails
+# enforce it). Task arguments follow `--`: `mise run test:plugins -- --lane units`.
+
+[settings]
+lockfile = true
+lockfile_platforms = ["macos-arm64", "macos-x64", "linux-x64"]
+# Every task works from a fresh checkout or right after a pin bump: `mise run`
+# installs the pinned tools a task is missing, even where a global
+# configuration turned auto-install off. CI opts out per job
+# (MISE_TASK_RUN_AUTO_INSTALL=false).
+auto_install = true
+task.run_auto_install = true
+
+[env]
+# Every plugin crate shares one Cargo target directory, outside the plugin
+# trees the dev resident watches (see Scripts/build-plugins.sh).
+CARGO_TARGET_DIR = "{{config_root}}/build/plugin-target"
+PNPM_CONFIG_UPDATE_NOTIFIER = "false"
+
+# Setup and the required checks (AGENTS.md).
+
+[tasks.setup]
+description = "Bootstrap a fresh checkout: install the pinned tools, then build libghostty-vt"
+run = ["mise install --locked python rust node pnpm zig cargo:cargo-about gh", { task = "build:ghostty" }]
+
+[tasks.fmt]
+description = "Format the Swift sources in place (swift format)"
+run = "swift format format --in-place --recursive Sources Tests Package.swift"
+
+[tasks.lint]
+description = "Lint the Swift sources (swift format lint --strict)"
+run = "swift format lint --strict --recursive Sources Tests Package.swift"
+
+[tasks.guardrails]
+description = "Check the repository guardrails behind the hard constraints"
+run = "./Scripts/check-guardrails.sh"
+
+[tasks.check]
+description = "Run the required checks in order: fmt, lint, guardrails, the plugin gate, the Swift suite"
+run = [
+  { task = "fmt" },
+  { task = "lint" },
+  { task = "guardrails" },
+  { task = "test:plugins" },
+  { task = "test" },
+]
+
+# Builds.
+
+[tasks.build]
+description = "Build the Swift package (debug) after bootstrapping libghostty-vt"
+depends = ["build:ghostty"]
+run = "swift build --force-resolved-versions"
+
+[tasks."build:ghostty"]
+description = "Build the pinned libghostty-vt XCFramework for this Mac (-- --release: universal)"
+run = "./Scripts/build-ghostty.sh"
+
+[tasks."build:plugins"]
+description = "Build the executable plugins into their directories, dev profile (-- <id>…: only those)"
+run = "./Scripts/build-plugins.sh dev"
+
+[tasks."build:inspector"]
+description = "Build the help UI, stage the committed inspector.html and bundle the manual (-- --dev: unstaged)"
+run = "./Scripts/build-inspector.sh"
+
+[tasks."build:site"]
+description = "Build the published manual into build/site, failing on a broken link or anchor"
+run = "./Scripts/build-site.sh"
+
+[tasks."build:tmux-oracle"]
+description = "Build the pinned tmux and utf8proc status-format oracle into build/tmux-oracle"
+run = "./Scripts/build-tmux-oracle.sh"
+
+[tasks."build:release"]
+description = "Build, validate and zip the clean universal release bundle (build/Flash.app, build/Flash.zip)"
+run = "./Scripts/build.sh --release"
+
+[tasks."generate:otlp"]
+description = "Regenerate the OTLP types in Sources/FlashOTLP from the pinned opentelemetry-proto"
+tools = { protoc = "36.2" }
+run = "./Scripts/generate-otlp.sh"
+
+[tasks."update:bangs"]
+description = "Refresh the searchproviders plugin's vendored Kagi bang snapshot (-- <commit>: pin one)"
+run = "./Scripts/update-bangs.sh"
+
+[tasks."update:emoji-keywords"]
+description = "Refresh the emojis plugin's vendored CLDR keyword table (-- <ref>: pin a release tag or commit)"
+run = "./Scripts/update-emoji-keywords.sh"
+
+[tasks."new:plugin"]
+description = "Scaffold a bundled Rust plugin: -- <id> \"<Display Name>\" \"<description>\""
+run = "./Scripts/new-plugin.sh"
+
+# Installation. The installers prompt for the Accessibility grant, so they
+# keep the terminal.
+
+[tasks."install:dev"]
+description = "Build, sign and install /Applications/Flash 🧪.app, then restart the resident"
+raw = true
+run = "./Scripts/install.sh --dev"
+
+[tasks."install:release"]
+description = "Install a clean universal release as /Applications/Flash.app (never for development)"
+raw = true
+run = "./Scripts/install.sh --release"
+
+[tasks."install:fixture-collector"]
+description = "Package the Firefox fixture-collector extension and install its native messaging host"
+run = "./Scripts/install-firefox-fixture-collector.sh"
+
+# Tests.
+
+[tasks.test]
+description = "Run the Swift test suite against real plugin binaries (-- <swift test args>)"
+depends = ["build:ghostty", "build:plugins"]
+env = { FLASH_REQUIRE_PLUGIN_BINARIES = "1" }
+run = "swift test --force-resolved-versions"
+
+[tasks."test:plugins"]
+description = "Run the plugin gate: Rust lint, units and dev builds (-- --lane lint|units|build|all)"
+run = "./Scripts/test-plugins.sh"
+
+[tasks."test:plugin"]
+description = "Run one plugin crate's cargo tests: mise run test:plugin <id> (a directory under Plugins/)"
+usage = 'arg "<id>" help="Plugin directory under Plugins/, such as terminals or _flash_plugin_rust"'
+run = 'cd "Plugins/${usage_id}" && cargo test --workspace --locked'
+
+[tasks."test:inspector"]
+description = "Type-check the help UI (svelte-check) and run its unit tests"
+dir = "{{config_root}}/Inspector"
+run = ["pnpm install --frozen-lockfile", "pnpm check", "node --test *.test.ts"]
+
+[tasks."test:status-format"]
+description = "Check the status-format corpus against the pinned tmux oracle (-- --record: update it)"
+depends = ["build:tmux-oracle"]
+env = { FLASH_REQUIRE_TMUX_ORACLE = "1" }
+run = "python3 Scripts/test-status-format-oracle.py"
+
+[tasks."test:ghostty"]
+description = "Cold-bootstrap libghostty-vt inside a temporary tagged repository"
+run = "bash Scripts/test-build-ghostty.sh"
+
+[tasks."build:schema"]
+description = "Regenerate docs/schema/flash.schema.json, flash.toml's JSON Schema"
+depends = ["build:ghostty"]
+run = "FLASH_WRITE_SCHEMA=1 swift test --force-resolved-versions --filter ConfigSchemaTests"
+
+[tasks."test:app-bundle"]
+description = "Test the release bundle validator against signed universal fixtures"
+run = "python3 Scripts/test-app-bundle.py"
+
+[tasks."test:notices"]
+description = "Test the third-party and libghostty-vt notice inventories"
+run = [
+  "python3 Scripts/test-third-party-notices.py",
+  "python3 Scripts/test-ghostty-notices.py",
+]
+
+[tasks."test:publish"]
+description = "Test GitHub release publication against a mocked gh"
+run = "bash Scripts/test-publish-github-release.sh"
+
+[tasks."test:cask"]
+description = "Test the generated Homebrew cask"
+run = "bash Scripts/test-update-homebrew-cask.sh"
+
+[tasks."test:hints-summary"]
+description = "Unit-test the hint latency log parser"
+run = "python3 Scripts/test-hints-latency-summary.py"
+
+[tasks."test:log-summary"]
+description = "Unit-test the log summary report"
+run = "python3 -I Scripts/test-log-summary.py"
+
+# Signed GUI fixtures against the installed resident, which each installs
+# from the current tree first. They drive real input: run them one at a time
+# in an unlocked console session.
+
+[tasks."test:integration"]
+description = "Run the native, browser and Electron fixtures in turn"
+run = [
+  { task = "test:integration:native" },
+  { task = "test:integration:browser" },
+  { task = "test:integration:electron" },
+]
+
+[tasks."test:integration:native"]
+description = "Run the AppKit fixture and its oracle: real host clicks (-- --setup-only)"
+depends = ["install:dev"]
+run = "./Scripts/test-integration-native.sh"
+
+[tasks."test:integration:browser"]
+description = "Run the Firefox fixtures: AX targets against reference DOM markers (-- --fixture <id>)"
+depends = ["install:dev"]
+run = "./Scripts/test-integration-browser.sh"
+
+[tasks."test:integration:electron"]
+description = "Run the Electron fixture and its oracle: real host clicks (-- --skip-npm-ci)"
+depends = ["install:dev"]
+run = "./Scripts/test-integration-electron.sh"
+
+# Benchmarks (docs/performance.md, docs/plugin-performance.md).
+
+[tasks."bench:hints"]
+description = "Install the dev resident, then time its hint activations per app class (-- --class=all --runs=30)"
+depends = ["install:dev"]
+run = "./Scripts/benchmark-hints.sh"
+
+[tasks."bench:hints-summary"]
+description = "Summarize hint latency from Flash logs (-- --by-bundle ~/Library/Logs/Flash/flash.log*)"
+run = "./Scripts/hints-latency-summary.py"
+
+[tasks."bench:log-summary"]
+description = "Report the resident's latency, walk, plugin, border and warning distributions from its logs (-- --hours 24 [LOG…])"
+run = "python3 -I Scripts/log-summary.py"
+
+[tasks."bench:plugins"]
+description = "Build the plugins, then measure their cold start, ping, RSS and threads (-- --plugin <id>…)"
+run = "./Scripts/benchmark-plugins.py --build"
+
+[tasks."bench:cli"]
+description = "Time the installed flash CLI's round trip to the running resident (-- --runs=50)"
+run = "python3 -I Scripts/benchmark-cli.py"
+
+[tasks."bench:help"]
+description = "Time the browser help: server replies, then load, navigation, typing and stream cost in headless Chrome (-- --runs 5)"
+run = "node Scripts/benchmark-help.mjs"
+
+[tasks."bench:footprint"]
+description = "Snapshot the running resident's CPU, wakeups, memory and log health (-- <seconds> <minutes>)"
+run = "./Scripts/measure-footprint.sh"
+
+# Release publication, run by the CI homebrew job.
+
+[tasks."release:publish"]
+description = "Create the GitHub release with its archive, or verify the existing one (CI)"
+run = "bash Scripts/publish-github-release.sh"
+
+[tasks."release:cask"]
+description = "Write the Homebrew cask for a published release (CI)"
+run = "./Scripts/update-homebrew-cask.sh"
+
 # Python drives the plugin tests, benchmarks and build helpers. Rust builds
-# the official plugins; Node and pnpm build the inspector and Electron fixture.
+# the official plugins; Node and pnpm build the inspector, the published
+# manual (Scripts/build-site.sh) and the Electron fixture.
 [tools]
-python = "3.15.0"
-rust = { version = "1.99.0", components = ["rustfmt", "clippy"] }
-node = "26.12.0"
-pnpm = "12.11.2"
-# uv runs the pinned mkdocs toolchain for the documentation site (mkdocs.yml).
-uv = "0.13.1"
-zig = "0.16.0"
+python = "3.15.2"
+rust = { version = "1.99.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"] }
+node = "26.13.0"
+pnpm = "12.18.0"
+zig = "0.17.1"
+gh = "2.103.3"
+# License notices for the Rust dependencies shipped inside bundled plugins.
+"cargo:cargo-about" = { version = "0.9.3", features = ["cli"] }

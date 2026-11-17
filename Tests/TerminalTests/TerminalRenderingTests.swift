@@ -141,7 +141,7 @@ final class TerminalRenderingTests: XCTestCase {
       let ready = expectation(
         for: NSPredicate { _, _ in view.terminalFrame?.text.contains(text) == true },
         evaluatedWith: nil)
-      wait(for: [ready], timeout: 5)
+      wait(for: [ready], timeout: terminalChildTimeout)
     }
     waitForText("BLINK")
     XCTAssertEqual(view.cursorBlinkAnimation?.repeatCount, .infinity)

@@ -2,7 +2,17 @@
   "id": "terminals",
   "name": "Terminals",
   "version": "0.1.0",
-  "description": "Declares the terminal emulators Flash applies its terminal rules to, the split shortcuts they bind for pane actions where no tmux client hosts the focused terminal, and that they have no back/forward history.",
+  "description": "Declares the terminal emulators Flash applies its terminal rules to and the split shortcuts they bind, and inside them hints tmux panes and links, answers the letter-search grid, exposes the tmux window finder and the tmux session and window commands, and publishes the attached client's session, window and pane.",
+  "sandbox": false,
+  "exec": [
+    "./flash-plugin-terminals"
+  ],
+  "capabilities": [
+    "accessibility",
+    "app_control"
+  ],
+  "priority": 20,
+  "only_terminals": true,
   "terminal_emulators": [
     "org.alacritty",
     "io.alacritty",
@@ -15,16 +25,123 @@
     "co.zeit.hyperterm",
     "co.zeit.hyper"
   ],
-  "action_bindings": {
-    "pane_next": {
+  "hints": {
+    "fallback_on_empty": true
+  },
+  "navigation": [
+    "tmux"
+  ],
+  "status": [
+    "session",
+    "window",
+    "pane"
+  ],
+  "listen": [
+    "core:focus.changed",
+    "core:apps.terminated",
+    "core:session.opened",
+    "core:ax.changed"
+  ],
+  "sources": [
+    {
+      "name": "tmux.windows",
+      "type": "terminals",
+      "kind": "locations",
+      "priority": "important"
+    }
+  ],
+  "commands": [
+    {
+      "command": "tmux",
+      "subcommand": "session",
+      "description": "Switch the active tmux client to a session by name and raise its terminal."
+    },
+    {
+      "command": "tmux",
+      "subcommand": "window",
+      "description": "Switch the active tmux client to a session:window target and raise its terminal."
+    },
+    {
+      "command": "tab",
+      "subcommand": "select"
+    },
+    {
+      "command": "tab",
+      "subcommand": "next"
+    },
+    {
+      "command": "tab",
+      "subcommand": "previous"
+    },
+    {
+      "command": "tab",
+      "subcommand": "first"
+    },
+    {
+      "command": "tab",
+      "subcommand": "last"
+    },
+    {
+      "command": "tab",
+      "subcommand": "new"
+    },
+    {
+      "command": "tab",
+      "subcommand": "close",
+      "confirm": "Close this tmux window?"
+    },
+    {
+      "command": "tab",
+      "subcommand": "move_previous"
+    },
+    {
+      "command": "tab",
+      "subcommand": "move_next"
+    },
+    {
+      "command": "pane",
+      "subcommand": "next"
+    },
+    {
+      "command": "pane",
+      "subcommand": "previous"
+    },
+    {
+      "command": "pane",
+      "subcommand": "split_vertical"
+    },
+    {
+      "command": "pane",
+      "subcommand": "split_horizontal"
+    },
+    {
+      "command": "pane",
+      "subcommand": "close",
+      "confirm": "Close this tmux pane?"
+    },
+    {
+      "command": "scroll",
+      "subcommand": "top"
+    },
+    {
+      "command": "scroll",
+      "subcommand": "bottom"
+    },
+    {
+      "command": "app",
+      "subcommand": "reload"
+    }
+  ],
+  "bindings": {
+    "pane next": {
       "com.mitchellh.ghostty": "cmd+]",
       "com.googlecode.iterm2": "cmd+]"
     },
-    "pane_previous": {
+    "pane previous": {
       "com.mitchellh.ghostty": "cmd+[",
       "com.googlecode.iterm2": "cmd+["
     },
-    "history_back": {
+    "history back": {
       "org.alacritty": false,
       "io.alacritty": false,
       "com.apple.Terminal": false,
@@ -36,7 +153,7 @@
       "co.zeit.hyperterm": false,
       "co.zeit.hyper": false
     },
-    "history_forward": {
+    "history forward": {
       "org.alacritty": false,
       "io.alacritty": false,
       "com.apple.Terminal": false,
@@ -47,6 +164,128 @@
       "dev.warp.Warp-Stable": false,
       "co.zeit.hyperterm": false,
       "co.zeit.hyper": false
+    },
+    "input line_start": {
+      "": false
+    },
+    "input line_end": {
+      "": false
+    },
+    "input char_left": {
+      "": false
+    },
+    "input char_right": {
+      "": false
+    },
+    "input line_up": {
+      "": false
+    },
+    "input line_down": {
+      "": false
+    },
+    "input document_start": {
+      "": false
+    },
+    "input document_end": {
+      "": false
+    },
+    "input select_left": {
+      "": false
+    },
+    "input select_right": {
+      "": false
+    },
+    "input select_up": {
+      "": false
+    },
+    "input select_down": {
+      "": false
+    },
+    "input select_word_left": {
+      "": false
+    },
+    "input select_word_right": {
+      "": false
+    },
+    "input select_line_start": {
+      "": false
+    },
+    "input select_line_end": {
+      "": false
+    },
+    "input select_document_start": {
+      "": false
+    },
+    "input select_document_end": {
+      "": false
+    },
+    "cursor previous_word": {
+      "": false
+    },
+    "cursor previous_big_word": {
+      "": false
+    },
+    "cursor word_end": {
+      "": false
+    },
+    "cursor big_word_end": {
+      "": false
+    },
+    "cursor line_start": {
+      "": false
+    },
+    "cursor line_end": {
+      "": false
+    },
+    "cursor first_line": {
+      "": false
+    },
+    "cursor last_line": {
+      "": false
+    },
+    "move down": {
+      "": false
+    },
+    "move up": {
+      "": false
+    },
+    "move left": {
+      "": false
+    },
+    "move right": {
+      "": false
+    },
+    "move top": {
+      "": false
+    },
+    "move bottom": {
+      "": false
+    },
+    "app cancel": {
+      "": false
+    },
+    "app select_all": {
+      "": false
+    },
+    "window close_all": {
+      "": false
+    },
+    "app settings": {
+      "org.alacritty": false,
+      "io.alacritty": false,
+      "com.apple.Terminal": "cmd+,",
+      "com.mitchellh.ghostty": "cmd+,",
+      "com.googlecode.iterm2": "cmd+,",
+      "net.kovidgoyal.kitty": "cmd+,",
+      "com.github.wez.wezterm": false,
+      "dev.warp.Warp-Stable": "cmd+,",
+      "co.zeit.hyperterm": "cmd+,",
+      "co.zeit.hyper": "cmd+,"
+    },
+    "window zoom": {
+      "org.alacritty": false,
+      "io.alacritty": false,
+      "com.github.wez.wezterm": false
     }
   },
   "help": {
@@ -54,8 +293,8 @@
       {
         "name": "terminals",
         "title": "Terminals",
-        "summary": "Terminal emulators and their built-in pane shortcuts.",
-        "body": "# Terminals\n\nThis bundled manifest-only plugin declares which apps are terminal emulators (`terminal_emulators`). Flash applies its terminal rules only to them: a Command chord the emulator would type as text is refused, pixel wheels are refused, a primary hint or grid click anywhere in one enters INSERT, and plugins scoped `only_terminals` (tmux) match them. It also declares the chords emulators bind for built-in actions: `pane_next` / `pane_previous` send Cmd-] / Cmd-[ in Ghostty and iTerm2 when no tmux client hosts the focused terminal; tmux still owns its panes first. Add an emulator by declaring it in a plugin of your own.\n"
+        "summary": "Terminal emulators, their built-in pane shortcuts, and tmux hints, finder, commands and status.",
+        "body": "# Terminals\n\nThis bundled plugin owns Flash's terminal knowledge. It declares which apps are terminal emulators (`terminal_emulators`); Flash applies its terminal rules only to them: a Command chord the emulator would type as text is refused, and pixel wheels are refused. Inside them it is the tmux provider: pane, link and status-bar hints, the `s` letter-search grid, the `@terminals` finder, the `tmux session` / `tmux window` commands, the `flash.plugin.terminals.session`, `window` and `pane` status segments, and the tab and pane commands tmux performs itself, declared as `commands[]` entries under Flash's `tab`, `pane`, `scroll` and `app` topics (closing a window or a pane asks first: those entries carry `confirm`). It also declares the chords emulators bind for built-in commands (`bindings`): `pane next` / `pane previous` (`flash pane next` / `flash pane previous`) send Cmd-] / Cmd-[ in Ghostty and iTerm2 when no tmux client hosts the focused terminal; tmux still owns its panes first. It binds none of the `input` commands, none of the `cursor` motions and none of the `move` arrows (`false` for every emulator): a shell, or vim running in it, would receive Cmd-Left or an arrow as input (Up recalls history), so `h` `j` `k` `l`, the half pages, pages and `gg` / `G` scroll there as they always have. Nor does a terminal get `app cancel` (NORMAL's Escape, which a shell or vim would read), `app select_all` or `window close_all`; `app settings` sends Cmd-Comma only to the emulators that bind it (not Alacritty or WezTerm). Remote tmux over SSH is opt-in through `[plugins.terminals] ssh_hosts`. Add an emulator by declaring it in a plugin of your own.\n"
       }
     ]
   }

@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { freshness, hashBody } from "./src/lib/reading.ts";
-import type { DocTopic } from "./src/lib/types.ts";
+import { bodyHash, freshness, hashBody, type Readable } from "./src/lib/reading.ts";
 
-const doc = (name: string, body: string): DocTopic => ({ name, title: name, summary: "", body });
+const doc = (name: string, body: string): Readable => ({ name, hash: hashBody(body) });
 
 test("the first visit marks nothing", () => {
   assert.equal(freshness([doc("a", "x")], null).size, 0);
@@ -21,4 +20,11 @@ test("hashes are stable and short", () => {
   assert.equal(hashBody("flash"), hashBody("flash"));
   assert.equal(hashBody("flash").length, 8);
   assert.notEqual(hashBody("flash"), hashBody("flesh"));
+});
+
+test("a guide's hash is remembered by its text", () => {
+  const body = "a guide ".repeat(1000);
+  assert.equal(bodyHash(body), hashBody(body));
+  assert.equal(bodyHash(`${body}`), bodyHash(body));
+  assert.notEqual(bodyHash(`${body}!`), bodyHash(body));
 });

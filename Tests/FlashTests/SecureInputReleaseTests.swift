@@ -252,4 +252,31 @@ final class SecureInputReleaseTests: XCTestCase {
     machine.noteCleared()
     XCTAssertEqual(machine.consider(.release([request])), .perform([request]))
   }
+
+  /// The poll runs every two seconds for the life of the resident, and the
+  /// flag is almost always off. Off decides nothing, so nothing past the flag
+  /// is gathered: no pass over every running app on main, no Accessibility
+  /// read, no registry walk.
+  func testTheOffFlagGathersNothingElse() {
+    var gathered = 0
+    let off = SecureInputFixer.observe(
+      enabled: { false }, ownPID: 7,
+      gather: {
+        gathered += 1
+        return self.snapshot()
+      })
+    XCTAssertEqual(gathered, 0)
+    XCTAssertEqual(
+      off, snapshot(enabled: false, frontmostPID: nil, frontmostBundleID: nil, ownPID: 7))
+    XCTAssertEqual(SecureInputRelease.decide(off), .idle)
+
+    let on = SecureInputFixer.observe(
+      enabled: { true }, ownPID: 7,
+      gather: {
+        gathered += 1
+        return self.snapshot(holders: [self.holder(20, "com.google.Chrome")])
+      })
+    XCTAssertEqual(gathered, 1, "an enable reads the holders, apps and focus")
+    XCTAssertEqual(on.holders, [holder(20, "com.google.Chrome")])
+  }
 }

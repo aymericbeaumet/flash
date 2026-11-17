@@ -1,6 +1,6 @@
 import Foundation
 
-/// `flash config_check [--file=<path>]`: validates a config file exactly as
+/// `flash config check [--file=<path>]`: validates a config file exactly as
 /// the resident loads it — the bundled defaults, then the file — without
 /// contacting the resident, for editors and dotfile CI. Prints one
 /// `path:line:col: message` line per diagnostic and fails on any.

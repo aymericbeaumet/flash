@@ -2,7 +2,7 @@ import Foundation
 
 /// Everything a HYPER hold owns, as one value: the physical leader hold, the
 /// HID backstop watch, and the two sequences typed during the hold. Every
-/// exit from HYPER — the release, `leave_mode`, opening the command line, a
+/// exit from HYPER — the release, `mode leave`, opening the command line, a
 /// focus change — ends them together through `modeChanged`, the one reset
 /// point, so no exit path can leave a latched hold that swallows the next
 /// leader press, or a pending sequence that completes in another mode.

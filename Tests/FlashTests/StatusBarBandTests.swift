@@ -3,7 +3,7 @@ import XCTest
 
 @testable import flash
 
-/// The band the status bar paints and the band `window_move` reserves are one
+/// The band the status bar paints and the band `window move` reserves are one
 /// value, and the focus border never strokes under the bar.
 final class StatusBarBandTests: XCTestCase {
   private let screen = CGRect(x: 0, y: 0, width: 2048, height: 1152)

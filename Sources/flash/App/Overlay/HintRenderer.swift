@@ -374,7 +374,7 @@ extension OverlayPanel {
     "shadowRadius": NSNull(), "shadowOffset": NSNull(), "shadowPath": NSNull(),
     "onOrderIn": NSNull(), "onOrderOut": NSNull(), "sublayers": NSNull(),
     "path": NSNull(), "strokeColor": NSNull(), "fillColor": NSNull(), "lineWidth": NSNull(),
-    "colors": NSNull(),
+    "colors": NSNull(), "truncationMode": NSNull(),
   ]
 
   /// Render (or move) the `--adjust` marker: the matched target's outline plus
@@ -524,6 +524,33 @@ extension OverlayPanel {
     return firstResponder === editor
   }
 
+  /// AppKit still names the panel its key window although the panel is not
+  /// key. NORMAL capture's `NSApp.deactivate()` leaves exactly this when
+  /// macOS ignores it: AppKit resigns the panel but keeps it as the window to
+  /// restore on reactivation, and the app, never deactivated, never
+  /// reactivates. `makeKey` then returns early, the panel never receives
+  /// `becomeKey`, and the command line shows no caret however often the
+  /// recovery ladder retries. Only while active: an inactive app reports no
+  /// key window, and activation still landing is the ladder's case.
+  static func keyWindowIsStale(appActive: Bool, appKeyWindowIsSelf: Bool, isKeyWindow: Bool)
+    -> Bool
+  {
+    appActive && appKeyWindowIsSelf && !isKeyWindow
+  }
+
+  /// Clear a stale key window before asking for key: ordering the panel out
+  /// makes AppKit drop it as the key window, so the `makeKey` that follows,
+  /// in the same turn, runs in full.
+  private func repairStaleKeyWindowIfNeeded() {
+    guard
+      Self.keyWindowIsStale(
+        appActive: NSApp.isActive, appKeyWindowIsSelf: NSApp.keyWindow === self,
+        isKeyWindow: isKeyWindow)
+    else { return }
+    FlashLog.debug("[overlay] stale_key_window repair=order_out input=\(inputMode)")
+    orderOut(nil)
+  }
+
   /// Restart the field editor's insertion-point blink. The caret is AppKit's
   /// own; Flash draws none. Idempotent, and it does not move the caret — the
   /// selection is owned by `syncCommandTextFieldSelection` — so it is safe to
@@ -646,6 +673,7 @@ extension OverlayPanel {
     if !NSApp.isActive || !isKeyWindow {
       requestApplicationActivationForKeyboardCapture()
     }
+    repairStaleKeyWindowIfNeeded()
     orderFrontRegardless()
     makeKeyAndOrderFront(nil)
     makeKey()
@@ -740,15 +768,13 @@ extension OverlayPanel {
       lastNonFlashPID: coordinator?.lastFocusedApplicationPID,
       currentPID: current.processIdentifier)
     var acceptedFrom = false
-    if #available(macOS 14.0, *) {
-      NSApp.activate()
-      if let sourcePID, let source = NSRunningApplication(processIdentifier: sourcePID),
-        !source.isTerminated
-      {
-        acceptedFrom = current.activate(from: source, options: [.activateAllWindows])
-      }
+    AppActivation.activate()
+    if let sourcePID, let source = NSRunningApplication(processIdentifier: sourcePID),
+      !source.isTerminated
+    {
+      acceptedFrom = AppActivation.activate(from: source, options: [.activateAllWindows])
     }
-    let acceptedDirect = current.activate(options: [.activateAllWindows])
+    let acceptedDirect = AppActivation.activateDirectly(options: [.activateAllWindows])
     let activeAfterRequest = NSApp.isActive
     FlashLog.trace(
       "[overlay] capture_activation front=\(frontDescription) "

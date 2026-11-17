@@ -72,12 +72,11 @@ impl State {
     }
 }
 
-/// One carousel line: the elastic linked title, the origin domain, and the
+/// One carousel line: the elastic linked title, the item's source, and the
 /// outbound arrow, sharing one article preview.
 pub(crate) fn render(article: &Article) -> StatusValue {
     let original = Url::parse(&article.original_url).expect("validated article URL");
-    let domain = original.host_str().unwrap_or_default();
-    let domain = Markup::text(domain.strip_prefix("www.").unwrap_or(domain));
+    let source = Markup::text(&article.source);
     let mut origin = original.clone();
     origin.set_path("/");
     origin.set_query(None);
@@ -98,23 +97,21 @@ pub(crate) fn render(article: &Article) -> StatusValue {
             Markup::raw("#[shrink]") + title + "#[noshrink]",
             &article.url
         ),
-        source = Markup::link(format!("({domain})"), origin.as_str()),
+        source = Markup::link(format!("({source})"), origin.as_str()),
         outbound = Markup::link("↗", &article.original_url),
     ));
     StatusValue::text(row).with_preview(preview)
 }
 
-/// One popup-free carousel line: the elastic title and its origin domain form
-/// a single link to the feed item, with no outbound arrow and no inline
+/// One popup-free carousel line: the elastic title and its source form a
+/// single link to the feed item, with no outbound arrow and no inline
 /// preview. The plugin owns the item URL. The template owns the section name,
 /// its colour, and the hover, and a link around the whole segment addresses
 /// the feed rather than any one item.
 pub(crate) fn render_label(article: &Article) -> StatusValue {
-    let original = Url::parse(&article.original_url).expect("validated article URL");
-    let domain = original.host_str().unwrap_or_default();
-    let domain = Markup::text(domain.strip_prefix("www.").unwrap_or(domain));
+    let source = Markup::text(&article.source);
     let title = Markup::text(feed::truncate(&article.title, 160));
-    let row = Markup::raw(format!("#[shrink]{title}#[noshrink] ({domain})"));
+    let row = Markup::raw(format!("#[shrink]{title}#[noshrink] ({source})"));
     StatusValue::text(Markup::link(row, &article.url))
 }
 
@@ -127,6 +124,7 @@ mod tests {
             title: name.into(),
             url: format!("https://aggr.example/{name}"),
             original_url: "https://www.source.example/original".into(),
+            source: "source.example".into(),
             preview: "A preview".into(),
             published_at,
         }
@@ -243,6 +241,17 @@ mod tests {
         assert!(line.contains("#[link=https://www.source.example/original]"));
         assert!(line.contains("↗"));
         assert!(line.contains("%23%23%5Bbold%5Dinjection"));
+    }
+
+    #[test]
+    fn both_lines_name_the_feed_source_as_escaped_text() {
+        let mut item = article("Title", 100);
+        item.source = "youtube.com/@Channel #[bold]".into();
+        for line in [render(&item), render_label(&item)] {
+            let line = line.render().unwrap();
+            assert!(line.contains("(youtube.com/@Channel ##[bold])"), "{line}");
+            assert!(!line.contains("source.example)"), "{line}");
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ use chrono::DateTime;
 use reqwest::Url;
 use roxmltree::{Document, Node, ParsingOptions};
 
-pub(crate) const MAX_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ITEMS: usize = 2000;
 pub(crate) const WINDOW_SECONDS: i64 = 24 * 60 * 60;
 
@@ -13,6 +13,8 @@ pub(crate) struct Article {
     pub title: String,
     pub url: String,
     pub original_url: String,
+    // The item's RSS `<source>`, or the original link's host when it names none.
+    pub source: String,
     // Rich status text with external content already escaped by preview::render.
     pub preview: String,
     pub published_at: i64,
@@ -92,6 +94,20 @@ fn parse_item(node: Node<'_, '_>, now: i64) -> Option<Article> {
         .and_then(web_url)
         .map(|url| url.to_string())
         .unwrap_or_else(|| url.clone());
+    let source = truncate(
+        &child_text(node, "source")
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        80,
+    );
+    let source = if source.is_empty() {
+        let host = web_url(&original_url)?.host_str()?.to_string();
+        host.strip_prefix("www.").unwrap_or(&host).to_string()
+    } else {
+        source
+    };
     let content = node
         .children()
         .find(|child| child.has_tag_name(("http://purl.org/rss/1.0/modules/content/", "encoded")))
@@ -104,6 +120,7 @@ fn parse_item(node: Node<'_, '_>, now: i64) -> Option<Article> {
         title,
         url,
         original_url,
+        source,
         preview,
         published_at,
     })
@@ -168,6 +185,7 @@ mod tests {
                 title: "Rust & RSS".into(),
                 url: "https://aggr.example/article".into(),
                 original_url: "https://www.example.com/article".into(),
+                source: "example.com".into(),
                 preview: crate::preview::render("<p>Read <b>this</b> &amp; that.</p>"),
                 published_at: NOW - 1,
             }]
@@ -216,6 +234,38 @@ mod tests {
         assert_eq!(articles.len(), 1);
         assert_eq!(articles[0].preview, "Hello world");
         assert_eq!(articles[0].original_url, articles[0].url);
+    }
+
+    #[test]
+    fn rss_source_names_the_item_and_the_original_host_stands_in_without_one() {
+        let xml = document(
+            &[
+                item(
+                    "Named",
+                    "https://aggr.example/named",
+                    NOW,
+                    r#"<atom:link rel="via" href="https://www.youtube.com/watch?v=1"/><source url="https://aggr.example/sources/a/rss.xml"> youtube.com/@Channel
+                    </source>"#,
+                ),
+                item(
+                    "Blank",
+                    "https://aggr.example/blank",
+                    NOW - 1,
+                    r#"<atom:link rel="via" href="https://www.example.com/post"/><source url="https://aggr.example/rss.xml"> </source>"#,
+                ),
+                item("Bare", "https://example.org/bare", NOW - 2, ""),
+            ]
+            .concat(),
+        );
+        let sources: Vec<_> = parse(&xml, NOW)
+            .unwrap()
+            .into_iter()
+            .map(|article| article.source)
+            .collect();
+        assert_eq!(
+            sources,
+            ["youtube.com/@Channel", "example.com", "example.org"]
+        );
     }
 
     #[test]

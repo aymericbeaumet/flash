@@ -1,13 +1,17 @@
 # Browser help
 
-Flash's browser help combines feature guides with the state of the running
-resident. `flash help_show` opens its homepage; `:help` works after opening
-the command line with `flash enter_command_mode` or a user-defined shortcut.
+Flash's browser help combines this documentation with the state of the
+running resident. `flash help show` opens its homepage; `:help` (or `:h`) works after
+opening the command line with `:` in NORMAL or `flash mode command`.
 The default NORMAL `?` mapping opens
-the effective mapping table, as does `:mappings`; the mapping syntax guide
-remains available through `:help mappings`.
+the effective mapping table, as does `:mappings`; the [mapping syntax](mappings.md)
+page is `:help mappings`.
 
-`:help <topic>` opens a guide directly:
+`:help <topic>` and `flash help show --topic=<topic>` open `/docs/<topic>`:
+a page of the documentation by its path or one of its aliases (`config`, `grid`,
+`start`, `doctor`), else a plugin's own guide. In the command line the topic
+may be cut to a unique prefix (`:h plug`), like any other word there
+([commands](commands.md#command-line-abbreviations)).
 
 ```text
 :help plugins
@@ -18,14 +22,28 @@ remains available through `:help mappings`.
 
 The homepage is one checklist for this Mac. It marks permissions, the config
 file, shortcuts, plugins, and the status bar from the resident's state, and it
-remembers which guides this browser has opened. Guides
-cover hints, grid/pointer control, modes, flashlight, mappings, configuration,
-status formats, the status bar, widgets, popups, plugins, privacy,
-troubleshooting and development. Items in "What is missing" open their linked
-guide or page when they have one; otherwise they jump to their checklist step.
-Plugin manifests add their own topics.
+remembers which pages of the documentation this browser has opened. Items in "What
+is missing" open their linked page when they have one; otherwise they jump to
+their checklist step. Plugin manifests add their own guides, listed under
+Plugin guides in the documentation sidebar.
+
+## Documentation
+
+Documentation lists every page of the repository's `docs/`,
+in the order `docs/nav.json` gives, bundled with the app so it describes the
+installed version. The same pages are published at
+<https://aymericbeaumet.github.io/flash/>: one source, one renderer. The help
+serves a page at `/docs/<page>` (`/docs/alternatives/neru`) and the site at
+`/flash/<page>/`, with the same content, sidebar, outline and design; only
+the shell differs, since the site has no resident behind it. There the live
+pages are a note pointing at `?` in NORMAL and `:help`, and the top bar links
+the repository instead of showing the connection.
 
 ## Live reference
+
+Each live page's header holds two controls: **? About this page** folds a
+short explanation of that page open, and **Documentation →** opens the page
+of this documentation that covers it.
 
 | Page | What it describes |
 | --- | --- |
@@ -34,115 +52,80 @@ Plugin manifests add their own topics.
 | Commands | Built-in and installed plugin command definitions, sorted alphabetically |
 | Plugins | Loaded manifests, process health, errors and capabilities. Selecting Inspect details opens a dialog; Escape or its close button dismisses it |
 | Runtime | Current mode, app, configuration diagnostics, permissions, input capture, hints and window state. Resolved configuration is JSON: default values keep the base colour, and an override is marked with the layer that set it. Config provenance links jump to the editor on the same page; Purge defaults removes bundled values in the editor and Save writes the file |
+| Monitors | Every `[monitors.<name>]`, built-in or configured, worst first (error, warning, unknown, OK, then disabled): a dial with its warning and error thresholds, the value as shown and direction, how long it has been in its state, the last alert, the sampling interval, its message, source and expression (see [monitors](monitors.md#the-monitors-page)). State tiles filter the list. Without monitors the page says how to configure `[monitors.<name>]` and links the manual. `flash monitors show` opens it |
+| Telemetry | The OpenTelemetry receiver and exporter: whether each is on, the receiver's address and counts per signal, refusals, the exporter's endpoint, signals, header names, sent and dropped items and last error. Below them every received metric with each series' attributes, latest value, rate, total or percentiles and a sparkline, with the `#{flash.otel…}` snippet that reads it; recent received log records; and recent traces as compact waterfalls (see [telemetry](telemetry.md#the-telemetry-page)). `flash telemetry show` opens it |
 | Logs | Recent structured diagnostics and interaction traces |
-| Clipboard | Live text registers (unnamed, latest yank and named buffers) above recent text, images, formatted copies, and files from core history. The page requests history directly on opening, loads it in pages, and can copy back or delete each entry |
+| Clipboard | Live text registers (unnamed, latest yank and named buffers) as one table of key, contents, type and size, above a dense history of recent text, images, formatted copies and files from core history: kind, a one-line preview with an image thumbnail, size or pixel dimensions, and copy, pin and delete actions that appear on hover, focus or selection. Pinned entries list first, marked with a pin. A type filter and search narrow it; `j` `k` or the arrows move, `↩` copies, space opens an entry, `p` pins or unpins it and `⌫` deletes it. The page requests history directly on opening and loads it in pages |
 
 The browser follows the resident's event stream: Flash pushes a snapshot when
 something it shows changes, never on a timer, and the page derives uptimes
-from the start times it carries. Plugin CPU time and memory change without an
-event, so they read as of the last snapshot; Refresh on the runtime page and
-Resample on a plugin's details ask for a fresh one. A disconnected browser
-keeps its last snapshot and marks the connection state with a small warning
-icon in the top bar. The icon's title explains that the snapshot may be stale;
-the page must not present that snapshot as current. Runtime state can include private app or clipboard data;
+from the start times it carries. A new stream receives the whole state once;
+every later push is a patch of the sections that changed, so a status bar
+that updates several times a second resends only the bar, and the page
+recomputes only what shows it. The page folds pushes in as they arrive and
+draws them once per frame, so a hidden tab draws nothing until it is shown
+again. The snapshot is built on the resident's
+main thread, so it carries previews and keeps big values behind endpoints:
+a clipboard entry is its kind, id and one-line preview (the text, formatted
+copy and image come from `/api/clipboard/history` and `/api/clipboard/<id>`,
+which the Clipboard page reads on opening), a plugin's status segments are
+bounded previews, and a plugin's commands appear once, in the top-level
+command catalog with the plugin as their source. A change of the status bar,
+a popup or a widget rebuilds only its own sections there. Each snapshot notes itself
+to the main-thread watchdog and logs its cost at `trace` as
+`[latency] inspector_snapshot ms=…`. Plugin CPU time and memory change without an
+event, so they read as of the last whole snapshot; Refresh on the runtime page and
+Resample on a plugin's details ask for a fresh one. Runtime state can include private app or clipboard data;
 see [privacy](privacy.md#local-inspector) before sharing it.
 
-## Routes and ownership
+A disconnected browser keeps its last snapshot and never presents it as
+current. The top bar's connection mark turns into a warning icon reading
+Offline, a banner under it says when Flash stopped answering and which
+snapshot is shown, and tells the reader to reopen help with `?` in NORMAL or
+`:help` if Flash quit or restarted. Each live page marks its data Stale with
+the snapshot's time. The stream reconnects by itself: the browser retries a
+dropped stream, the page reopens one it gave up on with backoff up to 30 s,
+and Reconnect now tries at once. Flash sends its state and logs to every new
+stream, and the page also asks for a snapshot after a reconnect, so it
+re-syncs without a reload.
 
-The inspector listens on loopback (port 4242 by default), starting when one of
-the browser commands needs it, or at launch with
-`[debug] http_inspector_enabled = true`. It stays available until Flash quits.
+Requests recover the same way. A failure is classified as offline, timeout,
+an HTTP status or a contract error (a reply the page cannot read). Offline,
+timeout, 5xx, 408 and 429 are retried three times with backoff from 0.5 s;
+a refused request or a contract error is not. After the last try the page
+shows an inline error naming what failed, with a Retry. A clipboard history
+load that stops keeps every entry it loaded, and the older entries an earlier
+load had reached, and resumes from the page that failed rather than from the
+top: on Resume, or by itself once the stream reconnects. The configuration
+editor retries its load on reconnect too, and a failed save keeps its text.
 
-| Path | Destination |
-| --- | --- |
-| `/` | Help homepage: a live onboarding checklist |
-| `/docs`, `/docs/<topic>` | Guide index; documentation topic, including aliases |
-| `/mappings`, `/commands` | Key mappings: your keyboard with what each key does in the mode picked under it (NORMAL, HOLD, HYPER, INSERT, COMMAND, TERMINAL or all), tinted by purpose, with free keys dashed and NORMAL's counts marked. Modifier buttons show the Shift, Control, Option and Command layers; a key that starts longer bindings opens what can follow it; picking a key lists its bindings, and a free key offers the TOML to map it. The list below follows the mode and key, groups bindings by purpose, leads with what each does, and copies the TOML that rebinds or removes it. A search ranks the whole mode and lights the keys it matches. The page also shows how each action resolves in the focused app, and never follows the live mode. Command catalog. Opening mappings focuses its search. `?q=<text>` starts the list filtered |
-| `/plugins`, `/plugins/<id>` | Plugin list; a direct plugin link opens that plugin's details in a dialog |
-| `/state`, `/clipboard` | Runtime and clipboard pages |
-| `/logs` | Live logs. The record list fills the page height, and its search field is focused when the page opens |
-| `/search?q=<text>` | Results across guide sections, commands, mappings and plugins. Typing in the top bar rewrites the query in place, so a search reloads and can be shared; `↓` `↑` `↩` pick a result |
-| `/api/state`, `/api/logs`, `/api/traces`, `/api/events` | JSON snapshots and the server-sent event stream the pages read; `/api/state?refresh=1` takes a fresh snapshot |
-| `/api/clipboard/<id>` | `GET` returns one history image. `DELETE` removes that entry. The id is 32 lowercase hex characters |
-| `/api/clipboard/history?offset=<n>` | Up to 100 history entries from newest to oldest, plus the next offset or null at the end |
+## Notifications
 
-The page routes itself with the History API: same-origin page links navigate
-in place, back/forward restore each page's scroll position, and modified,
-middle or new-window clicks keep the browser's behavior. The top bar shows
-the path as a breadcrumb (page › group › guide), hidden on Home, and the tab title
-names the guide. After a navigation focus moves to the main region and the
-new title is announced to assistive technology. Shortcuts outside a text
-field: `/` or `⌘K` search, `[` and `]` previous and next guide, `g` then a
-letter jumps to a page, `?` opens the shortcut sheet. Escape blurs a focused
-field so these page shortcuts work again. The server answers
-a direct load or reload of any page with the app, an unknown path with the
-app's not-found page and a 404 status, and an unknown `/api/` path with a
-plain 404. `DebugServer.Page` and `Inspector/src/lib/routes.ts` hold the same
-page table; change them together.
+What the help reports in passing is a toast in the bottom-right corner
+(along the bottom on a narrow screen): copies, the configuration editor's
+Save and Purge defaults, Refresh on the runtime page, and the failures of
+copies and clipboard history actions. A confirmation leaves after five
+seconds, held while the pointer or focus is on it; a failure stays until it
+is dismissed. Configuration diagnostics that appear, change or clear while
+the help is open say so on any page, with Show to read them on the runtime
+page. While pages of the documentation are new or updated since this
+browser last read them, a toast says what their ✨ marks and offers Mark all
+as read; dismissing it holds until the documentation changes again.
 
-Fragments are in-page anchors. Guide headings take GitHub-style slugs, so
-`/docs/normal-mode#input-capture-and-latency` opens a guide at a section, and a
-guide's `#heading` links and `other-guide.md#heading` references resolve.
-
-`HelpDocs.allTopics` merges built-in and manifest topics in reading order:
-`HelpDocs.groups` names each built-in topic's section and position, and
-plugin topics follow under one group. The snapshot carries `group` and
-`manual` with each topic; the browser groups the sidebar and index from
-them and derives previous/next links, so a new built-in guide only joins
-`groups` (a test rejects one left out). The browser also remembers, in its
-own localStorage, a hash of each guide it has shown: a guide whose body
-changed since is marked updated and an unknown one new, until opened, and
-the guide index lists them with a link to the release notes. A name or alias
-may identify only one accepted topic: built-ins take precedence, then the
-first plugin topic claiming the name wins. The browser's navigation and search use
-that installed inventory. Links between guides use `/docs/<topic>`; links to
-runtime companions use their page paths, such as `/mappings` or `/state`.
-Long-form references link to the published manual through
-`HelpDocs.manual("<page>")`, which is `docs/` built by mkdocs at
-<https://aymericbeaumet.github.io/flash/> from `main`; the `manual` topic
-(`:help manual`, aliases `docs`, `reference`, `alternatives`) is its table
-of contents. Source files that are not manual pages, such as `AGENTS.md`,
-keep absolute repository links pinned to the bundle's `FlashGitCommit`.
-
-Built-in prose lives in `HelpDocs.swift` or beside the feature that owns it
-(`Config.helpTopic`, `NormalModeDispatcher.helpTopic`,
-`URLEventHandler.helpTopic`, `PluginManager.helpTopic`). Command and mapping
-inventories derive from the effective runtime definitions; do not maintain
-parallel hard-coded reference tables. The full engineering contracts stay
-in `docs/` and are linked from the concise browser guides.
-
-When adding a feature, update its owning topic or add a topic to `HelpDocs`,
-link its live companion when available, and keep routes unique. The help
-tests cover core workflow discoverability, alias resolution, plugin collisions,
-internal guide links, mapping resolution, browser URL construction and the
-server's page, endpoint and not-found routing.
+Several toasts stack, the newest nearest the corner. They never take focus:
+their buttons follow the page in Tab order, Escape on one dismisses it, and
+a screen reader announces each as it appears. What belongs to a place stays
+there: a load that failed with its Retry, a refused save next to the editor,
+the offline banner and everything inside a dialog.
 
 ## Printing
 
-Every page prints in full: print styles release the app shell's fixed-height
-scroll container, drop the navigation, search, filters and connection status,
+Every page prints in full, on paper colours: print styles release the app
+shell's fixed-height scroll container, drop the navigation, search, filters, toasts and connection status,
 repeat table headers across pages and keep rows whole. The log list prints
 every filtered record rather than its visible window. Printing the mappings
 page gives a complete reference of the effective bindings; filter it first to
 print a subset.
 
-## Frontend changes
-
-`Inspector/` is a Svelte app. Run `pnpm check` there, then run
-`Scripts/build-inspector.sh --release` from the repository root to update the
-committed `Sources/flash/Resources/inspector.html`. Plain SwiftPM builds serve
-that resource; CI checks that it matches the frontend source. A dev install
-builds a separate unminified page and stages it into the app at
-`Contents/Resources/Flash_flash.bundle/inspector.html`. The resident reads
-that copy. The generated `Bundle.module` path does not, so leaving the new
-page only in `.build` does not change what the installed app serves.
-
-Check browser routes (direct loads, back/forward, heading anchors), search,
-guide links, live/disconnected states, narrow layouts and print preview after
-UI changes. Below 1300 px the outline folds into a disclosure above the
-article; below 1000 px the guide list becomes a drawer under a toggle; below
-700 px the sidebar becomes a scrimmed drawer and the breadcrumb keeps its
-last crumb. Nothing is set below 12 px and interactive targets are at least
-40 px tall. `node --test Inspector/*.test.ts` runs the pure tests (search,
-reading state, onboarding, mapping search, keyboard). The page must remain self-contained and must render
-plugin-authored Markdown as untrusted content.
+How the help routes pages, renders the documentation and is built is in
+[browser help internals](help-internals.md).

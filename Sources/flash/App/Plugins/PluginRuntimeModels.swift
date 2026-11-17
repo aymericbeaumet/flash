@@ -42,15 +42,19 @@ enum PluginOrigin: Equatable {
   }
 }
 
-/// The five-state lifecycle machine:
+/// The lifecycle machine as a status reader sees it:
 /// stopped → installing → launching → running → stopped, with `failed` the
-/// parked terminal (no auto-restart; watchers stay armed). Manifest-only
-/// plugins never enter the machine and report a static label instead.
+/// parked terminal (no auto-restart; watchers stay armed) and `published`
+/// the rest of a `publish_then_exit` plugin whose child published its
+/// catalog and exited 0 (the host keeps the catalog; a reload runs it
+/// again). Manifest-only plugins never enter the machine and report a
+/// static label instead.
 enum PluginRuntimeState: String {
   case stopped
   case installing
   case launching
   case running
+  case published
   case failed
 }
 
@@ -63,21 +67,33 @@ enum PluginActivation: String {
   /// widget shows it.
   case resident
   /// Stays unspawned until its first `perform` (the perform deadline absorbs
-  /// the startup budget), then remains running.
+  /// the startup budget), then remains running. One whose command a
+  /// configured mapping runs is spawned once startup has settled instead
+  /// (`PluginWarmPolicy`).
   case onDemand = "on_demand"
+  /// Manifest `lifecycle: publish_then_exit`: spawned at startup like a
+  /// resident plugin, but its child publishes its catalog and exits 0; the
+  /// host keeps the catalog and spawns it again only when its data can have
+  /// changed (its settings, a file its `watch_settings` name, its own
+  /// files, `plugins reload`).
+  case publishThenExit = "publish_then_exit"
   /// No `exec`: no child process ever runs; the host serves the manifest's
   /// inline surfaces alone.
   case manifestOnly = "manifest_only"
+
+  /// Whether the host spawns the child at startup rather than for a perform.
+  var spawnsAtStart: Bool {
+    switch self {
+    case .resident, .publishThenExit: return true
+    case .onDemand, .manifestOnly: return false
+    }
+  }
 }
 
 struct PluginEvent {
   var name: String
   var payload: [String: Any]
   var bundleID: String?
-  /// Front window frame (screen coordinates). Optional — only meaningful
-  /// for app-scoped events like `focus.changed`, `ax.changed`. Passed
-  /// through to plugins as `payload.front_window_frame`.
-  var frontWindowFrame: CGRect?
   /// Process id of the focused app for the event. Some events embed this
   /// in `payload.pid` already.
   var pid: pid_t?
@@ -93,9 +109,39 @@ struct PluginEvent {
   /// ones that cannot change what it reads.
   static func axChanged(pid: pid_t, notification: String, bundleID: String?) -> PluginEvent {
     PluginEvent(
-      name: PluginProtocol.axChangedEvent,
-      payload: ["notification": notification, "pid": Int(pid)],
-      bundleID: bundleID)
+      .axChanged, payload: ["notification": notification, "pid": Int(pid)], bundleID: bundleID)
+  }
+
+  /// `core:window.focus.changed`: the focused or main window of the app
+  /// `pid` changed, so a subscriber re-reads which of its windows is on top.
+  static func windowFocusChanged(pid: pid_t, bundleID: String) -> PluginEvent {
+    PluginEvent(
+      .windowFocusChanged, payload: ["pid": Int(pid), "bundle_id": bundleID],
+      bundleID: bundleID, pid: pid)
+  }
+
+  /// `core:apps.changed`: the complete snapshot of the running regular apps,
+  /// each `{bundle_id, pid, localized_name}`.
+  static func appsChanged(_ runningApplications: [[String: Any]]) -> PluginEvent {
+    PluginEvent(.appsChanged, payload: ["running_applications": runningApplications])
+  }
+}
+
+extension PluginEvent {
+  /// A host event: its name comes from the catalog (`HostEvent`).
+  init(
+    _ event: HostEvent, payload: [String: Any] = [:], bundleID: String? = nil, pid: pid_t? = nil
+  ) {
+    self.init(name: event.rawValue, payload: payload, bundleID: bundleID, pid: pid)
+  }
+
+  /// The payload every subscriber reads, a plugin or a socket client:
+  /// `bundle_id` and `pid` folded in where the payload has none of its own.
+  var wirePayload: [String: Any] {
+    var payload = self.payload
+    if let bundleID, payload["bundle_id"] == nil { payload["bundle_id"] = bundleID }
+    if let pid, payload["pid"] == nil { payload["pid"] = Int(pid) }
+    return payload
   }
 }
 
@@ -131,13 +177,18 @@ struct PluginStatus {
   /// Runtime status-bar segments keyed by the manifest-declared segment name.
   var statusSegments: [String: String]
 
+  /// How much of a status segment the inspector snapshot carries. A
+  /// carousel or a popup preview can run to tens of kilobytes; the snapshot
+  /// is rebuilt on main on every change a browser watches, so it shows a
+  /// preview and the bar renders the value.
+  static let segmentPreviewCharacters = 256
+
+  /// The inspector's row. Its commands are not repeated here: the top-level
+  /// `commands` already lists every plugin command with its `source`.
   var jsonObject: [String: Any] {
     [
       "activation": activation,
       "command_count": commandCount,
-      "commands": commands.map {
-        ["command": $0.command, "subcommand": $0.subcommand, "description": $0.description]
-      },
       "cpu_time_ms": cpuTimeMs ?? NSNull(),
       "description": description,
       "id": id,
@@ -154,7 +205,10 @@ struct PluginStatus {
       "source_count": sourceCount,
       "started_at_unix_ms": startedAtUnixMs ?? NSNull(),
       "state": state,
-      "status_segments": statusSegments,
+      "status_segments": statusSegments.mapValues { value in
+        value.count <= Self.segmentPreviewCharacters
+          ? value : String(value.prefix(Self.segmentPreviewCharacters)) + "…"
+      },
       "version": version,
     ]
   }
@@ -163,13 +217,16 @@ struct PluginStatus {
 /// One published status segment: plain markup, or a carousel whose lines the
 /// host rotates on its own clock (`FlashStatusBarCycleState`), rendering
 /// `prefix` once before the visible line and wrapping that line in
-/// `#[cyc]…#[nocyc]` so it takes the carousel transition.
+/// `#[cyc=<key>]…#[nocyc]` (`StatusCycleKey.wrap`) so it takes the carousel
+/// transition and a scroll over it steps this carousel.
 enum PluginStatusSegment: Equatable {
   case text(String)
   case carousel(prefix: String, lines: [String], cycleSeconds: TimeInterval)
 
-  static func carouselLine(prefix: String, line: String) -> String {
-    prefix + "#[cyc]" + line + "#[nocyc]"
+  static func carouselLine(
+    key: String, prefix: String, line: String, backward: Bool = false
+  ) -> String {
+    prefix + StatusCycleKey.wrap(line, key: key, backward: backward)
   }
 
   /// The segment as the debug inspector shows it.
@@ -190,6 +247,16 @@ struct PluginStatusBarInfo {
   var state: String
   var hasError: Bool
   var statusSegments: [String: PluginStatusSegment]
+  /// The child's latest process spawn; nil before its first.
+  var lastSpawn: PluginSpawnTiming? = nil
+}
+
+/// How long one plugin launch spent spawning its process (`posix_spawn`,
+/// where a busy `syspolicyd` stalls an exec), and when it did.
+struct PluginSpawnTiming: Equatable {
+  var milliseconds: Double
+  /// Uptime nanoseconds at the spawn, to order launches across plugins.
+  var at: UInt64
 }
 
 /// One reply to the unified `perform` method: the universal trichotomy.
@@ -211,7 +278,6 @@ struct PluginWireTarget {
   var url: String?
   var contextID: String? = nil
   var pid: pid_t?
-  var entersInsertMode: Bool
   var sourceID: String
   /// Source-declared target salience. `.important` and `.urgent` render with
   /// the accent hint style.
@@ -220,7 +286,23 @@ struct PluginWireTarget {
   func capturedTarget(contextPID: pid_t) -> JumpTarget {
     JumpTarget(
       id: id, frame: frame, role: role, accessibilityLabel: label, url: url,
-      contextID: contextID, pid: pid ?? contextPID, entersInsertMode: entersInsertMode,
-      priority: priority, providerID: sourceID)
+      contextID: contextID, pid: pid ?? contextPID,
+      isTextInput: JumpTarget.textInputRoles.contains(role ?? ""), priority: priority,
+      providerID: sourceID)
   }
+}
+
+/// One validated `text_grid` reply: `columns` × `rows` cells and the lines
+/// inside them, row 0 at the top. No lines means no grid.
+struct PluginTextGrid: Equatable {
+  enum Line: Equatable {
+    /// Captured cell text, one UTF-16 unit per cell from `column` on.
+    case text(row: Int, column: Int, text: String)
+    /// An expanded status format laid out across `width` cells from `column`.
+    case format(row: Int, column: Int, width: Int, format: String)
+  }
+
+  var columns: Int
+  var rows: Int
+  var lines: [Line]
 }

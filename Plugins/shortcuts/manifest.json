@@ -27,11 +27,15 @@
   "sources": [
     {
       "name": "shortcuts.entries",
+      "type": "shortcuts",
       "priority": "normal"
     }
   ],
   "capabilities": [
     "open",
-    "subprocess"
+    "apple_events"
+  ],
+  "apple_events_targets": [
+    "com.apple.shortcuts.events"
   ]
 }

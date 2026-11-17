@@ -10,9 +10,9 @@ makes no network requests.
 | | Scoot | Flash |
 | --- | --- | --- |
 | License, price | BSD-3, free | MIT, free |
-| Platforms | macOS (README still names 11 and 12) | macOS 14+ |
-| Permissions | Accessibility | Accessibility; Automation per browser for tab lists; Screen Recording only for `:screenshot` |
-| Hints from | Accessibility tree of the focused window | Accessibility tree; tmux panes; VS Code enhancer |
+| Platforms | macOS (README still names 11 and 12) | macOS 13+ |
+| Permissions | Accessibility | Accessibility; Automation per browser for tab lists; Screen Recording only for `:screenshot screen` |
+| Hints from | Accessibility tree of the focused window | Accessibility tree; tmux panes |
 | Pointer modes | Element, grid over all screens, freestyle; left/right/middle/double click, drag, scroll; System, Emacs and vi key sets | Hints, search, keyboard-shaped grid, bisect, pointer mode, screens, drag, select, words, path, sticky |
 | Beyond pointing | Menu bar icon | NORMAL mode, flashlight, status bar, widgets, popups, window placement, plugins |
 | Configuration | Preferences window | One TOML file, live reload, CLI |
@@ -34,34 +34,34 @@ makes no network requests.
   open (its README says so); Flash labels menus and menu-bar extras.
 - **Terminal hints, flashlight, bar, widgets, popups, plugins.**
 - **Scoot turns on `AXEnhancedUserInterface` for every app** to repair thin
-  trees (issue #11), which can change how other apps behave; Flash scopes
-  enhancements per app through its VS Code enhancer.
+  trees (issue #11), which can change how other apps behave; Flash sets it
+  only for the runtimes that need it, Chromium and Flutter apps.
 
 ## Flash features you might like
 
-- `mouse_pointer` is the freestyle mode: layout `hjkl`, `m` `,` `.` click,
+- `mouse pointer` is the freestyle mode: layout `hjkl`, `m` `,` `.` click,
   `v` drag ([commands](../commands.md)).
-- `mouse_grid --bisect` halves the screen instead of a fixed grid.
-- `mouse_warp --area=window --edge=center` jumps to a window or screen edge.
-- `mouse_position --action=save` remembers positions and labels them later.
+- `mouse grid --bisect` halves the screen instead of a fixed grid.
+- `mouse warp --area=window --edge=center` jumps to a window or screen edge.
+- `mouse position --action=save` remembers positions and labels them later.
 
 ## Moving from Scoot
 
 | Scoot | Flash |
 | --- | --- |
-| Element mode | `["flash", "mouse_target"]` |
-| Grid mode | `["flash", "mouse_grid"]` |
-| Freestyle mode | `["flash", "mouse_pointer"]` |
-| Drag | `mouse_target --drag`, `mouse_grid --drag` |
-| Right, middle click | `cf` in NORMAL for right-click; `mouse_button --state=toggle --middle` |
+| Element mode | `["flash", "mouse", "target"]` |
+| Grid mode | `["flash", "mouse", "grid"]` |
+| Freestyle mode | `["flash", "mouse", "pointer"]` |
+| Drag | `mouse target --drag`, `mouse grid --drag` |
+| Right, middle click | `cf` in NORMAL for right-click; `mouse button --state=toggle --middle` |
 | Scroll | NORMAL mode scroll keys |
 | vi / Emacs key sets | NORMAL mode keys are vi-like and remappable; no Emacs preset |
 
 ```toml
 [mode.all.mappings]
-"cmd+shift+space" = ["flash", "mouse_target"]
-"cmd+shift+alt+space" = ["flash", "mouse_grid"]
-"cmd+shift+ctrl+space" = ["flash", "mouse_pointer"]
+"cmd+shift+space" = ["flash", "mouse", "target"]
+"cmd+shift+alt+space" = ["flash", "mouse", "grid"]
+"cmd+shift+ctrl+space" = ["flash", "mouse", "pointer"]
 ```
 
 *Checked 2026-10-14 against the Scoot

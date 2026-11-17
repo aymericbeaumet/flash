@@ -8,7 +8,10 @@ import QuartzCore
 /// flashing its title, Flash itself becoming active, a wake) slides those
 /// windows down *behind* the bar instead of painting over it. A reveal under
 /// the pointer is the exception and lowers the bar; see
-/// `OverlayPanel.setStatusBarYieldsToNativeMenuBar`.
+/// `OverlayPanel.setStatusBarYieldsToNativeMenuBar`. It never covers a
+/// full-screen app: it is not a full-screen auxiliary, so a native full-screen
+/// Space leaves it out, and it hides while the frontmost app is full screen
+/// (`FullScreenPresentationObserver`).
 final class StatusBarWindow: NSPanel {
   let contentLayer = CALayer()
 
@@ -22,7 +25,7 @@ final class StatusBarWindow: NSPanel {
       backing: .buffered,
       defer: false)
     level = OverlayPanel.statusBarWindowLevel
-    collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
     isOpaque = false
     backgroundColor = .clear
     hasShadow = false

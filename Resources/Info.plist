@@ -25,7 +25,7 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -33,7 +33,17 @@
     <key>NSAccessibilityUsageDescription</key>
     <string>Flash uses the Accessibility API to find clickable elements in the focused application so it can show jump-hints.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Flash sends Apple Events to focus or launch the apps you bind to mapping commands, and to make sure their main window appears.</string>
+    <string>Flash controls apps for keyboard actions, reads what your media apps are playing and your notes in Notes for the flashlight, and reads browser tabs through enabled plugins.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Flash lists your contacts' names in the flashlight when you search @contacts.cards, and shows the one you pick in Contacts.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Flash shows your next event in its status bar when your configuration asks for it, and opens its meeting link with calendar join.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Flash shows your next event in its status bar when your configuration asks for it, and opens its meeting link with calendar join.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Flash lists your open reminders in the flashlight when you search @reminders.tasks, and shows the one you pick in Reminders.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Flash lists your open reminders in the flashlight when you search @reminders.tasks, and shows the one you pick in Reminders.</string>
     <key>NSLocationUsageDescription</key>
     <string>Flash uses Location permission only to read the name of the currently connected Wi-Fi network.</string>
 </dict>

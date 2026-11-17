@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/client-message.schema.json",
+  "title": "Client message",
+  "description": "Any line a client sends the resident's socket: hello first, then requests and subscriptions.",
+  "oneOf": [
+    {
+      "$ref": "hello.schema.json"
+    },
+    {
+      "$ref": "request.schema.json"
+    },
+    {
+      "$ref": "subscribe.schema.json"
+    }
+  ]
+}

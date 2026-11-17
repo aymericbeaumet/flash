@@ -14,7 +14,7 @@ extension AppDelegate {
     let context = pluginSelectorContext(fallbackBundleID: bundleID)
     let effective = effectiveMode(for: context)
     overlay?.normalModeMappings = Self.interpreterTable(
-      for: modeStore.mode.mappingScope, in: effective)
+      for: mappingScope(for: modeStore.mode), in: effective)
     overlay?.hyperModeMappings = effective.compiledHyper
     // The cache hands back one value per selector key, so a focus change
     // that lands on the key already applied skips the six-table compare.
@@ -35,7 +35,8 @@ extension AppDelegate {
   }
 
   /// The NORMAL interpreter's table for `scope`: HOLD's entries over
-  /// NORMAL's while a button is held, NORMAL's otherwise. A half-typed
+  /// NORMAL's while a button is held, a layer's own in a layer, NORMAL's
+  /// otherwise. A half-typed
   /// sequence belongs to the table it was typed against, so a switch drops it.
   func applyInterpreterTable(for scope: MappingScope) {
     guard let overlay, let effective = lastAppliedMappingMode else { return }
@@ -45,10 +46,49 @@ extension AppDelegate {
     resetPendingNormalSequence(reason: "mapping_scope")
   }
 
-  /// HOLD's own table; NORMAL's for every other scope.
+  /// The table `mode` reads (`Self.mappingScope(for:textEngaged:)`).
+  func mappingScope(for mode: Mode) -> MappingScope {
+    Self.mappingScope(for: mode, textEngaged: textScope.isEngaged)
+  }
+
+  /// The table `mode` reads: its own scope's, except that NORMAL reads the
+  /// text table while a field is engaged (`TextScope`). Only the engagement
+  /// decides, never a focus reading, so focus noise never swaps the table
+  /// under a half-typed sequence.
+  static func mappingScope(for mode: Mode, textEngaged: Bool) -> MappingScope {
+    let scope = mode.mappingScope
+    guard scope == .normal, textEngaged else { return scope }
+    return .text
+  }
+
+  /// A focus region read landed: VISUAL ends when the focus left its field,
+  /// and the engagement follows the reading (`TextScope.focusSettled`).
+  func focusRegionSettled() {
+    guard let pid = focusRegionTracker.pid,
+      let reading = focusRegionTracker.cachedReading(for: pid)
+    else { return }
+    visualFocusSettled(pid: pid, reading: reading)
+    let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    updateTextScope { $0.focusSettled(pid: pid, bundle: bundle, reading: reading) }
+  }
+
+  /// NORMAL's table follows a change of the engagement. Scope-only: Carbon
+  /// reconciles only the chords that differ, and a half-typed sequence of
+  /// the old table drops.
+  func applyTextScopeTable() {
+    let scope = mappingScope(for: modeStore.mode)
+    guard scope != mappings.appliedScope else { return }
+    mappings.apply(scope: scope)
+    applyInterpreterTable(for: scope)
+  }
+
+  /// HOLD's and each layer's own table; NORMAL's for every other scope.
   static func interpreterTable(for scope: MappingScope, in mode: Config.Mode) -> CompiledMappings {
     switch scope {
     case .hold: return mode.compiledHold
+    case .text: return mode.compiledText
+    case .visual: return mode.compiledVisual
+    case .layer(let name): return mode.compiledLayer(name)
     case .normal, .insert, .command, .terminal: return mode.compiledNormal
     }
   }
@@ -92,6 +132,6 @@ extension AppDelegate {
     guard let old else { return true }
     return old.all != new.all || old.normal != new.normal || old.insert != new.insert
       || old.command != new.command || old.terminal != new.terminal || old.hyper != new.hyper
-      || old.hold != new.hold
+      || old.hold != new.hold || old.layers != new.layers
   }
 }

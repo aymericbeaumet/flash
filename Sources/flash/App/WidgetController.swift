@@ -36,7 +36,7 @@ final class WidgetController {
   private var reportedVisible: [String: Bool] = [:]
   private var statusBarReservesSpace = false
   private var statusBarMonitor = Config.StatusBar.Monitor.all
-  private var screenCapture = ScreenCaptureVisibility.show
+  private var hideFromCapture = false
   private var screenObserver: NSObjectProtocol?
   /// The displays as of the last full reconcile; a line update re-uses them.
   private var layouts: [WindowScreenLayout] = []
@@ -54,15 +54,16 @@ final class WidgetController {
   }
 
   /// The enabled widgets and what their placement depends on: whether the
-  /// Flash bar reserves its band, and `[overlay] screen_capture`.
+  /// Flash bar reserves its band, and `[app] hide_from_capture`, which a
+  /// reload re-applies to the windows already placed.
   func apply(
     widgets: [String: Config.Widget], statusBarReservesSpace: Bool,
-    statusBarMonitor: Config.StatusBar.Monitor, screenCapture: ScreenCaptureVisibility
+    statusBarMonitor: Config.StatusBar.Monitor, hideFromCapture: Bool
   ) {
     self.widgets = widgets
     self.statusBarReservesSpace = statusBarReservesSpace
     self.statusBarMonitor = statusBarMonitor
-    self.screenCapture = screenCapture
+    self.hideFromCapture = hideFromCapture
     lines = lines.filter { widgets[$0.key] != nil }
     // A removed widget last reported covered returns to the state every
     // listener gives a widget that appears: visible. Otherwise re-adding it
@@ -94,7 +95,7 @@ final class WidgetController {
   func stop() {
     apply(
       widgets: [:], statusBarReservesSpace: statusBarReservesSpace,
-      statusBarMonitor: statusBarMonitor, screenCapture: screenCapture)
+      statusBarMonitor: statusBarMonitor, hideFromCapture: hideFromCapture)
   }
 
   /// Create, re-place, redraw or close windows so each enabled widget has one
@@ -124,8 +125,7 @@ final class WidgetController {
   }
 
   private func place(_ key: WindowKey, widget: Config.Widget, screen: WindowScreenLayout) {
-    let sharing: NSWindow.SharingType =
-      widget.hideFromCapture ? .none : screenCapture.sharingType
+    let sharing = CaptureSharing.sharingType(hidden: widget.hideFromCapture || hideFromCapture)
     if placed[key] == nil {
       let window = WidgetWindow(frame: .zero, sharingType: sharing)
       let surface = WidgetSurface()
@@ -200,6 +200,7 @@ final class WidgetController {
           "frame": rect(entry.window.frame),
           "ordered_in": entry.window.isVisible,
           "level": entry.window.level.rawValue,
+          "hidden_from_capture": entry.window.sharingType == .none,
           "occlusion_visible": entry.window.occlusionState.contains(.visible),
           "occlusion_trusted": entry.occlusionTrusted,
           "refreshing": entry.visible,

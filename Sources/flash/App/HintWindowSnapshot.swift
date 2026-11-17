@@ -1,4 +1,5 @@
 import CoreGraphics
+import FlashCore
 
 struct HintWindowSnapshot: Equatable {
   let number: CGWindowID
@@ -28,9 +29,7 @@ struct HintWindowSnapshot: Equatable {
         let bounds = raw[kCGWindowBounds as String] as? [String: Any],
         let cgFrame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
       else { continue }
-      let frame = CGRect(
-        x: cgFrame.minX, y: primaryHeight - cgFrame.maxY,
-        width: cgFrame.width, height: cgFrame.height)
+      let frame = ScreenRect<AXSpace>(cgFrame).toNS(primaryHeight: primaryHeight).cgRect
       let matches = windowNumber.map { $0 == number } ?? (frame == active?.nsBounds)
       if matches, frame.width > 0, frame.height > 0 {
         return Self(number: number, layer: raw[kCGWindowLayer as String] as? Int ?? 0, frame: frame)

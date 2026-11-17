@@ -44,7 +44,7 @@ if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null |
   grep -q "\"$SIGN_IDENTITY\""; then
   cat <<EOF >&2
 ERROR: signing identity "$SIGN_IDENTITY" not found in $KEYCHAIN_PATH.
-Run Scripts/install.sh --dev once first; it creates the stable dev identity.
+Run mise run install:dev once first; it creates the stable dev identity.
 EOF
   exit 1
 fi
@@ -59,9 +59,9 @@ bundle_app() {
   local install_app="/Applications/$app_name.app"
 
   echo "==> Building $product (release)"
-  swift build -c release --product "$product"
+  swift build --force-resolved-versions -c release --product "$product"
   local bin_path
-  bin_path="$(swift build -c release --show-bin-path)/$product"
+  bin_path="$(swift build --force-resolved-versions -c release --show-bin-path)/$product"
   if [[ ! -f "$bin_path" ]]; then
     echo "ERROR: built binary not found at $bin_path" >&2
     exit 1
@@ -97,7 +97,7 @@ bundle_app() {
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAccessibilityUsageDescription</key>
@@ -105,12 +105,6 @@ bundle_app() {
 </dict>
 </plist>
 EOF
-
-  if [[ "$product" == "$ORACLE_PRODUCT" ]]; then
-    /usr/libexec/PlistBuddy -c \
-      "Add :NSAppleEventsUsageDescription string The Flash native oracle sends commands to the installed Flash resident to verify hint clicks and input modes." \
-      "$staging_app/Contents/Info.plist"
-  fi
 
   echo "==> Codesigning $app_name.app"
   codesign --force --deep --sign "$SIGN_IDENTITY" --identifier "$bundle_id" "$staging_app" >/dev/null

@@ -4,10 +4,10 @@ import Foundation
 ///
 /// `normalizedSearchText` keeps only alphanumerics (plus `#`), so a literal
 /// `:)` collapses to the empty string and can never fuzzy-match a candidate —
-/// `@emojis.glyphs :)` would return the whole emoji set unranked. We rewrite
-/// each standalone emoticon token to a word the `reference` plugin actually
+/// `@emojis :)` would return the whole emoji set unranked. We rewrite
+/// each standalone emoticon token to a word the `emojis` plugin actually
 /// indexes (a Slack-style shortcode alias or the glyph's UCD name) *before*
-/// normalization, so `@emojis.glyphs :)` surfaces 🙂, `:D` surfaces 😀, and so
+/// normalization, so `@emojis :)` surfaces 🙂, `:D` surfaces 😀, and so
 /// on. The plugin owns the glyph/shortcode data; this table owns the
 /// punctuation→word bridge that the normalizer would otherwise discard.
 extension NormalModeDispatcher {

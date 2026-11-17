@@ -40,7 +40,11 @@ final class SourceRegistry {
     isTerminalEmulator: @escaping (String) -> Bool = TerminalEmulators.contains,
     runningApplications: [NSRunningApplication]? = nil,
     runningApplicationsProvider: (() -> [NSRunningApplication])? = nil,
-    pluginSourcesProvider: (() -> [FlashSource])? = nil
+    pluginSourcesProvider: (() -> [FlashSource])? = nil,
+    appleCatalogs: AppleCatalogs? = nil,
+    clipboard: ClipboardFlashlight? = nil,
+    windows: WindowListSource? = nil,
+    perform: @escaping (URLCommand) -> Void = { _ in }
   ) {
     let initialRunningApplications =
       runningApplications ?? runningApplicationsProvider?()
@@ -55,7 +59,7 @@ final class SourceRegistry {
     self.pluginSourcesProvider = pluginSourcesProvider ?? { [] }
     self.isTerminalEmulator = isTerminalEmulator
     self.flashlight = flashlight
-    self.descriptors =
+    let builtIn =
       descriptors
       ?? [
         SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
@@ -66,10 +70,48 @@ final class SourceRegistry {
         SourceDescriptor(identifier: "core.menus", activationPolicy: .always) {
           MenuBarSource()
         },
+        // Their rows run verbs, which ask first for what nothing undoes.
+        SourceDescriptor(identifier: "core.processes", activationPolicy: .always) {
+          ProcessListSource(perform: perform)
+        },
+        SourceDescriptor(identifier: "core.system", activationPolicy: .always) {
+          SystemActionSource(perform: perform)
+        },
+        SourceDescriptor(identifier: FileSearchSource.sourceID, activationPolicy: .always) {
+          FileSearchSource()
+        },
         SourceDescriptor(identifier: "accessibility", activationPolicy: .always) {
           AccessibilityProvider()
         },
       ]
+    // Notes, Reminders and Contacts rows, from the resident's catalogs.
+    let appleCatalogSources =
+      appleCatalogs.map { catalogs in
+        AppleCatalog.allCases.map { catalog in
+          SourceDescriptor(identifier: catalog.sourceID, activationPolicy: .always) {
+            AppleCatalogSource(catalog: catalog, catalogs: catalogs)
+          }
+        }
+      } ?? []
+    // Clipboard history and register rows, from the resident's store.
+    let clipboardSources =
+      clipboard.map { flashlight in
+        [
+          SourceDescriptor(identifier: ClipboardFlashlight.sourceID, activationPolicy: .always) {
+            ClipboardFlashlightSource(flashlight: flashlight)
+          }
+        ]
+      } ?? []
+    // Every window the switcher knows, from the resident's catalog.
+    let windowSources =
+      windows.map { source in
+        [
+          SourceDescriptor(identifier: WindowListSource.sourceID, activationPolicy: .always) {
+            source
+          }
+        ]
+      } ?? []
+    self.descriptors = builtIn + appleCatalogSources + clipboardSources + windowSources
     refreshRunningApplications(initialRunningApplications)
   }
 
@@ -256,8 +298,8 @@ final class SourceRegistry {
   }
 
   /// Plugin candidate sources that contribute location rows to the default
-  /// flashlight pool — those declaring a `kind: .locations` descriptor at normal
-  /// priority or above. The hidden initial barrier fans these out via
+  /// flashlight pool — those declaring a `kind: .locations` descriptor, at
+  /// any priority. The hidden initial barrier fans these out via
   /// `snapshotCandidates` before the first candidate reveal. Built-ins are
   /// excluded because callers gather them through their built-in path.
   func locationCandidateSources() -> [FlashSource] {
@@ -281,32 +323,27 @@ final class SourceRegistry {
 
   /// Plugin candidate sources that do NOT contribute default-pool location rows
   /// — emojis, search-engine bangs, notes, contacts, etc. These are pulled
-  /// lazily the first time the user types an `@source`/`!`bang filter, not on
+  /// lazily the first time the user types a `@type`/`!`bang filter, not on
   /// open.
-  func nonLocationCandidateSources(matching sourceFilter: String? = nil) -> [FlashSource] {
+  func nonLocationCandidateSources(matching scope: SourceScope? = nil) -> [FlashSource] {
     return activePluginSources().filter { source in
       source.capabilities.contains(.candidates) && !Self.isLocationCandidateSource(source)
         && !Self.isLiveCandidateSource(source)
-        && sourceFilter.map { filter in
-          source.candidateSourceDescriptors.contains { descriptor in
-            CandidateFinder.sourceLabel(descriptor.name, matchesFilter: filter)
-          }
-        } != false
+        && scope.map { scope in source.candidateSourceDescriptors.contains(where: scope.matches) }
+          != false
     }
   }
 
   /// Sources (built-in and plugin) that serve live candidates and match the
   /// explicit scope filter. Live sources answer per-keystroke pulls; they
   /// never join the warm snapshot fan-outs or the first-paint barrier.
-  func liveCandidateSources(matching sourceFilter: String) -> [FlashSource] {
+  func liveCandidateSources(matching scope: SourceScope) -> [FlashSource] {
     lock.lock()
     let builtIn = Array(activeSourcesByID.values)
     lock.unlock()
     return (builtIn + activePluginSources()).filter { source in
       Self.isLiveCandidateSource(source)
-        && source.candidateSourceDescriptors.contains { descriptor in
-          CandidateFinder.sourceLabel(descriptor.name, matchesFilter: sourceFilter)
-        }
+        && source.candidateSourceDescriptors.contains(where: scope.matches)
     }
   }
 
@@ -394,7 +431,7 @@ final class SourceRegistry {
           .filter { !settled.contains($0) }
           .joined(separator: ",")
         FlashLog.warn(
-          "[query_evaluator] aggregate timeout_ms=\(max(1, timeoutMs)) pending=[\(missing)]")
+          "[query] aggregate timeout_ms=\(max(1, timeoutMs)) pending=[\(missing)]")
       }
       let ordered = evaluators.flatMap {
         results[$0.queryEvaluatorIdentifier] ?? []
@@ -434,37 +471,38 @@ final class SourceRegistry {
     }
   }
 
-  func registeredCandidateSourceLabels() -> [String] {
-    var seen = Set<String>()
-    var labels: [String] = []
-    for source in sources where source.capabilities.contains(.candidates) {
-      let sourceLabels = source.candidateSourceLabels
-      let sourceDescriptors = source.candidateSourceDescriptors
-      let candidates =
-        sourceLabels.isEmpty
-        ? (sourceDescriptors.isEmpty ? [source.displayName] : sourceDescriptors.map(\.name))
-        : sourceLabels
-      for raw in candidates {
-        let label = raw.trimmed
-        let key = label.lowercased()
-        guard !label.isEmpty, seen.insert(key).inserted else { continue }
-        labels.append(label)
+  /// The resource types `@` completes to, alphabetically, each with its
+  /// providers (`ResourceTypes.provider`) by source name: the completion's
+  /// detail.
+  func registeredResourceTypeProviders() -> [(type: String, providers: [String])] {
+    var providers: [String: [String]] = [:]
+    for descriptor in registeredCandidateSourceDescriptors() where !descriptor.type.isEmpty {
+      var list = providers[descriptor.type, default: []]
+      if let provider = ResourceTypes.provider(of: descriptor.name, type: descriptor.type),
+        !list.contains(provider)
+      {
+        list.append(provider)
       }
+      providers[descriptor.type] = list
     }
-    labels.sort()
-    return labels
+    return providers.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+  }
+
+  /// Every registered source's lowered name to its resource type: how a row,
+  /// which carries its source's name, is matched against `@<type>`.
+  func resourceTypesBySource() -> [String: String] {
+    var types: [String: String] = [:]
+    for descriptor in registeredCandidateSourceDescriptors() where !descriptor.type.isEmpty {
+      types[descriptor.name.lowercased()] = descriptor.type
+    }
+    return types
   }
 
   func registeredCandidateSourceDescriptors() -> [CandidateSourceDescriptor] {
     var seen = Set<String>()
     var descriptors: [CandidateSourceDescriptor] = []
     for source in sources where source.capabilities.contains(.candidates) {
-      let declared = source.candidateSourceDescriptors
-      let candidates =
-        declared.isEmpty
-        ? [CandidateSourceDescriptor(name: source.displayName)]
-        : declared
-      for raw in candidates {
+      for raw in source.candidateSourceDescriptors {
         var descriptor = raw
         descriptor.name = descriptor.name.trimmed
         let key = descriptor.name.lowercased()
@@ -515,12 +553,12 @@ final class SourceRegistry {
       source.capabilities.contains(.appActivation)
         && (sourceID == nil || Self.source(source, owns: sourceID!))
     }
-    // `app_open?name=` means "activate application X". The app source resolves
+    // `app open --name=` means "activate application X". The app source resolves
     // names precisely (bundle id / exact running name / `<name>.app` lookup),
     // so consult it first — otherwise a higher-priority plugin shadows the app
     // with a loose substring match: e.g. a "[slack]" channel whose decorated
     // title contains the query. Skip text-insertion candidates entirely so an
-    // app_open can never type emoji content into the focused field.
+    // `app open` can never type emoji content into the focused field.
     let ordered =
       builtInSources.filter { $0.identifier == "core.apps" }
       + builtInSources.filter { $0.identifier != "core.apps" }
@@ -533,7 +571,7 @@ final class SourceRegistry {
     }
 
     // Plugin fallback: warm catalogs are a synchronous host-store read, ranked
-    // with the flashlight's own scorer so `app_open --name=<text>` lands on
+    // with the flashlight's own scorer so `app open --name=<text>` lands on
     // the row the flashlight would list first for that text (exact tab or
     // window titles before partial hits, then source precedence), never on
     // whichever source happened to answer first with a substring.
@@ -627,23 +665,18 @@ final class SourceRegistry {
     return nil
   }
 
-  /// Dispatch `action` through the source chain. The first registered
-  /// source whose ``FlashSourceCapabilities`` includes
-  /// ``SourceAction/requiredCapability`` and supports the focused app gets
-  /// to handle it; on `.unhandled` the next source runs; on `.performed`
-  /// or `.failed` the chain stops and the result is reported. Replaces the
-  /// dozen tab*/scroll* dispatch methods this registry used to expose.
+  /// Dispatch `command` through the source chain. The first registered
+  /// source whose ``FlashSource/commands`` declares its name and that
+  /// supports the focused app gets to handle it; on `.unhandled` the next
+  /// source runs; on `.performed` or `.failed` the chain stops and the
+  /// result is reported.
   func perform(
-    _ action: SourceAction,
+    _ command: SourceCommand,
     in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
-    performSourceAction(
-      capability: action.requiredCapability,
-      context: context,
-      completion: completion
-    ) { source, env, done in
-      source.performAction(action, in: context, environment: env, completion: done)
+    performSourceCommand(command, context: context, completion: completion) { source, env, done in
+      source.perform(command, in: context, environment: env, completion: done)
     }
   }
 
@@ -657,7 +690,7 @@ final class SourceRegistry {
 
   func restoreNavigation(
     to url: URL,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
     guard let scheme = url.scheme?.lowercased(), !scheme.isEmpty else {
       DispatchQueue.main.async { completion(.unhandled) }
@@ -733,7 +766,7 @@ final class SourceRegistry {
   private static func normalizedLocationURL(_ raw: String) -> String {
     let trimmed = raw.trimmed
     guard !trimmed.isEmpty else { return "" }
-    if let components = URLComponents(string: trimmed) {
+    if let components = URLParsing.components(trimmed) {
       var normalized = components
       normalized.scheme = components.scheme?.lowercased()
       normalized.host = components.host?.lowercased()
@@ -746,15 +779,15 @@ final class SourceRegistry {
     return trimmed.lowercased()
   }
 
-  private func performSourceAction(
-    capability: FlashSourceCapabilities,
+  private func performSourceCommand(
+    _ command: SourceCommand,
     context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void,
+    completion: @escaping (SourceCommandResult) -> Void,
     action:
-      @escaping (FlashSource, FlashSourceEnvironment, @escaping (SourceActionResult) -> Void)
+      @escaping (FlashSource, FlashSourceEnvironment, @escaping (SourceCommandResult) -> Void)
       -> Void
   ) {
-    // Hot-path timing for source actions. Keep this summary compact even at
+    // Hot-path timing for source commands. Keep this summary compact even at
     // trace level: materializing a reason string for every excluded plugin was
     // measurable on each repeated normal-mode mapping.
     let startedNs = DispatchTime.now().uptimeNanoseconds
@@ -763,23 +796,23 @@ final class SourceRegistry {
     let trace = Trace.current
     let env = environment
     let allSources = sources
-    let sourceSnapshot = Self.actionChain(allSources, capability: capability, context: context)
+    let sourceSnapshot = Self.commandChain(allSources, name: command.name, context: context)
     guard !sourceSnapshot.isEmpty else {
       FlashLog.trace(
-        "[source_action] action=\(capability.traceDescription) considered=\(allSources.count) "
+        "[source] command=\(command) considered=\(allSources.count) "
           + "passing=0 unhandled "
           + "bundle=\(context.bundleIdentifier)")
       DispatchQueue.main.async { Trace.run(in: trace) { completion(.unhandled) } }
       return
     }
     FlashLog.trace(
-      "[source_action] action=\(capability.traceDescription) "
+      "[source] command=\(command) "
         + "considered=\(allSources.count) passing=\(sourceSnapshot.count) "
         + "chain=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))]")
 
-    func finish(_ result: SourceActionResult, handledBy: String) {
+    func finish(_ result: SourceCommandResult, handledBy: String) {
       FlashLog.trace(
-        "[source_action] action=\(capability.traceDescription) handled_by=\(handledBy) "
+        "[source] command=\(command) handled_by=\(handledBy) "
           + "total_ms=\(Self.elapsedMs(since: startedNs)) disposition=\(result.disposition)"
           + (result.failureReason.map { " reason=\($0)" } ?? ""))
       completion(result.attributed(to: handledBy))
@@ -795,11 +828,11 @@ final class SourceRegistry {
       action(source, env) { result in
         Trace.run(in: trace) {
           FlashLog.trace(
-            "[source_action] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
+            "[source] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
               + "disposition=\(result.disposition)")
           switch result.disposition {
           case .performed, .failed:
-            // `.failed` also stops the chain: the source claimed the action
+            // `.failed` also stops the chain: the source claimed the command
             // for this context, so a lower-priority source must not re-run
             // it (and the caller must not keystroke-fallback).
             finish(result, handledBy: source.identifier)
@@ -812,14 +845,13 @@ final class SourceRegistry {
     attempt(0)
   }
 
-  /// The sources that get to try an action needing `capability` in
-  /// `context`, in dispatch order: highest contextual priority first, then
-  /// by identifier.
-  private static func actionChain(
-    _ sources: [FlashSource], capability: FlashSourceCapabilities, context: AppContext
+  /// The sources that get to try the command `name` in `context`, in
+  /// dispatch order: highest contextual priority first, then by identifier.
+  private static func commandChain(
+    _ sources: [FlashSource], name: CommandName, context: AppContext
   ) -> [FlashSource] {
     sources
-      .filter { $0.capabilities.contains(capability) && $0.supports(context) }
+      .filter { $0.commands.contains(name) && $0.supports(context) }
       .sorted { lhs, rhs in
         let lhsPriority = lhs.priority(in: context)
         let rhsPriority = rhs.priority(in: context)
@@ -828,11 +860,11 @@ final class SourceRegistry {
       }
   }
 
-  /// The identifiers of the sources that would get first try at `action`
-  /// in `context`, in order; a read for diagnostics that performs nothing.
-  func claimants(of action: SourceAction, in context: AppContext) -> [String] {
-    Self.actionChain(sources, capability: action.requiredCapability, context: context)
-      .map(\.identifier)
+  /// The identifiers of the sources that would get first try at the command
+  /// `name` in `context`, in order; a read for diagnostics that performs
+  /// nothing.
+  func claimants(of name: CommandName, in context: AppContext) -> [String] {
+    Self.commandChain(sources, name: name, context: context).map(\.identifier)
   }
 
   private static func elapsedMs(since startNs: UInt64) -> Int {

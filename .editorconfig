@@ -1,0 +1,21 @@
+# EditorConfig (https://editorconfig.org): each language's indentation, so any
+# editor starts right. The formatters stay the authority: swift-format,
+# rustfmt, and the Inspector's own tooling.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{rs,py}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab

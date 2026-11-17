@@ -3,10 +3,10 @@ import FlashTerminal
 import IOKit
 import Security
 
-/// `flash doctor` and `:doctor`: every check that turns "Flash doesn't work"
+/// `flash resident doctor` and `:doctor`: every check that turns "Flash doesn't work"
 /// into a fix. `run` is pure over `Inputs`; `DoctorProbe` gathers them, the
 /// slow ones (IORegistry, code signature, plugin sandbox compiles) off the
-/// main thread. An `error` check is an issue and makes `flash doctor` exit 1;
+/// main thread. An `error` check is an issue and makes `flash resident doctor` exit 1;
 /// a `warn` is reported without failing it.
 enum Doctor {
   struct Check: Equatable {
@@ -80,7 +80,7 @@ enum Doctor {
     /// Other Flash residents running beside this one.
     var otherResidents: [Process] = []
     var configPath: String
-    /// `path:line:col: message` lines, as `flash config_check` prints them.
+    /// `path:line:col: message` lines, as `flash config check` prints them.
     var configDiagnostics: [String] = []
     /// Native hotkeys macOS refused because another app registered them.
     var refusedHotkeys: [String] = []
@@ -101,6 +101,29 @@ enum Doctor {
     var popupCommands: [String: String] = [:]
     /// The `PATH` popups launch with, from the login environment.
     var popupPath: String?
+    /// Plugin id → the status names the bar, widgets, popups and monitors
+    /// read (`Config.observedStatusSegments`).
+    var statusSegmentsRead: [String: Set<String>] = [:]
+    /// Plugin id → the status names each loaded plugin's manifest declares.
+    var statusSegmentsDeclared: [String: Set<String>] = [:]
+    var disabledPlugins: Set<String> = []
+    /// URL schemes a status link was refused for since launch, each once
+    /// (`StatusLinkOpener.refusedSchemes`): neither web, mail nor
+    /// `[statusbar] link_schemes`.
+    var refusedLinkSchemes: [String] = []
+    /// The OTLP receiver and the monitors a received metric can fire; nil
+    /// when the configuration was not asked.
+    var telemetryReceiver: TelemetryReceiverState?
+  }
+
+  /// `[telemetry.receiver]` as the doctor judges it.
+  struct TelemetryReceiverState: Equatable {
+    var enabled: Bool
+    var port: Int
+    var hasToken: Bool
+    /// The enabled value monitors with a `run` whose `value` reads a
+    /// `#{flash.otel…}` metric (`Config.monitorsRunOnReceivedMetrics`).
+    var monitorsRunOnReceivedMetrics: [String]
   }
 
   static func run(_ inputs: Inputs) -> Report {
@@ -218,6 +241,14 @@ enum Doctor {
 
     if let popups = popupCommandCheck(inputs) { checks.append(popups) }
 
+    if let values = statusValuesCheck(inputs) { checks.append(values) }
+
+    if let links = statusLinksCheck(inputs.refusedLinkSchemes) { checks.append(links) }
+
+    if let receiver = inputs.telemetryReceiver.flatMap(telemetryReceiverCheck) {
+      checks.append(receiver)
+    }
+
     if let granted = inputs.screenRecordingGranted {
       checks.append(
         granted
@@ -227,6 +258,62 @@ enum Doctor {
             summary: "Screen Recording is not granted; :screenshot asks for it on first use"))
     }
     return Report(checks: checks)
+  }
+
+  /// Status links refused since launch: a `#[link]` whose scheme is neither
+  /// web, mail nor allowlisted does nothing, and the log names only the
+  /// scheme, so this is where the user learns which setting would allow it.
+  /// Absent while nothing was refused.
+  static func statusLinksCheck(_ refused: [String]) -> Check? {
+    guard !refused.isEmpty else { return nil }
+    let list = refused.filter(StatusLinkPolicy.isSchemeName)
+      .map { "\"\($0)\"" }.joined(separator: ", ")
+    var details = ["A #[link] opens only http, https and mailto URLs; a refused link does nothing."]
+    if !list.isEmpty {
+      details.append(
+        "Allow a scheme with [statusbar] link_schemes = [\(list)] "
+          + "when you trust what writes those links.")
+    }
+    if refused.contains("(none)") {
+      details.append("A link without a scheme needs an absolute URL; it cannot be allowlisted.")
+    }
+    return Check(
+      id: "status_links", status: .warn,
+      summary: "\(refused.count) status link scheme\(refused.count == 1 ? " was" : "s were") "
+        + "refused since launch: " + refused.joined(separator: ", "),
+      details: details)
+  }
+
+  /// The OTLP receiver listens on loopback, which every account and program
+  /// on the Mac shares. Without a token that is harmless until a monitor
+  /// runs a command from a received metric: then anyone local can fire it.
+  /// Absent while the receiver is off; a warning, since the receiver is
+  /// opt-in by design.
+  static func telemetryReceiverCheck(_ receiver: TelemetryReceiverState) -> Check? {
+    guard receiver.enabled else { return nil }
+    let address = "127.0.0.1:\(receiver.port)"
+    if receiver.hasToken {
+      return Check(
+        id: "telemetry_receiver", status: .ok,
+        summary: "the OTLP receiver on \(address) requires its token")
+    }
+    let monitors = receiver.monitorsRunOnReceivedMetrics
+    guard !monitors.isEmpty else {
+      return Check(
+        id: "telemetry_receiver", status: .ok,
+        summary: "the OTLP receiver on \(address) has no token; "
+          + "no monitor runs a command from a received metric")
+    }
+    return Check(
+      id: "telemetry_receiver", status: .warn,
+      summary: "the OTLP receiver on \(address) has no token, and \(monitors.count) monitor"
+        + (monitors.count == 1 ? " runs" : "s run") + " commands from received metrics: "
+        + monitors.joined(separator: ", "),
+      details: [
+        "Any program on this Mac, under any account, can post a metric there and fire them.",
+        "Set [telemetry.receiver] token and send it as Authorization: Bearer <token> "
+          + "(OTEL_EXPORTER_OTLP_HEADERS), or drop run from those monitors.",
+      ])
   }
 
   /// An app is judged once it has this many recent activations.
@@ -257,6 +344,53 @@ enum Doctor {
         "Flash reads PATH from your login shell at launch and on config reload.",
         "After installing a tool, Command-R in its popup rereads it and starts it.",
       ])
+  }
+
+  /// Plugin values a surface reads that no loaded plugin publishes: they
+  /// show nothing, and the config check cannot know which plugins exist. A
+  /// value from a merged plugin names its replacement: `<old>_<name>` in a
+  /// plugin that declares it (cpu.label is sysinfo.cpu_label), or the same
+  /// name under another plugin (tmux.session is terminals.session).
+  static func statusValuesCheck(_ inputs: Inputs) -> Check? {
+    guard !inputs.statusSegmentsRead.isEmpty else { return nil }
+    let declared = inputs.statusSegmentsDeclared
+    func replacement(plugin: String, name: String) -> String? {
+      for candidate in ["\(plugin)_\(name)", name] {
+        if let owner = declared.keys.sorted().first(where: {
+          $0 != plugin && declared[$0]?.contains(candidate) == true
+        }) {
+          return "flash.plugin.\(owner).\(candidate)"
+        }
+      }
+      return nil
+    }
+    var problems: [String] = []
+    for plugin in inputs.statusSegmentsRead.keys.sorted() {
+      for name in inputs.statusSegmentsRead[plugin, default: []].sorted() {
+        let value = "flash.plugin.\(plugin).\(name)"
+        if inputs.disabledPlugins.contains(plugin) {
+          problems.append("\(value): the \(plugin) plugin is disabled ([plugins] disabled)")
+        } else if let names = declared[plugin] {
+          guard !names.contains(name) else { continue }
+          problems.append(
+            "\(value): the \(plugin) plugin publishes no \(name) (it has "
+              + names.sorted().joined(separator: ", ") + ")")
+        } else {
+          problems.append(
+            "\(value): no \(plugin) plugin is loaded"
+              + (replacement(plugin: plugin, name: name).map { "; did you mean \($0)?" } ?? ""))
+        }
+      }
+    }
+    guard !problems.isEmpty else {
+      return Check(
+        id: "status_values", status: .ok,
+        summary: "every plugin value your bar, widgets and monitors read is published")
+    }
+    return Check(
+      id: "status_values", status: .warn,
+      summary: "\(problems.count) plugin value\(problems.count == 1 ? "" : "s") will stay empty",
+      details: problems)
   }
 
   static func hintActivationCheck(_ apps: [HintActivationStats.Summary]) -> Check? {

@@ -31,7 +31,7 @@ enum CommandArguments {
   }
 }
 
-struct VerbParameter {
+struct CommandParameter {
   enum Kind {
     case flag
     case text(String)
@@ -70,11 +70,17 @@ struct VerbParameter {
   }
 }
 
-struct VerbDefinition {
-  let parameters: [VerbParameter]
-  let parse: (VerbArgs) -> URLCommand?
+struct CommandDefinition {
+  /// One line saying what the command does, for the catalog and completion.
+  let summary: String
+  let parameters: [CommandParameter]
+  let parse: (CommandArgs) -> URLCommand?
 
-  init(_ parameters: [VerbParameter] = [], parse: @escaping (VerbArgs) -> URLCommand?) {
+  init(
+    _ summary: String, _ parameters: [CommandParameter] = [],
+    parse: @escaping (CommandArgs) -> URLCommand?
+  ) {
+    self.summary = summary
     self.parameters = parameters
     self.parse = parse
   }
@@ -83,6 +89,6 @@ struct VerbDefinition {
     guard Set(arguments.keys).isSubset(of: Set(parameters.map(\.name))),
       parameters.allSatisfy({ $0.accepts(arguments[$0.name]) })
     else { return nil }
-    return parse(VerbArgs(args: arguments))
+    return parse(CommandArgs(args: arguments))
   }
 }

@@ -73,12 +73,14 @@ enum ActionDispatcher {
     case gestureStart
     /// Back on this NSScreen point: where the mouse grid found the pointer
     /// before cursor-follow moved it.
-    case point(CGPoint)
+    case point(ScreenPoint<NSSpace>)
 
     /// The restore a committed hint or grid gesture gets:
     /// `[hints] restore_pointer`, returning to the grid's origin when
     /// cursor-follow moved the pointer before the gesture.
-    static func afterCommit(restorePointer: Bool, gridOrigin: CGPoint?) -> PointerRestore {
+    static func afterCommit(
+      restorePointer: Bool, gridOrigin: ScreenPoint<NSSpace>?
+    ) -> PointerRestore {
       guard restorePointer else { return .stay }
       return gridOrigin.map(PointerRestore.point) ?? .gestureStart
     }
@@ -98,7 +100,7 @@ enum ActionDispatcher {
   /// runs on main after the click has been posted and the pointer restored.
   @discardableResult
   static func synthesizeClick(
-    at screenPoint: CGPoint,
+    at screenPoint: ScreenPoint<NSSpace>,
     action: JumpAction,
     modifiers: ClickModifiers = [],
     restoring restore: PointerRestore = .stay,
@@ -125,22 +127,22 @@ enum ActionDispatcher {
   /// nothing was posted.
   @discardableResult
   private static func postSynthesizedClick(
-    screenPoint: CGPoint,
+    screenPoint: ScreenPoint<NSSpace>,
     screenH: CGFloat,
     action: JumpAction,
     modifiers: ClickModifiers,
     frontmostBundleID: String
-  ) -> CGPoint? {
-    let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+  ) -> ScreenPoint<AXSpace>? {
+    let cgPoint = screenPoint.toAX(primaryHeight: screenH)
 
     let source = SyntheticEventSources.session
-    let originalCursor = CGEvent(source: source)?.location ?? cgPoint
+    let originalCursor = pointerLocation(source: source) ?? cgPoint
 
     guard
       let events = clickEvents(
         at: cgPoint, from: originalCursor, action: action, modifiers: modifiers, source: source)
     else {
-      FlashLog.warn("[click] could not create CGEvent for synthesized click")
+      FlashLog.error("[click] could not create CGEvent for synthesized click")
       return nil
     }
     warpCursor(to: cgPoint)
@@ -169,7 +171,7 @@ enum ActionDispatcher {
   /// it, like `moveCursor`. Modifier flags are cleared: a magic modifier still
   /// held from the final hint key must not turn the move into a modified hover.
   private static func restorePointer(
-    _ restore: PointerRestore, gestureStart: CGPoint?, screenH: CGFloat
+    _ restore: PointerRestore, gestureStart: ScreenPoint<AXSpace>?, screenH: CGFloat
   ) {
     guard let gestureStart,
       let destination = restoreDestination(restore, gestureStart: gestureStart, screenH: screenH)
@@ -177,26 +179,26 @@ enum ActionDispatcher {
     // Let the release reach the app before the pointer leaves the target.
     usleep(20_000)
     let source = SyntheticEventSources.session
-    let current = CGEvent(source: source)?.location ?? destination
+    let current = pointerLocation(source: source) ?? destination
     warpCursor(to: destination)
     guard let move = pointerMoveEvent(to: destination, from: current, source: source) else {
       return
     }
     move.flags = []
     move.post(tap: .cghidEventTap)
-    FlashLog.trace(
-      "[click] restore_pointer to=(\(Int(destination.x)),\(Int(screenH - destination.y)))")
+    let shown = destination.toNS(primaryHeight: screenH)
+    FlashLog.trace("[click] restore_pointer to=(\(Int(shown.x)),\(Int(shown.y)))")
   }
 
   /// Where `restore` puts the pointer, in event space (top-left origin); nil
   /// when it stays. `gestureStart` is already in event space.
   static func restoreDestination(
-    _ restore: PointerRestore, gestureStart: CGPoint, screenH: CGFloat
-  ) -> CGPoint? {
+    _ restore: PointerRestore, gestureStart: ScreenPoint<AXSpace>, screenH: CGFloat
+  ) -> ScreenPoint<AXSpace>? {
     switch restore {
     case .stay: return nil
     case .gestureStart: return gestureStart
-    case .point(let point): return CGPoint(x: point.x, y: screenH - point.y)
+    case .point(let point): return point.toAX(primaryHeight: screenH)
     }
   }
 
@@ -206,13 +208,13 @@ enum ActionDispatcher {
   /// that button's dragged event instead, so drop targets track it like a
   /// hardware drag.
   static func pointerMoveEvent(
-    to point: CGPoint, from origin: CGPoint, holding button: MouseButtonKind? = nil,
-    source: CGEventSource?
+    to point: ScreenPoint<AXSpace>, from origin: ScreenPoint<AXSpace>,
+    holding button: MouseButtonKind? = nil, source: CGEventSource?
   ) -> CGEvent? {
     guard
       let move = CGEvent(
         mouseEventSource: source, mouseType: button?.draggedEventType ?? .mouseMoved,
-        mouseCursorPosition: point, mouseButton: button?.cgButton ?? .left)
+        mouseCursorPosition: point.cgPoint, mouseButton: button?.cgButton ?? .left)
     else { return nil }
     clearInheritedMouseModifiers(on: move)
     move.setIntegerValueField(.mouseEventDeltaX, value: Int64((point.x - origin.x).rounded()))
@@ -228,8 +230,8 @@ enum ActionDispatcher {
   }
 
   static func clickEvents(
-    at point: CGPoint,
-    from origin: CGPoint,
+    at point: ScreenPoint<AXSpace>,
+    from origin: ScreenPoint<AXSpace>,
     action: JumpAction,
     modifiers: ClickModifiers,
     source: CGEventSource?
@@ -239,7 +241,7 @@ enum ActionDispatcher {
     guard
       let move = CGEvent(
         mouseEventSource: source, mouseType: .mouseMoved,
-        mouseCursorPosition: point, mouseButton: .left)
+        mouseCursorPosition: point.cgPoint, mouseButton: .left)
     else { return nil }
     move.flags = modifiers.cgEventFlags
     move.setIntegerValueField(.mouseEventDeltaX, value: Int64((point.x - origin.x).rounded()))
@@ -275,7 +277,7 @@ enum ActionDispatcher {
       for type in [downType, upType] {
         guard
           let event = CGEvent(
-            mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
+            mouseEventSource: source, mouseType: type, mouseCursorPosition: point.cgPoint,
             mouseButton: button)
         else { return nil }
         event.flags = modifiers.cgEventFlags
@@ -295,9 +297,15 @@ enum ActionDispatcher {
   /// Warp and immediately re-associate. A bare warp suppresses local HID
   /// movement for the source's suppression interval (0.25 s), which would eat
   /// the user's next physical nudge.
-  private static func warpCursor(to point: CGPoint) {
-    CGWarpMouseCursorPosition(point)
+  private static func warpCursor(to point: ScreenPoint<AXSpace>) {
+    CGWarpMouseCursorPosition(point.cgPoint)
     CGAssociateMouseAndMouseCursorPosition(1)
+  }
+
+  /// Where the pointer is, in event space, as a `CGEvent` on `source`
+  /// reports it; nil when no event can be made.
+  private static func pointerLocation(source: CGEventSource?) -> ScreenPoint<AXSpace>? {
+    CGEvent(source: source).map { ScreenPoint<AXSpace>($0.location) }
   }
 
   /// Synthesize a continuous left-button drag from `from` to `to` (both
@@ -310,8 +318,8 @@ enum ActionDispatcher {
   /// `completion` runs on the main thread after the gesture has been posted.
   @discardableResult
   static func synthesizeDrag(
-    from: CGPoint,
-    to: CGPoint,
+    from: ScreenPoint<NSSpace>,
+    to: ScreenPoint<NSSpace>,
     modifiers: ClickModifiers = [],
     restoring restore: PointerRestore = .stay,
     completion: (() -> Void)? = nil
@@ -329,24 +337,26 @@ enum ActionDispatcher {
   /// The blocking body of `synthesizeDrag`, run on `clickQueue`. Returns where
   /// the pointer was before the drag (event space).
   private static func postSynthesizedDrag(
-    from: CGPoint,
-    to: CGPoint,
+    from: ScreenPoint<NSSpace>,
+    to: ScreenPoint<NSSpace>,
     screenH: CGFloat,
     modifiers: ClickModifiers
-  ) -> CGPoint {
-    let start = CGPoint(x: from.x, y: screenH - from.y)
-    let end = CGPoint(x: to.x, y: screenH - to.y)
+  ) -> ScreenPoint<AXSpace> {
+    let start = from.toAX(primaryHeight: screenH)
+    let end = to.toAX(primaryHeight: screenH)
     let source = SyntheticEventSources.session
     let flags = modifiers.cgEventFlags
-    let previous = CGEvent(source: source)?.location ?? start
+    let previous = pointerLocation(source: source) ?? start
 
-    func post(_ type: CGEventType, at point: CGPoint, deltaFrom: CGPoint? = nil) {
+    func post(
+      _ type: CGEventType, at point: ScreenPoint<AXSpace>, deltaFrom: ScreenPoint<AXSpace>? = nil
+    ) {
       guard
         let event = CGEvent(
-          mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
+          mouseEventSource: source, mouseType: type, mouseCursorPosition: point.cgPoint,
           mouseButton: .left)
       else {
-        FlashLog.warn("[drag] could not create CGEvent for synthesized drag")
+        FlashLog.error("[drag] could not create CGEvent for synthesized drag")
         return
       }
       event.flags = flags
@@ -360,7 +370,7 @@ enum ActionDispatcher {
       event.post(tap: .cghidEventTap)
     }
 
-    CGWarpMouseCursorPosition(start)
+    CGWarpMouseCursorPosition(start.cgPoint)
     CGAssociateMouseAndMouseCursorPosition(1)
     post(.mouseMoved, at: start, deltaFrom: previous)
     usleep(20_000)
@@ -370,7 +380,9 @@ enum ActionDispatcher {
     // spring-loading arms on the initial hold.
     usleep(60_000)
     var last = start
-    for waypoint in dragWaypoints(from: start, to: end) {
+    for waypoint in dragWaypoints(from: start.cgPoint, to: end.cgPoint)
+      .map({ ScreenPoint<AXSpace>($0) })
+    {
       post(.leftMouseDragged, at: waypoint, deltaFrom: last)
       last = waypoint
       usleep(12_000)
@@ -396,8 +408,8 @@ enum ActionDispatcher {
   /// `completion` runs on the main thread after both clicks have been posted.
   @discardableResult
   static func synthesizeSelection(
-    from: CGPoint,
-    to: CGPoint,
+    from: ScreenPoint<NSSpace>,
+    to: ScreenPoint<NSSpace>,
     modifiers: ClickModifiers = [],
     restoring restore: PointerRestore = .stay,
     completion: (() -> Void)? = nil
@@ -423,7 +435,7 @@ enum ActionDispatcher {
     return true
   }
 
-  /// The button `mouse_button` or pointer mode's `v` holds down. Main thread
+  /// The button `mouse button` or pointer mode's `v` holds down. Main thread
   /// only: every transition happens there, and the events it implies are
   /// queued on `clickQueue` in the same turn, so they post in order.
   private static var buttonHold = MouseButtonHold()
@@ -432,35 +444,36 @@ enum ActionDispatcher {
 
   /// Told, on main, each time the held button changes, with the hold now in
   /// place: HOLD follows it, whichever path pressed or
-  /// released it — `mouse_button`, pointer mode's `v`, an overlay cancel, a
+  /// released it — `mouse button`, pointer mode's `v`, an overlay cancel, a
   /// committed gesture freeing the buttons, quit.
   static var heldButtonDidChange: ((MouseButtonHold.Held?) -> Void)?
 
   /// Press, release, toggle or cancel `button` at `screenPoint` (NSScreen;
-  /// the pointer's location for `mouse_button`), held for `purpose`. A
+  /// the pointer's location for `mouse button`), held for `purpose`. A
   /// cancel drags back to where the button went down and lets go there.
   /// Returns what was posted.
   @discardableResult
   static func setMouseButton(
     _ state: MouseButtonState, _ button: MouseButtonKind, for purpose: ButtonHold,
-    at screenPoint: CGPoint
+    at screenPoint: ScreenPoint<NSSpace>
   ) -> [MouseButtonHold.Effect] {
     var releasePoint = screenPoint
-    if state == .cancel, let origin = buttonHold.held?.origin {
+    if state == .cancel, let held = buttonHold.held {
       // Queued on `clickQueue` ahead of the release below.
+      let origin = ScreenPoint<NSSpace>(held.origin)
       moveCursor(to: origin)
       releasePoint = origin
     }
-    let effects = buttonHold.apply(state, button, for: purpose, at: screenPoint)
+    let effects = buttonHold.apply(state, button, for: purpose, at: screenPoint.cgPoint)
     postButtonEffects(effects, at: releasePoint)
     if !effects.isEmpty { heldButtonDidChange?(buttonHold.held) }
     return effects
   }
 
   /// Let go of the held button, if any: Escape in a Flash overlay,
-  /// `leave_mode` and quit. Idempotent.
+  /// `mode leave` and quit. Idempotent.
   @discardableResult
-  static func releaseHeldButton(at screenPoint: CGPoint) -> Bool {
+  static func releaseHeldButton(at screenPoint: ScreenPoint<NSSpace>) -> Bool {
     let effects = buttonHold.release()
     postButtonEffects(effects, at: screenPoint)
     if !effects.isEmpty { heldButtonDidChange?(nil) }
@@ -472,15 +485,15 @@ enum ActionDispatcher {
   /// paired with its release.
   private static func releaseHeldButtonBeforeGesture() {
     guard heldButton != nil else { return }
-    releaseHeldButton(at: NSEvent.mouseLocation)
+    releaseHeldButton(at: ScreenPoint<NSSpace>(NSEvent.mouseLocation))
   }
 
   private static func postButtonEffects(
-    _ effects: [MouseButtonHold.Effect], at screenPoint: CGPoint
+    _ effects: [MouseButtonHold.Effect], at screenPoint: ScreenPoint<NSSpace>
   ) {
     guard !effects.isEmpty else { return }
     let screenH = ScreenSpace.primaryHeight
-    let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+    let cgPoint = screenPoint.toAX(primaryHeight: screenH)
     clickQueue.async {
       let source = SyntheticEventSources.session
       for effect in effects {
@@ -496,18 +509,19 @@ enum ActionDispatcher {
         else { continue }
         event.post(tap: .cghidEventTap)
         postedHeldButton = pressed ? button : nil
-        FlashLog.trace("[mouse_button] \(pressed ? "press" : "release") button=\(button.rawValue)")
+        FlashLog.trace("[button] \(pressed ? "press" : "release") button=\(button.rawValue)")
       }
     }
   }
 
   static func heldButtonEvent(
-    button: MouseButtonKind, pressed: Bool, at point: CGPoint, source: CGEventSource?
+    button: MouseButtonKind, pressed: Bool, at point: ScreenPoint<AXSpace>,
+    source: CGEventSource?
   ) -> CGEvent? {
     guard
       let event = CGEvent(
         mouseEventSource: source, mouseType: button.eventType(pressed: pressed),
-        mouseCursorPosition: point, mouseButton: button.cgButton)
+        mouseCursorPosition: point.cgPoint, mouseButton: button.cgButton)
     else { return nil }
     clearInheritedMouseModifiers(on: event)
     event.setIntegerValueField(.mouseEventClickState, value: 1)
@@ -529,7 +543,7 @@ enum ActionDispatcher {
     let start = DispatchTime.now()
     for delay in HoldSelection.catchUpDelays(scrollMs: scrollMs) {
       clickQueue.asyncAfter(deadline: start + .milliseconds(delay)) {
-        guard let held = postedHeldButton, let location = CGEvent(source: nil)?.location else {
+        guard let held = postedHeldButton, let location = pointerLocation(source: nil) else {
           return
         }
         pointerMoveEvent(
@@ -564,15 +578,15 @@ enum ActionDispatcher {
   /// delta from the old position, which the window server hit-tests like
   /// a genuine move (driving hover, tracking-area enter/exit, etc.).
   ///
-  /// While a button is held (`mouse_button`, pointer mode's `v`) the move is
+  /// While a button is held (`mouse button`, pointer mode's `v`) the move is
   /// that button's drag, posted on `clickQueue` behind the press it follows,
   /// so pointer mode, `--move` commits and grid cursor-follow all drag.
   @discardableResult
-  static func moveCursor(to screenPoint: CGPoint) -> Bool {
+  static func moveCursor(to screenPoint: ScreenPoint<NSSpace>) -> Bool {
     let screenH = ScreenSpace.primaryHeight
-    let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+    let cgPoint = screenPoint.toAX(primaryHeight: screenH)
     let source = SyntheticEventSources.session
-    let previous = CGEvent(source: source)?.location ?? cgPoint
+    let previous = pointerLocation(source: source) ?? cgPoint
     // The warp is immediate on every path: the next keystroke (a HOLD
     // `j`, a HOLD nudge) reads the pointer where this one left it, even
     // while the drag event is still queued behind the press it follows.

@@ -31,7 +31,7 @@
   } = $props();
 
   const rows = $derived(ansiRows(keyboard));
-  const unit = 58;
+  const unit = 62;
   const gap = 6;
   const widthOf = (units: number) => `${units * unit + (units - 1) * gap}px`;
 
@@ -63,7 +63,7 @@
       const zone = zoneOf(keyboard, cap);
       if (!zone) return "";
       const hue = 110 + (zone.column / Math.max(1, zone.columns - 1)) * 170;
-      return `--zone:hsl(${hue.toFixed(0)} 45% ${88 - zone.row * 10}%)`;
+      return `--zone:hsl(${hue.toFixed(0)} 45% ${62 - zone.row * 8}%)`;
     }
     return "";
   }
@@ -122,31 +122,27 @@
   .rows { display: flex; flex-direction: column; gap: var(--gap); width: max-content; }
   .row { display: flex; gap: var(--gap); }
   .escape-row { margin-bottom: 8px; }
-  .key { --tint: #eef4e8; --edge: #c9d8bd; position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; height: 60px; min-height: 0; flex: none; padding: 6px 7px; border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 8px; background: #fbfcf9; color: #8a948a; text-align: left; transition: background .2s, color .2s, border-color .2s, transform .15s, box-shadow .2s; }
-  .key:hover { transform: translateY(-1px); }
-  .key.free { border-style: dashed; background: transparent; color: #a8b0a6; }
-  .key.bound { background: var(--tint); color: var(--text); border-color: var(--edge); }
-  .key.prefix { background: #f4f6f1; color: var(--text); border-color: #b9c6ad; }
-  .key[data-category="pointer"] { --tint: #e6efdd; --edge: #a9c296; }
-  .key[data-category="scroll"] { --tint: #e3edf7; --edge: #9db6d8; }
-  .key[data-category="tabs"] { --tint: #f6ecdc; --edge: #d9b98a; }
-  .key[data-category="windows"] { --tint: #ece6f6; --edge: #b5a3d4; }
-  .key[data-category="modes"] { --tint: #f7e3e3; --edge: #d6a1a1; }
-  .key[data-category="system"] { --tint: #e2f1ef; --edge: #8fc3bb; }
-  .key[data-category="plugins"], .key[data-category="programs"], .key[data-category="other"] { --tint: #eef0ec; --edge: #bfc6bb; }
-  .key.alpha { background: color-mix(in oklab, #fff785 calc(var(--heat, 0) * 100%), #f6f8f3); border-color: color-mix(in oklab, #e3be23 calc(var(--heat, 0) * 100%), var(--border)); color: #302505; }
-  .key.grid-key { background: #dfe9f6; border-color: #9db6d8; color: #1f3f66; }
-  .key.zone { background: var(--zone, #f6f8f3); border-color: color-mix(in oklab, var(--zone, #ccc), #000 20%); color: #233; }
-  .key.hit { box-shadow: 0 0 0 2px #e3be23; }
-  .key.selected { box-shadow: 0 0 0 3px #6c875c; border-color: #6c875c; }
-  .key.modifier { justify-content: center; background: #f3f4f0; color: #6d7868; font-size: 12px; }
+  /* Keycaps: a raised face over a darker skirt. */
+  .key { position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; height: 66px; min-height: 0; flex: none; padding: 5px 7px 6px; border: 1px solid var(--border); border-bottom: 3px solid var(--inset); border-radius: 6px; background: var(--raised); color: var(--faint); text-align: left; box-shadow: var(--engrave); transition: background-color .15s, color .15s, border-color .15s, box-shadow .15s; }
+  .key:hover { border-color: var(--border-strong); background: var(--hover); }
+  .key.free { border-style: dashed; border-bottom-width: 1px; background: transparent; box-shadow: none; color: var(--faint); }
+  .key.bound { background: color-mix(in oklab, var(--cat, var(--muted)) 20%, var(--raised)); color: var(--text); border-color: color-mix(in oklab, var(--cat, var(--muted)) 55%, var(--border)); border-bottom-color: color-mix(in oklab, var(--cat, var(--muted)) 30%, var(--inset)); }
+  .key.bound .note { color: color-mix(in oklab, var(--cat, var(--muted)) 55%, var(--text)); }
+  .key.prefix { background: var(--raised); color: var(--text); border-color: var(--accent-dim); }
+  .key.alpha { background: color-mix(in oklab, var(--accent) calc(var(--heat, 0) * 42%), var(--raised)); border-color: color-mix(in oklab, var(--accent) calc(var(--heat, 0) * 80%), var(--border)); color: var(--text); }
+  .key.grid-key { background: color-mix(in oklab, var(--steel) 20%, var(--raised)); border-color: color-mix(in oklab, var(--steel) 55%, var(--border)); color: var(--text); }
+  .key.zone { background: color-mix(in oklab, var(--zone, var(--raised)) 26%, var(--raised)); border-color: color-mix(in oklab, var(--zone, var(--border)) 60%, var(--border)); color: var(--text); }
+  .key.hit { box-shadow: 0 0 0 2px var(--amber); }
+  .key.selected { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
+  .key.modifier { justify-content: center; background: var(--panel); color: var(--muted); font-size: 12px; }
   .key.modifier .cap { font-family: inherit; font-size: 12px; font-weight: 600; }
-  .key.modifier.held { background: #e4ecdb; border-color: #6c875c; color: #244f38; box-shadow: inset 0 2px 0 rgba(0, 0, 0, .06); }
-  .key.inert { border-style: dotted; background: transparent; color: #b4bbb2; cursor: default; }
+  .key.modifier.held { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); box-shadow: inset 0 2px 0 rgba(0, 0, 0, .35); }
+  .key.inert { border-style: dotted; border-bottom-width: 1px; background: transparent; box-shadow: none; color: var(--faint); cursor: default; }
   .key.inert .cap { font-family: inherit; font-size: 12px; }
-  .cap { font-family: var(--mono); font-size: 14px; font-weight: 600; }
-  .leader-mark { font-size: 10px; font-weight: 500; color: var(--muted); }
-  .more { position: absolute; top: 5px; right: 6px; padding: 0 5px; border-radius: 999px; background: #2e5b43; color: #eff6e7; font-size: 10px; font-weight: 700; }
-  .note { font-size: 9px; line-height: 1.15; color: inherit; opacity: .85; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+  .cap { font-family: var(--mono); font-size: 14px; font-weight: 600; line-height: 1.25; }
+  .leader-mark { font-size: 12px; font-weight: 500; color: var(--accent); }
+  .more { position: absolute; top: 5px; right: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--accent-dim); background: var(--accent-soft); color: var(--accent); font: 600 12px/1.3 var(--mono); }
+  .note { font-size: 11px; line-height: 1.15; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; letter-spacing: -.01em; }
   @media (prefers-reduced-motion: reduce) { .key { transition: none; } }
+  @media print { .key { box-shadow: none; } }
 </style>

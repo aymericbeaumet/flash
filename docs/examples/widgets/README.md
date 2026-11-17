@@ -7,20 +7,21 @@ disappear when their tables are removed or set `enabled = false`.
 
 ```sh
 cat docs/examples/widgets/system-panel.toml >> ~/.config/flash/flash.toml
-flash config_check
+flash config check
 ```
 
 Appending works while your file does not already define the same tables. TOML
-rejects a table defined twice, so if you already have `[plugin.processes]` or
-a `[statusbar.sources.<name>]` of the same name, merge the keys into your
-table instead. `flash config_check` reports any problem with its line.
+rejects a table defined twice, so if you already have a
+`[statusbar.sources.<name>]` of the same name, merge the keys into your table
+instead. `flash config check` reports any problem with its line.
 
 ## `system-panel.toml`
 
 A conky-style panel in the top-right corner: CPU, memory and disk meters with
 0–100 sparklines of the last 20 samples, battery, disk and network rates, the
 default-route address, uptime and load, and the five busiest processes by CPU
-and by memory. It shows only bundled plugin data and runs no command. Every
+and by memory (`[statusbar] top_count` sets how many). It shows only bundled
+plugin data and Flash's process tables, and runs no command. Every
 row is written out in the template, so each can be restyled on its own.
 
 ## `clock-agenda.toml`
@@ -40,7 +41,7 @@ calendar still shows and the agenda stays empty.
 ## `dev-corner.toml`
 
 A bottom-left corner for development: the tmux session, window and pane of
-the attached client (the bundled `tmux` plugin), the branch and number of
+the attached client (the bundled `terminals` plugin), the branch and number of
 changed files of one repository through `#()` shell jobs, and the last five
 lines of a log file through a named source. Set the repository path in the
 two `git -C` jobs and the log path in `[statusbar.sources.log]` first.

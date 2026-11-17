@@ -9,6 +9,7 @@ import Foundation
 ///     [latency] hints_visible ms=<n> origin=<key|hotkey|cli>
 ///       prepared=<hit|miss|none> targets=<n> class=<native|browser|electron|other>
 ///       surface=<surface> bundle=<id|-> outcome=<hit|miss|retried|empty|none>
+///       miss_reason=<PreparedModelMiss|->
 ///
 /// or, when the activation ends without drawing anything, as
 ///
@@ -72,13 +73,16 @@ struct HintLatencyProbe: Equatable {
     max(0, uptime - triggeredAt) * 1000
   }
 
+  /// `missReason` says why the prepared model could not serve a miss; `-`
+  /// for a hit and for surfaces that never consult it.
   func line(
     visibleAt uptime: TimeInterval, prepared: Prepared, outcome: Outcome, targets: Int,
-    appClass: AppClass, bundleIdentifier: String?, surface: String
+    appClass: AppClass, bundleIdentifier: String?, surface: String, missReason: PreparedModelMiss?
   ) -> String {
     "[latency] hints_visible ms=\(Self.format(elapsedMs(at: uptime))) origin=\(origin.rawValue) "
       + "prepared=\(prepared.rawValue) targets=\(targets) class=\(appClass.rawValue) "
-      + "surface=\(surface) bundle=\(Self.field(bundleIdentifier)) outcome=\(outcome.rawValue)"
+      + "surface=\(surface) bundle=\(Self.field(bundleIdentifier)) outcome=\(outcome.rawValue) "
+      + "miss_reason=\(missReason?.rawValue ?? "-")"
   }
 
   /// An activation that ended without hints: `path` names where discovery
@@ -89,6 +93,23 @@ struct HintLatencyProbe: Equatable {
     "[latency] hints_empty ms=\(Self.format(elapsedMs(at: uptime))) "
       + "bundle=\(Self.field(bundleIdentifier)) path=\(path) origin=\(origin.rawValue) "
       + "surface=\(surface)"
+  }
+
+  /// The activation as telemetry: `flash.hints.latency` and a span from the
+  /// trigger inside its interaction. No bundle identifier: which apps the
+  /// user works in stays on this Mac.
+  func recordTelemetry(
+    endedAt uptime: TimeInterval, surface: String, outcome: String, appClass: String?,
+    targets: Int
+  ) {
+    guard FlashTelemetry.current != nil else { return }
+    var attributes = ["origin": origin.rawValue, "surface": surface, "outcome": outcome]
+    if let appClass { attributes["app_class"] = appClass }
+    FlashTelemetry.record(.hintsLatency, elapsedMs(at: uptime), attributes)
+    attributes["targets"] = String(targets)
+    FlashTelemetry.span(
+      outcome == "empty" ? "hints empty" : "hints visible", trace: trace.text,
+      startUptime: triggeredAt, endUptime: uptime, attributes: attributes, origin: origin)
   }
 
   private static func format(_ ms: Double) -> String {

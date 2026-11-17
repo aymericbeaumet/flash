@@ -15,14 +15,14 @@ final class StatusBarInlineTemplateTests: XCTestCase {
 
     """,
     "@centre": """
-    #[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
+    #[popup=active-app]#{=/23/…:flash.focused_app_name}#[nopopup]
 
     """,
     "@right": """
-    #{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
+    #{?flash.caffeinate,#[fg=#EBCB8B]AWAKE#[default] ,}
     #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.source.cld}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.source.cdx}#[nolink]#[nopopup]
-    #[fg=colour245] · #[popup=btop]#[label]CPU#[default] #{p-3:flash.plugin.cpu.label} #[label]MEM#[default] #{p-3:flash.plugin.memory.label} #[label]DSK#[default] #{p-3:flash.plugin.disks.label} #[label]NET#[default] #{p-4:flash.plugin.network.label} #[label]BAT#[default] #{flash.plugin.power.label}#[nopopup]
-    #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
+    #[fg=colour245] · #[popup=btop]#[label]CPU#[default] #{p-3:flash.plugin.sysinfo.cpu_label} #[label]MEM#[default] #{p-3:flash.plugin.sysinfo.memory_label} #[label]DSK#[default] #{p-3:flash.plugin.sysinfo.disks_label} #[label]NET#[default] #{p-4:flash.plugin.sysinfo.network_label} #[label]BAT#[default] #{flash.plugin.sysinfo.power_label}#[nopopup]
+    #[fg=colour245] · #[popup=date]#{?flash.caffeinate,,%a %b %-d }#[default]%H:%M#[nopopup]
 
     """,
   ]
@@ -33,11 +33,11 @@ final class StatusBarInlineTemplateTests: XCTestCase {
     enabled = true
     template = """
     #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.example]#[label]aggr#[default] #{flash.plugin.feed.label}#[nolink]#[nopopup]
-    #[align=notch]#[popup=active-app]#{=/23/…:flash.active_app_name}#[nopopup]
-    #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
+    #[align=notch]#[popup=active-app]#{=/23/…:flash.focused_app_name}#[nopopup]
+    #[align=right]#{?flash.caffeinate,#[fg=#EBCB8B]AWAKE#[default] ,}
     #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.source.cld}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.source.cdx}#[nolink]#[nopopup]
-    #[fg=colour245] · #[popup=btop]#[label]CPU#[default] #{p-3:flash.plugin.cpu.label} #[label]MEM#[default] #{p-3:flash.plugin.memory.label} #[label]DSK#[default] #{p-3:flash.plugin.disks.label} #[label]NET#[default] #{p-4:flash.plugin.network.label} #[label]BAT#[default] #{flash.plugin.power.label}#[nopopup]
-    #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
+    #[fg=colour245] · #[popup=btop]#[label]CPU#[default] #{p-3:flash.plugin.sysinfo.cpu_label} #[label]MEM#[default] #{p-3:flash.plugin.sysinfo.memory_label} #[label]DSK#[default] #{p-3:flash.plugin.sysinfo.disks_label} #[label]NET#[default] #{p-4:flash.plugin.sysinfo.network_label} #[label]BAT#[default] #{flash.plugin.sysinfo.power_label}#[nopopup]
+    #[fg=colour245] · #[popup=date]#{?flash.caffeinate,,%a %b %-d }#[default]%H:%M#[nopopup]
     """
 
     [statusbar.sources.cld]
@@ -53,7 +53,7 @@ final class StatusBarInlineTemplateTests: XCTestCase {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "Europe/Paris")!
     return FlashStatusBarContext(
-      activeAppName: app, modeLabel: "NORMAL", now: Date(timeIntervalSince1970: 1_790_600_000),
+      focusedAppName: app, modeLabel: "NORMAL", now: Date(timeIntervalSince1970: 1_790_600_000),
       calendar: calendar)
   }
 
@@ -82,9 +82,9 @@ final class StatusBarInlineTemplateTests: XCTestCase {
         "flash.plugin.feed.label": "A #[bold]rich#[nobold] headline",
         "flash.source.cld": "42%↻3d",
         "flash.source.cdx": "7%↻1d",
-        "flash.plugin.cpu.label": "3%", "flash.plugin.memory.label": "61%",
-        "flash.plugin.disks.label": "40%", "flash.plugin.network.label": "1.2k",
-        "flash.plugin.power.label": "80%", "flash.plugin.caffeinate.state": "1",
+        "flash.plugin.sysinfo.cpu_label": "3%", "flash.plugin.sysinfo.memory_label": "61%",
+        "flash.plugin.sysinfo.disks_label": "40%", "flash.plugin.sysinfo.network_label": "1.2k",
+        "flash.plugin.sysinfo.power_label": "80%", "flash.caffeinate": "on",
       ],
     ]
     for app in apps {
@@ -104,7 +104,7 @@ final class StatusBarInlineTemplateTests: XCTestCase {
         XCTAssertEqual(drawn(new.document.runs), drawn(old.document.runs), app)
         XCTAssertFalse(new.document.runs.contains { $0.text.contains("\n") })
         XCTAssertTrue(new.rightText.contains("14:53"), "strftime expands in the template")
-        if dynamic["flash.plugin.cpu.label"] == "3%" {
+        if dynamic["flash.plugin.sysinfo.cpu_label"] == "3%" {
           let right = new.rightDocument.map(\.text).joined()
           XCTAssertTrue(right.contains("CPU  3%"), right)
           XCTAssertTrue(right.contains("MEM 61%"), right)

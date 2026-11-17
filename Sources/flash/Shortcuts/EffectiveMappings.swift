@@ -30,6 +30,8 @@ enum EffectiveMappings {
       effective.terminal = mergeScope(base: base.terminal, plugin: plugin, scope: .terminal)
       effective.hyper = mergeScope(base: base.hyper, plugin: plugin, scope: .hyper)
       effective.hold = mergeScope(base: base.hold, plugin: plugin, scope: .hold)
+      effective.text = mergeScope(base: base.text, plugin: plugin, scope: .text)
+      effective.visual = mergeScope(base: base.visual, plugin: plugin, scope: .visual)
     }
     if let bundleID, let app = base.appMappings[bundleID] {
       effective.all = apply(app: app, scope: .all, to: effective.all)
@@ -39,6 +41,8 @@ enum EffectiveMappings {
       effective.command = apply(app: app, scope: .command, to: effective.command)
       effective.hyper = apply(app: app, scope: .hyper, to: effective.hyper)
       effective.hold = apply(app: app, scope: .hold, to: effective.hold)
+      effective.text = apply(app: app, scope: .text, to: effective.text)
+      effective.visual = apply(app: app, scope: .visual, to: effective.visual)
     }
     effective.recompileMappings()
     return effective

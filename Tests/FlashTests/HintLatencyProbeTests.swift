@@ -63,15 +63,20 @@ final class HintLatencyProbeTests: XCTestCase {
     Trace.begin(.key, triggeredAt: 10) { probe = HintLatencyProbe.arm(Trace.currentTrigger) }
     let line = try XCTUnwrap(probe).line(
       visibleAt: 10.01234, prepared: .hit, outcome: .hit, targets: 42, appClass: .native,
-      bundleIdentifier: "com.apple.Safari", surface: "targets")
+      bundleIdentifier: "com.apple.Safari", surface: "targets", missReason: nil)
     XCTAssertEqual(
       line,
       "[latency] hints_visible ms=12.3 origin=key prepared=hit targets=42 class=native "
-        + "surface=targets bundle=com.apple.Safari outcome=hit")
+        + "surface=targets bundle=com.apple.Safari outcome=hit miss_reason=-")
+    // A miss says why the prepared model could not serve it.
+    let missed = try XCTUnwrap(probe).line(
+      visibleAt: 10.1, prepared: .miss, outcome: .miss, targets: 42, appClass: .electron,
+      bundleIdentifier: "com.tinyspeck.slackmacgap", surface: "targets", missReason: .expired)
+    XCTAssertTrue(missed.hasSuffix("outcome=miss miss_reason=expired"), missed)
     let unknown = try XCTUnwrap(probe).line(
       visibleAt: 10.5, prepared: .none, outcome: .none, targets: 9, appClass: .other,
-      bundleIdentifier: nil, surface: "grid")
-    XCTAssertTrue(unknown.hasSuffix("surface=grid bundle=- outcome=none"), unknown)
+      bundleIdentifier: nil, surface: "grid", missReason: nil)
+    XCTAssertTrue(unknown.hasSuffix("surface=grid bundle=- outcome=none miss_reason=-"), unknown)
   }
 
   /// An activation that ends with no hints is logged too, and parsed by the

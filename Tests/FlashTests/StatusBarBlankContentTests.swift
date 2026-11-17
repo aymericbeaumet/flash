@@ -6,11 +6,11 @@ final class StatusBarBlankContentTests: XCTestCase {
   private let template = FlashStatusBarTemplate(
     template: """
       #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
-      #[align=notch]#[popup=active-app]#[shrink]#{flash.active_app_name}#[noshrink]#[nopopup]
-      #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
+      #[align=notch]#[popup=active-app]#[shrink]#{flash.focused_app_name}#[noshrink]#[nopopup]
+      #[align=right]#{?flash.caffeinate,#[fg=#EBCB8B]AWAKE#[default] ,}
       #[popup=quota]#{flash.plugin.quota.label}#[nopopup]
-      #[fg=colour245] · #{flash.plugin.cpu.label} #{flash.plugin.memory.label}
-      #[fg=colour245] · #{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M
+      #[fg=colour245] · #{flash.plugin.sysinfo.cpu_label} #{flash.plugin.sysinfo.memory_label}
+      #[fg=colour245] · #{?flash.caffeinate,,%a %b %-d }#[default]%H:%M
       """)
 
   func testDynamicOverflowAndNotchReservationsKeepVisibleModeText() {
@@ -27,13 +27,13 @@ final class StatusBarBlankContentTests: XCTestCase {
           let model = FlashStatusBarTemplateEngine.render(
             template: template,
             context: .init(
-              activeAppName: app, modeLabel: mode,
+              focusedAppName: app, modeLabel: mode,
               now: Date(timeIntervalSince1970: 1_800_000_000)),
             dynamicValues: [
               "flash.plugin.feed.summary": feed,
               "flash.plugin.quota.label": "#[fg=green]Cld 99% Cdx 100%#[default]",
-              "flash.plugin.cpu.label": "CPU 100%",
-              "flash.plugin.memory.label": "MEM 99%",
+              "flash.plugin.sysinfo.cpu_label": "CPU 100%",
+              "flash.plugin.sysinfo.memory_label": "MEM 99%",
             ])
           XCTAssertFalse(model.document.runs.contains { $0.text.contains("\n") })
           for columns in [90, 128, 180, 260] {
@@ -61,7 +61,7 @@ final class StatusBarBlankContentTests: XCTestCase {
   func testNarrowVirtualCenterSlotDoesNotBlankNonemptyContent() {
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
-      context: .init(activeAppName: "Microsoft Visual Studio Code", modeLabel: "INSERT"),
+      context: .init(focusedAppName: "Microsoft Visual Studio Code", modeLabel: "INSERT"),
       dynamicValues: [
         "flash.plugin.feed.summary": feed(title: String(repeating: "Overflow ", count: 100))
       ])
@@ -82,7 +82,7 @@ final class StatusBarBlankContentTests: XCTestCase {
       "#[fg=not-a-color]Malformed feed style",
     ] {
       let model = FlashStatusBarTemplateEngine.render(
-        template: template, context: .init(activeAppName: "Firefox", modeLabel: "INSERT"),
+        template: template, context: .init(focusedAppName: "Firefox", modeLabel: "INSERT"),
         dynamicValues: ["flash.plugin.feed.summary": markup])
       let pill = layout(model.document, columns: 128, physicalNotch: false).filter {
         $0.segment.pill
@@ -123,5 +123,23 @@ final class StatusBarBlankContentTests: XCTestCase {
       excluded = nil
     }
     return NativeStatusBarSurface.visibleRuns(result, cellWidth: 8, excluded: excluded)
+  }
+
+  /// An app names itself: its name and bundle identifier are text in the
+  /// bar, never a style, a link a click would open, or a click range.
+  func testTheFocusedAppNameIsTextNeverAStyleOrALink() {
+    let template = FlashStatusBarTemplate(
+      template: "#{flash.focused_app_name} #{flash.focused_app_bundle_id}")
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: .init(
+        focusedAppName: "#[link=file:///Applications/Terminal.app,range=user|x]Evil",
+        focusedAppBundleID: "com.example.#[fg=red]app", modeLabel: "NORMAL",
+        now: Date(timeIntervalSince1970: 1_800_000_000)))
+    let runs = model.document.runs
+    XCTAssertTrue(runs.allSatisfy { $0.link == nil }, "\(runs)")
+    XCTAssertEqual(
+      runs.map(\.text).joined(),
+      "#[link=file:///Applications/Terminal.app,range=user|x]Evil com.example.#[fg=red]app")
   }
 }

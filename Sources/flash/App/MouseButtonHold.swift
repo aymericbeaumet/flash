@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// A button `mouse_button` presses or releases.
+/// A button `mouse button` presses or releases.
 enum MouseButtonKind: String, CaseIterable, Hashable {
   case primary
   case secondary
@@ -32,7 +32,7 @@ enum MouseButtonKind: String, CaseIterable, Hashable {
   }
 }
 
-/// `mouse_button --state=`.
+/// `mouse button --state=`.
 enum MouseButtonState: String, CaseIterable, Hashable {
   case down
   case up
@@ -45,7 +45,7 @@ enum MouseButtonState: String, CaseIterable, Hashable {
   case cancel
 }
 
-/// `mouse_button --state=<state> [--secondary|--middle] [--mode=hold]`.
+/// `mouse button --state=<state> [--secondary|--middle] [--mode=hold]`.
 /// The held button enters HOLD.
 struct MouseButtonRequest: Hashable {
   var state: MouseButtonState
@@ -65,7 +65,7 @@ struct MouseButtonRequest: Hashable {
 }
 
 /// The one button Flash holds between a press and its release, for
-/// `mouse_button` and pointer mode's `v`. `ActionDispatcher` owns the only
+/// `mouse button` and pointer mode's `v`. `ActionDispatcher` owns the only
 /// instance; a transition returns the events to post, so the state and the
 /// event stream cannot disagree. One button at a time: pressing another
 /// releases the held one first.
@@ -107,7 +107,7 @@ struct MouseButtonHold: Equatable {
     }
   }
 
-  /// Give the held button up: Escape in an overlay, `leave_mode`, quit, or a
+  /// Give the held button up: Escape in an overlay, `mode leave`, quit, or a
   /// committed gesture that needs the buttons free.
   mutating func release() -> [Effect] {
     guard let held else { return [] }

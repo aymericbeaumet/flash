@@ -24,8 +24,20 @@ func flashTestsBootstrap() {
 ///   exactly what the tests assert.
 /// - After every test a guard fails the test when this process still has an
 ///   on-screen window with alpha above zero over a display, and orders it out.
+/// - No window of this process becomes key. A non-activating panel that does
+///   takes the keyboard from the user's frontmost app without activating
+///   anything (WindowServer logs a "keythief"), so the keys the user types
+///   into their app reach a hidden test window instead. `makeKey` is refused
+///   and `makeKeyAndOrderFront` only orders the window in; tests drive key
+///   handling by calling the panel's methods, never through the key window.
 enum TestWindowHygiene {
   private static let observer = Observer()
+  /// Refused key requests per window, for the hygiene's own test.
+  @MainActor fileprivate static var refusals: [ObjectIdentifier: Int] = [:]
+
+  @MainActor static func refusedKeyRequests(for window: NSWindow) -> Int {
+    refusals[ObjectIdentifier(window)] ?? 0
+  }
 
   static func install() {
     swap(
@@ -34,6 +46,10 @@ enum TestWindowHygiene {
     swap(
       #selector(NSWindow.orderFrontRegardless),
       #selector(NSWindow.flashTestsOrderFrontRegardless))
+    swap(#selector(NSWindow.makeKey), #selector(NSWindow.flashTestsMakeKey))
+    swap(
+      #selector(NSWindow.makeKeyAndOrderFront(_:)),
+      #selector(NSWindow.flashTestsMakeKeyAndOrderFront(_:)))
     XCTestObservationCenter.shared.addTestObserver(observer)
   }
 
@@ -83,7 +99,27 @@ enum TestWindowHygiene {
   }
 
   private final class Observer: NSObject, XCTestObservation {
+    /// Windows that became key during the running test, by class name.
+    private var becameKey: [String] = []
+    private var keyObserver: NSObjectProtocol?
+
     func testCaseWillStart(_ testCase: XCTestCase) {
+      becameKey = []
+      keyObserver = NotificationCenter.default.addObserver(
+        forName: NSWindow.didBecomeKeyNotification, object: nil, queue: nil
+      ) { [weak self] note in
+        guard let window = note.object as? NSWindow else { return }
+        self?.becameKey.append(String(describing: type(of: window)))
+        window.resignKey()
+      }
+      testCase.addTeardownBlock { [weak self] in
+        if let observer = self?.keyObserver { NotificationCenter.default.removeObserver(observer) }
+        if let names = self?.becameKey, !names.isEmpty {
+          XCTFail(
+            "\(testCase.name) made a window key, which takes the keyboard from the "
+              + "user's frontmost app: \(names.joined(separator: ", "))")
+        }
+      }
       testCase.addTeardownBlock {
         let offenders = TestWindowHygiene.occludingWindows(
           owner: getpid(),
@@ -112,5 +148,17 @@ extension NSWindow {
   @objc fileprivate func flashTestsOrderFrontRegardless() {
     alphaValue = 0
     flashTestsOrderFrontRegardless()
+  }
+
+  /// Swapped with `makeKey()`: never calls the original (`TestWindowHygiene`).
+  @MainActor @objc fileprivate func flashTestsMakeKey() {
+    TestWindowHygiene.refusals[ObjectIdentifier(self), default: 0] += 1
+  }
+
+  /// Swapped with `makeKeyAndOrderFront(_:)`: orders in, transparent,
+  /// without the key window (`TestWindowHygiene`).
+  @MainActor @objc fileprivate func flashTestsMakeKeyAndOrderFront(_ sender: Any?) {
+    TestWindowHygiene.refusals[ObjectIdentifier(self), default: 0] += 1
+    orderFront(sender)
   }
 }

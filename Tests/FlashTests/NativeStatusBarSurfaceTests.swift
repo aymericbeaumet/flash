@@ -69,6 +69,27 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertEqual(document.runs[0].text, "N", "Rendering must not rewrite a published model")
   }
 
+  /// A layer's label is transient, like HYPER's: entering the layer must
+  /// not widen the pill and shift the bar.
+  func testALayerLabelDoesNotWidenTheModePill() {
+    var mode = FlashStatusTextSegment(text: "N", foreground: .defaultForeground)
+    mode.isModeLabel = true
+    mode.pill = true
+    let document = StatusFormatDocument(runs: [
+      mode, FlashStatusTextSegment(text: " tail", foreground: .defaultForeground),
+    ])
+    let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    let base = NativeStatusBarSurface()
+    redraw(
+      base, document: document, columns: 80, labels: labels, style: .normal, modeText: "NORMAL")
+    let layer = NativeStatusBarSurface()
+    redraw(
+      layer, document: document, columns: 80, labels: labels, style: .layer,
+      modeText: "RESIZE-WINDOWS")
+    XCTAssertEqual(layer.runFrames[0].width, base.runFrames[0].width, accuracy: 0.001)
+    XCTAssertEqual(layer.runFrames[1].minX, base.runFrames[1].minX, accuracy: 0.001)
+  }
+
   func testLiveModeTextOutsidePillChangesImmediately() {
     var mode = FlashStatusTextSegment(text: "STALE", foreground: .defaultForeground)
     mode.isModeLabel = true
@@ -369,6 +390,33 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     XCTAssertTrue(surface.runLayers[0] === first)
     XCTAssertEqual(first.effect.animation(forKey: "flashEffect")?.beginTime, animation?.beginTime)
     XCTAssertTrue(surface.runLayers[1].text.animation(forKey: cycleKey) is CAAnimationGroup)
+  }
+
+  /// A line reached by stepping back plays the same push mirrored: it comes
+  /// down from above while the old line leaves through the bottom, on the
+  /// same duration and curve.
+  func testABackwardCarouselLinePushesDownFromAbove() {
+    let surface = render("NEWS #[cyc=k]second#[nocyc] CPU 10%", columns: 40)
+    redraw(surface, "NEWS #[cyc=k,cycback]first#[nocyc] CPU 10%", columns: 40)
+    let article = surface.runLayers[1]
+    let lineHeight = article.container.frame.height
+    let incoming = article.text.animation(forKey: cycleKey) as? CAAnimationGroup
+    let fall = incoming?.animations?.compactMap { $0 as? CABasicAnimation }
+    XCTAssertEqual(fall?[1].fromValue as? CGFloat, lineHeight)
+    XCTAssertEqual(fall?[1].toValue as? CGFloat, 0)
+    let leaving = article.outgoing.animation(forKey: cycleKey) as? CAAnimationGroup
+    let push = leaving?.animations?.compactMap { $0 as? CABasicAnimation }
+    XCTAssertEqual(push?[1].fromValue as? CGFloat, 0)
+    XCTAssertEqual(push?[1].toValue as? CGFloat, -lineHeight)
+    XCTAssertEqual(incoming?.duration, NativeStatusBarSurface.cycleTransitionDuration)
+    XCTAssertEqual((article.outgoing.string as? NSAttributedString)?.string, "second")
+
+    // The next forward change rises from below again.
+    article.text.removeAllAnimations()
+    redraw(surface, "NEWS #[cyc=k]second#[nocyc] CPU 10%", columns: 40)
+    let rise = (article.text.animation(forKey: cycleKey) as? CAAnimationGroup)?.animations?
+      .compactMap { $0 as? CABasicAnimation }
+    XCTAssertEqual(rise?[1].fromValue as? CGFloat, -lineHeight)
   }
 
   func testCarouselSlidesUpOnlyOnArticleChangesAndClearsWhenLayerBecomesAMetric() {
@@ -1078,6 +1126,8 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .command: modeText = labels.command
     case .hyper: modeText = labels.hyper
     case .hold: modeText = labels.hold
+    case .visual: modeText = labels.visual
+    case .layer: modeText = "LAYER"
     }
     redraw(
       surface, document: StatusFormatDocument.parse(source), columns: columns, notch: notch,
@@ -1101,6 +1151,8 @@ final class NativeStatusBarSurfaceTests: XCTestCase {
     case .command: palette = OverlayPanel.commandPaletteValue
     case .hyper: palette = OverlayPanel.hyperPalette
     case .hold: palette = OverlayPanel.holdPalette
+    case .visual: palette = OverlayPanel.visualPalette
+    case .layer: palette = OverlayPanel.layerPalette
     }
     surface.render(
       document: document,

@@ -119,6 +119,6 @@ CARGO_TARGET_DIR="$PROJECT_DIR/build/plugin-target" \
 echo "Created hermetic plugin crate Plugins/$ID (commit its Cargo.lock)"
 echo
 echo "Iterate with:"
-echo "  ./Scripts/build-plugins.sh dev $ID   # build + stage just this plugin"
+echo "  mise run build:plugins -- $ID   # build + stage just this plugin"
 echo "  tail -f ~/Library/Logs/Flash/flash.log   # watcher restarts it on the swap"
-echo "  flash help_show                      # or :$ID ping from the command line"
+echo "  flash help show                      # or :$ID ping from the command line"

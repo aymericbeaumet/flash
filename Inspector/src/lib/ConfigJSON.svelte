@@ -12,13 +12,13 @@
 {/if}
 
 <style>
-  .config-json { margin: 0; padding: 20px; background: #f5f8f0; max-height: 600px; color: var(--text); white-space: pre; }
-  .override { color: #6d3b0e; font-weight: 650; background: #f8ecd9; border-radius: 3px; }
-  .where { margin-left: 10px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+  .config-json { margin: 0; padding: 16px; background: var(--inset); max-height: 600px; color: var(--muted); white-space: pre; font-size: 12px; }
+  .override { color: var(--copper); font-weight: 650; background: rgba(208, 138, 92, .12); border-radius: 3px; }
+  .where { margin-left: 10px; color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
   a.where { text-decoration: underline; text-underline-offset: 2px; }
   .empty { padding: 28px 20px; }
   @media print {
-    .config-json { padding: 12px; max-height: none; }
+    .config-json { padding: 12px; max-height: none; color: inherit; }
     .override { color: #6d3b0e; background: none; }
   }
 </style>

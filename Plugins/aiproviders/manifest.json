@@ -2,49 +2,178 @@
   "id": "aiproviders",
   "name": "AI Providers",
   "version": "0.1.0",
-  "description": "Open AI chat providers from the flashlight and publish Claude and Codex weekly quota labels.",
+  "description": "Open AI chat providers from the flashlight and publish the Claude, Codex and Grok weekly quotas as bare metrics: claude, codex and grok.",
+  "sandbox": false,
   "exec": [
     "./flash-plugin-aiproviders"
   ],
-  "bangs": {
-    "command": "aiproviders",
-    "items": [
-      {
-        "token": "chatgpt",
-        "description": "Open ChatGPT (pre-fills query if provided)"
-      },
-      {
-        "token": "claude",
-        "description": "Open Claude (pre-fills query if provided)"
-      },
-      {
-        "token": "gemini",
-        "description": "Open Gemini (pre-fills query if provided)"
-      },
-      {
-        "token": "perplexity",
-        "description": "Open Perplexity search"
-      },
-      {
-        "token": "copilot",
-        "description": "Open Microsoft Copilot"
-      },
-      {
-        "token": "grok",
-        "description": "Open Grok (xAI)"
-      }
-    ]
-  },
+  "bangs": [
+    {
+      "token": "ai",
+      "description": "Open Duck.ai (pre-fills query if provided)"
+    },
+    {
+      "token": "aichat",
+      "description": "Open Duck.ai (pre-fills query if provided)"
+    },
+    {
+      "token": "cgpt",
+      "description": "Open ChatGPT (pre-fills query if provided)"
+    },
+    {
+      "token": "chat",
+      "description": "Open Duck.ai (pre-fills query if provided)"
+    },
+    {
+      "token": "chatgpt",
+      "description": "Open ChatGPT (pre-fills query if provided)"
+    },
+    {
+      "token": "claude",
+      "description": "Open Claude (pre-fills query if provided)"
+    },
+    {
+      "token": "copilot",
+      "description": "Open Microsoft Copilot (pre-fills query if provided)"
+    },
+    {
+      "token": "ddg-ai",
+      "description": "Open Duck.ai (pre-fills query if provided)"
+    },
+    {
+      "token": "ddg-chat",
+      "description": "Open Duck.ai (pre-fills query if provided)"
+    },
+    {
+      "token": "deepseek",
+      "description": "Open DeepSeek"
+    },
+    {
+      "token": "duckai",
+      "description": "Open Duck.ai (pre-fills query if provided)"
+    },
+    {
+      "token": "felo",
+      "description": "Open Felo (pre-fills query if provided)"
+    },
+    {
+      "token": "gai",
+      "description": "Open Google AI Mode (pre-fills query if provided)"
+    },
+    {
+      "token": "gemini",
+      "description": "Open Gemini (pre-fills query if provided)"
+    },
+    {
+      "token": "googleai",
+      "description": "Open Google AI Mode (pre-fills query if provided)"
+    },
+    {
+      "token": "grok",
+      "description": "Open Grok (pre-fills query if provided)"
+    },
+    {
+      "token": "huggingchat",
+      "description": "Open HuggingChat"
+    },
+    {
+      "token": "ithy",
+      "description": "Open Ithy (pre-fills query if provided)"
+    },
+    {
+      "token": "kagiassistant",
+      "description": "Open Kagi Assistant (pre-fills query if provided)"
+    },
+    {
+      "token": "kimi",
+      "description": "Open Kimi"
+    },
+    {
+      "token": "lechat",
+      "description": "Open Le Chat (pre-fills query if provided)"
+    },
+    {
+      "token": "lmarena",
+      "description": "Open LMArena"
+    },
+    {
+      "token": "lumo",
+      "description": "Open Lumo (pre-fills query if provided)"
+    },
+    {
+      "token": "metaai",
+      "description": "Open Meta AI"
+    },
+    {
+      "token": "mistral",
+      "description": "Open Le Chat (pre-fills query if provided)"
+    },
+    {
+      "token": "perplexity",
+      "description": "Open Perplexity (pre-fills query if provided)"
+    },
+    {
+      "token": "phind",
+      "description": "Open Phind (pre-fills query if provided)"
+    },
+    {
+      "token": "piai",
+      "description": "Open Pi"
+    },
+    {
+      "token": "poeai",
+      "description": "Open Poe"
+    },
+    {
+      "token": "pplx",
+      "description": "Open Perplexity (pre-fills query if provided)"
+    },
+    {
+      "token": "ppx",
+      "description": "Open Perplexity (pre-fills query if provided)"
+    },
+    {
+      "token": "protonlumo",
+      "description": "Open Lumo (pre-fills query if provided)"
+    },
+    {
+      "token": "qwen",
+      "description": "Open Qwen Chat"
+    },
+    {
+      "token": "t3",
+      "description": "Open T3 Chat (pre-fills query if provided)"
+    },
+    {
+      "token": "v0",
+      "description": "Open v0 (pre-fills query if provided)"
+    },
+    {
+      "token": "youai",
+      "description": "Open You.com (pre-fills query if provided)"
+    },
+    {
+      "token": "zai",
+      "description": "Open Z.ai"
+    },
+    {
+      "token": "гии",
+      "description": "Open Google AI Mode (pre-fills query if provided)"
+    }
+  ],
   "status": [
-    "claude_label",
-    "codex_label"
+    "claude",
+    "codex",
+    "grok"
   ],
   "listen": [
     "core:status.observed"
   ],
   "capabilities": [
     "open",
-    "network",
-    "subprocess"
+    "apple_events"
+  ],
+  "apple_events_targets": [
+    "com.apple.systemevents"
   ]
 }

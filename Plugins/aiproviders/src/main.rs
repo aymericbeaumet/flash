@@ -1,299 +1,367 @@
-//! AI-provider launcher and quota status owner.
+//! AI chat bangs and the weekly AI quota segments.
 //!
-//! Quota refreshes run after the protocol handshake and never on status-bar
-//! rendering or popup hover. The plugin immediately republishes its sanitized
-//! last-good cache, republishes changed rendered status at minute boundaries,
-//! then refreshes Anthropic every ten minutes and OpenAI every two minutes.
-//! Only percentages, reset epochs, window lengths, and fetch time are persisted
-//! in the plugin cache, and raw responses stay in memory.
+//! Every AI chat trigger (`!claude`, `!chatgpt`, `!ai` for Duck.ai, …) is
+//! this plugin's: it opens the provider, pre-filling the query where the
+//! provider's URL takes one, and presses Return once the page had time to
+//! load while the app it opened in still has focus. Search-engine bangs
+//! belong to `searchproviders`, which leaves these triggers alone.
 //!
-//! Claude Code's credentials are read-only by default: an expired token leaves
-//! the Claude quota to age out until Claude Code renews it, with the store
-//! reread every minute and the gap logged once through `ClaudeHealth`. Only
-//! `[plugin.aiproviders] refresh_claude_code_credentials = true` lets the
-//! plugin renew the token itself and write the rotation back to Claude Code's
-//! own store.
+//! The `claude`, `codex` and `grok` status segments carry only the metric
+//! (`6%↻22h`); the template owns the names, colours, links and hover. The
+//! quota rules live in [`quota`]: Claude from a read-only usage request with
+//! the OAuth access token Claude Code stored (its login Keychain item, else
+//! `~/.claude/.credentials.json`), Codex from `codex app-server`, Grok from
+//! a read-only billing request with the access token already in Grok's auth
+//! file. No token is ever refreshed or written. Quotas refresh only while a
+//! status surface shows their segment, and only the shown providers.
 //!
-//! Claude Code keeps OAuth credentials in the login keychain, while Codex owns
-//! its auth behind `codex app-server`. Those interfaces require subprocesses
-//! that a deny-default plugin profile cannot access, so the manifest follows
-//! the bundled GitHub plugin's `subprocess` posture. Tokens are passed through
-//! stdin, never argv or logs.
+//! The manifest declares `"sandbox": false`: macOS refuses Apple Events from
+//! a sandboxed sender, so the Return press through System Events could not
+//! run, and the quota reads spawn `codex` (with its own network access and
+//! credentials), `security` and `curl`. A token reaches curl on stdin, never
+//! argv or logs, and the plugin stores percentages and times only.
 
-use std::collections::BTreeMap;
+mod quota;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flash_plugin::process;
-use flash_plugin::status::duration_compact;
 use flash_plugin::{
-    Color, CommandRequest, Context, Event, Markup, ObservedCadences, PerformResponse, PollPriority,
-    Published, RefreshGate, run, run_osascript,
+    CommandRequest, Context, Event, ObservedCadences, PerformResponse, PollPriority, Published,
+    host_events, run,
 };
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{OnceCell, RwLock};
+use tokio::sync::OnceCell;
+
+use quota::{Entry, Quota, QuotaState};
 
 const AUTOSEND_DELAY: Duration = Duration::from_millis(2_500);
+/// The quota tick: once a minute while a segment is shown.
+const QUOTA_TICK: Duration = Duration::from_secs(60);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(6);
+const STATE_FILE: &str = "quotas.json";
+const GROK_AUTH_SETTING: &str = "grok_auth_file";
+const GROK_AUTH_DEFAULT: &str = "~/.grok/auth.json";
+
+static CODEX_PATH: LazyLock<OnceCell<Option<PathBuf>>> = LazyLock::new(OnceCell::new);
+
+// -- Chat bangs -------------------------------------------------------------
+
+/// An AI chat provider: `home` opens for an empty query, and `template`
+/// (with `{query}`) pre-fills one. A provider whose URL takes no query
+/// opens `home` either way.
+#[derive(Debug, PartialEq, Eq)]
+struct ChatProvider {
+    token: &'static str,
+    name: &'static str,
+    home: &'static str,
+    template: Option<&'static str>,
+}
+
+const fn chat(
+    token: &'static str,
+    name: &'static str,
+    home: &'static str,
+    template: Option<&'static str>,
+) -> ChatProvider {
+    ChatProvider {
+        token,
+        name,
+        home,
+        template,
+    }
+}
+
+const DUCK_AI_HOME: &str = "https://duck.ai/";
+const DUCK_AI: Option<&str> = Some("https://duckduckgo.com/?q={query}&ia=chat&bang=true");
+const CHATGPT_HOME: &str = "https://chatgpt.com/";
+const CHATGPT: Option<&str> = Some("https://chatgpt.com/?q={query}");
+const GOOGLE_AI_HOME: &str = "https://www.google.com/?udm=50";
+const GOOGLE_AI: Option<&str> = Some("https://www.google.com/search?q={query}&udm=50");
+const LE_CHAT_HOME: &str = "https://chat.mistral.ai/chat";
+const LE_CHAT: Option<&str> = Some("https://chat.mistral.ai/chat?q={query}");
+const LUMO_HOME: &str = "https://lumo.proton.me/";
+const LUMO: Option<&str> = Some("https://lumo.proton.me/?q={query}");
+const PERPLEXITY_HOME: &str = "https://www.perplexity.ai/search";
+const PERPLEXITY: Option<&str> = Some("https://www.perplexity.ai/search?q={query}");
+
+/// Sorted by token so lookup stays allocation-free. Each token is one
+/// manifest `bangs` item: every AI chat bang of DuckDuckGo's and Kagi's
+/// lists (Duck.ai, Kagi's "AI Chatbots" and its Copilot, You.com and
+/// DuckDuckGo AI Chat entries), plus the chat providers neither lists.
+const PROVIDERS: &[ChatProvider] = &[
+    chat("ai", "Duck.ai", DUCK_AI_HOME, DUCK_AI),
+    chat("aichat", "Duck.ai", DUCK_AI_HOME, DUCK_AI),
+    chat("cgpt", "ChatGPT", CHATGPT_HOME, CHATGPT),
+    chat("chat", "Duck.ai", DUCK_AI_HOME, DUCK_AI),
+    chat("chatgpt", "ChatGPT", CHATGPT_HOME, CHATGPT),
+    chat(
+        "claude",
+        "Claude",
+        "https://claude.ai/new",
+        Some("https://claude.ai/new?q={query}"),
+    ),
+    chat(
+        "copilot",
+        "Microsoft Copilot",
+        "https://copilot.microsoft.com/",
+        Some("https://copilot.microsoft.com/?q={query}&bypassredir=1"),
+    ),
+    chat("ddg-ai", "Duck.ai", DUCK_AI_HOME, DUCK_AI),
+    chat("ddg-chat", "Duck.ai", DUCK_AI_HOME, DUCK_AI),
+    chat("deepseek", "DeepSeek", "https://chat.deepseek.com/", None),
+    chat("duckai", "Duck.ai", DUCK_AI_HOME, DUCK_AI),
+    chat(
+        "felo",
+        "Felo",
+        "https://felo.ai/",
+        Some("https://felo.ai/search?q={query}"),
+    ),
+    chat("gai", "Google AI Mode", GOOGLE_AI_HOME, GOOGLE_AI),
+    chat(
+        "gemini",
+        "Gemini",
+        "https://gemini.google.com/app",
+        Some("https://gemini.google.com/app?q={query}"),
+    ),
+    chat("googleai", "Google AI Mode", GOOGLE_AI_HOME, GOOGLE_AI),
+    chat(
+        "grok",
+        "Grok",
+        "https://grok.com/",
+        Some("https://grok.com/?q={query}"),
+    ),
+    chat(
+        "huggingchat",
+        "HuggingChat",
+        "https://huggingface.co/chat/",
+        None,
+    ),
+    chat(
+        "ithy",
+        "Ithy",
+        "https://ithy.com/",
+        Some("https://ithy.com/?query={query}"),
+    ),
+    chat(
+        "kagiassistant",
+        "Kagi Assistant",
+        "https://kagi.com/assistant",
+        Some("https://kagi.com/assistant?q={query}"),
+    ),
+    chat("kimi", "Kimi", "https://www.kimi.com/", None),
+    chat("lechat", "Le Chat", LE_CHAT_HOME, LE_CHAT),
+    chat("lmarena", "LMArena", "https://lmarena.ai/", None),
+    chat("lumo", "Lumo", LUMO_HOME, LUMO),
+    chat("metaai", "Meta AI", "https://www.meta.ai/", None),
+    chat("mistral", "Le Chat", LE_CHAT_HOME, LE_CHAT),
+    chat("perplexity", "Perplexity", PERPLEXITY_HOME, PERPLEXITY),
+    chat(
+        "phind",
+        "Phind",
+        "https://www.phind.com/",
+        Some("https://www.phind.com/search?q={query}"),
+    ),
+    chat("piai", "Pi", "https://pi.ai/", None),
+    chat("poeai", "Poe", "https://poe.com/", None),
+    chat("pplx", "Perplexity", PERPLEXITY_HOME, PERPLEXITY),
+    chat("ppx", "Perplexity", PERPLEXITY_HOME, PERPLEXITY),
+    chat("protonlumo", "Lumo", LUMO_HOME, LUMO),
+    chat("qwen", "Qwen Chat", "https://chat.qwen.ai/", None),
+    chat(
+        "t3",
+        "T3 Chat",
+        "https://www.t3.chat/",
+        Some("https://www.t3.chat/new?q={query}"),
+    ),
+    chat(
+        "v0",
+        "v0",
+        "https://v0.app/",
+        Some("https://v0.app/?q={query}"),
+    ),
+    chat(
+        "youai",
+        "You.com",
+        "https://you.com/",
+        Some("https://you.com/search?q={query}"),
+    ),
+    chat("zai", "Z.ai", "https://chat.z.ai/", None),
+    // Kagi's Russian alias for Google AI Mode.
+    chat("гии", "Google AI Mode", GOOGLE_AI_HOME, GOOGLE_AI),
+];
+
+fn lookup(bang: &str) -> Option<&'static ChatProvider> {
+    PROVIDERS
+        .binary_search_by(|provider| provider.token.cmp(bang))
+        .ok()
+        .map(|index| &PROVIDERS[index])
+}
+
+/// The URL to open, and whether the page then gets its Return press: only
+/// a pre-filled query is submitted.
+fn chat_url(provider: &ChatProvider, query: &str) -> (String, bool) {
+    match provider.template.filter(|_| !query.is_empty()) {
+        Some(template) => (template.replace("{query}", &percent_encode(query)), true),
+        None => (provider.home.to_string(), false),
+    }
+}
+
+/// Match `urllib.parse.quote`'s default query-value behavior: RFC 3986
+/// unreserved bytes and `/` pass through, every other UTF-8 byte is `%XX`.
+fn percent_encode(input: &str) -> String {
+    let mut encoded = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
 
 /// Return, pressed only while the app the page opened in still has focus:
 /// by the time the page has loaded the user may be typing elsewhere, where
 /// a stray Return would submit or run whatever is there. `None` for a bundle
 /// id that could not be spliced into AppleScript verbatim.
-fn autosend_script(bundle_id: &str) -> Option<String> {
+fn autosend_script(bundle_id: &str) -> Option<flash_plugin::AppleScriptOperation> {
     let valid = !bundle_id.is_empty()
         && bundle_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
-    valid.then(|| {
-        format!(
-            r#"tell application "System Events" to if bundle identifier of (first application process whose frontmost is true) is "{bundle_id}" then key code 36"#
-        )
+    valid.then(|| flash_plugin::AppleScriptOperation::ChatSubmit {
+        bundle_id: bundle_id.to_string(),
     })
 }
 
-const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_secs(60);
-const ANTHROPIC_USAGE_TTL: u64 = 600;
-const ANTHROPIC_RETRY_SECONDS: u64 = 300;
-const OPENAI_USAGE_TTL: u64 = 120;
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(6);
-const COMMAND_STDOUT_LIMIT: usize = 1024 * 1024;
-const COMMAND_STDERR_LIMIT: usize = 64 * 1024;
-const ANTHROPIC_CACHE: &str = "anthropic-usage-v1.json";
-const OPENAI_CACHE: &str = "openai-usage-v1.json";
-const ANTHROPIC_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const ANTHROPIC_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const CREDENTIAL_REFRESH_SETTING: &str = "refresh_claude_code_credentials";
+// -- Quota settings -----------------------------------------------------------
 
-static USAGE_REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
-static CODEX_PATH: LazyLock<OnceCell<Option<PathBuf>>> = LazyLock::new(OnceCell::new);
-static ANTHROPIC_RETRY_AT: AtomicU64 = AtomicU64::new(0);
-
-/// Sorted by bang token so lookup stays allocation-free.
-const PROVIDERS: &[(&str, &str, &str)] = &[
-    ("chatgpt", "https://chatgpt.com/", "q"),
-    ("claude", "https://claude.ai/new", "q"),
-    ("copilot", "https://copilot.microsoft.com/", "q"),
-    ("gemini", "https://gemini.google.com/app", "q"),
-    ("grok", "https://grok.com/", "q"),
-    ("perplexity", "https://www.perplexity.ai/search", "q"),
-];
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-struct WindowUsage {
-    used_percent: f64,
-    resets_at: Option<u64>,
-    window_minutes: u64,
+/// Where each quota is read. `grok_auth_file` is `None` when its setting is
+/// invalid: Grok then keeps its last reading rather than reading another
+/// file.
+#[derive(Clone, Debug, PartialEq)]
+struct Sources {
+    claude: quota::ClaudeCredentials,
+    claude_usage_url: String,
+    grok_auth_file: Option<PathBuf>,
 }
 
-impl WindowUsage {
-    fn new(used_percent: f64, resets_at: Option<u64>, window_minutes: u64) -> Self {
-        Self {
-            used_percent,
-            resets_at,
-            window_minutes,
+/// An explicit path setting, `~/` expanded against `home`.
+fn configured_path(
+    value: Option<&Value>,
+    default: &str,
+    home: Option<&Path>,
+) -> Result<PathBuf, &'static str> {
+    let raw = match value {
+        None => default,
+        Some(Value::String(raw)) => raw.as_str(),
+        Some(_) => return Err("not_a_string"),
+    };
+    let path = match raw.strip_prefix("~/") {
+        Some(rest) => home.ok_or("no_home")?.join(rest),
+        None => PathBuf::from(raw),
+    };
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err("not_absolute")
+    }
+}
+
+/// Claude Code's own credential locations, and the Grok setting, logging an
+/// invalid one once without its value.
+fn configured_sources(ctx: &Context) -> Sources {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let resolve = |setting: &str, default: &str| {
+        let value = ctx.config_json::<Value>(setting);
+        configured_path(value.as_ref(), default, home.as_deref())
+            .map_err(|reason| {
+                ctx.log_fields(
+                    "warn",
+                    "[aiproviders] invalid quota setting; that quota keeps its last reading",
+                    BTreeMap::from([
+                        ("setting".to_string(), setting.to_string()),
+                        ("reason".to_string(), reason.to_string()),
+                    ]),
+                );
+            })
+            .ok()
+    };
+    Sources {
+        claude: quota::ClaudeCredentials::claude_code(home.as_deref()),
+        claude_usage_url: quota::CLAUDE_USAGE_URL.to_string(),
+        grok_auth_file: resolve(GROK_AUTH_SETTING, GROK_AUTH_DEFAULT),
+    }
+}
+
+// -- Observation scope --------------------------------------------------------
+
+/// The quotas a status surface shows, from `core:status.observed`: a quota
+/// refreshes only while its own segment is shown. Every quota counts until
+/// the host's first report.
+#[derive(Debug, Default)]
+struct ObservedScope {
+    shown: Mutex<Option<BTreeSet<Quota>>>,
+}
+
+impl ObservedScope {
+    fn current(&self) -> Vec<Quota> {
+        match &*self.shown.lock().unwrap_or_else(|error| error.into_inner()) {
+            Some(shown) => shown.iter().copied().collect(),
+            None => Quota::ALL.to_vec(),
         }
     }
 
-    fn valid(&self) -> bool {
-        self.used_percent.is_finite()
-            && (0.0..=100.0).contains(&self.used_percent)
-            && self.window_minutes > 0
+    /// Apply a report; the quotas it newly shows (all shown ones on the
+    /// first report) refresh at once rather than a tick later.
+    fn observe(&self, segments: &[String]) -> Vec<Quota> {
+        let next: BTreeSet<Quota> = segments
+            .iter()
+            .filter_map(|segment| Quota::from_segment(segment))
+            .collect();
+        let mut shown = self.shown.lock().unwrap_or_else(|error| error.into_inner());
+        let gained = match &*shown {
+            Some(previous) => next.difference(previous).copied().collect(),
+            None => next.iter().copied().collect(),
+        };
+        *shown = Some(next);
+        gained
     }
 }
 
-/// The Claude weekly window the `Cld` label shows.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-struct AnthropicUsage {
-    updated_at: u64,
-    claude_week: Option<WindowUsage>,
-}
-
-impl AnthropicUsage {
-    fn sanitize(mut self) -> Option<Self> {
-        self.claude_week = self.claude_week.filter(WindowUsage::valid);
-        self.claude_week.is_some().then_some(self)
-    }
-}
-
-/// The Codex weekly window the `Cdx` label shows.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-struct OpenAIUsage {
-    updated_at: u64,
-    #[serde(rename = "openai", with = "openai_weekly", default)]
-    codex_week: Option<WindowUsage>,
-}
-
-/// The cache has always kept the Codex weekly window at `openai.weekly`, so a
-/// cache written before the plugin dropped the other windows still loads.
-mod openai_weekly {
-    use super::WindowUsage;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    #[derive(Deserialize)]
-    struct Windows {
-        weekly: Option<WindowUsage>,
-    }
-
-    #[derive(Serialize)]
-    struct WindowsRef<'a> {
-        weekly: &'a Option<WindowUsage>,
-    }
-
-    pub fn serialize<S: Serializer>(
-        weekly: &Option<WindowUsage>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        WindowsRef { weekly }.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<WindowUsage>, D::Error> {
-        Ok(Windows::deserialize(deserializer)?.weekly)
-    }
-}
-
-impl OpenAIUsage {
-    fn sanitize(mut self) -> Option<Self> {
-        self.codex_week = self.codex_week.filter(WindowUsage::valid);
-        self.codex_week.is_some().then_some(self)
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct UsageState {
-    anthropic: Option<AnthropicUsage>,
-    openai: Option<OpenAIUsage>,
-}
+// -- Quota runtime ------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct StatusSegments {
-    claude_label: Markup,
-    codex_label: Markup,
+struct Metrics {
+    claude: String,
+    codex: String,
+    grok: String,
+}
+
+fn render_metrics(state: &QuotaState, now: u64, offset: &dyn Fn(u64) -> i64) -> Metrics {
+    let metric = |quota| quota::metric(state.get(quota), now, offset);
+    Metrics {
+        claude: metric(Quota::Claude),
+        codex: metric(Quota::Codex),
+        grok: metric(Quota::Grok),
+    }
 }
 
 #[derive(Debug, Default)]
-struct UsageRuntime {
-    state: UsageState,
-    published: Published<StatusSegments>,
-    claude_health: ClaudeHealth,
+struct QuotaRuntime {
+    loaded: bool,
+    state: QuotaState,
+    published: Published<Metrics>,
 }
 
-/// Why a Claude refresh produced no reading. Content-free: a failure class
-/// and, for a request, only its HTTP status (0 when no response arrived).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClaudeFailure {
-    /// Neither the Keychain item nor `~/.claude/.credentials.json` holds a
-    /// usable token.
-    NoCredentials,
-    /// Read-only, and Claude Code's token has expired: Claude Code renews it
-    /// on its next request.
-    TokenExpired,
-    /// The opted-in renewal did not store a new token.
-    RenewalFailed,
-    Request {
-        http_status: u16,
-    },
-    /// A successful response without the weekly window.
-    Unrecognized,
-}
-
-impl ClaudeFailure {
-    fn reason(self) -> &'static str {
-        match self {
-            Self::NoCredentials => "no_credentials",
-            Self::TokenExpired => "token_expired",
-            Self::RenewalFailed => "renewal_failed",
-            Self::Request { .. } => "request",
-            Self::Unrecognized => "unrecognized",
-        }
-    }
-
-    fn describe(self) -> &'static str {
-        match self {
-            Self::NoCredentials => "no Claude Code sign-in found",
-            Self::TokenExpired => {
-                "Claude Code's token has expired; waiting for Claude Code to renew it"
-            }
-            Self::RenewalFailed => "renewing Claude Code's token failed",
-            Self::Request { .. } => "the usage request failed",
-            Self::Unrecognized => "the usage response has no weekly window",
-        }
-    }
-
-    fn fields(self) -> BTreeMap<String, String> {
-        let mut fields = BTreeMap::from([("reason".to_string(), self.reason().to_string())]);
-        if let Self::Request { http_status } = self {
-            fields.insert("http_status".to_string(), http_status.to_string());
-        }
-        fields
-    }
-
-    /// An expired read-only token made no request, so the next tick rereads
-    /// the store and the label recovers within a minute of Claude Code
-    /// renewing it. Every other failure waits five minutes.
-    fn retry_at(self, now: u64) -> u64 {
-        match self {
-            Self::TokenExpired => now,
-            _ => now.saturating_add(ANTHROPIC_RETRY_SECONDS),
-        }
-    }
-}
-
-type LogLine = (&'static str, String, BTreeMap<String, String>);
-
-/// Latches the last Claude failure: a failure logs when it starts or changes
-/// class, and the next reading logs the recovery. Repeated ticks stay quiet.
-#[derive(Debug, Default)]
-struct ClaudeHealth {
-    failure: Option<ClaudeFailure>,
-}
-
-impl ClaudeHealth {
-    fn observe(&mut self, outcome: Result<(), ClaudeFailure>) -> Option<LogLine> {
-        let failure = outcome.err();
-        match (std::mem::replace(&mut self.failure, failure), failure) {
-            (previous, Some(failure)) if previous != Some(failure) => Some((
-                "warn",
-                format!(
-                    "[aiproviders] Claude quota unavailable: {}",
-                    failure.describe()
-                ),
-                failure.fields(),
-            )),
-            (Some(previous), None) => Some((
-                "info",
-                "[aiproviders] Claude quota recovered".to_string(),
-                previous.fields(),
-            )),
-            _ => None,
-        }
-    }
-}
-
-fn note_claude_outcome(
-    ctx: &Context,
-    health: &mut ClaudeHealth,
-    outcome: Result<(), ClaudeFailure>,
-) {
-    if let Some((level, message, fields)) = health.observe(outcome) {
-        ctx.log_fields(level, &message, fields);
-    }
-}
-
-impl StatusSegments {
-    #[cfg(test)]
-    fn all(&self) -> [&str; 2] {
-        [self.claude_label.as_str(), self.codex_label.as_str()]
-    }
-}
+type SharedQuotas = Arc<tokio::sync::Mutex<QuotaRuntime>>;
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -302,303 +370,128 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-fn fresh(updated_at: u64, ttl: u64, now: u64) -> bool {
-    updated_at <= now.saturating_add(60) && now.saturating_sub(updated_at) < ttl
+fn state_path(ctx: &Context) -> PathBuf {
+    ctx.data_dir().join(STATE_FILE)
 }
 
-async fn load_usage_state(ctx: &Context) -> UsageState {
-    let anthropic = load_json::<AnthropicUsage>(&ctx.data_dir().join(ANTHROPIC_CACHE))
-        .await
-        .and_then(AnthropicUsage::sanitize);
-    let openai = load_json::<OpenAIUsage>(&ctx.data_dir().join(OPENAI_CACHE))
-        .await
-        .and_then(OpenAIUsage::sanitize);
-    UsageState { anthropic, openai }
+async fn ensure_loaded(ctx: &Context, runtime: &mut QuotaRuntime) {
+    if runtime.loaded {
+        return;
+    }
+    if let Ok(bytes) = tokio::fs::read(state_path(ctx)).await {
+        runtime.state = QuotaState::from_json(&bytes);
+    }
+    runtime.loaded = true;
 }
 
-async fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let bytes = tokio::fs::read(path).await.ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
+/// Atomically replace the state file, readable by the user alone.
+async fn write_state(path: &Path, state: &QuotaState) -> bool {
+    use std::os::unix::fs::PermissionsExt;
 
-async fn write_json<T: Serialize>(path: &Path, value: &T) -> bool {
-    let Ok(bytes) = serde_json::to_vec(value) else {
-        return false;
-    };
     let Some(parent) = path.parent() else {
         return false;
     };
     if tokio::fs::create_dir_all(parent).await.is_err() {
         return false;
     }
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    if tokio::fs::write(&temporary, bytes).await.is_err() {
-        return false;
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let written = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temporary)
+            .await?;
+        file.write_all(&state.to_json()).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600)).await?;
+        tokio::fs::rename(&temporary, path).await
     }
-    if tokio::fs::rename(&temporary, path).await.is_err() {
+    .await;
+    if written.is_err() {
         let _ = tokio::fs::remove_file(&temporary).await;
-        return false;
     }
-    true
+    written.is_ok()
 }
 
-fn publish_status(ctx: &Context, segments: &StatusSegments) {
-    ctx.status([
-        ("claude_label", segments.claude_label.as_str()),
-        ("codex_label", segments.codex_label.as_str()),
-    ]);
-}
-
-async fn publish_current_status(ctx: &Context, shared: &Arc<RwLock<UsageRuntime>>) {
-    let mut runtime = shared.write().await;
-    let segments = render_status_segments(&runtime.state, unix_now());
-    if let Some(segments) = runtime.published.update(segments) {
-        publish_status(ctx, segments);
+fn publish_metrics(ctx: &Context, runtime: &mut QuotaRuntime, now: u64) {
+    let metrics = render_metrics(&runtime.state, now, &quota::local_utc_offset);
+    if let Some(metrics) = runtime.published.update(metrics) {
+        ctx.status([
+            (Quota::Claude.segment(), metrics.claude.as_str()),
+            (Quota::Codex.segment(), metrics.codex.as_str()),
+            (Quota::Grok.segment(), metrics.grok.as_str()),
+        ]);
     }
 }
 
-async fn refresh_usage(
-    ctx: &Context,
-    shared: &Arc<RwLock<UsageRuntime>>,
-    refresh_credentials: bool,
-) {
-    let shared = Arc::clone(shared);
-    USAGE_REFRESH_GATE
-        .run(ctx, move |ctx, _applications| async move {
-            let now = unix_now();
-            let mut state = shared.read().await.state.clone();
-            let refresh_anthropic = state
-                .anthropic
-                .as_ref()
-                .is_none_or(|usage| !fresh(usage.updated_at, ANTHROPIC_USAGE_TTL, now))
-                && now >= ANTHROPIC_RETRY_AT.load(Ordering::Relaxed);
-            let refresh_openai = state
-                .openai
-                .as_ref()
-                .is_none_or(|usage| !fresh(usage.updated_at, OPENAI_USAGE_TTL, now));
-
-            let anthropic = async {
-                if refresh_anthropic {
-                    Some(fetch_anthropic_usage(now, refresh_credentials).await)
-                } else {
-                    None
-                }
-            };
-            let openai = async {
-                if refresh_openai {
-                    fetch_openai_usage(now).await
-                } else {
-                    None
-                }
-            };
-            let (anthropic, openai) = tokio::join!(anthropic, openai);
-
-            let claude_outcome = anthropic
-                .as_ref()
-                .map(|fetched| fetched.as_ref().map(|_| ()).map_err(|failure| *failure));
-            match anthropic {
-                Some(Ok(usage)) => {
-                    ANTHROPIC_RETRY_AT.store(0, Ordering::Relaxed);
-                    let _ = write_json(&ctx.data_dir().join(ANTHROPIC_CACHE), &usage).await;
-                    state.anthropic = Some(usage);
-                }
-                Some(Err(failure)) => {
-                    ANTHROPIC_RETRY_AT.store(failure.retry_at(now), Ordering::Relaxed)
-                }
-                None => {}
-            }
-            if let Some(usage) = openai {
-                let _ = write_json(&ctx.data_dir().join(OPENAI_CACHE), &usage).await;
-                state.openai = Some(usage);
-            }
-            {
-                let mut runtime = shared.write().await;
-                runtime.state = state;
-                if let Some(outcome) = claude_outcome {
-                    note_claude_outcome(&ctx, &mut runtime.claude_health, outcome);
-                }
-            }
-            publish_current_status(&ctx, &shared).await;
-        })
-        .await;
+/// Publish the stored readings as they read now.
+async fn publish_stored(ctx: &Context, shared: &SharedQuotas) {
+    let mut runtime = shared.lock().await;
+    ensure_loaded(ctx, &mut runtime).await;
+    publish_metrics(ctx, &mut runtime, unix_now());
 }
 
-fn parse_anthropic_usage(raw: &str, now: u64) -> Option<AnthropicUsage> {
-    let root: Value = serde_json::from_str(raw).ok()?;
-    AnthropicUsage {
-        updated_at: now,
-        claude_week: anthropic_window(root.get("seven_day")?, 10_080),
-    }
-    .sanitize()
-}
-
-fn anthropic_window(value: &Value, window_minutes: u64) -> Option<WindowUsage> {
-    let used = usage_percent(value.get("utilization")?)?;
-    let resets_at = value
-        .get("resets_at")
-        .and_then(Value::as_str)
-        .and_then(parse_rfc3339_epoch);
-    Some(WindowUsage::new(used, resets_at, window_minutes))
-}
-
-fn parse_openai_rate_limits(raw: &str, now: u64) -> Option<OpenAIUsage> {
-    let result = raw.lines().find_map(|line| {
-        let value: Value = serde_json::from_str(line).ok()?;
-        (value.get("id").and_then(Value::as_u64) == Some(2))
-            .then(|| value.get("result").cloned())
-            .flatten()
-    })?;
-    OpenAIUsage {
-        updated_at: now,
-        codex_week: result
-            .pointer("/rateLimitsByLimitId/codex")
-            .or_else(|| result.get("rateLimits"))
-            .and_then(weekly_window),
-    }
-    .sanitize()
-}
-
-/// The window of a day or longer among a rate limit's primary and secondary
-/// ones; the other is the session.
-fn weekly_window(limits: &Value) -> Option<WindowUsage> {
-    [limits.get("primary"), limits.get("secondary")]
-        .into_iter()
-        .flatten()
-        .filter_map(codex_window)
-        .find(|window| window.window_minutes >= 1_440)
-}
-
-fn codex_window(value: &Value) -> Option<WindowUsage> {
-    let used = usage_percent(value.get("usedPercent")?)?;
-    let window_minutes = value.get("windowDurationMins")?.as_u64()?;
-    let resets_at = value.get("resetsAt").and_then(Value::as_u64);
-    Some(WindowUsage::new(used, resets_at, window_minutes))
-}
-
-fn usage_percent(value: &Value) -> Option<f64> {
-    let value = value.as_f64()?;
-    (value.is_finite() && (0.0..=100.0).contains(&value)).then_some(value)
-}
-
-fn render_status_segments(state: &UsageState, now: u64) -> StatusSegments {
-    let claude_week = state
-        .anthropic
-        .as_ref()
-        .filter(|usage| fresh(usage.updated_at, 2 * ANTHROPIC_USAGE_TTL, now))
-        .and_then(|usage| usage.claude_week.as_ref());
-    let codex_week = state
-        .openai
-        .as_ref()
-        .filter(|usage| fresh(usage.updated_at, 2 * OPENAI_USAGE_TTL, now))
-        .and_then(|usage| usage.codex_week.as_ref());
-    StatusSegments {
-        claude_label: quota_label("Cld", claude_week, now),
-        codex_label: quota_label("Cdx", codex_week, now),
-    }
-}
-
-fn quota_label(label: &str, weekly: Option<&WindowUsage>, now: u64) -> Markup {
-    let metric = weekly
-        .map(|window| {
-            let remaining = remaining_percent(window.used_percent).min(99);
-            let mut metric = format!("{remaining}%");
-            if let Some(reset) = window.resets_at {
-                metric.push('↻');
-                metric.push_str(&duration_compact(reset.saturating_sub(now)));
-            }
-            metric
-        })
-        .unwrap_or_else(|| "—".to_string());
-    Markup::raw(format!(
-        "#[fg={}]{label} #[fg={}]{metric}#[default]",
-        Color::TITLE,
-        Color::MUTED
-    ))
-}
-
-fn remaining_percent(used: f64) -> u8 {
-    (100_i64 - used.floor() as i64).clamp(0, 100) as u8
-}
-
-fn parse_rfc3339_epoch(value: &str) -> Option<u64> {
-    let bytes = value.as_bytes();
-    if bytes.len() < 20
-        || bytes.get(4) != Some(&b'-')
-        || bytes.get(7) != Some(&b'-')
-        || bytes.get(10) != Some(&b'T')
-        || bytes.get(13) != Some(&b':')
-        || bytes.get(16) != Some(&b':')
-    {
-        return None;
-    }
-    let year = decimal(bytes.get(0..4)?)? as i64;
-    let month = decimal(bytes.get(5..7)?)? as i64;
-    let day = decimal(bytes.get(8..10)?)? as i64;
-    let hour = decimal(bytes.get(11..13)?)? as i64;
-    let minute = decimal(bytes.get(14..16)?)? as i64;
-    let second = decimal(bytes.get(17..19)?)? as i64;
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
-        return None;
-    }
-    let zone_index = value[19..].find(['Z', '+', '-']).map(|index| index + 19)?;
-    let offset = match bytes[zone_index] {
-        b'Z' if zone_index + 1 == bytes.len() => 0,
-        b'+' | b'-' if zone_index + 6 == bytes.len() && bytes[zone_index + 3] == b':' => {
-            let offset_hour = decimal(&bytes[zone_index + 1..zone_index + 3])? as i64;
-            let offset_minute = decimal(&bytes[zone_index + 4..zone_index + 6])? as i64;
-            if offset_hour > 23 || offset_minute > 59 {
-                return None;
-            }
-            let seconds = offset_hour * 3_600 + offset_minute * 60;
-            if bytes[zone_index] == b'+' {
-                seconds
-            } else {
-                -seconds
-            }
+/// Refresh the due `quotas`, persist a changed state, and republish.
+/// Serialized by the runtime lock.
+async fn refresh_quotas(ctx: &Context, shared: &SharedQuotas, sources: &Sources, quotas: &[Quota]) {
+    let mut runtime = shared.lock().await;
+    ensure_loaded(ctx, &mut runtime).await;
+    let now = unix_now();
+    let wants = |quota| quotas.contains(&quota);
+    let state = &runtime.state;
+    let claude = async {
+        if wants(Quota::Claude) && quota::wants_fetch(&state.entry(Quota::Claude), now) {
+            Some(quota::fetch_claude(&sources.claude, &sources.claude_usage_url, now).await)
+        } else {
+            None
         }
-        _ => return None,
     };
-    let days = days_from_civil(year, month, day)?;
-    let epoch = days * 86_400 + hour * 3_600 + minute * 60 + second - offset;
-    u64::try_from(epoch).ok()
-}
-
-fn decimal(bytes: &[u8]) -> Option<u64> {
-    bytes.iter().try_fold(0_u64, |value, byte| {
-        byte.is_ascii_digit()
-            .then_some(value * 10 + u64::from(byte - b'0'))
-    })
-}
-
-fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
-    let leap = |year: i64| year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let days_in_month = match month {
-        2 if leap(year) => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        _ => return None,
+    let codex = async {
+        if wants(Quota::Codex) && quota::wants_fetch(&state.entry(Quota::Codex), now) {
+            Some(fetch_codex().await)
+        } else {
+            None
+        }
     };
-    if day < 1 || day > days_in_month {
-        return None;
+    let grok = async {
+        match &sources.grok_auth_file {
+            Some(path)
+                if wants(Quota::Grok) && quota::wants_fetch(&state.entry(Quota::Grok), now) =>
+            {
+                Some(quota::fetch_grok(path, now).await)
+            }
+            _ => None,
+        }
+    };
+    let (claude, codex, grok) = tokio::join!(claude, codex, grok);
+
+    let mut next = runtime.state.clone();
+    if let Some(fetch) = claude {
+        let entry = quota::after_token_fetch(next.entry(Quota::Claude), now, fetch);
+        next.set(Quota::Claude, entry);
     }
-    let adjusted_year = year - i64::from(month <= 2);
-    let era = if adjusted_year >= 0 {
-        adjusted_year
-    } else {
-        adjusted_year - 399
-    } / 400;
-    let year_of_era = adjusted_year - era * 400;
-    let shifted_month = month + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    Some(era * 146_097 + day_of_era - 719_468)
+    if let Some(window) = codex {
+        let entry = quota::after_codex(next.entry(Quota::Codex), now, window);
+        next.set(Quota::Codex, entry);
+    }
+    if let Some(fetch) = grok {
+        let entry = quota::after_token_fetch(next.entry(Quota::Grok), now, fetch);
+        next.set(Quota::Grok, entry);
+    }
+    if next != runtime.state {
+        runtime.state = next;
+        if !write_state(&state_path(ctx), &runtime.state).await {
+            ctx.log("warn", "[aiproviders] quota state write failed");
+        }
+    }
+    publish_metrics(ctx, &mut runtime, now);
 }
+
+// -- Codex ----------------------------------------------------------------------
 
 #[derive(Debug)]
 struct CapturedOutput {
@@ -617,8 +510,8 @@ async fn capture(
         &mut command,
         stdin,
         timeout,
-        COMMAND_STDOUT_LIMIT,
-        COMMAND_STDERR_LIMIT,
+        quota::STDOUT_LIMIT,
+        quota::STDERR_LIMIT,
     )
     .await
     .ok()?;
@@ -627,368 +520,9 @@ async fn capture(
     })
 }
 
-#[derive(Debug)]
-enum CredentialStore {
-    Keychain { account: String, service: String },
-    File(PathBuf),
-}
-
-#[derive(Debug)]
-struct ClaudeCredentials {
-    value: Value,
-    store: CredentialStore,
-}
-
-/// What a fetch does with the stored Claude Code token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClaudeToken {
-    Use,
-    Renew,
-    Expired,
-}
-
-/// `[plugin.aiproviders] refresh_claude_code_credentials`. Renewal rotates
-/// Claude Code's refresh token with Claude Code's own OAuth client and
-/// writes the result back into Claude Code's store, which can sign Claude Code
-/// out, so the default is read-only.
-fn parse_credential_refresh(value: Option<Value>) -> Result<bool, &'static str> {
-    match value {
-        None => Ok(false),
-        Some(Value::Bool(enabled)) => Ok(enabled),
-        Some(_) => Err("refresh_claude_code_credentials must be true or false"),
-    }
-}
-
-fn configured_credential_refresh(ctx: &Context) -> bool {
-    parse_credential_refresh(ctx.config_json(CREDENTIAL_REFRESH_SETTING)).unwrap_or_else(|error| {
-        ctx.log(
-            "warn",
-            &format!("[aiproviders] invalid configuration: {error}; credentials stay read-only"),
-        );
-        false
-    })
-}
-
-/// A read-only fetch uses the token until it expires; an opted-in one renews
-/// it two minutes early.
-fn claude_token(credentials: &Value, now: u64, refresh_credentials: bool) -> ClaudeToken {
-    let expires_at = credentials
-        .pointer("/claudeAiOauth/expiresAt")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    if refresh_credentials && expires_at <= now.saturating_add(120).saturating_mul(1_000) {
-        ClaudeToken::Renew
-    } else if expires_at <= now.saturating_mul(1_000) {
-        ClaudeToken::Expired
-    } else {
-        ClaudeToken::Use
-    }
-}
-
-async fn fetch_anthropic_usage(
-    now: u64,
-    refresh_credentials: bool,
-) -> Result<AnthropicUsage, ClaudeFailure> {
-    let token = claude_access_token(now, refresh_credentials).await?;
-    let mut curl_config = format!(
-        "header = \"Authorization: Bearer {token}\"\n\
-         header = \"Content-Type: application/json\"\n\
-         header = \"anthropic-version: 2023-06-01\"\n\
-         header = \"anthropic-beta: oauth-2025-04-20\"\n\
-         header = \"anthropic-client-platform: macos\"\n\
-         header = \"User-Agent: claude-code/flash-status\"\n"
-    );
-    if let Some(organization) = claude_organization_uuid().await {
-        curl_config.push_str(&format!(
-            "header = \"x-organization-uuid: {organization}\"\n"
-        ));
-    }
-    // No --fail: the trailing status line reports an HTTP error by number.
-    let mut command = Command::new("/usr/bin/curl");
-    command.args([
-        "-sS",
-        "--max-time",
-        "5",
-        "-w",
-        "\n%{http_code}",
-        "-K",
-        "-",
-        ANTHROPIC_USAGE_URL,
-    ]);
-    let output = process::capture(
-        &mut command,
-        Some(curl_config.into_bytes()),
-        COMMAND_TIMEOUT,
-        COMMAND_STDOUT_LIMIT,
-        COMMAND_STDERR_LIMIT,
-    )
-    .await
-    .map_err(|_| ClaudeFailure::Request { http_status: 0 })?;
-    parse_usage_reply(&String::from_utf8_lossy(&output.stdout), now)
-}
-
-/// Splits curl's `\n%{http_code}` trailer from the body. Only a 200 is parsed;
-/// any other status, or `000` when no response arrived, is reported by number.
-fn parse_usage_reply(stdout: &str, now: u64) -> Result<AnthropicUsage, ClaudeFailure> {
-    let (body, status) = stdout.rsplit_once('\n').unwrap_or(("", stdout));
-    match status.trim().parse::<u16>().unwrap_or(0) {
-        200 => parse_anthropic_usage(body, now).ok_or(ClaudeFailure::Unrecognized),
-        http_status => Err(ClaudeFailure::Request { http_status }),
-    }
-}
-
-/// An expired read-only token is left for Claude Code to renew.
-async fn claude_access_token(now: u64, refresh_credentials: bool) -> Result<String, ClaudeFailure> {
-    let mut credentials = load_claude_credentials()
-        .await
-        .ok_or(ClaudeFailure::NoCredentials)?;
-    match claude_token(&credentials.value, now, refresh_credentials) {
-        ClaudeToken::Use => {}
-        ClaudeToken::Expired => return Err(ClaudeFailure::TokenExpired),
-        ClaudeToken::Renew => refresh_claude_credentials(&mut credentials, now)
-            .await
-            .ok_or(ClaudeFailure::RenewalFailed)?,
-    }
-    credentials
-        .value
-        .pointer("/claudeAiOauth/accessToken")
-        .and_then(Value::as_str)
-        .filter(|token| safe_header_value(token))
-        .map(str::to_string)
-        .ok_or(ClaudeFailure::NoCredentials)
-}
-
-async fn load_claude_credentials() -> Option<ClaudeCredentials> {
-    let user = std::env::var("USER")
-        .ok()
-        .filter(|value| safe_keychain_name(value))
-        .unwrap_or_else(|| "claude-code-user".to_string());
-    let service = "Claude Code-credentials".to_string();
-    let output = capture(
-        Path::new("/usr/bin/security"),
-        &["find-generic-password", "-a", &user, "-s", &service, "-w"],
-        None,
-        Duration::from_secs(3),
-    )
-    .await;
-    if let Some(output) = output
-        && let Ok(value) = serde_json::from_str(output.stdout.trim())
-    {
-        return Some(ClaudeCredentials {
-            value,
-            store: CredentialStore::Keychain {
-                account: user,
-                service,
-            },
-        });
-    }
-
-    let home = user_home()?;
-    let path = home.join(".claude/.credentials.json");
-    let value = load_json(&path).await?;
-    Some(ClaudeCredentials {
-        value,
-        store: CredentialStore::File(path),
-    })
-}
-
-async fn refresh_claude_credentials(credentials: &mut ClaudeCredentials, now: u64) -> Option<()> {
-    let refresh_token = credentials
-        .value
-        .pointer("/claudeAiOauth/refreshToken")
-        .and_then(Value::as_str)?;
-    if !safe_header_value(refresh_token) {
-        return None;
-    }
-    let body = serde_json::to_vec(&json!({
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": CLAUDE_OAUTH_CLIENT_ID,
-    }))
-    .ok()?;
-    let response = capture(
-        Path::new("/usr/bin/curl"),
-        &[
-            "-fsS",
-            "--max-time",
-            "5",
-            "-H",
-            "Accept: application/json",
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            "anthropic-beta: oauth-2025-04-20",
-            "-H",
-            "User-Agent: anthropic-sdk-typescript/0.94.0 userOAuthProvider",
-            "--data-binary",
-            "@-",
-            ANTHROPIC_TOKEN_URL,
-        ],
-        Some(body),
-        COMMAND_TIMEOUT,
-    )
-    .await?;
-    let refreshed: Value = serde_json::from_str(&response.stdout).ok()?;
-    let access_token = refreshed.get("access_token")?.as_str()?;
-    if access_token.is_empty() || !safe_header_value(access_token) {
-        return None;
-    }
-    let refresh_token = refreshed
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(refresh_token)
-        .to_string();
-    let expires_in = refreshed
-        .get("expires_in")
-        .and_then(Value::as_u64)
-        .unwrap_or(3_600);
-    let oauth = credentials
-        .value
-        .get_mut("claudeAiOauth")?
-        .as_object_mut()?;
-    oauth.insert("accessToken".to_string(), json!(access_token));
-    oauth.insert("refreshToken".to_string(), json!(refresh_token));
-    oauth.insert(
-        "expiresAt".to_string(),
-        json!(now.saturating_add(expires_in).saturating_mul(1_000)),
-    );
-    if let Some(refresh_expires_in) = refreshed
-        .get("refresh_token_expires_in")
-        .and_then(Value::as_u64)
-    {
-        oauth.insert(
-            "refreshTokenExpiresAt".to_string(),
-            json!(now.saturating_add(refresh_expires_in).saturating_mul(1_000)),
-        );
-    }
-    store_claude_credentials(credentials).await.then_some(())
-}
-
-async fn store_claude_credentials(credentials: &ClaudeCredentials) -> bool {
-    let Ok(body) = serde_json::to_vec(&credentials.value) else {
-        return false;
-    };
-    match &credentials.store {
-        CredentialStore::Keychain { account, service } => {
-            let Some(command) = keychain_update_command(account, service, &body) else {
-                return false;
-            };
-            // Interactive input keeps the secret off argv. A trailing -w instead
-            // prompts on the controlling terminal and can store an empty password.
-            if capture(
-                Path::new("/usr/bin/security"),
-                &["-i"],
-                Some(command.into_bytes()),
-                Duration::from_secs(3),
-            )
-            .await
-            .is_none()
-            {
-                return false;
-            }
-            // security -i can exit successfully after a failed subcommand.
-            capture(
-                Path::new("/usr/bin/security"),
-                &["find-generic-password", "-a", account, "-s", service, "-w"],
-                None,
-                Duration::from_secs(3),
-            )
-            .await
-            .is_some_and(|stored| {
-                stored
-                    .stdout
-                    .strip_suffix('\n')
-                    .unwrap_or(&stored.stdout)
-                    .as_bytes()
-                    == body
-            })
-        }
-        CredentialStore::File(path) => write_secret(path, &body).await,
-    }
-}
-
-fn keychain_update_command(account: &str, service: &str, body: &[u8]) -> Option<String> {
-    if !safe_keychain_name(account)
-        || service.is_empty()
-        || body.is_empty()
-        || !service
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' '))
-    {
-        return None;
-    }
-    let hex: String = body.iter().map(|byte| format!("{byte:02x}")).collect();
-    Some(format!(
-        "add-generic-password -U -a {account} -s \"{service}\" -X {hex}\n"
-    ))
-}
-
-async fn write_secret(path: &Path, body: &[u8]) -> bool {
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    if tokio::fs::create_dir_all(parent).await.is_err() {
-        return false;
-    }
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    let opened = tokio::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
-        .open(&temporary)
-        .await;
-    let Ok(mut file) = opened else {
-        return false;
-    };
-    if file.write_all(body).await.is_err() || file.flush().await.is_err() {
-        let _ = tokio::fs::remove_file(&temporary).await;
-        return false;
-    }
-    drop(file);
-    if tokio::fs::rename(&temporary, path).await.is_err() {
-        let _ = tokio::fs::remove_file(&temporary).await;
-        return false;
-    }
-    true
-}
-
-async fn claude_organization_uuid() -> Option<String> {
-    let home = user_home()?;
-    let preferred = home.join(".claude/.config.json");
-    let path = if tokio::fs::metadata(&preferred).await.is_ok() {
-        preferred
-    } else {
-        home.join(".claude.json")
-    };
-    let value: Value = load_json(&path).await?;
-    value
-        .pointer("/oauthAccount/organizationUuid")
-        .and_then(Value::as_str)
-        .filter(|value| safe_header_value(value))
-        .map(str::to_string)
-}
-
-fn user_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
-fn safe_header_value(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic() && byte != b'"' && byte != b'\\')
-}
-
-fn safe_keychain_name(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-async fn fetch_openai_usage(now: u64) -> Option<OpenAIUsage> {
+/// The weekly Codex window from `account/rateLimits/read`, through Codex's
+/// own app-server and authentication.
+async fn fetch_codex() -> Option<Entry> {
     let codex = resolved_codex_path().await?;
     let input = concat!(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{",
@@ -998,7 +532,7 @@ async fn fetch_openai_usage(now: u64) -> Option<OpenAIUsage> {
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\"}\n"
     );
     let response = capture_codex_rate_limits(&codex, input).await?;
-    parse_openai_rate_limits(&response, now)
+    quota::parse_codex_rate_limits(&response)
 }
 
 async fn capture_codex_rate_limits(codex: &Path, input: &str) -> Option<String> {
@@ -1013,7 +547,7 @@ async fn capture_codex_rate_limits(codex: &Path, input: &str) -> Option<String> 
     let mut stdin = child.stdin.take()?;
     stdin.write_all(input.as_bytes()).await.ok()?;
     stdin.flush().await.ok()?;
-    let stdout = child.stdout.take()?.take((COMMAND_STDOUT_LIMIT + 1) as u64);
+    let stdout = child.stdout.take()?.take((quota::STDOUT_LIMIT + 1) as u64);
     let mut lines = BufReader::new(stdout).lines();
     let response = tokio::time::timeout(COMMAND_TIMEOUT, async {
         while let Some(line) = lines.next_line().await.ok()? {
@@ -1039,7 +573,7 @@ async fn resolved_codex_path() -> Option<PathBuf> {
 }
 
 async fn find_codex() -> Option<PathBuf> {
-    let home = user_home();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut candidates = vec![
         PathBuf::from("/opt/homebrew/bin/codex"),
         PathBuf::from("/opt/local/bin/codex"),
@@ -1108,20 +642,30 @@ async fn executable_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+// -- Plugin -----------------------------------------------------------------------
+
+#[derive(Default)]
 struct AiProviders {
-    usage: Arc<RwLock<UsageRuntime>>,
+    quotas: SharedQuotas,
+    sources: OnceLock<Sources>,
+    scope: Arc<ObservedScope>,
     /// The quota tick runs only while a surface shows a quota segment: a
     /// chat bang starts this plugin too, and must not leave it reading
-    /// credentials and calling the usage APIs every minute for nobody.
+    /// files, spawning Codex and calling Grok every minute for nobody.
     cadences: ObservedCadences,
 }
 
-impl Default for AiProviders {
-    fn default() -> Self {
-        Self {
-            usage: Arc::new(RwLock::new(UsageRuntime::default())),
-            cadences: ObservedCadences::default(),
-        }
+impl AiProviders {
+    fn sources(&self, ctx: &Context) -> Sources {
+        self.sources.get_or_init(|| configured_sources(ctx)).clone()
+    }
+
+    fn spawn_refresh(&self, ctx: Context, quotas: Vec<Quota>) {
+        let shared = Arc::clone(&self.quotas);
+        let sources = self.sources(&ctx);
+        tokio::spawn(async move {
+            refresh_quotas(&ctx, &shared, &sources, &quotas).await;
+        });
     }
 }
 
@@ -1129,74 +673,53 @@ flash_plugin::plugin!(AiProviders);
 
 impl FlashPlugin for AiProviders {
     async fn on_start(&self, ctx: Context) {
-        let cached = load_usage_state(&ctx).await;
-        *self.usage.write().await = UsageRuntime {
-            state: cached,
-            published: Published::new(),
-            claude_health: ClaudeHealth::default(),
-        };
-        publish_current_status(&ctx, &self.usage).await;
+        publish_stored(&ctx, &self.quotas).await;
 
-        let refresh_credentials = configured_credential_refresh(&ctx);
-        if self.cadences.observed() {
-            let refresh_ctx = ctx.clone();
-            let refresh_usage_state = Arc::clone(&self.usage);
-            tokio::spawn(async move {
-                refresh_usage(&refresh_ctx, &refresh_usage_state, refresh_credentials).await;
-            });
-        }
-        let refresh_usage_state = Arc::clone(&self.usage);
-        // `Low`: a remote pull behind a one-minute cadence; a second of
-        // slack is invisible and lets it coalesce with everything else.
-        self.cadences.interval(
-            &ctx,
-            STATUS_PUBLISH_INTERVAL,
-            PollPriority::Low,
-            move |ctx| {
-                let usage = Arc::clone(&refresh_usage_state);
+        let shared = Arc::clone(&self.quotas);
+        let scope = Arc::clone(&self.scope);
+        let sources = self.sources(&ctx);
+        // `Low`: a file read and two fetches behind a one-minute cadence; a
+        // second of slack is invisible and lets it coalesce with everything
+        // else. Armed only while a quota segment is shown.
+        self.cadences
+            .interval(&ctx, QUOTA_TICK, PollPriority::Low, move |ctx| {
+                let shared = Arc::clone(&shared);
+                let sources = sources.clone();
+                let quotas = scope.current();
                 async move {
-                    refresh_usage(&ctx, &usage, refresh_credentials).await;
+                    refresh_quotas(&ctx, &shared, &sources, &quotas).await;
                 }
-            },
-        );
+            });
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
         let Some(segments) = event
             .segments
             .as_deref()
-            .filter(|_| event.name == "core:status.observed")
+            .filter(|_| event.name == host_events::STATUS_OBSERVED)
         else {
             return;
         };
-        if self.cadences.observe(segments) {
-            let usage = Arc::clone(&self.usage);
-            tokio::spawn(async move {
-                let refresh_credentials = configured_credential_refresh(&ctx);
-                refresh_usage(&ctx, &usage, refresh_credentials).await;
-            });
+        self.cadences.observe(segments);
+        let gained = self.scope.observe(segments);
+        if !gained.is_empty() {
+            self.spawn_refresh(ctx, gained);
         }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
-        let bang = command.subcommand.to_ascii_lowercase();
-        let Some((_, base, parameter)) = lookup(&bang) else {
+        let bang = command.subcommand.to_lowercase();
+        let Some(provider) = lookup(&bang) else {
             return PerformResponse::fail(format!("unknown ai provider: !{bang}"));
         };
-        let query = command.query();
-        let url = provider_url(base, parameter, &query);
-        let opened = ctx.call_host("host.open", json!({ "url": url })).await;
-        if opened.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-            let error = opened
-                .get("error")
-                .and_then(serde_json::Value::as_str)
-                .filter(|error| !error.is_empty())
-                .unwrap_or("host.open failed");
-            return PerformResponse::fail(error);
-        }
-        let handler = opened.get("bundle_id").and_then(serde_json::Value::as_str);
+        let (url, autosend) = chat_url(provider, &command.query());
+        let handler = match ctx.open_url(&url).await {
+            Ok(handler) => handler,
+            Err(error) => return PerformResponse::fail(error),
+        };
         if let Some(script) = handler
-            .filter(|_| !query.is_empty())
+            .as_deref()
+            .filter(|_| autosend)
             .and_then(autosend_script)
         {
             // The page needs a beat to load before Return reaches it: a host
@@ -1206,42 +729,12 @@ impl FlashPlugin for AiProviders {
                 AUTOSEND_DELAY,
                 PollPriority::Normal,
                 move |ctx| async move {
-                    let _ = run_osascript(&ctx, &script, Duration::from_secs(10)).await;
+                    let _ = ctx.applescript(&script, Duration::from_secs(10)).await;
                 },
             );
         }
         PerformResponse::ok()
     }
-}
-
-fn lookup(bang: &str) -> Option<&'static (&'static str, &'static str, &'static str)> {
-    PROVIDERS
-        .binary_search_by(|entry| entry.0.cmp(bang))
-        .ok()
-        .map(|index| &PROVIDERS[index])
-}
-
-fn provider_url(base: &str, parameter: &str, query: &str) -> String {
-    if query.is_empty() {
-        base.to_string()
-    } else {
-        format!("{base}?{parameter}={}", percent_encode(query))
-    }
-}
-
-/// Match `urllib.parse.quote`'s default query-value behavior: RFC 3986
-/// unreserved bytes and `/` pass through, every other UTF-8 byte is `%XX`.
-fn percent_encode(input: &str) -> String {
-    let mut encoded = String::with_capacity(input.len());
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                encoded.push(byte as char)
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
 
 fn main() {
@@ -1251,14 +744,167 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flash_plugin::testing::Harness;
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn bang(subcommand: &str, args: &[&str]) -> CommandRequest {
+        CommandRequest {
+            subcommand: subcommand.to_string(),
+            args: args.iter().map(|arg| arg.to_string()).collect(),
+            ..CommandRequest::default()
+        }
+    }
+
+    /// A chat bang opens through `host.open` and reports the host's refusal
+    /// as its own failure.
+    #[tokio::test]
+    async fn a_refused_open_fails_with_the_host_error() {
+        let mut harness = Harness::new("aiproviders");
+        let ctx = harness.context();
+        let request = tokio::spawn(async move {
+            AiProviders::default()
+                .on_command(ctx, bang("claude", &["hello"]))
+                .await
+        });
+
+        let (id, method, params) = harness.next_host_request().await.expect("host request");
+        assert_eq!(
+            (method.as_str(), params),
+            (
+                "host.open",
+                json!({ "url": "https://claude.ai/new?q=hello" })
+            )
+        );
+        assert!(harness.reply_host(id, json!({ "ok": false, "error": "open failed" })));
+        assert_eq!(
+            serde_json::to_value(request.await.expect("command task")).expect("response"),
+            json!({ "ok": false, "error": "open failed" })
+        );
+    }
+
+    /// Opens `subcommand` with `args`, answers the open from Chrome, and
+    /// returns the URL and whether a Return press was scheduled.
+    async fn open(subcommand: &str, args: &[&str]) -> (String, bool) {
+        let mut harness = Harness::new("aiproviders");
+        let ctx = harness.context();
+        let command = bang(subcommand, args);
+        let request =
+            tokio::spawn(async move { AiProviders::default().on_command(ctx, command).await });
+        let (id, _, params) = harness.next_host_request().await.expect("host request");
+        assert!(harness.reply_host(id, json!({ "ok": true, "bundle_id": "com.google.Chrome" })));
+        assert_eq!(
+            serde_json::to_value(request.await.expect("command task")).expect("response"),
+            json!({ "ok": true })
+        );
+        let scheduled = harness
+            .drain()
+            .iter()
+            .any(|frame| frame["method"] == "poll");
+        (
+            params["url"].as_str().unwrap_or_default().to_string(),
+            scheduled,
+        )
+    }
+
+    #[tokio::test]
+    async fn only_a_prefilled_query_gets_the_return_press() {
+        assert_eq!(
+            open("claude", &["hello", "world"]).await,
+            ("https://claude.ai/new?q=hello%20world".to_string(), true)
+        );
+        assert_eq!(
+            open("claude", &[]).await,
+            ("https://claude.ai/new".to_string(), false)
+        );
+        assert_eq!(
+            open("DeepSeek", &["hello"]).await,
+            ("https://chat.deepseek.com/".to_string(), false),
+            "an open-only provider ignores the query and never presses Return"
+        );
+    }
 
     #[test]
-    fn provider_table_is_sorted_and_complete() {
-        assert!(PROVIDERS.windows(2).all(|pair| pair[0].0 < pair[1].0));
-        for (bang, _, _) in PROVIDERS {
-            assert!(lookup(bang).is_some());
+    fn provider_table_is_sorted_unique_and_lowercase() {
+        assert!(
+            PROVIDERS
+                .windows(2)
+                .all(|pair| pair[0].token < pair[1].token)
+        );
+        for provider in PROVIDERS {
+            assert_eq!(provider.token, provider.token.to_lowercase());
+            assert_eq!(lookup(provider.token), Some(provider));
+            assert!(provider.home.starts_with("https://"));
+            if let Some(template) = provider.template {
+                assert!(template.starts_with("https://"));
+                assert_eq!(template.matches("{query}").count(), 1, "{}", provider.token);
+            }
         }
         assert!(lookup("unknown").is_none());
+    }
+
+    fn describe(provider: &ChatProvider) -> String {
+        match provider.template {
+            Some(_) => format!("Open {} (pre-fills query if provided)", provider.name),
+            None => format!("Open {}", provider.name),
+        }
+    }
+
+    /// Every chat trigger is one manifest bang, and the manifest describes
+    /// what the table does.
+    #[test]
+    fn manifest_bangs_are_exactly_the_provider_table() {
+        let manifest: Value =
+            serde_json::from_str(include_str!("../manifest.json")).expect("manifest JSON");
+        let items: Vec<(String, String)> = manifest["bangs"]
+            .as_array()
+            .expect("bang items")
+            .iter()
+            .map(|item| {
+                (
+                    item["token"].as_str().unwrap_or_default().to_string(),
+                    item["description"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        let table: Vec<(String, String)> = PROVIDERS
+            .iter()
+            .map(|provider| (provider.token.to_string(), describe(provider)))
+            .collect();
+        assert_eq!(items, table);
+        let status: Vec<&str> = manifest["status"]
+            .as_array()
+            .expect("status segments")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let segments: Vec<&str> = Quota::ALL.iter().map(|quota| quota.segment()).collect();
+        assert_eq!(status, segments);
+    }
+
+    #[test]
+    fn chat_urls_prefill_only_where_the_provider_takes_a_query() {
+        let duck = lookup("ai").unwrap();
+        assert_eq!(
+            chat_url(duck, "what is rust?"),
+            (
+                "https://duckduckgo.com/?q=what%20is%20rust%3F&ia=chat&bang=true".to_string(),
+                true
+            )
+        );
+        assert_eq!(chat_url(duck, ""), ("https://duck.ai/".to_string(), false));
+        assert_eq!(
+            chat_url(lookup("mistral").unwrap(), "a/b"),
+            ("https://chat.mistral.ai/chat?q=a/b".to_string(), true)
+        );
+        assert_eq!(
+            chat_url(lookup("qwen").unwrap(), "hello"),
+            ("https://chat.qwen.ai/".to_string(), false)
+        );
+        assert_eq!(
+            chat_url(lookup("perplexity").unwrap(), ""),
+            ("https://www.perplexity.ai/search".to_string(), false)
+        );
     }
 
     #[test]
@@ -1270,383 +916,285 @@ mod tests {
     }
 
     #[test]
-    fn bare_provider_uses_base_and_query_uses_q_parameter() {
-        assert_eq!(
-            provider_url("https://example.test/", "q", ""),
-            "https://example.test/"
-        );
-        assert_eq!(
-            provider_url("https://example.test/", "q", "hello world"),
-            "https://example.test/?q=hello%20world"
-        );
-    }
-
-    #[test]
-    fn autosend_presses_return_only_in_the_app_the_page_opened_in() {
+    fn autosend_preserves_the_focus_guard_as_data() {
         assert_eq!(AUTOSEND_DELAY, Duration::from_millis(2_500));
         assert_eq!(
-            autosend_script("com.google.Chrome").as_deref(),
-            Some(
-                r#"tell application "System Events" to if bundle identifier of (first application process whose frontmost is true) is "com.google.Chrome" then key code 36"#
-            )
+            autosend_script("com.google.Chrome"),
+            Some(flash_plugin::AppleScriptOperation::ChatSubmit {
+                bundle_id: "com.google.Chrome".into()
+            })
         );
         assert_eq!(autosend_script(""), None);
         assert_eq!(autosend_script(r#"x" then key code 36 --"#), None);
     }
 
     #[test]
-    fn anthropic_usage_keeps_the_claude_weekly_window() {
-        let usage = parse_anthropic_usage(
-            r#"{
-              "five_hour":{"utilization":20.4,"resets_at":"1970-01-01T03:00:00Z"},
-              "seven_day":{"utilization":47.2,"resets_at":"1970-01-06T00:00:00Z"}
-            }"#,
-            0,
-        )
-        .expect("valid Anthropic usage");
+    fn path_settings_default_expand_home_and_reject_the_rest() {
+        let home = Path::new("/Users/me");
         assert_eq!(
-            usage,
-            AnthropicUsage {
-                updated_at: 0,
-                claude_week: Some(WindowUsage::new(47.2, Some(5 * 86_400), 10_080)),
-            }
+            configured_path(None, GROK_AUTH_DEFAULT, Some(home)),
+            Ok(PathBuf::from("/Users/me/.grok/auth.json"))
+        );
+        assert_eq!(
+            configured_path(Some(&json!("~/x/auth.json")), GROK_AUTH_DEFAULT, Some(home)),
+            Ok(PathBuf::from("/Users/me/x/auth.json"))
+        );
+        assert_eq!(
+            configured_path(Some(&json!("/tmp/a.json")), GROK_AUTH_DEFAULT, None),
+            Ok(PathBuf::from("/tmp/a.json"))
+        );
+        assert_eq!(
+            configured_path(Some(&json!("relative.json")), GROK_AUTH_DEFAULT, Some(home)),
+            Err("not_absolute")
+        );
+        assert_eq!(
+            configured_path(Some(&json!(true)), GROK_AUTH_DEFAULT, Some(home)),
+            Err("not_a_string")
+        );
+        assert_eq!(
+            configured_path(None, GROK_AUTH_DEFAULT, None),
+            Err("no_home")
+        );
+    }
+
+    /// An invalid setting disables that quota's source, logged once without
+    /// its value. Claude is read where Claude Code keeps its credentials.
+    #[test]
+    fn invalid_settings_disable_their_source_and_log_without_the_value() {
+        let mut harness = Harness::with_config(
+            "aiproviders",
+            json!({ "grok_auth_file": "secret-relative-path" }),
+        );
+        let sources = configured_sources(&harness.context());
+        assert_eq!(sources.grok_auth_file, None);
+        assert_eq!(
+            sources.claude.keychain_service,
+            Some(quota::CLAUDE_KEYCHAIN_SERVICE)
         );
         assert!(
-            parse_anthropic_usage(r#"{"five_hour":{"utilization":20.4}}"#, 0).is_none(),
-            "a session alone leaves the weekly label without data"
+            sources
+                .claude
+                .file
+                .as_ref()
+                .is_some_and(|file| file.ends_with(".claude/.credentials.json"))
         );
-    }
-
-    #[test]
-    fn openai_usage_keeps_the_codex_weekly_window() {
-        let usage = parse_openai_rate_limits(
-            concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
-                "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"rateLimitsByLimitId\":{",
-                "\"codex\":{",
-                "\"primary\":{\"usedPercent\":35.9,\"resetsAt\":18000,\"windowDurationMins\":300},",
-                "\"secondary\":{\"usedPercent\":46.1,\"resetsAt\":432000,\"windowDurationMins\":10080}",
-                "},",
-                "\"codex_bengalfox\":{",
-                "\"primary\":{\"usedPercent\":12.5,\"resetsAt\":604800,\"windowDurationMins\":10080}",
-                "}}}}\n"
-            ),
-            0,
-        )
-        .expect("valid OpenAI rate limits");
-        assert_eq!(
-            usage.codex_week,
-            Some(WindowUsage::new(46.1, Some(432_000), 10_080))
-        );
-
-        let fallback = parse_openai_rate_limits(
-            concat!(
-                "{\"id\":2,\"result\":{\"rateLimits\":{",
-                "\"primary\":{\"usedPercent\":10.0,\"windowDurationMins\":10080}}}}\n"
-            ),
-            0,
-        )
-        .expect("single rate limit");
-        assert_eq!(fallback.codex_week.unwrap().used_percent, 10.0);
-    }
-
-    #[test]
-    fn a_cache_with_every_codex_window_keeps_its_weekly_quota() {
-        let cached = concat!(
-            "{\"updated_at\":100,",
-            "\"openai\":{",
-            "\"session\":{\"used_percent\":35.9,\"resets_at\":18000,\"window_minutes\":300},",
-            "\"weekly\":{\"used_percent\":46.1,\"resets_at\":432000,\"window_minutes\":10080}},",
-            "\"astra\":{\"session\":null,\"weekly\":null}}"
-        );
-        let usage: OpenAIUsage = serde_json::from_str(cached).expect("an earlier cache loads");
-        assert_eq!(
-            usage.clone().sanitize(),
-            Some(OpenAIUsage {
-                updated_at: 100,
-                codex_week: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
-            })
-        );
-        let written = serde_json::to_value(&usage).expect("serializes");
-        assert_eq!(written["openai"]["weekly"]["used_percent"], 46.1);
-        assert_eq!(
-            serde_json::from_value::<OpenAIUsage>(written).expect("round-trips"),
-            usage
-        );
-    }
-
-    #[test]
-    fn status_segments_show_each_providers_weekly_quota() {
-        let state = UsageState {
-            anthropic: Some(AnthropicUsage {
-                updated_at: 0,
-                claude_week: Some(WindowUsage::new(47.2, Some(432_000), 10_080)),
-            }),
-            openai: Some(OpenAIUsage {
-                updated_at: 0,
-                codex_week: Some(WindowUsage::new(46.1, Some(432_000), 10_080)),
-            }),
-        };
-        let segments = render_status_segments(&state, 0);
-        assert_eq!(
-            segments.claude_label.as_str(),
-            "#[fg=#EBCB8B]Cld #[fg=colour245]53%↻5d#[default]"
-        );
-        assert_eq!(
-            segments.codex_label.as_str(),
-            "#[fg=#EBCB8B]Cdx #[fg=colour245]54%↻5d#[default]"
-        );
-        for label in segments.all() {
-            assert!(!label.contains("#[popup="));
-            assert!(!label.contains("#[link="));
-        }
-    }
-
-    #[test]
-    fn quota_labels_cap_percent_without_padding() {
-        for (used, expected) in [(0.0, "99%"), (91.0, "9%"), (100.0, "0%")] {
-            let window = WindowUsage::new(used, None, 300);
-            assert_eq!(
-                quota_label("Cld", Some(&window), 0).as_str(),
-                format!("#[fg=#EBCB8B]Cld #[fg=colour245]{expected}#[default]")
-            );
-        }
-        let segments = render_status_segments(&UsageState::default(), 0);
-        assert_eq!(
-            segments.claude_label.as_str(),
-            "#[fg=#EBCB8B]Cld #[fg=colour245]—#[default]"
-        );
-        assert_eq!(
-            segments.codex_label.as_str(),
-            "#[fg=#EBCB8B]Cdx #[fg=colour245]—#[default]"
-        );
-        assert!(!segments.all().iter().any(|value| value.contains("?%")));
-    }
-
-    #[test]
-    fn keychain_update_uses_hex_stdin_without_interpreter_injection() {
-        let body = br#"{"token":"quotes\\and\"newlines\n"}"#;
-        let command = keychain_update_command("ab", "Claude Code-credentials", body).unwrap();
-        assert!(
-            command.starts_with("add-generic-password -U -a ab -s \"Claude Code-credentials\" -X ")
-        );
-        assert_eq!(command.lines().count(), 1);
-        assert!(command.ends_with('\n'));
-        let hex = command.split(" -X ").nth(1).unwrap().trim();
-        let decoded: Vec<u8> = (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-            .collect();
-        assert_eq!(decoded, body);
-        assert!(keychain_update_command("ab\nquit", "Claude Code-credentials", body).is_none());
-        assert!(keychain_update_command("ab", "bad\"service", body).is_none());
-        assert!(keychain_update_command("ab", "Claude Code-credentials", &[]).is_none());
-    }
-
-    #[test]
-    fn claude_code_credentials_are_read_only_unless_refresh_is_enabled() {
-        assert_eq!(parse_credential_refresh(None), Ok(false));
-        assert_eq!(parse_credential_refresh(Some(json!(false))), Ok(false));
-        assert_eq!(parse_credential_refresh(Some(json!(true))), Ok(true));
-        assert!(parse_credential_refresh(Some(json!("true"))).is_err());
-
-        let harness = flash_plugin::testing::Harness::new("aiproviders");
-        assert!(!configured_credential_refresh(&harness.context()));
-        let harness = flash_plugin::testing::Harness::with_config(
-            "aiproviders",
-            json!({ "refresh_claude_code_credentials": 1 }),
-        );
-        assert!(!configured_credential_refresh(&harness.context()));
-        let harness = flash_plugin::testing::Harness::with_config(
-            "aiproviders",
-            json!({ "refresh_claude_code_credentials": true }),
-        );
-        assert!(configured_credential_refresh(&harness.context()));
-    }
-
-    #[test]
-    fn expired_claude_token_is_left_to_claude_code_by_default() {
-        let now = 1_000;
-        let expiring = |at: u64| json!({ "claudeAiOauth": { "expiresAt": at * 1_000 } });
-
-        assert_eq!(
-            claude_token(&expiring(now), now, false),
-            ClaudeToken::Expired
-        );
-        assert_eq!(claude_token(&json!({}), now, false), ClaudeToken::Expired);
-        assert_eq!(
-            claude_token(&expiring(now + 60), now, false),
-            ClaudeToken::Use
-        );
-        assert_eq!(
-            claude_token(&expiring(now + 60), now, true),
-            ClaudeToken::Renew
-        );
-        assert_eq!(claude_token(&expiring(now), now, true), ClaudeToken::Renew);
-        assert_eq!(
-            claude_token(&expiring(now + 600), now, true),
-            ClaudeToken::Use
-        );
-    }
-
-    /// Regression: Claude Code's eight-hour token expired overnight while
-    /// Claude Code sat idle. The label aged out to a dash for hours without a
-    /// single log line, and the store was reread only every five minutes
-    /// although an expired token makes no request.
-    #[test]
-    fn an_expired_claude_token_is_logged_once_and_rechecked_every_tick() {
-        let mut harness = flash_plugin::testing::Harness::new("aiproviders");
-        let ctx = harness.context();
-        let mut health = ClaudeHealth::default();
-        note_claude_outcome(&ctx, &mut health, Err(ClaudeFailure::TokenExpired));
-        note_claude_outcome(&ctx, &mut health, Err(ClaudeFailure::TokenExpired));
-        note_claude_outcome(&ctx, &mut health, Ok(()));
-        note_claude_outcome(&ctx, &mut health, Ok(()));
+        assert_eq!(sources.claude_usage_url, quota::CLAUDE_USAGE_URL);
         let logs: Vec<Value> = harness
             .drain()
             .into_iter()
             .filter(|frame| frame["method"] == "log")
-            .map(|frame| frame["params"].clone())
             .collect();
-        assert_eq!(logs.len(), 2, "{logs:?}");
-        assert_eq!(logs[0]["level"], "warn");
-        assert_eq!(logs[0]["fields"]["reason"], "token_expired");
-        assert_eq!(logs[1]["level"], "info");
-        assert_eq!(logs[1]["fields"]["reason"], "token_expired");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["params"]["fields"]["setting"], "grok_auth_file");
+        assert!(!logs[0].to_string().contains("secret-relative-path"));
+    }
+
+    fn segments(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn only_the_shown_quotas_refresh() {
+        let scope = ObservedScope::default();
+        assert_eq!(
+            scope.current(),
+            Quota::ALL,
+            "every quota until the host reports"
+        );
+        assert_eq!(
+            scope.observe(&segments(&["claude"])),
+            [Quota::Claude],
+            "the first report refreshes what it shows at once"
+        );
+        assert_eq!(scope.current(), [Quota::Claude]);
+        assert_eq!(scope.observe(&segments(&["claude"])), []);
+        assert_eq!(
+            scope.observe(&segments(&["grok", "claude"])),
+            [Quota::Grok],
+            "a newly shown quota refreshes at once"
+        );
+        assert_eq!(scope.current(), [Quota::Claude, Quota::Grok]);
+        assert_eq!(scope.observe(&[]), []);
         assert!(
-            logs[1]["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("recovered"))
-        );
-
-        assert_eq!(ClaudeFailure::TokenExpired.retry_at(1_000), 1_000);
-        for failure in [
-            ClaudeFailure::NoCredentials,
-            ClaudeFailure::RenewalFailed,
-            ClaudeFailure::Request { http_status: 429 },
-            ClaudeFailure::Unrecognized,
-        ] {
-            assert_eq!(failure.retry_at(1_000), 1_000 + ANTHROPIC_RETRY_SECONDS);
-        }
-    }
-
-    #[test]
-    fn claude_failures_relog_only_when_their_class_changes() {
-        let mut health = ClaudeHealth::default();
-        assert_eq!(health.observe(Ok(())), None, "a first reading is not news");
-        let (level, _, fields) = health
-            .observe(Err(ClaudeFailure::Request { http_status: 429 }))
-            .expect("a new failure logs");
-        assert_eq!(level, "warn");
-        assert_eq!(fields.get("reason").map(String::as_str), Some("request"));
-        assert_eq!(fields.get("http_status").map(String::as_str), Some("429"));
-        assert_eq!(
-            health.observe(Err(ClaudeFailure::Request { http_status: 429 })),
-            None
-        );
-        assert!(
-            health
-                .observe(Err(ClaudeFailure::Request { http_status: 0 }))
-                .is_some()
-        );
-        assert!(health.observe(Err(ClaudeFailure::Unrecognized)).is_some());
-        let (level, _, fields) = health.observe(Ok(())).expect("recovery logs");
-        assert_eq!(level, "info");
-        assert_eq!(
-            fields.get("reason").map(String::as_str),
-            Some("unrecognized")
-        );
-        assert_eq!(health.observe(Ok(())), None);
-    }
-
-    #[test]
-    fn usage_reply_reports_the_http_status_without_the_body() {
-        let body = r#"{"seven_day":{"utilization":47.2,"resets_at":"1970-01-06T00:00:00Z"}}"#;
-        assert_eq!(
-            parse_usage_reply(&format!("{body}\n200"), 0).map(|usage| usage.claude_week),
-            Ok(Some(WindowUsage::new(47.2, Some(5 * 86_400), 10_080)))
+            scope.current().is_empty(),
+            "nothing shown, nothing refreshes"
         );
         assert_eq!(
-            parse_usage_reply(
-                "{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}\n429",
-                0
-            ),
-            Err(ClaudeFailure::Request { http_status: 429 })
-        );
-        assert_eq!(
-            parse_usage_reply("\n000", 0),
-            Err(ClaudeFailure::Request { http_status: 0 })
-        );
-        assert_eq!(
-            parse_usage_reply("", 0),
-            Err(ClaudeFailure::Request { http_status: 0 })
-        );
-        assert_eq!(
-            parse_usage_reply("{\"five_hour\":{\"utilization\":2.0}}\n200", 0),
-            Err(ClaudeFailure::Unrecognized)
+            scope.observe(&segments(&["codex", "unknown"])),
+            [Quota::Codex]
         );
     }
 
     #[test]
-    fn stale_quota_labels_become_a_dash() {
-        let state = UsageState {
-            anthropic: Some(AnthropicUsage {
-                updated_at: 1_000,
-                claude_week: Some(WindowUsage::new(25.0, None, 10_080)),
-            }),
-            openai: Some(OpenAIUsage {
-                updated_at: 1_000,
-                codex_week: Some(WindowUsage::new(40.0, None, 10_080)),
-            }),
-        };
-        let current = render_status_segments(&state, 1_000);
-        assert!(current.claude_label.as_str().contains("75%"));
-        assert!(current.codex_label.as_str().contains("60%"));
-        let old = render_status_segments(&state, 1_000 + 2 * ANTHROPIC_USAGE_TTL);
-        assert!(old.claude_label.as_str().contains("]—#[default]"));
-        assert!(old.codex_label.as_str().contains("]—#[default]"));
+    fn an_unobserved_start_never_refreshes() {
+        let scope = ObservedScope::default();
+        assert_eq!(scope.observe(&[]), [], "a bang-started process stays idle");
+        assert!(scope.current().is_empty());
     }
 
-    #[test]
-    fn runtime_publishes_only_changed_rendered_status() {
-        let mut runtime = UsageRuntime {
-            state: UsageState {
-                openai: Some(OpenAIUsage {
-                    updated_at: 0,
-                    codex_week: Some(WindowUsage::new(25.0, Some(3_600), 10_080)),
-                }),
-                ..UsageState::default()
+    /// One canned 200 on loopback: the URL to fetch, and the request it
+    /// received, headers included.
+    fn serve_once(body: String) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/api/oauth/usage", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(reply.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (url, handle)
+    }
+
+    fn claude_credentials(expires_at: u64) -> String {
+        json!({"claudeAiOauth": {
+            "accessToken": "access-value",
+            "refreshToken": "refresh-value",
+            "expiresAt": expires_at * 1_000,
+        }})
+        .to_string()
+    }
+
+    /// Claude's usage drives the `claude` segment through Claude Code's
+    /// stored access token; the state file is private and holds percentages
+    /// and times only; an expired token is never sent and keeps the reading.
+    #[tokio::test]
+    async fn claude_refresh_publishes_persists_privately_and_keeps_the_last_reading() {
+        let mut harness = Harness::new("aiproviders");
+        let ctx = harness.context();
+        let data_dir = harness.data_dir();
+        tokio::fs::create_dir_all(&data_dir).await.unwrap();
+        let credentials_file = data_dir.join("credentials.json");
+        tokio::fs::write(&credentials_file, claude_credentials(unix_now() + 3_600))
+            .await
+            .unwrap();
+        let reset = unix_now() + 22 * 3_600 + 1_800;
+        let (url, request) =
+            serve_once(json!({"seven_day": {"utilization": 94.0, "resets_at": reset}}).to_string());
+        let state_file = data_dir.join(STATE_FILE);
+        tokio::fs::write(&state_file, "{}").await.unwrap();
+        tokio::fs::set_permissions(&state_file, std::fs::Permissions::from_mode(0o644))
+            .await
+            .unwrap();
+        let auth_file = data_dir.join("auth.json");
+        tokio::fs::write(
+            &auth_file,
+            json!({"x": {"key": "token-value", "expires_at": "2001-01-01T00:00:00Z", "refresh_token": "refresh-value"}}).to_string(),
+        )
+        .await
+        .unwrap();
+        let sources = Sources {
+            claude: quota::ClaudeCredentials {
+                keychain_service: None,
+                file: Some(credentials_file.clone()),
             },
-            published: Published::new(),
-            claude_health: ClaudeHealth::default(),
+            claude_usage_url: url,
+            grok_auth_file: Some(auth_file),
         };
-        let mut publish = |now| {
-            runtime
-                .published
-                .update(render_status_segments(&runtime.state, now))
-                .is_some()
-        };
+        let shared = SharedQuotas::default();
 
-        assert!(publish(0));
-        assert!(!publish(0));
-        assert!(publish(60));
-        assert!(!publish(60));
-    }
-
-    #[test]
-    fn one_minute_tick_keeps_provider_fetch_ttls_independent() {
-        assert_eq!(STATUS_PUBLISH_INTERVAL, Duration::from_secs(60));
-        assert_eq!(ANTHROPIC_USAGE_TTL, 600);
-        assert_eq!(OPENAI_USAGE_TTL, 120);
-    }
-
-    #[test]
-    fn rfc3339_parser_handles_zulu_and_offsets() {
-        assert_eq!(parse_rfc3339_epoch("1970-01-02T00:00:00Z"), Some(86_400));
+        refresh_quotas(&ctx, &shared, &sources, &[Quota::Claude, Quota::Grok]).await;
+        let request = request.join().unwrap().to_ascii_lowercase();
+        assert!(request.starts_with("get /api/oauth/usage "), "{request}");
+        assert!(request.contains("\r\nauthorization: bearer access-value\r\n"));
+        assert!(request.contains("\r\nanthropic-beta: oauth-2025-04-20\r\n"));
+        assert!(!request.contains("refresh-value"));
+        let published = harness.drain_status();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0]["claude"], "6%↻22h");
+        assert_eq!(published[0]["codex"], "—");
         assert_eq!(
-            parse_rfc3339_epoch("1970-01-02T01:30:00+01:30"),
-            Some(86_400)
+            published[0]["grok"], "—",
+            "an expired token never produced a reading"
         );
-        assert_eq!(parse_rfc3339_epoch("not-a-date"), None);
+
+        let mode = tokio::fs::metadata(&state_file)
+            .await
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "quota state is mode 0600");
+        let stored = tokio::fs::read_to_string(&state_file).await.unwrap();
+        assert!(stored.contains("\"used_percent\":94.0"));
+        assert!(
+            !stored.contains("token-value")
+                && !stored.contains("access-value")
+                && !stored.contains("refresh-value")
+        );
+        assert!(
+            !stored.contains("\"codex\""),
+            "an unshown quota is untouched"
+        );
+
+        // Due again, but the token has expired: nothing is sent (the test
+        // server is gone, so a request would fail and wait to retry), and
+        // the reading stays.
+        tokio::fs::write(&credentials_file, claude_credentials(unix_now() - 60))
+            .await
+            .unwrap();
+        {
+            let mut runtime = shared.lock().await;
+            let mut entry = runtime.state.entry(Quota::Claude);
+            entry.fetched_at = Some(0);
+            runtime.state.set(Quota::Claude, entry);
+        }
+        refresh_quotas(&ctx, &shared, &sources, &[Quota::Claude]).await;
+        assert!(
+            harness.drain_status().is_empty(),
+            "an expired token keeps the published reading"
+        );
+        let kept = shared.lock().await.state.entry(Quota::Claude);
+        assert_eq!(kept.used_percent, Some(94.0));
+        assert_eq!(kept.retry_at, None, "an expired token is not a failure");
+
+        let restarted = SharedQuotas::default();
+        publish_stored(&ctx, &restarted).await;
+        assert_eq!(
+            harness.drain_status()[0]["claude"],
+            "6%↻22h",
+            "a restart republishes the persisted reading"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_publishes_stored_metrics_without_fetching() {
+        let mut harness = Harness::new("aiproviders");
+        let ctx = harness.context();
+        AiProviders::default().on_start(ctx).await;
+        let frames = harness.drain();
+        let status: Vec<&Value> = frames
+            .iter()
+            .filter(|frame| frame["method"] == "status")
+            .collect();
+        assert_eq!(status.len(), 1);
+        assert_eq!(
+            status[0]["params"]["segments"],
+            json!({ "claude": "—", "codex": "—", "grok": "—" })
+        );
+        assert!(
+            frames.iter().any(|frame| frame["method"] == "poll"
+                && frame["params"]["registrations"]["i0"]["every"] == 60.0),
+            "{frames:?}"
+        );
+        assert!(
+            !tokio::fs::try_exists(harness.data_dir().join(STATE_FILE))
+                .await
+                .unwrap(),
+            "no refresh ran at start"
+        );
     }
 }

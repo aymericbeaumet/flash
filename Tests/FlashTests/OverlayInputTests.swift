@@ -349,6 +349,37 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.cancelCount, 0, "the question owns its own no")
   }
 
+  /// The window list owns every key: navigation keys move and choose, every
+  /// other key types a label whatever modifier rides it, its own chord moves
+  /// down the list, and neither a mapping nor the cancel path sees a key.
+  func testWindowSwitcherRouteOwnsEveryKeyAndStepsOnItsChord() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.keyboardLayout = .usANSI
+    panel.inputMode = .hints
+    panel.hintKeyRoute = .switcher
+    defer { panel.inputMode = .passive }
+    XCTAssertTrue(HintKeyRoute.switcher.showsCursor, "the list covers no targets")
+
+    coordinator.mappingEventsToHandle = 1
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_Tab, characters: "\t", modifierFlags: [.option]))
+    panel.handleTapCapturedKey(
+      try keyEvent(keyCode: kVK_Tab, characters: "\t", modifierFlags: [.option, .shift]))
+    panel.handleTapCapturedKey(
+      try keyEvent(
+        keyCode: kVK_ANSI_D, characters: "∂", charactersIgnoringModifiers: "d",
+        modifierFlags: [.option]))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Return, characters: "\r"))
+    panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}"))
+
+    XCTAssertEqual(
+      coordinator.windowSwitcherCommands, [.move(1), .move(-1), .type("d"), .choose, .cancel])
+    XCTAssertEqual(coordinator.mappingEventsToHandle, 1, "no mapping fires over the list")
+    XCTAssertEqual(coordinator.cancelCount, 0, "the list owns its own Escape")
+  }
+
   /// Under a Russian source the F key types "а"; with a reference layout
   /// every positional interpreter reads it as `f`, while `--search` keeps
   /// the typed text it matches against.
@@ -407,7 +438,7 @@ final class OverlayInputTests: XCTestCase {
     panel.handleTapCapturedKey(try keyEvent(keyCode: kVK_ANSI_G, characters: "п"))
     XCTAssertEqual(
       coordinator.normalModeActions.map { $0.0?.command },
-      [.mouseTarget(.click(.leftClick, modifiers: [])), .scroll(.top)])
+      [.mouseTarget(.click(.leftClick, modifiers: [])), .move(.top)])
   }
 
   func testWithoutAReferenceLayoutKeysReadAsTyped() throws {
@@ -760,7 +791,8 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.scroll(.top)])
   }
 
-  func testKeyWindowFallbackConsumesEscapeByDefault() throws {
+  /// NORMAL's default Escape is `app cancel`, on the key-window path too.
+  func testKeyWindowFallbackRunsTheAppsCancelOnEscapeByDefault() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
@@ -770,7 +802,7 @@ final class OverlayInputTests: XCTestCase {
     let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
 
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
-    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
+    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.appCancel])
   }
 
   func testKeyWindowFallbackConsumesUnmappedModifierChordByDefault() throws {
@@ -807,7 +839,7 @@ final class OverlayInputTests: XCTestCase {
       ConfigLoader.parse(
         """
         [mode.normal.mappings]
-        "A" = ["flash", "enter_insert_mode"]
+        "A" = ["flash", "mode", "insert"]
         """
       ).mode.compiledNormal
 
@@ -1069,7 +1101,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var searchCommands: [HintSearchCommand] = []
   var bigramCommands: [HintBigramCommand] = []
   var confirmations: [Bool] = []
-
+  var windowSwitcherCommands: [WindowSwitcherKeyCommand] = []
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {
@@ -1215,6 +1247,30 @@ final class CommandLineKeyResignTests: XCTestCase {
   }
 }
 
+/// The regression: NORMAL capture's `NSApp.deactivate()`, which this macOS
+/// ignores, resigned the panel but left it as AppKit's key window while the
+/// app stayed active. Every `makeKey` then returned early, so a command line
+/// opened right after had no caret through the whole recovery ladder (the
+/// live log: `is_key=false app_key_is_self=true app_active=true` on all five
+/// attempts, then `key_recovery_exhausted`). That state, and only that one,
+/// is repaired before asking for key.
+final class CommandLineStaleKeyWindowTests: XCTestCase {
+  func testAnActiveAppNamingTheUnkeyedPanelItsKeyWindowIsStale() {
+    XCTAssertTrue(
+      OverlayPanel.keyWindowIsStale(appActive: true, appKeyWindowIsSelf: true, isKeyWindow: false))
+    XCTAssertFalse(
+      OverlayPanel.keyWindowIsStale(appActive: true, appKeyWindowIsSelf: true, isKeyWindow: true),
+      "really key: nothing to repair")
+    XCTAssertFalse(
+      OverlayPanel.keyWindowIsStale(
+        appActive: false, appKeyWindowIsSelf: false, isKeyWindow: false),
+      "activation still landing is the ladder's case, not a stale window")
+    XCTAssertFalse(
+      OverlayPanel.keyWindowIsStale(appActive: true, appKeyWindowIsSelf: false, isKeyWindow: false),
+      "another Flash window is key")
+  }
+}
+
 /// The command line's caret is armed by restarting the field editor's blink
 /// timer, which only takes effect if AppKit considers the panel key at that
 /// instant. The panel does not receive `becomeKey`, so the arming is repeated
@@ -1251,5 +1307,11 @@ final class CommandLineSingleCaretTests: XCTestCase {
     panel.displayCommandLine(":hel")
 
     XCTAssertEqual(panel.commandPromptLayer.sublayers ?? [], [panel.commandPromptLabel])
+  }
+}
+
+extension SpyOverlayCoordinator: OverlayWindowSwitching {
+  func overlayDidSwitchWindow(_ command: WindowSwitcherKeyCommand) {
+    windowSwitcherCommands.append(command)
   }
 }

@@ -22,8 +22,9 @@ extension AppDelegate {
 }
 
 extension AppDelegate {
-  /// `window_focus`: the nearest window in a direction from the prepared
-  /// catalog, or the next one in the stacking order. The z-order comes from
+  /// `window focus`, `window next` and `window previous`: the nearest window
+  /// in a direction from the prepared catalog, the next one in the stacking
+  /// order, or the focused app's next window. The z-order comes from
   /// `WindowSnapshot.windowList`, read here on the main thread, never on the
   /// layout manager's queue.
   func focusWindow(_ request: WindowFocusRequest, targetPID: pid_t) {
@@ -31,12 +32,26 @@ extension AppDelegate {
     case .direction(let direction):
       windowLayoutManager.focusWindow(direction, targetPID: targetPID)
     case .cycle(let cycle):
-      let primaryH = ScreenSpace.primaryHeight
-      let info = WindowSnapshot.windowList([.optionOnScreenOnly, .excludeDesktopElements]) ?? []
-      let zOrder = WindowSnapshot.entries(from: info, primaryH: primaryH)
-        .filter { $0.layer == 0 && $0.pid != getpid() }
-        .map { WindowFocusZEntry(pid: $0.pid, frame: $0.nsBounds) }
-      windowLayoutManager.focusWindow(cycle: cycle, targetPID: targetPID, zOrder: zOrder)
+      windowLayoutManager.focusWindow(cycle: cycle, targetPID: targetPID, zOrder: windowZOrder())
+    case .app(let cycle):
+      windowLayoutManager.focusAppWindow(cycle, targetPID: targetPID, zOrder: windowZOrder())
     }
+  }
+
+  /// `mouse screens --focus`: the frontmost window on `display` takes
+  /// keyboard focus, chosen from the prepared catalog in stacking order like
+  /// `window focus --direction=next`. A display without windows keeps focus
+  /// where it is.
+  func focusFrontmostWindow(on display: WindowScreenLayout, layouts: [WindowScreenLayout]) {
+    windowLayoutManager.focusFrontmostWindow(
+      onScreen: display.identity, screens: layouts, zOrder: windowZOrder())
+  }
+
+  private func windowZOrder() -> [WindowFocusZEntry] {
+    let primaryH = ScreenSpace.primaryHeight
+    let info = WindowSnapshot.windowList([.optionOnScreenOnly, .excludeDesktopElements]) ?? []
+    return WindowSnapshot.entries(from: info, primaryH: primaryH)
+      .filter { $0.layer == 0 && $0.pid != getpid() }
+      .map { WindowFocusZEntry(pid: $0.pid, frame: $0.nsBounds) }
   }
 }

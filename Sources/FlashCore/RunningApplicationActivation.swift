@@ -1,6 +1,32 @@
 import AppKit
 import ApplicationServices
 
+/// How activation moves between apps on the running macOS. macOS 14 made it
+/// cooperative: the active app hands activation over (`yieldActivation(to:)`,
+/// `activate(from:options:)`) and `activateIgnoringOtherApps` has no effect.
+/// macOS 13 has no handover; there a request carrying
+/// `activateIgnoringOtherApps` moves activation as the handover does, and one
+/// without it activates its app only while no other app is active.
+public enum ActivationModel: Equatable, Sendable {
+  case cooperative
+  case forced
+
+  public static let current: ActivationModel = {
+    if #available(macOS 14.0, *) { return .cooperative }
+    return .forced
+  }()
+
+  /// The options an activation request carries under this model.
+  public func options(_ options: NSApplication.ActivationOptions)
+    -> NSApplication.ActivationOptions
+  {
+    switch self {
+    case .cooperative: return options
+    case .forced: return options.union(.activateIgnoringOtherApps)
+    }
+  }
+}
+
 public enum RunningApplicationActivation {
   /// `restoringMinimizedWindows` costs one `kAXWindows` read plus one
   /// `kAXMinimized` read per window — AX IPC into the target app, which never
@@ -23,7 +49,21 @@ public enum RunningApplicationActivation {
       }
     }
     app.unhide()
-    return app.activate(options: options)
+    return app.activate(options: ActivationModel.current.options(options))
+  }
+
+  /// Moves activation from Flash to `app`. From macOS 14 Flash yields to it
+  /// (when `yielding`), then activates it from Flash: `NSApp.deactivate()` and
+  /// a bare `activate(options:)` are ignored there, and the cooperative
+  /// handover is the request that moves activation. macOS 13 moves it with
+  /// `activateIgnoringOtherApps` instead.
+  @discardableResult
+  public static func handOff(to app: NSRunningApplication, yielding: Bool) -> Bool {
+    if #available(macOS 14.0, *) {
+      if yielding { NSApp.yieldActivation(to: app) }
+      return app.activate(from: .current, options: [])
+    }
+    return app.activate(options: ActivationModel.forced.options([]))
   }
 
   private static let restoreQueue = DispatchQueue(

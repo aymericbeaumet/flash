@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/welcome.schema.json",
+  "title": "welcome",
+  "description": "Resident to client, the answer to hello: the version, the resident's name and process, and the limits it applies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "protocol",
+    "server",
+    "pid",
+    "limits"
+  ],
+  "properties": {
+    "type": {
+      "const": "welcome"
+    },
+    "protocol": {
+      "type": "integer",
+      "const": 1
+    },
+    "server": {
+      "type": "string",
+      "description": "Flash <version> (<build>)."
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handshake_timeout_ms",
+        "max_connections",
+        "max_frame_bytes",
+        "max_in_flight",
+        "max_patterns",
+        "max_queued_event_bytes",
+        "max_queued_events",
+        "max_reply_bytes"
+      ],
+      "properties": {
+        "max_frame_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Longest line a client may send, newline excluded."
+        },
+        "max_reply_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Longest line the resident sends; a larger result is a reply_too_large error."
+        },
+        "max_connections": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Connections the resident holds at once."
+        },
+        "max_in_flight": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Requests one connection may have running at once."
+        },
+        "max_queued_events": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Events that may wait unread for one subscriber before it is disconnected."
+        },
+        "max_queued_event_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bytes of events that may wait unread for one subscriber."
+        },
+        "max_patterns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Patterns one subscribe may name."
+        },
+        "handshake_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How long a connection may take to say hello."
+        }
+      }
+    }
+  }
+}

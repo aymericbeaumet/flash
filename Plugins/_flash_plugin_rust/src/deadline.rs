@@ -1,8 +1,8 @@
 //! Request deadlines. The host names how long it will wait for a request's
-//! reply (`deadline_ms` on the envelope). A read-only handler (`search`,
-//! `hints`) still running just before then is dropped — its subprocesses and
-//! host calls with it — and the request answers `deadline exceeded` while the
-//! host still listens, instead of a reply it would discard.
+//! reply (`deadline_ms` on the envelope). A read-only handler (`hints`,
+//! `text_grid`) still running just before then is dropped — its subprocesses
+//! and host calls with it — and the request answers `deadline exceeded` while
+//! the host still listens, instead of a reply it would discard.
 
 use std::future::Future;
 use std::time::Duration;
@@ -10,7 +10,8 @@ use std::time::Duration;
 /// Canonical error (pinned in `protocol.json` as `errors.deadline_exceeded`).
 pub(crate) const DEADLINE_EXCEEDED_ERROR: &str = "deadline exceeded";
 
-/// No host deadline is longer: a manifest `timeout_ms` perform override.
+/// An upper bound on a well-formed `deadline_ms`, well above any deadline the
+/// host names (`protocol.json` `deadlines_ms`).
 const MAX_DEADLINE_MS: u64 = 600_000;
 
 /// The request's deadline, when the envelope names a well-formed one.

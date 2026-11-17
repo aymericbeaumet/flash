@@ -117,7 +117,7 @@ void flash_vt_resize(FlashVT *vt, uint16_t columns, uint16_t rows) {
   size.screen_height = rows * vt->cell_height;
   size.cell_width = vt->cell_width;
   size.cell_height = vt->cell_height;
-  ghostty_mouse_encoder_setopt(vt->mouse, GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
+  ghostty_mouse_encoder_set(vt->mouse, GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
                                &size);
 }
 void flash_vt_cell_size(FlashVT *vt, uint32_t width, uint32_t height) {
@@ -257,7 +257,7 @@ static uint16_t append_link(FlashVT *vt, size_t *used, uint16_t *count,
                             uint16_t x) {
   GhosttyPoint point = {.tag = GHOSTTY_POINT_TAG_VIEWPORT,
                         .value.coordinate = {.x = x, .y = vt->row_y}};
-  GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  GhosttyGridRef ref = {0};
   if (ghostty_terminal_grid_ref(vt->terminal, point, &ref) != GHOSTTY_SUCCESS)
     return 0;
   for (;;) {
@@ -358,13 +358,14 @@ bool flash_vt_row_cells(FlashVT *vt, FlashVTCell *cells, FlashVTRow *row) {
     uint8_t underline = 0;
     GhosttyColorRgb underline_color;
     if (has_styling && select_cell(vt, &cells_ready, x)) {
-      GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+      GhosttyStyle style = {0};
       ghostty_render_state_row_cells_get(
           vt->cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style);
-      flags = style.bold | style.italic << 1 | style.faint << 2 |
-              style.blink << 3 | style.inverse << 4 | style.invisible << 5 |
-              style.strikethrough << 6 | style.overline << 7;
-      underline = (uint8_t)style.underline;
+      flags = style.flags & (GHOSTTY_STYLE_FLAG_BOLD | GHOSTTY_STYLE_FLAG_ITALIC |
+                             GHOSTTY_STYLE_FLAG_FAINT | GHOSTTY_STYLE_FLAG_BLINK |
+                             GHOSTTY_STYLE_FLAG_INVERSE | GHOSTTY_STYLE_FLAG_INVISIBLE |
+                             GHOSTTY_STYLE_FLAG_STRIKETHROUGH | GHOSTTY_STYLE_FLAG_OVERLINE);
+      underline = (uint8_t)GHOSTTY_STYLE_UNDERLINE(style);
       fg = resolve(vt, style.fg_color, fg);
       // A background-only cell's own color wins over its style, as in
       // libghostty's resolved background.
@@ -400,7 +401,7 @@ bool flash_vt_row_cells(FlashVT *vt, FlashVTCell *cells, FlashVTRow *row) {
 }
 void flash_vt_clean(FlashVT *vt) { ghostty_render_state_clean(vt->render); }
 void flash_vt_scroll(FlashVT *vt, int lines) {
-  GhosttyTerminalScrollViewport scroll = {.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA,
+  GhosttyTerminalScrollViewport scroll = {.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA,
                                           .value.delta = lines};
   ghostty_terminal_scroll_viewport(vt->terminal, scroll);
 }
@@ -622,7 +623,7 @@ static GhosttyKey mac_key(uint16_t key) {
 void flash_vt_key(FlashVT *vt, uint16_t key, uint16_t mods, int action,
                   const char *text, size_t length, uint32_t unshifted) {
   if (vt->keys_stale) {
-    ghostty_key_encoder_setopt_from_terminal(vt->keys, vt->terminal);
+    ghostty_key_encoder_set_from_terminal(vt->keys, vt->terminal);
     vt->keys_stale = false;
   }
   GhosttyKeyEvent event = vt->key_event;
@@ -632,19 +633,21 @@ void flash_vt_key(FlashVT *vt, uint16_t key, uint16_t mods, int action,
   ghostty_key_event_set_consumed_mods(event,
                                       text && length ? mods & GHOSTTY_MODS_SHIFT
                                                      : 0);
-  ghostty_key_event_set_utf8(event, text, length);
+  ghostty_key_event_set_utf8(
+      event, (GhosttyString){.ptr = (const uint8_t *)text, .len = length});
   ghostty_key_event_set_unshifted_codepoint(event, unshifted);
-  char output[4096];
+  uint8_t output[4096];
   size_t count = 0;
-  if (ghostty_key_encoder_encode(vt->keys, event, output, sizeof(output),
-                                 &count) == GHOSTTY_SUCCESS &&
-      count)
-    write_pty(vt->terminal, vt, (uint8_t *)output, count);
+  GhosttyResult result = ghostty_key_encoder_encode(
+      vt->keys, event, output, sizeof(output), &count);
+  ghostty_key_event_set_utf8(event, (GhosttyString){0});
+  if (result == GHOSTTY_SUCCESS && count)
+    write_pty(vt->terminal, vt, output, count);
 }
 void flash_vt_mouse(FlashVT *vt, int action, int button, uint16_t mods,
                     double x, double y) {
   if (vt->mouse_stale) {
-    ghostty_mouse_encoder_setopt_from_terminal(vt->mouse, vt->terminal);
+    ghostty_mouse_encoder_set_from_terminal(vt->mouse, vt->terminal);
     vt->mouse_stale = false;
   }
   GhosttyMouseEvent event = vt->mouse_event;
@@ -657,14 +660,14 @@ void flash_vt_mouse(FlashVT *vt, int action, int button, uint16_t mods,
   ghostty_mouse_event_set_position(
       event, (GhosttyMousePosition){x * vt->cell_width, y * vt->cell_height});
   bool pressed = button > 0 && action != GHOSTTY_MOUSE_ACTION_RELEASE;
-  ghostty_mouse_encoder_setopt(
+  ghostty_mouse_encoder_set(
       vt->mouse, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &pressed);
-  char output[256];
+  uint8_t output[256];
   size_t count = 0;
   if (ghostty_mouse_encoder_encode(vt->mouse, event, output, sizeof(output),
                                    &count) == GHOSTTY_SUCCESS &&
       count)
-    write_pty(vt->terminal, vt, (uint8_t *)output, count);
+    write_pty(vt->terminal, vt, output, count);
 }
 static bool mode(FlashVT *vt, GhosttyMode mode) {
   GhosttyTerminalModeConfig query = {.mode = mode};
@@ -674,12 +677,12 @@ static bool mode(FlashVT *vt, GhosttyMode mode) {
 }
 void flash_vt_paste(FlashVT *vt, char *text, size_t length) {
   size_t capacity = length + 12, count = 0;
-  char *output = malloc(capacity);
+  uint8_t *output = malloc(capacity);
   if (!output)
     return;
   if (ghostty_paste_encode(text, length, mode(vt, GHOSTTY_MODE_BRACKETED_PASTE),
                            output, capacity, &count) == GHOSTTY_SUCCESS)
-    write_pty(vt->terminal, vt, (uint8_t *)output, count);
+    write_pty(vt->terminal, vt, output, count);
   free(output);
 }
 void flash_vt_focus(FlashVT *vt, bool focused) {

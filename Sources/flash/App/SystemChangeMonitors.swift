@@ -22,6 +22,9 @@ final class HostEventSources {
   /// Event names whose monitor runs, sorted.
   var runningEvents: [String] { running.keys.sorted() }
 
+  /// The running monitor behind `event`, if any.
+  func source(for event: String) -> (any HostEventSource)? { running[event] }
+
   /// Start the monitor of each event that gained a listener, stop the one of
   /// each event that lost its last.
   func reconcile(listening: (String) -> Bool) {

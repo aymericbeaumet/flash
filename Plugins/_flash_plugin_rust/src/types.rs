@@ -88,8 +88,6 @@ pub struct JumpTarget {
     pub context_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enters_insert_mode: Option<bool>,
     /// Source-declared salience. `Important` and `Urgent` render with the
     /// host's accent hint style.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,7 +104,6 @@ impl JumpTarget {
             url: None,
             context_id: None,
             pid: None,
-            enters_insert_mode: None,
             priority: None,
         }
     }
@@ -136,11 +133,6 @@ impl JumpTarget {
         self
     }
 
-    pub fn enters_insert_mode(mut self, enters: bool) -> Self {
-        self.enters_insert_mode = Some(enters);
-        self
-    }
-
     pub fn priority(mut self, priority: Priority) -> Self {
         if priority == Priority::Normal {
             self.priority = None;
@@ -151,9 +143,9 @@ impl JumpTarget {
     }
 }
 
-/// A catalog row. Outbound (via [`Context::publish`](crate::Context::publish)
-/// or a `search` reply) `source` must name one of this plugin's manifest
-/// `sources[].name` entries and `title` is the searchable string. Inbound (on
+/// A catalog row. Outbound (via [`Context::publish`](crate::Context::publish))
+/// `source` must name one of this plugin's manifest `sources[].name` entries
+/// and `title` is the searchable string. Inbound (on
 /// `perform {kind: "resolve"}`) the host echoes the row back with the same
 /// shape — read structured payload via [`payload_str`](Candidate::payload_str)
 /// / [`payload_as`](Candidate::payload_as).
@@ -324,7 +316,6 @@ pub mod ax_notifications {
 /// `NETWORK_CHANGED` and `VOLUMES_CHANGED` are payload-free, coalesced
 /// signals: re-read the state you show when one arrives instead of polling.
 pub mod host_events {
-    pub const FLASH_STARTED: &str = "core:flash.started";
     pub const APPS_CHANGED: &str = "core:apps.changed";
     pub const APPS_LAUNCHED: &str = "core:apps.launched";
     pub const APPS_TERMINATED: &str = "core:apps.terminated";
@@ -337,13 +328,47 @@ pub mod host_events {
     pub const NETWORK_CHANGED: &str = "core:network.changed";
     /// A volume mounted, unmounted or was renamed.
     pub const VOLUMES_CHANGED: &str = "core:volumes.changed";
-    pub const SPACE_CHANGED: &str = "core:space.changed";
     pub const STATUS_OBSERVED: &str = "core:status.observed";
     pub const SESSION_OPENED: &str = "core:session.opened";
+    /// The Mac is going to sleep, and woke.
+    pub const SYSTEM_SLEPT: &str = "core:system.slept";
+    pub const SYSTEM_WOKE: &str = "core:system.woke";
+    /// The displays slept, and woke.
+    pub const DISPLAYS_SLEPT: &str = "core:displays.slept";
+    pub const DISPLAYS_WOKE: &str = "core:displays.woke";
+    /// The lock screen came up, and went away.
+    pub const SCREEN_LOCKED: &str = "core:screen.locked";
+    pub const SCREEN_UNLOCKED: &str = "core:screen.unlocked";
+    /// A display was connected or removed (`added`, `removed`, `displays`).
+    pub const DISPLAYS_CHANGED: &str = "core:displays.changed";
+    /// The active Space changed.
+    pub const SPACE_CHANGED: &str = "core:space.changed";
+    /// Nobody touched the keyboard, mouse or trackpad for `seconds`.
+    pub const USER_IDLE: &str = "core:user.idle";
+    /// Input came back after an idle episode of `idle_seconds`.
+    pub const USER_ACTIVE: &str = "core:user.active";
+    /// A USB device was connected (`vendor_id`, `product_id`, `name`).
+    pub const USB_ATTACHED: &str = "core:usb.attached";
+    /// A USB device was removed.
+    pub const USB_DETACHED: &str = "core:usb.detached";
+    /// A wall-clock minute began (`time`, `weekday`, `date`, `late_seconds`).
+    pub const CLOCK_MINUTE: &str = "core:clock.minute";
+    /// The focused tiling workspace changed (`workspace`, `previous`,
+    /// `workspaces`).
+    pub const WORKSPACE_CHANGED: &str = "core:workspace.changed";
+    /// Flash's mode changed (`mode`, `previous`, `layer`).
+    pub const MODE_CHANGED: &str = "core:mode.changed";
+    /// A hint session drew its first labels (`surface`, `targets`).
+    pub const HINTS_SHOWN: &str = "core:hints.shown";
+    /// A hint session committed a target (`surface`).
+    pub const HINTS_COMMITTED: &str = "core:hints.committed";
+    /// A hint session ended without committing (`surface`).
+    pub const HINTS_CANCELLED: &str = "core:hints.cancelled";
+    /// A value monitor rose into warning or error (`monitor`, `level`).
+    pub const MONITOR_TRIGGERED: &str = "core:monitor.triggered";
 
     /// In `protocol.json` order.
-    pub const ALL: [&str; 14] = [
-        FLASH_STARTED,
+    pub const ALL: [&str; 31] = [
         APPS_CHANGED,
         APPS_LAUNCHED,
         APPS_TERMINATED,
@@ -354,9 +379,27 @@ pub mod host_events {
         POWER_CHANGED,
         NETWORK_CHANGED,
         VOLUMES_CHANGED,
-        SPACE_CHANGED,
         STATUS_OBSERVED,
         SESSION_OPENED,
+        SYSTEM_SLEPT,
+        SYSTEM_WOKE,
+        DISPLAYS_SLEPT,
+        DISPLAYS_WOKE,
+        SCREEN_LOCKED,
+        SCREEN_UNLOCKED,
+        DISPLAYS_CHANGED,
+        SPACE_CHANGED,
+        USER_IDLE,
+        USER_ACTIVE,
+        USB_ATTACHED,
+        USB_DETACHED,
+        CLOCK_MINUTE,
+        WORKSPACE_CHANGED,
+        MODE_CHANGED,
+        HINTS_SHOWN,
+        HINTS_COMMITTED,
+        HINTS_CANCELLED,
+        MONITOR_TRIGGERED,
     ];
 }
 
@@ -605,8 +648,6 @@ pub struct Event {
     pub name: String,
     pub bundle_id: Option<String>,
     pub pid: Option<i64>,
-    pub front_window_frame: Option<Frame>,
-    pub text: Option<String>,
     /// `core:ax.changed`: the AX notification the app posted, one of
     /// [`ax_notifications::ALL`] (`AXTitleChanged`, `AXValueChanged`, …).
     /// Always present on that event, with [`pid`](Event::pid). Match on it
@@ -635,9 +676,25 @@ impl Event {
     }
 }
 
-/// A `perform {kind: "command"}` request: the matched `:`-command or verb, its
-/// subcommand, the trailing args, and the raw input. Bang dispatch arrives
-/// with the bang token as `subcommand`.
+/// The focused-app context a core command carries: the app the host asks
+/// the plugin to perform it in.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CommandContext {
+    #[serde(default)]
+    pub bundle_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
+    pub pid: Option<i64>,
+    #[serde(default)]
+    pub front_window_frame: Option<Frame>,
+}
+
+/// A `perform {kind: "command"}` request: the command's two words and its
+/// argument words. Three things arrive this way: a core command the
+/// manifest's `commands[]` declares under one of Flash's topics (`tab
+/// close`), with `context` naming the focused app and `args` holding the
+/// argument words a mapping wrote (`--index=3`, `--force`); the plugin's own
+/// command (`tmux session main`), without `context`; and a bang, with the
+/// plugin id as `command` and the typed token as `subcommand`.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct CommandRequest {
     #[serde(default)]
@@ -647,13 +704,36 @@ pub struct CommandRequest {
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
-    pub raw: String,
+    pub context: Option<CommandContext>,
 }
 
 impl CommandRequest {
+    /// The two words as one command line: `"tab close"`.
+    pub fn name(&self) -> String {
+        format!("{} {}", self.command, self.subcommand)
+    }
+
     /// The args joined by a single space, trimmed.
     pub fn query(&self) -> String {
         self.args.join(" ").trim().to_string()
+    }
+
+    /// The value of `--<key>=<value>` among the args, when present.
+    pub fn flag(&self, key: &str) -> Option<&str> {
+        let prefix = format!("--{key}=");
+        self.args
+            .iter()
+            .find_map(|arg| arg.strip_prefix(prefix.as_str()))
+    }
+
+    /// Whether the bare flag `--<key>` is among the args.
+    pub fn has_flag(&self, key: &str) -> bool {
+        self.args.contains(&format!("--{key}"))
+    }
+
+    /// `--index=<n>` as a number, when well-formed (`tab select`).
+    pub fn index(&self) -> Option<i64> {
+        self.flag("index").and_then(|raw| raw.trim().parse().ok())
     }
 }
 
@@ -667,48 +747,24 @@ pub struct HintsRequest {
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
+    /// Physical pixels per AppKit point on the captured window display, when known.
+    #[serde(default)]
+    pub display_scale: Option<f64>,
 }
 
-/// The focused-app context attached to a [`ActionRequest`].
+/// A `text_grid` request: the same focused-app context as [`HintsRequest`].
+/// Always live.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct ActionContext {
+pub struct TextGridRequest {
     #[serde(default)]
     pub bundle_id: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
-}
-
-/// A `perform {kind: "action"}` request (e.g. `tab_select`). Extra arguments
-/// arrive in `args` (`index` for the numbered-tab actions).
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ActionRequest {
+    /// Physical pixels per AppKit point on the captured window display, when known.
     #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub context: ActionContext,
-    #[serde(default)]
-    pub args: serde_json::Map<String, Value>,
-}
-
-impl ActionRequest {
-    /// The `args.index` payload for numbered actions, when well-formed.
-    pub fn index(&self) -> Option<i64> {
-        self.arg_i64("index")
-    }
-
-    pub fn arg_i64(&self, key: &str) -> Option<i64> {
-        match self.args.get(key)? {
-            Value::Number(number) => number.as_i64(),
-            Value::String(raw) => raw.parse().ok(),
-            _ => None,
-        }
-    }
-
-    pub fn arg_str(&self, key: &str) -> Option<&str> {
-        self.args.get(key).and_then(Value::as_str)
-    }
+    pub display_scale: Option<f64>,
 }
 
 /// A `perform {kind: "navigate"}` request. `url` is the durable route the host
@@ -724,22 +780,6 @@ pub struct NavigateRequest {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct EvaluateRequest {
     #[serde(default)]
-    pub surface: String,
-    #[serde(default)]
-    pub scope: String,
-    #[serde(default)]
-    pub query: String,
-}
-
-/// One explicitly scoped query against a `live: true` source (`search`).
-/// Unlike `evaluate`, the handler may do real work (subprocess, disk); the
-/// host enforces its own drop-late deadline and simply ignores replies that
-/// miss it.
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct SearchRequest {
-    #[serde(default)]
-    pub scope: String,
-    #[serde(default)]
     pub query: String,
 }
 
@@ -748,10 +788,10 @@ pub struct SearchRequest {
 pub enum Perform {
     /// `kind: "resolve"` — the host echoes back a row this plugin published.
     Resolve(Candidate),
-    /// `kind: "command"` — `:`-commands, verbs, and bang dispatch.
+    /// `kind: "command"` — the core commands the plugin performs in its
+    /// context (with `context`), its own commands and bangs (without; a bang
+    /// carries the plugin id as its command).
     Command(CommandRequest),
-    /// `kind: "action"` — source-owned normal-mode actions.
-    Action(ActionRequest),
     /// `kind: "navigate"` — movement-history route restoration.
     Navigate(NavigateRequest),
 }
@@ -909,19 +949,6 @@ impl EvaluateResponse {
     }
 }
 
-/// Catalog-shaped rows answering one `search` request against this plugin's
-/// `live: true` sources.
-#[derive(Clone, Debug, Default)]
-pub struct SearchResponse {
-    pub rows: Vec<Candidate>,
-}
-
-impl SearchResponse {
-    pub fn rows(rows: Vec<Candidate>) -> Self {
-        Self { rows }
-    }
-}
-
 /// Hint targets answering one `hints` request.
 #[derive(Clone, Debug, Default)]
 pub struct HintsResponse {
@@ -940,6 +967,64 @@ impl HintsResponse {
     pub fn context_pid(mut self, pid: i64) -> Self {
         self.context_pid = Some(pid);
         self
+    }
+}
+
+/// One line of a [`TextGridResponse`]. Rows and columns are cells of the
+/// grid, row 0 at the top.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum TextGridLine {
+    /// Captured cell text: one UTF-16 unit per cell from `column` on, the way
+    /// a terminal capture addresses it.
+    Text { row: u32, column: u32, text: String },
+    /// An expanded tmux-style status format (`#[…]` styles and alignment)
+    /// the host lays out across `width` cells from `column`, as its status
+    /// line does.
+    Format {
+        row: u32,
+        column: u32,
+        width: u32,
+        format: String,
+    },
+}
+
+impl TextGridLine {
+    pub fn text(row: u32, column: u32, text: impl Into<String>) -> Self {
+        Self::Text {
+            row,
+            column,
+            text: text.into(),
+        }
+    }
+
+    pub fn format(row: u32, column: u32, width: u32, format: impl Into<String>) -> Self {
+        Self::Format {
+            row,
+            column,
+            width,
+            format: format.into(),
+        }
+    }
+}
+
+/// The focused app's visible text as a `columns` × `rows` cell grid,
+/// answering one `text_grid` request. The host searches it for a letter when
+/// the app publishes no Accessibility text. No lines means no grid.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextGridResponse {
+    pub columns: u32,
+    pub rows: u32,
+    pub lines: Vec<TextGridLine>,
+}
+
+impl TextGridResponse {
+    pub fn new(columns: u32, rows: u32, lines: Vec<TextGridLine>) -> Self {
+        Self {
+            columns,
+            rows,
+            lines,
+        }
     }
 }
 
@@ -986,6 +1071,23 @@ mod tests {
     }
 
     #[test]
+    fn text_grid_lines_serialize_as_their_exact_wire_shapes() {
+        let lines = vec![
+            TextGridLine::text(1, 2, "ab"),
+            TextGridLine::format(0, 0, 9, "#[align=left]s"),
+        ];
+        assert_eq!(
+            serde_json::to_value(&lines).unwrap(),
+            json!([
+                { "row": 1, "column": 2, "text": "ab" },
+                { "row": 0, "column": 0, "width": 9, "format": "#[align=left]s" },
+            ])
+        );
+        let result = json!({ "ok": true, "columns": 9, "rows": 2, "lines": lines });
+        assert!(crate::wire::valid_result("text_grid", &result));
+    }
+
+    #[test]
     fn failure_builders_cannot_emit_success_fields() {
         assert_eq!(
             PerformResponse::fail("broken")
@@ -1017,13 +1119,33 @@ mod tests {
                 None
             );
             assert_eq!(
-                serde_json::from_value::<ActionContext>(value).unwrap().pid,
+                serde_json::from_value::<CommandContext>(value).unwrap().pid,
                 None
             );
         }
         for pid in [json!(true), json!(0), json!(1.0), json!(2147483648_u64)] {
             assert!(serde_json::from_value::<HintsRequest>(json!({"pid": pid})).is_err());
+            assert!(
+                serde_json::from_value::<CommandRequest>(
+                    json!({"command": "tab", "subcommand": "close", "context": {"pid": pid}})
+                )
+                .is_err()
+            );
         }
+        // An own command or a bang carries no context at all.
+        let own: CommandRequest =
+            serde_json::from_value(json!({"command": "tmux", "subcommand": "session"})).unwrap();
+        assert!(own.context.is_none());
+        let core: CommandRequest = serde_json::from_value(json!({
+            "command": "tab", "subcommand": "close", "args": [],
+            "context": {"bundle_id": "com.example", "pid": 7}
+        }))
+        .unwrap();
+        let context = core.context.expect("a core command carries its context");
+        assert_eq!(
+            (context.bundle_id.as_deref(), context.pid),
+            (Some("com.example"), Some(7))
+        );
     }
 
     #[test]
@@ -1079,21 +1201,44 @@ mod tests {
     }
 
     #[test]
-    fn action_args_read_numbers_and_numeric_strings() {
-        let request: ActionRequest = serde_json::from_value(json!({
-            "name": "tab_select",
+    fn command_flags_parse_numbers_numeric_strings_and_bare_flags() {
+        let select: CommandRequest = serde_json::from_value(json!({
+            "command": "tab",
+            "subcommand": "select",
+            "args": ["--index=3"],
             "context": { "pid": 7 },
-            "args": { "index": "3" },
         }))
         .unwrap();
-        assert_eq!(request.index(), Some(3));
+        assert_eq!(select.name(), "tab select");
+        assert_eq!(select.index(), Some(3));
+        assert_eq!(select.flag("index"), Some("3"));
+        assert!(
+            !select.has_flag("index"),
+            "a value argument is not a bare flag"
+        );
+        assert!(!select.has_flag("force"));
 
-        let request: ActionRequest = serde_json::from_value(json!({
-            "name": "tab_select",
-            "args": { "index": 4 },
+        let forced: CommandRequest = serde_json::from_value(json!({
+            "command": "app",
+            "subcommand": "reload",
+            "args": ["--force"],
         }))
         .unwrap();
-        assert_eq!(request.index(), Some(4));
-        assert_eq!(request.arg_str("index"), None);
+        assert!(forced.has_flag("force"));
+        assert_eq!(forced.flag("force"), None, "a bare flag has no value");
+        assert_eq!(forced.index(), None);
+
+        // Positional words are neither flags nor values; a malformed index is
+        // no index.
+        let own: CommandRequest = serde_json::from_value(json!({
+            "command": "tmux",
+            "subcommand": "session",
+            "args": ["main", "--index=x"],
+        }))
+        .unwrap();
+        assert!(!own.has_flag("main"));
+        assert_eq!(own.flag("main"), None);
+        assert_eq!(own.index(), None);
+        assert_eq!(own.query(), "main --index=x");
     }
 }
