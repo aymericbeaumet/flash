@@ -702,10 +702,11 @@ cwd = "~"
 # warning = 80
 [monitors]
 
-# Battery charge, from the sysinfo plugin; unknown on a Mac without a battery.
+# Battery charge, from the sysinfo plugin, while the Mac runs on its battery:
+# charging, full, on the adapter or without a battery it reads nothing.
 [monitors.battery]
 enabled = true
-value = "#{flash.plugin.sysinfo.power_percent}%%"
+value = "#{?#{==:#{flash.plugin.sysinfo.power_state},discharging},#{flash.plugin.sysinfo.power_percent}%%,}"
 direction = "below"
 warning = 20
 error = 10

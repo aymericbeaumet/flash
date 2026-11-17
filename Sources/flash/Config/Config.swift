@@ -1032,10 +1032,13 @@ struct Config {
   /// value Flash already has: an event-driven plugin segment or a core value
   /// sampled only at the monitor's interval.
   static let defaultMonitors: [String: Monitor] = [
+    // The charge only while the Mac runs on its battery: charging, full or on
+    // the adapter, the value is empty and nothing alerts.
     "battery": Monitor(
-      value: "#{flash.plugin.sysinfo.power_percent}%%", message: "Battery low", warning: 20,
-      error: 10,
-      direction: .below),
+      value:
+        "#{?#{==:#{flash.plugin.sysinfo.power_state},discharging},"
+        + "#{flash.plugin.sysinfo.power_percent}%%,}",
+      message: "Battery low", warning: 20, error: 10, direction: .below),
     "disk": Monitor(
       value: "#{flash.plugin.sysinfo.disks_percent}%%", message: "Startup disk almost full",
       warning: 90, error: 97),

@@ -333,7 +333,7 @@ Two tools need their unattended flags:
 
 | Name | Value | Thresholds | Reads |
 | --- | --- | --- | --- |
-| `battery` | `#{flash.plugin.sysinfo.power_percent}%%` | below 20, 10 | The `sysinfo` plugin's battery charge; unknown on a Mac without a battery |
+| `battery` | `#{?#{==:#{flash.plugin.sysinfo.power_state},discharging},#{flash.plugin.sysinfo.power_percent}%%,}` | below 20, 10 | The `sysinfo` plugin's battery charge while the Mac runs on its battery; unknown while it charges, is full or sits on the adapter, and on a Mac without a battery, so a low charge never warns once plugged in |
 | `disk` | `#{flash.plugin.sysinfo.disks_percent}%%` | above 90, 97 | The `sysinfo` plugin's startup-volume usage |
 | `memory` | `#{flash.memory_pressure}%%` | above 85, 95 | Memory pressure, read from the kernel once per interval |
 | `plugin_errors` | `#{flash.plugin.error_count}` | warning at 1 | Plugins whose last launch, exit or handshake failed, crash loops included; the alert names them (`flash.plugin.errors`) |

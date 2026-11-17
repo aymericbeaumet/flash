@@ -743,6 +743,29 @@ final class MonitorTests: XCTestCase {
       "the alert names the failing plugins, not their count")
   }
 
+  /// The built-in battery monitor reads the charge only while the Mac runs
+  /// on its battery: a low charge while charging, full or on the adapter
+  /// alerts nothing, and unplugging while low alerts at once.
+  func testTheBuiltInBatteryMonitorStaysQuietOnThePowerAdapter() throws {
+    let spec = try XCTUnwrap(Config.defaultMonitors["battery"]).spec(name: "battery")
+    let harness = Harness(monitors: ["battery": spec])
+    defer { harness.controller.stop() }
+    for state in ["charging", "charged", "ac", ""] {
+      harness.publish(["power_percent": "8", "power_state": state])
+      XCTAssertEqual(harness.snapshot("battery")?.level, .unknown, state)
+    }
+    harness.settle()
+    XCTAssertEqual(harness.alerts, [], "no low-battery alert while plugged in")
+
+    harness.publish(["power_percent": "8", "power_state": "discharging"])
+    XCTAssertEqual(harness.snapshot("battery")?.level, .error)
+    harness.settle()
+    XCTAssertEqual(harness.alerts, [StatusAlert(title: "Battery low", value: "8%", style: .error)])
+
+    harness.publish(["power_percent": "8", "power_state": "charging"])
+    XCTAssertEqual(harness.snapshot("battery")?.level, .unknown, "plugging in clears it")
+  }
+
   func testAnEmptyDetailAlertsWithTheValue() {
     var spec = Self.battery
     spec.detail = .init(template: "#{flash.plugin.sysinfo.power_source}")
