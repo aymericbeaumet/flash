@@ -1,6 +1,7 @@
 import AppKit
 import CFlashTerminal
 import Darwin
+import FlashCore
 import Foundation
 
 public struct TerminalConfiguration: Equatable, Sendable {
@@ -78,12 +79,12 @@ enum TerminalChildReaping {
 
   /// A child that outlived both stop deadlines is reaped when the kernel
   /// reports its exit, not by re-checking on a timer.
-  static func reapLater(pid: pid_t, completion: @escaping () -> Void) {
+  static func reapLater(pid: pid_t, completion: @escaping @Sendable () -> Void) {
     ProcessExit.reapWhenExited(pid, completion: completion)
   }
 }
 
-public final class TerminalSession {
+public final class TerminalSession: @unchecked Sendable {
   public let configuration: TerminalConfiguration
   public private(set) var state: TerminalSessionState = .idle
   public private(set) var frame: TerminalFrame?
@@ -164,10 +165,11 @@ public final class TerminalSession {
   }
   public func stop(completion: (() -> Void)? = nil) {
     let generation = invalidatePublications()
+    let completion = completion.map { body in MainQueueCompletion<Void> { body() } }
     queue.async { [self] in
       runGeneration = generation
       stopOnQueue()
-      if let completion { DispatchQueue.main.async(execute: completion) }
+      completion?.deliver {}
     }
   }
   /// Reaping uses two 200 ms deadlines; delayed kernel exits are reaped asynchronously.
@@ -190,7 +192,7 @@ public final class TerminalSession {
     let group = DispatchGroup()
     for session in sessions {
       let generation = session.invalidatePublications()
-      let stop = {
+      let stop: @Sendable () -> Void = {
         session.runGeneration = generation
         session.stopOnQueue()
       }
@@ -521,10 +523,10 @@ public final class TerminalSession {
       // Closing the master and cancelling the process source must precede final reaping.
       closeSources()
       if !reaped && !TerminalChildReaping.wait(pid: pid, timeoutMilliseconds: 200) {
-        let diagnostic = onDiagnostic
-        DispatchQueue.main.async { diagnostic?(.reapDeferred(pid: pid)) }
+        let diagnostic = onDiagnostic.map { MainQueueCompletion($0) }
+        diagnostic?.deliver { .reapDeferred(pid: pid) }
         TerminalChildReaping.reapLater(pid: pid) {
-          DispatchQueue.main.async { diagnostic?(.reaped(pid: pid)) }
+          diagnostic?.deliver { .reaped(pid: pid) }
         }
       }
     } else {
@@ -540,7 +542,7 @@ public final class TerminalSession {
     }
   }
 
-  private func publishOnMain(_ update: @escaping (TerminalSession) -> Void) {
+  private func publishOnMain(_ update: @escaping @Sendable (TerminalSession) -> Void) {
     let generation = runGeneration
     DispatchQueue.main.async { [weak self] in
       guard let self,

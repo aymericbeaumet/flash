@@ -66,7 +66,7 @@ let package = Package(
       cSettings: [.unsafeFlags(["-O2"], .when(configuration: .debug))]),
     .target(
       name: "FlashTerminal", dependencies: ["CFlashTerminal", "FlashCore"],
-      swiftSettings: strictSwiftSettings + optimizedInDebug),
+      swiftSettings: strictSwiftSettings + optimizedInDebug + checkedConcurrency),
     .executableTarget(
       name: "flash",
       dependencies: [
