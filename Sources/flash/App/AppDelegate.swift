@@ -269,16 +269,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// fetched after the first one.
   var clipboardImageMimes = ClipboardImageCache()
   let pluginStateRefresh = PollDeadline("core:plugin_state_refresh", priority: .normal, on: .main)
-  var commandLineCompletionPrefix: String = ""
-  var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
-  /// The highlighted row; Enter applies a `chosen` one rather than
-  /// resolving the text. See `CommandLineCompletionSelection`.
-  var commandLineCompletionSelection = CommandLineCompletionSelection.none
-  var commandLineCompletionQuery: String = ""
-  /// Session-local immutable completion catalog. Plugin registrations and help
-  /// topics do not change while one command field is open, so rebuilding these
-  /// collections on every character only adds input latency.
-  var commandLineCompletionInventory: NormalModeDispatcher.CommandLineInventory?
   /// Every page path and alias of the bundled manual, read once at launch:
   /// `:help` completes them and plugin topics cannot take them.
   var manualTopicNames: [String] = []

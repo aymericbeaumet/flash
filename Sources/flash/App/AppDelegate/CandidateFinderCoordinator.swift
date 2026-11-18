@@ -657,7 +657,7 @@ extension AppDelegate {
     }
     if let context = commandLineCompletionContext(for: command) {
       clearCandidateFinderState()
-      updateCommandLineCompletions(context: context)
+      finder.completions.update(context: context, boost: commandFrecencyBoost(label:))
       overlay.displayCommandLine(
         command,
         suggestions: commandLineCompletionDisplayItems(),
@@ -680,56 +680,10 @@ extension AppDelegate {
   /// registrations and help topics do not change while one command field
   /// is open, so rebuilding them on every character only adds input latency.
   func commandLineInventory() -> NormalModeDispatcher.CommandLineInventory {
-    if let cached = commandLineCompletionInventory { return cached }
+    if let cached = finder.commandLineInventory { return cached }
     let inventory = makeCommandLineInventory()
-    commandLineCompletionInventory = inventory
+    finder.commandLineInventory = inventory
     return inventory
-  }
-
-  private func updateCommandLineCompletions(
-    context: NormalModeDispatcher.CommandLineCompletionContext
-  ) {
-    commandLineCompletionPrefix = context.prefix
-    commandLineCompletionQuery = context.query
-    let trimmedQuery = context.query.trimmed
-    let scored: [CommandLineCompletionMatch] = context.items.compactMap { item in
-      // Frecency boost surfaces the user's most-typed commands at the
-      // top of the empty `:` prompt without distorting the order once
-      // they start typing — fuzzy score dominates from the first
-      // character because it's an order of magnitude larger than the
-      // capped boost.
-      let boost = commandFrecencyBoost(label: item.label)
-      if trimmedQuery.isEmpty {
-        return CommandLineCompletionMatch(completion: item, score: boost)
-      }
-      guard
-        let score = NormalModeDispatcher.fuzzyScore(
-          query: trimmedQuery, candidate: item.label)
-      else { return nil }
-      return CommandLineCompletionMatch(completion: item, score: score + boost)
-    }
-    let sorted = scored.sorted { lhs, rhs in
-      // The word the typed query selects — an ex command at its minimum
-      // (`:q` is `quit`, not `qall`), an exact word or a unique prefix —
-      // ranks first whatever its fuzzy score or frecency: it is what Enter
-      // runs, so it is the highlighted row.
-      if let selected = context.selectedLabel {
-        let lhsSelected = lhs.completion.label == selected
-        let rhsSelected = rhs.completion.label == selected
-        if lhsSelected != rhsSelected { return lhsSelected }
-      }
-      if lhs.score != rhs.score { return lhs.score > rhs.score }
-      return lhs.completion.label.localizedCaseInsensitiveCompare(rhs.completion.label)
-        == .orderedAscending
-    }
-    commandLineCompletionMatches = sorted
-    // A keystroke recomputes the highlight from the text; only the
-    // resolver's pick is highlighted, so an ambiguous or unknown word, and
-    // the empty prompt, show the candidates with no row selected.
-    commandLineCompletionSelection =
-      context.selectedLabel.flatMap { selected in
-        sorted.firstIndex { $0.completion.label == selected }
-      }.map(CommandLineCompletionSelection.implied) ?? .none
   }
 
   /// Frecency boost for a command-line completion label. Falls back to
@@ -758,33 +712,11 @@ extension AppDelegate {
   }
 
   func commandLineCompletionDisplayItems() -> [CandidateDisplayItem] {
-    guard !commandLineCompletionMatches.isEmpty else { return [] }
-    // Same windowed slice as the flashlight finder. This list used to show
-    // every match at once ("reveal the whole catalogue"), but the plugin
-    // command set has outgrown the band between the centered prompt and the
-    // screen bottom — an unwindowed list drew up across the prompt itself.
-    // Arrow keys scroll the window over the full match set.
-    let window = CandidateFinder.displayWindow(
-      count: commandLineCompletionMatches.count,
-      selectedIndex: commandLineCompletionSelection.index ?? 0,
-      windowSize: commandBarSuggestionCount)
-    return commandLineCompletionMatches[window].enumerated().map { offset, match in
-      CandidateDisplayItem(
-        title: match.completion.label,
-        detail: match.completion.detail,
-        highlightedRanges: commandLineCompletionQuery.isEmpty
-          ? []
-          : NormalModeDispatcher.fuzzyHighlightRanges(
-            query: commandLineCompletionQuery, candidate: match.completion.label),
-        isSelected: window.lowerBound + offset == commandLineCompletionSelection.index)
-    }
+    finder.completions.displayItems(windowSize: commandBarSuggestionCount)
   }
 
   private func clearCommandLineCompletionState() {
-    commandLineCompletionPrefix = ""
-    commandLineCompletionMatches = []
-    commandLineCompletionSelection = .none
-    commandLineCompletionQuery = ""
+    finder.completions = CommandLineCompletionList()
   }
 
   static func commandLineBuffer(from raw: String) -> String {
@@ -1489,7 +1421,7 @@ extension AppDelegate {
     // A row the user moved to is what Enter runs, whatever the text
     // resolves to. `applySelected…` clears the completion state before
     // recursing, so the recursive call resolves the inserted words.
-    if commandLineCompletionSelection.isChosen, applySelectedCommandLineCompletion() {
+    if finder.completions.selection.isChosen, applySelectedCommandLineCompletion() {
       return
     }
     // Otherwise the words resolve as the completion list showed them, and as
@@ -1510,12 +1442,11 @@ extension AppDelegate {
       // line names (`:ta` inserts `tab `) — is applied; otherwise the list,
       // when there is one, stays up as the feedback: the candidates of an
       // ambiguous word, or the words the typed text resembles.
-      let topLevelEmpty =
-        commandLineCompletionPrefix == ":" && commandLineCompletionQuery.isEmpty
+      let topLevelEmpty = finder.completions.isTopLevelEmpty
       if !topLevelEmpty, applySelectedCommandLineCompletion() {
         return
       }
-      if !commandLineCompletionMatches.isEmpty, !topLevelEmpty {
+      if !finder.completions.isEmpty, !topLevelEmpty {
         FlashLog.debug("[command] nothing to run for \(raw); the list shows the candidates")
         return
       }
@@ -1534,13 +1465,8 @@ extension AppDelegate {
   }
 
   private func applySelectedCommandLineCompletion() -> Bool {
-    guard let index = commandLineCompletionSelection.index,
-      commandLineCompletionMatches.indices.contains(index)
-    else { return false }
-    let match = commandLineCompletionMatches[index]
-    let completion = match.completion
-    let prefix = commandLineCompletionPrefix
-    let newBuffer = prefix + completion.insertion
+    guard let completion = finder.completions.selected else { return false }
+    let newBuffer = finder.completions.buffer(inserting: completion)
     switch completion.kind {
     case .acceptsArgs:
       refreshCommandLine(text: newBuffer, cursorIndex: newBuffer.count)
@@ -1561,12 +1487,11 @@ extension AppDelegate {
   /// can fall back to selection movement (the candidate finder keeps its
   /// documented tab-to-cycle).
   func applySelectedCommandLineCompletionInPlace() -> Bool {
-    guard !commandLineCompletionMatches.isEmpty else { return false }
-    commandLineCompletionSelection = commandLineCompletionSelection.tabbed(
-      count: commandLineCompletionMatches.count)
-    guard let index = commandLineCompletionSelection.index else { return false }
-    let completion = commandLineCompletionMatches[index].completion
-    let newBuffer = commandLineCompletionPrefix + completion.insertion
+    guard !finder.completions.isEmpty else { return false }
+    finder.completions.selection = finder.completions.selection.tabbed(
+      count: finder.completions.matches.count)
+    guard let completion = finder.completions.selected else { return false }
+    let newBuffer = finder.completions.buffer(inserting: completion)
     refreshCommandLine(text: newBuffer, cursorIndex: newBuffer.count)
     return true
   }
@@ -1827,7 +1752,7 @@ extension AppDelegate {
     finder.scope = .all
     clearCandidateFinderState()
     clearCommandLineCompletionState()
-    commandLineCompletionInventory = nil
+    finder.commandLineInventory = nil
   }
 
   func clearCandidateFinderState() {

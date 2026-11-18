@@ -1351,7 +1351,7 @@ extension AppDelegate {
       isRecalling: commandLineHistory.isRecalling,
       hasCandidateQuery:
         NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil,
-      hasCompletions: !commandLineCompletionMatches.isEmpty)
+      hasCompletions: !finder.completions.isEmpty)
     // A list re-render must keep the caret where the user actually has it (they
     // may have moved it with an arrow/click without notifying us) rather than
     // forcing the stale stored index and jumping it to the line end.
@@ -1387,12 +1387,12 @@ extension AppDelegate {
     case .completions:
       // Same crossover as the candidate list: "up" from the top completion
       // steps into history rather than clamping.
-      if commandLineCompletionSelection.entersHistory(movingBy: delta) {
+      if finder.completions.selection.entersHistory(movingBy: delta) {
         return recallCommandLineHistory(delta: delta)
       }
       // From no highlighted row, the first move lands on the first row.
-      commandLineCompletionSelection = commandLineCompletionSelection.moved(
-        by: delta, count: commandLineCompletionMatches.count)
+      finder.completions.selection = finder.completions.selection.moved(
+        by: delta, count: finder.completions.matches.count)
       overlay.displayCommandLine(
         overlay.commandLineText,
         suggestions: commandLineCompletionDisplayItems(),

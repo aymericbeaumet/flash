@@ -108,6 +108,12 @@ final class CandidateFinderSession {
   var queryEvaluationSettledGeneration: UInt64?
   var currentQuery = ""
   var scope: CandidateScope = .all
+  /// The command line's own list: what the word being typed completes to.
+  var completions = CommandLineCompletionList()
+  /// Session-local immutable completion catalog. Plugin registrations and help
+  /// topics do not change while one command field is open, so rebuilding these
+  /// collections on every character only adds input latency.
+  var commandLineInventory: NormalModeDispatcher.CommandLineInventory?
   /// A `menu choose` pick the command line shows instead of the catalogs:
   /// its rows are the whole pool, and its answer waits on Return or a close.
   var menu: MenuSession?

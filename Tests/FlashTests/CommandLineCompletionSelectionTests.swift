@@ -31,4 +31,58 @@ final class CommandLineCompletionSelectionTests: XCTestCase {
     XCTAssertFalse(Selection.chosen(2).entersHistory(movingBy: -1))
     XCTAssertFalse(Selection.none.entersHistory(movingBy: 1))
   }
+
+  // MARK: The list
+
+  private typealias Completion = NormalModeDispatcher.CommandLineCompletion
+
+  private func context(
+    _ query: String, _ labels: [String], selected: String? = nil, prefix: String = ":"
+  ) -> NormalModeDispatcher.CommandLineCompletionContext {
+    .init(
+      prefix: prefix, query: query,
+      items: labels.map { Completion(label: $0, insertion: "\($0) ", kind: .acceptsArgs) },
+      selectedLabel: selected, ambiguous: false)
+  }
+
+  func testTheEmptyPromptListsEveryItemByFrecencyThenName() {
+    var list = CommandLineCompletionList()
+    list.update(context: context("", ["tab", "help", "quit"])) { $0 == "quit" ? 40 : 0 }
+    XCTAssertEqual(list.matches.map(\.completion.label), ["quit", "help", "tab"])
+    XCTAssertEqual(list.selection, .none, "nothing typed selects nothing")
+    XCTAssertNil(list.selected)
+    XCTAssertTrue(list.isTopLevelEmpty)
+  }
+
+  func testTheWordTheQuerySelectsRanksFirstAndIsHighlightedNotChosen() throws {
+    var list = CommandLineCompletionList()
+    // Frecency favours `qall`; `:q` still means `quit`.
+    list.update(context: context("q", ["qall", "quit", "tab"], selected: "quit")) {
+      $0 == "qall" ? 40 : 0
+    }
+    XCTAssertEqual(list.matches.map(\.completion.label), ["quit", "qall"], "`tab` has no q")
+    XCTAssertEqual(list.selection, .implied(0))
+    XCTAssertEqual(list.selected?.label, "quit")
+    XCTAssertEqual(list.buffer(inserting: try XCTUnwrap(list.selected)), ":quit ")
+    XCTAssertFalse(list.isTopLevelEmpty)
+    XCTAssertEqual(list.displayItems(windowSize: 5).map(\.isSelected), [true, false])
+
+    // The next keystroke recomputes the highlight: a moved row does not stick.
+    list.selection = list.selection.moved(by: 1, count: list.matches.count)
+    XCTAssertEqual(list.selected?.label, "qall")
+    list.update(context: context("qa", ["qall", "quit", "tab"], selected: "qall")) { _ in 0 }
+    XCTAssertEqual(list.selection, .implied(0))
+    XCTAssertEqual(list.selected?.label, "qall")
+  }
+
+  func testTheDisplayedWindowFollowsTheSelection() {
+    var list = CommandLineCompletionList()
+    list.update(context: context("", ["a", "b", "c", "d", "e"])) { _ in 0 }
+    XCTAssertEqual(list.displayItems(windowSize: 2).map(\.title), ["a", "b"])
+    list.selection = .chosen(4)
+    let shown = list.displayItems(windowSize: 2)
+    XCTAssertEqual(shown.last?.title, "e")
+    XCTAssertEqual(shown.filter(\.isSelected).map(\.title), ["e"])
+    XCTAssertTrue(CommandLineCompletionList().displayItems(windowSize: 2).isEmpty)
+  }
 }
