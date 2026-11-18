@@ -1,0 +1,467 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/definitions.schema.json",
+  "title": "definitions",
+  "description": "Shapes the frames of the plugin protocol share. Byte quotas are written as maxLength: a string within the quota always passes, and the receiver counts UTF-8 bytes, so a multi-byte string may still be refused.",
+  "definitions": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "A request id: positive, monotonic per sender. The host's and the plugin's counters are independent."
+    },
+    "deadline_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The milliseconds the host still waits for the reply as it writes the request."
+    },
+    "trace": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{1,16}$",
+      "description": "The id of the user interaction that caused a request."
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647,
+      "description": "A native process id."
+    },
+    "priority": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "important",
+        "urgent"
+      ]
+    },
+    "ok": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "description": "A success that carries nothing else."
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "A content-free reason; never blank."
+        }
+      },
+      "description": "The response law's failure: a content-free reason and nothing else."
+    },
+    "window_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      },
+      "description": "The focused window in global AppKit points; all zero when the app has none."
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundle_id",
+        "pid",
+        "front_window_frame"
+      ],
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "pid": {
+          "$ref": "#/definitions/pid"
+        },
+        "front_window_frame": {
+          "$ref": "#/definitions/window_frame"
+        }
+      },
+      "description": "The focused app a core command runs against."
+    },
+    "spatial_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundle_id",
+        "pid",
+        "front_window_frame"
+      ],
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "pid": {
+          "$ref": "#/definitions/pid"
+        },
+        "front_window_frame": {
+          "$ref": "#/definitions/window_frame"
+        },
+        "display_scale": {
+          "type": "number",
+          "description": "Physical pixels per AppKit point of the window's display, when known."
+        }
+      },
+      "description": "The focused app a hints or text_grid request describes."
+    },
+    "text_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "copy_text",
+            "insert_text"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      }
+    },
+    "open_url_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "open"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 65536,
+          "pattern": "^(?![Ff][Ii][Ll][Ee]:)[A-Za-z][A-Za-z0-9+.-]*:",
+          "description": "An absolute URL of any scheme but file."
+        }
+      }
+    },
+    "open_app_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "bundle_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "open"
+        },
+        "bundle_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      }
+    },
+    "effect": {
+      "description": "What committing a catalog row does.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/text_effect"
+        },
+        {
+          "$ref": "#/definitions/open_url_effect"
+        },
+        {
+          "$ref": "#/definitions/open_app_effect"
+        }
+      ]
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "title"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "A manifest sources[].name of the publishing plugin."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 16384,
+          "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+          "description": "An absolute URL."
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "$comment": "Open by design: the keys are the plugin's own, apart from the host-read ones docs/plugin-protocol.md lists.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 256
+          },
+          "properties": {
+            "priority": {
+              "$ref": "#/definitions/priority"
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 65536
+          }
+        },
+        "effect": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/effect"
+            }
+          ]
+        }
+      },
+      "description": "One catalog row: as a plugin publishes it, and as the host hands it back in perform {kind: resolve}."
+    },
+    "answer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "effect"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "subtitle": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 16384
+        },
+        "effect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "copy_text",
+                "insert_text"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            }
+          },
+          "$comment": "Never open: an evaluator cannot manufacture navigation."
+        }
+      },
+      "description": "One evaluate answer."
+    },
+    "target_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "description": "A hint target's rectangle in global AppKit points."
+    },
+    "hint_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "frame"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "frame": {
+          "$ref": "#/definitions/target_frame"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/pid"
+            }
+          ]
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/priority"
+            }
+          ]
+        },
+        "context_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "description": "One hint target: geometry and semantics, nothing about the mode."
+    },
+    "text_grid_line": {
+      "description": "One line of a text grid: captured text, or a status format laid out over width cells.",
+      "$comment": "row < rows, column < columns and width <= columns - column; the receiver checks them against the reply's dimensions.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "row",
+            "column",
+            "text"
+          ],
+          "properties": {
+            "row": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "row",
+            "column",
+            "width",
+            "format"
+          ],
+          "properties": {
+            "row": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "format": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

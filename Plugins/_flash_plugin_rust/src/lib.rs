@@ -7,6 +7,8 @@
 //! typed host RPC client. Everything a plugin touches is a typed value.
 
 mod applescript;
+#[cfg(test)]
+mod conformance;
 mod context;
 mod deadline;
 mod emit;

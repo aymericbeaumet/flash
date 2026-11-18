@@ -2,20 +2,21 @@ import Foundation
 
 /// A JSON Schema (draft-07) validator for the keywords Flash's published
 /// schemas use: `type`, `const`, `enum`, `properties`, `required`,
-/// `additionalProperties`, `items`, `minItems`, `maxItems`, `uniqueItems`,
-/// `minLength`, `maxLength`, `minimum`, `pattern`, `oneOf`, `anyOf`,
-/// `allOf` and `$ref` (to `#/definitions/…` and to sibling files). A
-/// keyword it does not know fails validation, so a schema cannot quietly
-/// outgrow it.
+/// `additionalProperties`, `propertyNames`, `maxProperties`, `items`,
+/// `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`,
+/// `minimum`, `exclusiveMinimum`, `maximum`, `pattern`, `oneOf`, `anyOf`,
+/// `allOf` and `$ref` (to `#/definitions/…` and to sibling files);
+/// `$comment` is read past. A keyword it does not know fails validation, so
+/// a schema cannot quietly outgrow it.
 struct JSONSchemaValidator {
   /// Schema documents by file name (`hello.schema.json`).
   let documents: [String: [String: Any]]
 
   static let keywords: Set<String> = [
-    "$schema", "$id", "title", "description", "definitions", "type", "const", "enum",
-    "properties", "required", "additionalProperties", "items", "minItems", "maxItems",
-    "uniqueItems", "minLength", "maxLength", "minimum", "pattern", "oneOf", "anyOf", "allOf",
-    "$ref",
+    "$schema", "$id", "$comment", "title", "description", "definitions", "type", "const", "enum",
+    "properties", "required", "additionalProperties", "propertyNames", "maxProperties", "items",
+    "minItems", "maxItems", "uniqueItems", "minLength", "maxLength", "minimum",
+    "exclusiveMinimum", "maximum", "pattern", "oneOf", "anyOf", "allOf", "$ref",
   ]
 
   init(directory: URL) throws {
@@ -98,10 +99,16 @@ struct JSONSchemaValidator {
         problems.append("\(path): does not match \(pattern)")
       }
     }
-    if Self.isType(value, "number"), let number = (value as? NSNumber)?.doubleValue,
-      let minimum = (schema["minimum"] as? NSNumber)?.doubleValue, number < minimum
-    {
-      problems.append("\(path): below \(minimum)")
+    if Self.isType(value, "number"), let number = (value as? NSNumber)?.doubleValue {
+      if let minimum = (schema["minimum"] as? NSNumber)?.doubleValue, number < minimum {
+        problems.append("\(path): below \(minimum)")
+      }
+      if let bound = (schema["exclusiveMinimum"] as? NSNumber)?.doubleValue, number <= bound {
+        problems.append("\(path): not above \(bound)")
+      }
+      if let maximum = (schema["maximum"] as? NSNumber)?.doubleValue, number > maximum {
+        problems.append("\(path): above \(maximum)")
+      }
     }
     if let array = value as? [Any] {
       if let minimum = schema["minItems"] as? Int, array.count < minimum {
@@ -126,6 +133,14 @@ struct JSONSchemaValidator {
       let properties = schema["properties"] as? [String: Any] ?? [:]
       for key in schema["required"] as? [String] ?? [] where object[key] == nil {
         problems.append("\(path).\(key): required")
+      }
+      if let maximum = schema["maxProperties"] as? Int, object.count > maximum {
+        problems.append("\(path): more than \(maximum) properties")
+      }
+      if let names = schema["propertyNames"] as? [String: Any] {
+        for key in object.keys {
+          validate(key, names, document: document, path: "\(path).\(key)", into: &problems)
+        }
       }
       for (key, child) in object {
         if let property = properties[key] as? [String: Any] {

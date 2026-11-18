@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.post_keys.schema.json",
+  "title": "host.post_keys",
+  "description": "Plugin to host: post modified key chords to one app.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.post_keys"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "keys"
+      ],
+      "properties": {
+        "pid": {
+          "$ref": "definitions.schema.json#/definitions/pid"
+        },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key_code",
+              "modifiers"
+            ],
+            "properties": {
+              "key_code": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 127
+              },
+              "modifiers": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": [
+                    "command",
+                    "control",
+                    "option",
+                    "shift"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "interval_ms": {
+          "type": "integer",
+          "description": "The pause between chords; the host keeps it within 8 to 100 and defaults to 35."
+        }
+      }
+    }
+  }
+}

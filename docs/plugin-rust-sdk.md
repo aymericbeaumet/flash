@@ -336,7 +336,9 @@ SDK's own runtime tests and the probe crate (`Plugins/_flash_plugin_rust/probe`)
 hold the protocol conformance suite, so a plugin crate rarely needs one.
 
 The SDK and the host XCTest suites consume the shared malformed and boundary
-corpus at `Plugins/_flash_plugin_rust/fixtures/wire-values.fixture`;
+corpus at `Plugins/_flash_plugin_rust/fixtures/wire-values.fixture` and the
+whole-frame corpus in `Plugins/_flash_plugin_rust/conformance/`
+([how both ends read it](plugin-protocol.md#conformance-workflow));
 `Plugins/_flash_plugin_rust/protocol.json` pins the constants both assert
 against.
 

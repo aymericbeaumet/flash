@@ -1,0 +1,241 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/event.schema.json",
+  "title": "event",
+  "description": "Host to plugin, never replied: one host event the manifest listens to, or the tick of a cadence the plugin registered through poll.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "method",
+    "params"
+  ],
+  "properties": {
+    "method": {
+      "const": "event"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "payload"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "anyOf": [
+            {
+              "enum": [
+                "core:apps.changed",
+                "core:apps.launched",
+                "core:apps.terminated",
+                "core:focus.changed",
+                "core:window.focus.changed",
+                "core:ax.changed",
+                "core:config.changed",
+                "core:power.changed",
+                "core:network.changed",
+                "core:volumes.changed",
+                "core:status.observed",
+                "core:session.opened",
+                "core:system.slept",
+                "core:system.woke",
+                "core:displays.slept",
+                "core:displays.woke",
+                "core:screen.locked",
+                "core:screen.unlocked",
+                "core:displays.changed",
+                "core:space.changed",
+                "core:user.idle",
+                "core:user.active",
+                "core:usb.attached",
+                "core:usb.detached",
+                "core:clock.minute",
+                "core:workspace.changed",
+                "core:mode.changed",
+                "core:hints.shown",
+                "core:hints.committed",
+                "core:hints.cancelled",
+                "core:monitor.triggered"
+              ]
+            },
+            {
+              "pattern": "^core:poll:[a-z0-9_-]{1,64}$"
+            }
+          ]
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "name": {
+              "const": "core:apps.changed"
+            },
+            "payload": {
+              "$ref": "#/definitions/apps_changed"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "core:ax.changed"
+            },
+            "payload": {
+              "$ref": "#/definitions/ax_changed"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "core:status.observed"
+            },
+            "payload": {
+              "$ref": "#/definitions/status_observed"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "core:session.opened"
+            },
+            "payload": {
+              "$ref": "#/definitions/empty"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "pattern": "^core:poll:[a-z0-9_-]{1,64}$"
+            },
+            "payload": {
+              "$ref": "#/definitions/empty"
+            }
+          }
+        },
+        {
+          "$comment": "The events the resident's socket streams too: docs/schema/ipc/event.schema.json pins their payloads.",
+          "properties": {
+            "name": {
+              "enum": [
+                "core:apps.launched",
+                "core:apps.terminated",
+                "core:focus.changed",
+                "core:window.focus.changed",
+                "core:config.changed",
+                "core:power.changed",
+                "core:network.changed",
+                "core:volumes.changed",
+                "core:system.slept",
+                "core:system.woke",
+                "core:displays.slept",
+                "core:displays.woke",
+                "core:screen.locked",
+                "core:screen.unlocked",
+                "core:displays.changed",
+                "core:space.changed",
+                "core:user.idle",
+                "core:user.active",
+                "core:usb.attached",
+                "core:usb.detached",
+                "core:clock.minute",
+                "core:workspace.changed",
+                "core:mode.changed",
+                "core:hints.shown",
+                "core:hints.committed",
+                "core:hints.cancelled",
+                "core:monitor.triggered"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "empty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "apps_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "running_applications"
+      ],
+      "properties": {
+        "running_applications": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "bundle_id",
+              "pid",
+              "localized_name"
+            ],
+            "properties": {
+              "bundle_id": {
+                "type": "string"
+              },
+              "pid": {
+                "type": "integer"
+              },
+              "localized_name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "description": "The complete snapshot of running regular apps."
+    },
+    "ax_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "notification"
+      ],
+      "properties": {
+        "pid": {
+          "$ref": "definitions.schema.json#/definitions/pid"
+        },
+        "notification": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bundle_id": {
+          "type": "string"
+        }
+      },
+      "description": "One AX notification an observed app posted."
+    },
+    "status_observed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "segments"
+      ],
+      "properties": {
+        "segments": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "description": "The plugin's status segments a status surface shows; empty means none."
+    }
+  }
+}

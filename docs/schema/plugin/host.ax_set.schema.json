@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.ax_set.schema.json",
+  "title": "host.ax_set",
+  "description": "Plugin to host: set a Boolean accessibility attribute of a snapshot node.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.ax_set"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handle",
+        "attribute",
+        "value"
+      ],
+      "properties": {
+        "handle": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attribute": {
+          "type": "string"
+        },
+        "value": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

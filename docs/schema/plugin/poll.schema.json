@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/poll.schema.json",
+  "title": "poll",
+  "description": "Plugin to host: the complete set of cadences and one-shot deadlines the host drives for this plugin; an empty set clears them. A malformed or over-bound set is rejected whole.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "method",
+    "params"
+  ],
+  "properties": {
+    "method": {
+      "const": "poll"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registrations"
+      ],
+      "properties": {
+        "registrations": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": {
+            "pattern": "^[a-z0-9_-]{1,64}$"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "every",
+                  "priority"
+                ],
+                "properties": {
+                  "every": {
+                    "type": "number",
+                    "minimum": 0.05,
+                    "maximum": 86400,
+                    "description": "A cadence, in seconds."
+                  },
+                  "priority": {
+                    "enum": [
+                      "high",
+                      "normal",
+                      "low"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "after",
+                  "priority"
+                ],
+                "properties": {
+                  "after": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 86400,
+                    "description": "A one-shot deadline, in seconds from receipt."
+                  },
+                  "priority": {
+                    "enum": [
+                      "high",
+                      "normal",
+                      "low"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

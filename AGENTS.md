@@ -363,9 +363,11 @@ Surface requests that would violate these constraints before implementing them.
   actual app target against its declared `apple_events_targets`.
 - Validate plugin wire changes across Swift and Rust. The wire contract lives in
   `Plugins/_flash_plugin_rust`: `protocol.json` pins the constants, the
-  `wire`/`runtime` suites and the `probe` workspace member pin the behaviour. A
-  wire bug gets a failing test there before its fix; domain behaviour gets a
-  unit test in `Plugins/<id>`.
+  `wire`/`runtime` suites and the `probe` workspace member pin the behaviour,
+  and `conformance/*.ndjson` pins whole frames for both ends
+  (`src/conformance.rs`, `PluginSchemaTests`, `docs/schema/plugin/`). A wire
+  bug gets a failing test or corpus line there before its fix; domain
+  behaviour gets a unit test in `Plugins/<id>`.
 - Keep plugin stdout protocol-only and bound encoded bytes, queue admission,
   requests and shutdown. A publish is proportional to the change: volatile
   and static rows are separate sources, each published alone

@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/perform.reply.schema.json",
+  "title": "perform reply",
+  "description": "Plugin to host, exactly one of: performed, not mine (the host may fall back), or mine but broke (the host must not).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "target_pid": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "definitions.schema.json#/definitions/pid"
+                }
+              ]
+            },
+            "navigation_url": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+              "description": "An absolute URL."
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "unhandled"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "unhandled": {
+              "const": true
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

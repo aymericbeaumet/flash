@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.ax_snapshot.schema.json",
+  "title": "host.ax_snapshot",
+  "description": "Plugin to host: walk one app's accessibility tree and read the attributes it names.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.ax_snapshot"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid"
+      ],
+      "properties": {
+        "pid": {
+          "$ref": "definitions.schema.json#/definitions/pid"
+        },
+        "follow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The attributes whose elements the walk descends into."
+        },
+        "collect": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The attributes read on every node."
+        },
+        "max_nodes": {
+          "type": "integer"
+        },
+        "prune_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The roles the walk does not descend below."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host-frame.schema.json",
+  "title": "host frame",
+  "description": "Any frame the host writes to a plugin's stdin: a request, an event, or the reply to a host RPC. Replies are told apart by the request they answer, not by their content, so this is a union rather than a discriminated choice.",
+  "anyOf": [
+    {
+      "$ref": "initialize.schema.json"
+    },
+    {
+      "$ref": "ping.schema.json"
+    },
+    {
+      "$ref": "event.schema.json"
+    },
+    {
+      "$ref": "evaluate.schema.json"
+    },
+    {
+      "$ref": "hints.schema.json"
+    },
+    {
+      "$ref": "text_grid.schema.json"
+    },
+    {
+      "$ref": "perform.schema.json"
+    },
+    {
+      "$ref": "host.ping.reply.schema.json"
+    },
+    {
+      "$ref": "host.fetch.reply.schema.json"
+    },
+    {
+      "$ref": "host.wifi_info.reply.schema.json"
+    },
+    {
+      "$ref": "host.applescript.reply.schema.json"
+    },
+    {
+      "$ref": "host.normal_mode_target.reply.schema.json"
+    },
+    {
+      "$ref": "host.activate.reply.schema.json"
+    },
+    {
+      "$ref": "host.open.reply.schema.json"
+    },
+    {
+      "$ref": "host.post_keys.reply.schema.json"
+    },
+    {
+      "$ref": "host.ax_snapshot.reply.schema.json"
+    },
+    {
+      "$ref": "host.ax_perform.reply.schema.json"
+    },
+    {
+      "$ref": "host.ax_set.reply.schema.json"
+    },
+    {
+      "$ref": "host.ax_select_child.reply.schema.json"
+    }
+  ]
+}

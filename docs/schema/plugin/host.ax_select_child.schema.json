@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.ax_select_child.schema.json",
+  "title": "host.ax_select_child",
+  "description": "Plugin to host: select one child of a snapshot node.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.ax_select_child"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parent",
+        "child"
+      ],
+      "properties": {
+        "parent": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "child": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

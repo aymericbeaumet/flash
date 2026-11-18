@@ -1,0 +1,196 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.applescript.schema.json",
+  "title": "host.applescript",
+  "description": "Plugin to host: run one host-owned AppleScript template over data fields. No source crosses the wire.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.applescript"
+    },
+    "params": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "bundle_id"
+          ],
+          "properties": {
+            "operation": {
+              "const": "browser_tabs"
+            },
+            "bundle_id": {
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "bundle_id"
+          ],
+          "properties": {
+            "operation": {
+              "const": "browser_select"
+            },
+            "bundle_id": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "window": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "tab": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "bundle_id",
+            "index"
+          ],
+          "properties": {
+            "operation": {
+              "const": "browser_tab_index"
+            },
+            "bundle_id": {
+              "type": "string"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "bundle_id",
+            "forward"
+          ],
+          "properties": {
+            "operation": {
+              "const": "browser_tab_move"
+            },
+            "bundle_id": {
+              "type": "string"
+            },
+            "forward": {
+              "type": "boolean"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "shortcuts_list"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "name"
+          ],
+          "properties": {
+            "operation": {
+              "const": "shortcut_run"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "bundle_id"
+          ],
+          "properties": {
+            "operation": {
+              "const": "chat_submit"
+            },
+            "bundle_id": {
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30000
+            }
+          }
+        }
+      ],
+      "$comment": "browser_select needs a url or a title, and window and tab come together; the host checks both, and every operation's target against the manifest's apple_events_targets."
+    }
+  }
+}

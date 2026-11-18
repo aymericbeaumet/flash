@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.normal_mode_target.reply.schema.json",
+  "title": "host.normal_mode_target reply",
+  "description": "Host to plugin: that app, when there is one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "present"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "present": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "present",
+            "pid",
+            "bundle_id"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "present": {
+              "const": true
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "bundle_id": {
+              "type": "string"
+            },
+            "window_id": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

@@ -22,7 +22,7 @@ review.
 | Standard | Decision | Notes |
 | --- | --- | --- |
 | [TOML 1.0](https://toml.io/en/v1.0.0) | Adopted, the only format | `flash.toml`; no JSON, YAML or plist configuration. |
-| [JSON Schema](https://json-schema.org) (draft-07) | Adopted | `docs/schema/flash.schema.json`, built from the loader's own key tables and the defaults; `flash config schema` prints the running version's ([editor support](configuration.md#editor-support)). `docs/schema/ipc/` describes every message of the [IPC protocol](ipc-protocol.md#schemas), pinned by tests against the messages Flash encodes. |
+| [JSON Schema](https://json-schema.org) (draft-07) | Adopted | `docs/schema/flash.schema.json`, built from the loader's own key tables and the defaults; `flash config schema` prints the running version's ([editor support](configuration.md#editor-support)). `docs/schema/ipc/` describes every message of the [IPC protocol](ipc-protocol.md#schemas), pinned by tests against the messages Flash encodes. `docs/schema/plugin/` describes every frame of the [plugin protocol](plugin-protocol.md#schemas-and-constants), pinned by a corpus the host and the SDK both read. |
 | [Taplo](https://taplo.tamasfe.dev) `#:schema` directive and `.taplo.toml` | Adopted | The starter config carries the directive; Tombi and Even Better TOML read it too. |
 | [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) for configuration | Adopted | `$XDG_CONFIG_HOME/flash/flash.toml`, which defaults to `~/.config/flash/flash.toml`: dotfiles stay portable. |
 | XDG for data, state and logs | Rejected | Data stays in `~/Library/Application Support/Flash` and logs in `~/Library/Logs/Flash`, where macOS tools (Console, Time Machine exclusions, MDM) expect them. One location each. |

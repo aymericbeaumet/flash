@@ -1154,6 +1154,50 @@ SDK's wire and runtime tests, plus the `probe` crate, prove the behaviour.
 Where this prose and `protocol.json` disagree, `protocol.json` is right and
 this page has a bug.
 
+Every frame has a JSON Schema (draft-07) under `docs/schema/plugin/`, named
+after its method: `<method>.schema.json` for a request or notification and
+`<method>.reply.schema.json` for its reply. A manifest is not a frame and has
+no schema here.
+
+- [`host-frame.schema.json`](schema/plugin/host-frame.schema.json): any line
+  the host sends
+- [`plugin-frame.schema.json`](schema/plugin/plugin-frame.schema.json): any
+  line a plugin sends
+- [`definitions.schema.json`](schema/plugin/definitions.schema.json): the
+  shapes several frames share (ids, pids, frames, rows, targets, the context)
+- Host requests and their replies:
+  [`initialize`](schema/plugin/initialize.schema.json)
+  ([reply](schema/plugin/initialize.reply.schema.json)),
+  [`ping`](schema/plugin/ping.schema.json)
+  ([reply](schema/plugin/ping.reply.schema.json)),
+  [`evaluate`](schema/plugin/evaluate.schema.json)
+  ([reply](schema/plugin/evaluate.reply.schema.json)),
+  [`hints`](schema/plugin/hints.schema.json)
+  ([reply](schema/plugin/hints.reply.schema.json)),
+  [`text_grid`](schema/plugin/text_grid.schema.json)
+  ([reply](schema/plugin/text_grid.reply.schema.json)),
+  [`perform`](schema/plugin/perform.schema.json)
+  ([reply](schema/plugin/perform.reply.schema.json))
+- The host notification: [`event`](schema/plugin/event.schema.json), with
+  each event's payload
+- Plugin notifications: [`publish`](schema/plugin/publish.schema.json),
+  [`status`](schema/plugin/status.schema.json),
+  [`poll`](schema/plugin/poll.schema.json),
+  [`log`](schema/plugin/log.schema.json)
+- Host RPCs and their replies: `host.<name>.schema.json` and
+  `host.<name>.reply.schema.json` for each method in
+  `methods.plugin_to_host_rpcs`, from
+  [`host.ping`](schema/plugin/host.ping.schema.json) to
+  [`host.ax_select_child`](schema/plugin/host.ax_select_child.schema.json)
+
+A schema describes what the sender writes. Where a shape is open on purpose
+(a row's `data`, a `log` line's field names, the attributes of an
+Accessibility snapshot node), a `$comment` says so. The schemas are
+written by hand from the codecs; `PluginSchemaTests` fails when a method in
+`protocol.json` has no schema, when a bound in a schema differs from the
+quota it mirrors, or when a line of the conformance corpus meets a schema
+with the wrong verdict.
+
 ## Compatibility policy
 
 Locked while breaking is still free (the MV3 lesson); changing any of these
@@ -1218,8 +1262,21 @@ is the malformed and boundary-value corpus the SDK and the host's XCTest
 suites both consume, and the probe crate `Plugins/_flash_plugin_rust/probe`
 drives a generic `plugin!`-generated plugin through every surface (catalog,
 evaluate, hints, text grids, the perform trichotomy, notifications,
-events, host-RPC arms) over the wire. For a protocol defect, land the failing test
-there before changing the implementation.
+events, host-RPC arms) over the wire.
+
+Whole frames are pinned by the two-way corpus in
+`Plugins/_flash_plugin_rust/conformance/`: `host-frames.ndjson` holds frames
+the host sends and `plugin-frames.ndjson` frames a plugin sends, each line
+marked `accept` or `reject` (the `README.md` beside them gives the format and
+the fixture they describe). The SDK's `src/conformance.rs` sends the host
+frames through the real serve loop and decoders and requires the SDK's
+encoders to write the plugin frames; the host's `PluginSchemaTests` checks
+every line against the [schemas](#schemas-and-constants), runs the plugin
+frames through the host's decoders and answers each `host.*` request with
+the real dispatcher. Neither end has a copy of the other's expectations.
+
+For a protocol defect, land the failing corpus line or test there before
+changing the implementation.
 
 Behaviour specific to one plugin — scripted host replies, the published
 catalog, status rows — is a `cargo test` in `Plugins/<id>` written against
