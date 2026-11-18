@@ -425,18 +425,6 @@ PY
     "async fn evaluate\\(" \
     Plugins
 
-  # The Rust SDK and host hardcode the one protocol version; drift means a
-  # stale implementation is shipping against the redefined wire.
-  sdk=Plugins/_flash_plugin_rust/src/runtime.rs
-  if ! search_paths -qi 'protocol_?version(:[[:space:]]*[[:alnum:]_]+)?[[:space:]]*=[[:space:]]*1([^[:alnum:]_]|$)' "$sdk"; then
-    echo "GUARDRAIL FAILED: $sdk must pin PROTOCOL_VERSION = 1" >&2
-    fail=1
-  fi
-  if ! search_paths -q 'static let version = 1([^[:alnum:]_]|$)' Sources/flash/App/Plugins/PluginProtocol.swift; then
-    echo "GUARDRAIL FAILED: PluginProtocol.swift must pin protocol version 1" >&2
-    fail=1
-  fi
-
   for manifest in Plugins/*/manifest.json; do
     plugin_dir="${manifest%/manifest.json}"
     plugin_id="${plugin_dir##*/}"

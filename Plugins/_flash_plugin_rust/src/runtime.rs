@@ -31,8 +31,9 @@ pub(crate) const REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_OVERLOAD_ERROR: &str = "plugin request capacity exceeded";
 
 /// Wire-protocol version echoed at `initialize`. A mismatch is terminal:
-/// reply `ok: false` with the canonical error, flush, exit 0. MUST stay equal
-/// to `protocol_version` in `Plugins/_flash_plugin_rust/protocol.json`.
+/// reply `ok: false` with the canonical error, flush, exit 0. Equal to
+/// `protocol_version` in `Plugins/_flash_plugin_rust/protocol.json`; a test
+/// below holds the two together.
 const PROTOCOL_VERSION: u64 = 1;
 
 /// Canonical protocol error strings (pinned in `protocol.json`).
@@ -641,6 +642,13 @@ mod tests {
     use std::time::Instant;
 
     const INITIALIZE: &str = r#"{"id":1,"method":"initialize","params":{"protocol_version":1}}"#;
+
+    #[test]
+    fn the_protocol_version_matches_the_shared_protocol_contract() {
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(contract["protocol_version"], PROTOCOL_VERSION);
+    }
 
     fn initialize() -> Value {
         serde_json::from_str(INITIALIZE).unwrap()
