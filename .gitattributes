@@ -1,4 +1,4 @@
 # Generated artifacts and captured pages are fixtures, not implementation.
-Sources/flash/Resources/inspector.html linguist-generated=true -whitespace
+Sources/flash/Resources/inspector.html linguist-generated=true -whitespace -diff
 Tests/BrowserSnapshots/snapshots/** linguist-generated=true
 Plugins/searchproviders/kagi-bangs.tsv linguist-generated=true -whitespace
