@@ -133,6 +133,35 @@ final class LatencyProbeTests: XCTestCase {
     XCTAssertEqual(lines, [])
   }
 
+  /// An open says when each of its stages ended, in the order they ran, so
+  /// the time between the input and the first candidates can be attributed.
+  func testAFlashlightOpenLogsItsStagesInOrder() throws {
+    let logged = expectation(description: "flashlight_open")
+    var line = ""
+    let sink = FlashLog.addSink { record in
+      guard record.message.hasPrefix("[latency] flashlight_open ") else { return }
+      line = record.message
+      logged.fulfill()
+    }
+    defer { FlashLog.removeSink(sink) }
+    let delegate = AppDelegate()
+    delegate.overlay = OverlayPanel()
+    delegate.registry = SourceRegistry(descriptors: [], runningApplications: [])
+    defer { delegate.overlay.orderOut(nil) }
+
+    delegate.openCandidateFinderSession(scope: .all)
+    wait(for: [logged], timeout: 5)
+
+    let fields = line.split(separator: " ").dropFirst(2).map { $0.split(separator: "=") }
+    let stages = fields.filter { $0[0].hasSuffix("_ms") }
+    XCTAssertEqual(
+      stages.map { String($0[0]) }, ["asked_ms", "settled_ms", "prepared_ms", "published_ms"], line)
+    let ended = try stages.map { try XCTUnwrap(Double($0[1]), line) }
+    XCTAssertEqual(ended, ended.sorted(), "each stage ends after the one before: \(line)")
+    let total = try XCTUnwrap(Double(try XCTUnwrap(fields.first { $0[0] == "ms" })[1]))
+    XCTAssertGreaterThanOrEqual(total, ended.last ?? 0, line)
+  }
+
   func testTheProcessStartPrecedesNow() throws {
     let started = try XCTUnwrap(LatencyProbe.processStartUptime())
     XCTAssertLessThan(started, ProcessInfo.processInfo.systemUptime)

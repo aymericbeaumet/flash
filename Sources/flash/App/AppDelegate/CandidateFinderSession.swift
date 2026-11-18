@@ -116,6 +116,8 @@ final class CandidateFinderSession {
   var openProbe: LatencyProbe?
   /// When that open's prompt was laid out, before any candidate arrived.
   var openPromptAt: TimeInterval?
+  /// When that open asked its sources for their candidates.
+  var openAskedAt: TimeInterval?
   /// Bumped every time a flashlight session is (re)seeded. Plugin replies and
   /// the first-paint deadline capture this value so work from a closed or
   /// superseded session cannot publish a stale snapshot.

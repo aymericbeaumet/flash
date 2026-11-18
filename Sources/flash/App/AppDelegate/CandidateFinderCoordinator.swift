@@ -24,6 +24,7 @@ extension AppDelegate {
     let startedNs = DispatchTime.now().uptimeNanoseconds
     finder.openProbe = LatencyProbe.arm(.flashlightOpen)
     finder.openPromptAt = nil
+    finder.openAskedAt = nil
     // Advisory: the flashlight opened. Eager plugins may refresh their
     // catalogs; nothing is required and first paint never waits for them.
     if pluginManager.hasListener(for: .sessionOpened) {
@@ -104,6 +105,7 @@ extension AppDelegate {
       deadline: .now() + .milliseconds(remainingMs),
       execute: deadline)
 
+    finder.openAskedAt = LatencyProbe.now
     guard !sources.isEmpty else {
       finalizeInitialCandidateSnapshot(
         generation: generation, reason: .allSourcesSettled)
@@ -211,11 +213,13 @@ extension AppDelegate {
     let expectedSourceCount = barrier.expectedSourceCount
     let settledSourceCount = snapshot.replies.count
     let latencies = snapshot.sourceLatencies.isEmpty ? "none" : snapshot.sourceLatencies
+    let settledAt = LatencyProbe.now
     finder.preparationQueue.async { [weak self] in
       var frozen: [Candidate] = []
       for reply in snapshot.replies {
         frozen.append(contentsOf: CandidateFinder.prepare(reply.candidates))
       }
+      let preparedAt = LatencyProbe.now
       DispatchQueue.main.async { [weak self] in
         guard let self,
           generation == self.finder.sessionGeneration,
@@ -243,8 +247,15 @@ extension AppDelegate {
           ("reason", reason.rawValue), ("count", "\(self.finder.candidates.count)"),
           ("settled", "\(settledSourceCount)/\(expectedSourceCount)"),
         ]
-        if let promptAt = self.finder.openPromptAt {
-          fields.append(("prompt_ms", LatencyProbe.format(probe.elapsedMs(at: promptAt))))
+        // Each stage is when it ended, counted like `ms` from the open.
+        let stages: [(String, TimeInterval?)] = [
+          ("prompt_ms", self.finder.openPromptAt), ("asked_ms", self.finder.openAskedAt),
+          ("settled_ms", settledAt), ("prepared_ms", preparedAt),
+          ("published_ms", LatencyProbe.now),
+        ]
+        for (name, endedAt) in stages {
+          guard let endedAt else { continue }
+          fields.append((name, LatencyProbe.format(probe.elapsedMs(at: endedAt))))
         }
         CATransaction.begin()
         CATransaction.setCompletionBlock {

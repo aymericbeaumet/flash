@@ -134,7 +134,7 @@ input's interaction (`origin` names it: `key`, `hotkey`, `pointer`, `cli` or
 ```text
 [latency] launch_ready ms=412.0 origin=- config_ms=30.5 plugins_ms=8.0 statusbar_ms=40.0 apply_ms=45.0 main_ms=300.0
 [latency] config_reload ms=50.0 origin=- reason=watch parse_ms=32.0 apply_ms=18.0
-[latency] flashlight_open ms=35.0 origin=key reason=all_sources_settled count=900 settled=7/7 prompt_ms=4.0
+[latency] flashlight_open ms=35.0 origin=key reason=all_sources_settled count=900 settled=7/7 prompt_ms=4.0 asked_ms=5.0 settled_ms=12.0 prepared_ms=20.0 published_ms=21.0
 [latency] flashlight_key ms=2.0 origin=key path=ranked pool=900 matches=30 eval_ms=1.5 filter_ms=0.2 scored=900 inc=false score_ms=1.0 sort_ms=0.2 render_ms=0.1
 [latency] popup_show ms=180.0 origin=key state=cold kind=terminal popup_id=4d290749288b71c1
 ```
@@ -143,7 +143,7 @@ input's interaction (`origin` names it: `key`, `hotkey`, `pointer`, `cli` or
 | --- | --- | --- | --- |
 | `launch_ready` | The process start, as the kernel recorded it | The end of `applicationDidFinishLaunching` | `main_ms` is that method alone; `config_ms` reads and parses the configuration, once; `plugins_ms` is the plugin manager's start, `statusbar_ms` the status bar's construction, `apply_ms` publishing that configuration and arming the file watcher |
 | `config_reload` | The load starting (after a watched save's 150 ms settle) | Every subsystem has the new configuration | `reason` is `launch`, `watch` or `command`; `parse_ms` validates the file, `apply_ms` publishes it. Both run on the main thread. `launch` has no `parse_ms`: it applies what `launch_ready config_ms` parsed |
-| `flashlight_open` | The input that opened the flashlight | The commit that draws its first candidates | `reason` is why the first snapshot was published, `count` its candidates, `settled` the sources that had answered; `prompt_ms` is when the empty prompt was laid out |
+| `flashlight_open` | The input that opened the flashlight | The commit that draws its first candidates | `reason` is why the first snapshot was published, `count` its candidates, `settled` the sources that had answered; the stages are each counted from the start like `ms`: `prompt_ms` is when the empty prompt was laid out, `asked_ms` when the sources were asked (one main-thread turn later), `settled_ms` when the last one answered or the first-paint budget ran out, `prepared_ms` when the candidates were prepared off the main thread, `published_ms` when the main thread took them; the rest of `ms` is the render and its commit |
 | `flashlight_key` | The key, when the list was evaluated in its turn; else the evaluation | The candidate list is applied | `path` is the list built: `ranked`, `completion` (a `@` source or bang completion pool), `bangs`, `empty` (no query yet) or `evaluator` (a leading `=`). `eval_ms` is the evaluation alone, `filter_ms` the pool's construction, then `score_ms`, `sort_ms` and `render_ms` |
 | `popup_show` | The input that asked for the popup | `warm`: the showing, with the screen its running process already had. `cold`: the first frame its program draws | `state`, `kind` (`terminal` or `text`) and a `popup_id` that is a hash of the popup's name |
 
