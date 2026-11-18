@@ -60,14 +60,14 @@ extension AppDelegate {
         }
         self.serveClipboardHistoryHTTP(offset: offset, completion: completion)
       },
-      configHTTP: { [weak self] method, purge, body, completion in
+      configHTTP: { [weak self] operation, body, completion in
         guard let self else {
           completion(
             "503 Service Unavailable", "application/json; charset=utf-8",
             Self.configJSON(["error": "unavailable"]))
           return
         }
-        self.serveConfigHTTP(method: method, purge: purge, body: body, completion: completion)
+        self.serveConfigHTTP(operation: operation, body: body, completion: completion)
       },
       telemetryHTTP: { [store = telemetry.store] in store.snapshotJSON() },
       sectionsProvider: { [weak self] sections in
@@ -91,25 +91,56 @@ extension AppDelegate {
     try Data(text.utf8).write(to: target, options: .atomic)
   }
 
+  /// Parses the editor's text for `POST /api/config/check`, one at a time
+  /// and never on main: a parse takes tens of milliseconds.
+  private static let configCheckQueue = DispatchQueue(
+    label: "flash.inspector.config-check", qos: .utility)
+
   /// `GET /api/config` reads the file Flash loaded. `PUT` replaces it after
   /// the body parses as TOML. `POST /api/config/purge` returns the editor
-  /// text with bundled defaults removed and does not write.
+  /// text with bundled defaults removed and does not write. `POST
+  /// /api/config/check` returns what `flash config check` reports for the
+  /// editor text as that file, and does not write either.
   func serveConfigHTTP(
-    method: String, purge: Bool, body: Data,
+    operation: DebugServer.ConfigOperation, body: Data,
     completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
   ) {
     let type = "application/json; charset=utf-8"
+    if operation == .check {
+      Self.configCheckQueue.async {
+        guard let text = String(data: body, encoding: .utf8) else {
+          completion(
+            "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
+          return
+        }
+        let url = ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment)
+        let rows = ConfigCheck.rows(
+          fileURL: url, text: text, defaultLayer: ConfigLoader.embeddedDefaultLayer())
+        completion(
+          "200 OK", type,
+          Self.configJSON([
+            "path": url.path,
+            "diagnostics": rows.map { row -> [String: Any] in
+              var object: [String: Any] = ["path": row.path, "message": row.message]
+              object["line"] = row.line
+              object["column"] = row.column
+              return object
+            },
+          ]))
+      }
+      return
+    }
     DispatchQueue.main.async { [weak self] in
       guard self != nil else {
         completion("503 Service Unavailable", type, Self.configJSON(["error": "unavailable"]))
         return
       }
       let url = ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment)
-      switch (method, purge) {
-      case ("GET", false):
+      switch operation {
+      case .read:
         let toml = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         completion("200 OK", type, Self.configJSON(["path": url.path, "toml": toml]))
-      case ("PUT", false):
+      case .write:
         guard let text = String(data: body, encoding: .utf8) else {
           completion(
             "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
@@ -128,7 +159,7 @@ extension AppDelegate {
           return
         }
         completion("200 OK", type, Self.configJSON(["ok": true]))
-      case ("POST", true):
+      case .purge:
         guard let text = String(data: body, encoding: .utf8) else {
           completion(
             "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
@@ -142,9 +173,8 @@ extension AppDelegate {
         }
         let toml = ConfigPurge.purgeDefaults(in: text, defaults: defaults)
         completion("200 OK", type, Self.configJSON(["toml": toml]))
-      default:
-        completion(
-          "405 Method Not Allowed", type, Self.configJSON(["error": "method not allowed"]))
+      case .check:
+        break  // Answered above, off main.
       }
     }
   }

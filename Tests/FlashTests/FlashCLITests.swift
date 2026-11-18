@@ -66,6 +66,15 @@ final class FlashCLITests: XCTestCase {
     XCTAssertTrue(bad.lines[0].hasPrefix("/tmp/flash-check.toml:2:7: mapping \"t\""), bad.lines[0])
     XCTAssertTrue(
       bad.lines[1].hasPrefix("/tmp/flash-check.toml:5:14: hints.min_length"), bad.lines[1])
+    // The same diagnostics as rows, for a caller that places them itself.
+    let rows = ConfigCheck.rows(
+      ConfigLoader.parseLayers([
+        ConfigLoader.Layer(text: "[hints]\nmin_length = 0\n", sourceURL: url)
+      ]).loadingDiagnostics, file: url.path)
+    XCTAssertEqual(rows.map(\.path), ["/tmp/flash-check.toml"])
+    XCTAssertEqual(rows.map(\.line), [2])
+    XCTAssertEqual(rows.map(\.column), [14])
+    XCTAssertEqual(rows.map(\.text), ["/tmp/flash-check.toml:2:14: \(rows[0].message)"])
 
     let good = ConfigCheck.run(
       fileURL: url, text: "[mode.normal.mappings]\n\"t\" = false\n", defaultLayer: nil)

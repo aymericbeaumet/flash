@@ -17,7 +17,7 @@ final class DebugServerTests: XCTestCase {
   func testTheDataEndpointsAnswerOnlyTheAccessToken() throws {
     let server = DebugServer(
       host: "127.0.0.1", port: 0, accessToken: Self.token,
-      configHTTP: { _, _, _, completion in
+      configHTTP: { _, _, completion in
         completion("200 OK", "text/plain; charset=utf-8", Data())
       },
       stateProvider: { ["secret": true] })
@@ -337,6 +337,8 @@ final class DebugServerTests: XCTestCase {
     XCTAssertEqual(DebugServer.route(path: "/api/clipboard/history"), .clipboardHistory)
     XCTAssertEqual(DebugServer.route(path: "/api/config"), .config)
     XCTAssertEqual(DebugServer.route(path: "/api/config/purge"), .configPurge)
+    XCTAssertEqual(DebugServer.route(path: "/api/config/check"), .configCheck)
+    XCTAssertTrue(DebugServer.Route.configCheck.requiresAccess)
     XCTAssertEqual(DebugServer.route(path: "/api/telemetry"), .telemetry)
     let id = "0123456789abcdef0123456789abcdef"
     XCTAssertEqual(DebugServer.route(path: "/api/clipboard/\(id)"), .clipboardItem(id: id))
@@ -944,8 +946,8 @@ final class DebugServerTests: XCTestCase {
     let seen = LockedData()
     let server = DebugServer(
       host: "localhost", port: 0, accessToken: Self.token,
-      configHTTP: { method, purge, body, done in
-        seen.store(method: method, purge: purge, body: body)
+      configHTTP: { operation, body, done in
+        seen.store(operation: operation, body: body)
         done("200 OK", "application/json; charset=utf-8", Data("{\"ok\":true}".utf8))
       },
       stateProvider: { [:] }
@@ -957,24 +959,91 @@ final class DebugServerTests: XCTestCase {
       try fetchBody(
         port: port, method: "PUT", path: "/api/config", body: payload,
         headers: ["Origin": "https://evil.example"]), 403)
-    XCTAssertEqual(seen.method, "", "a refused change never reaches the handler")
+    XCTAssertNil(seen.operation, "a refused change never reaches the handler")
     let saved = try fetchBody(port: port, method: "PUT", path: "/api/config", body: payload)
     XCTAssertEqual(saved, 200)
-    XCTAssertEqual(seen.method, "PUT")
-    XCTAssertEqual(seen.purge, false)
+    XCTAssertEqual(seen.operation, .write)
     XCTAssertEqual(seen.body, payload)
+    XCTAssertEqual(try fetchBody(port: port, method: "GET", path: "/api/config"), 200)
+    XCTAssertEqual(seen.operation, .read)
 
     let purged = try fetchBody(
       port: port, method: "POST", path: "/api/config/purge", body: Data("x".utf8))
     XCTAssertEqual(purged, 200)
-    XCTAssertEqual(seen.method, "POST")
-    XCTAssertEqual(seen.purge, true)
+    XCTAssertEqual(seen.operation, .purge)
+
+    let checked = try fetchBody(
+      port: port, method: "POST", path: "/api/config/check", body: Data("y".utf8))
+    XCTAssertEqual(checked, 200)
+    XCTAssertEqual(seen.operation, .check)
+    XCTAssertEqual(seen.body, Data("y".utf8))
+    // Each address answers its own methods only.
+    for (method, path) in [
+      ("POST", "/api/config"), ("DELETE", "/api/config"), ("GET", "/api/config/purge"),
+      ("GET", "/api/config/check"), ("PUT", "/api/config/check"),
+    ] {
+      XCTAssertEqual(
+        try fetchBody(port: port, method: method, path: path), 405, "\(method) \(path)")
+    }
+    XCTAssertEqual(seen.operation, .check, "a refused method never reaches the handler")
 
     let missing = DebugServer(host: "localhost", port: 0, accessToken: Self.token) { [:] }
     missing.start()
     defer { missing.stop() }
     let missingPort = try waitForListeningPort(missing)
     XCTAssertEqual(try fetchBody(port: missingPort, method: "GET", path: "/api/config"), 503)
+  }
+
+  /// `POST /api/config/check` answers what `flash config check` prints for
+  /// the body, as rows the editor can place, and never parses on main.
+  func testConfigCheckAnswersLocatedDiagnosticsOffMain() throws {
+    let text = """
+      [mode.normal.mappings]
+      "t" = true
+
+      [hints]
+      min_length = 0
+      """
+    func check(_ body: Data) throws -> (status: String, json: [String: Any]) {
+      let answered = expectation(description: "check")
+      var status = ""
+      var payload = Data()
+      AppDelegate().serveConfigHTTP(operation: .check, body: body) { code, _, data in
+        XCTAssertFalse(Thread.isMainThread, "the check parses off the main thread")
+        status = code
+        payload = data
+        answered.fulfill()
+      }
+      wait(for: [answered], timeout: 10)
+      return (status, try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any]))
+    }
+    let bad = try check(Data(text.utf8))
+    XCTAssertEqual(bad.status, "200 OK")
+    let path = try XCTUnwrap(bad.json["path"] as? String)
+    XCTAssertEqual(
+      path, ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment).path)
+    let rows = try XCTUnwrap(bad.json["diagnostics"] as? [[String: Any]])
+    XCTAssertEqual(rows.count, 2, "\(rows)")
+    XCTAssertEqual(rows.map { $0["line"] as? Int }, [2, 5])
+    XCTAssertEqual(rows.map { $0["column"] as? Int }, [7, 14])
+    XCTAssertEqual(rows.map { $0["path"] as? String }, [path, path])
+    XCTAssertTrue((rows[0]["message"] as? String ?? "").hasPrefix("mapping \"t\""), "\(rows[0])")
+    XCTAssertTrue((rows[1]["message"] as? String ?? "").hasPrefix("hints.min_length"), "\(rows[1])")
+
+    let good = try check(Data("[mode.normal.mappings]\n\"t\" = false\n".utf8))
+    XCTAssertEqual(good.status, "200 OK")
+    XCTAssertEqual((good.json["diagnostics"] as? [Any])?.count, 0)
+
+    // A syntax error is a diagnostic like any other, not a refusal.
+    let broken = try check(Data("[hints\n".utf8))
+    XCTAssertEqual(broken.status, "200 OK")
+    let syntax = try XCTUnwrap((broken.json["diagnostics"] as? [[String: Any]])?.first)
+    XCTAssertTrue((syntax["message"] as? String ?? "").hasPrefix("TOML parse error"), "\(syntax)")
+    XCTAssertEqual(syntax["line"] as? Int, 1)
+
+    let binary = try check(Data([0xFF, 0xFE]))
+    XCTAssertEqual(binary.status, "400 Bad Request")
+    XCTAssertEqual(binary.json["error"] as? String, "configuration must be UTF-8")
   }
 
   func testClipboardItemServesBytesAndRejectsOtherMethods() throws {
@@ -1313,14 +1382,12 @@ final class DebugServerTests: XCTestCase {
 
 private final class LockedData: @unchecked Sendable {
   private let lock = NSLock()
-  private(set) var method = ""
-  private(set) var purge = false
+  private(set) var operation: DebugServer.ConfigOperation?
   private(set) var body = Data()
 
-  func store(method: String, purge: Bool, body: Data) {
+  func store(operation: DebugServer.ConfigOperation, body: Data) {
     lock.lock()
-    self.method = method
-    self.purge = purge
+    self.operation = operation
     self.body = body
     lock.unlock()
   }

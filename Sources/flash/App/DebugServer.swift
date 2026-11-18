@@ -36,10 +36,18 @@ final class DebugServer {
     _ offset: Int,
     _ completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
   ) -> Void
-  /// `GET`/`PUT /api/config` and `POST /api/config/purge`. Nil answers 503.
-  /// Invoked on the server queue; the completion may run on any queue.
+  /// What a configuration request asks: `GET` (read) and `PUT` (write)
+  /// `/api/config`, `POST /api/config/purge` and `POST /api/config/check`.
+  enum ConfigOperation: Equatable {
+    case read
+    case write
+    case purge
+    case check
+  }
+  /// Nil answers 503. Invoked on the server queue; the completion may run
+  /// on any queue.
   typealias ConfigHTTPHandler = (
-    _ method: String, _ purge: Bool, _ body: Data,
+    _ operation: ConfigOperation, _ body: Data,
     _ completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
   ) -> Void
 
@@ -551,9 +559,16 @@ final class DebugServer {
     case .clipboardHistory:
       serveClipboardHistory(request: headers, connection: connection)
     case .config:
-      serveConfig(purge: false, request: headers, body: body, connection: connection)
+      let method = Self.requestMethod(headers)
+      serveConfig(
+        method == "GET" ? .read : method == "PUT" ? .write : nil, body: body,
+        connection: connection)
     case .configPurge:
-      serveConfig(purge: true, request: headers, body: body, connection: connection)
+      serveConfig(
+        Self.requestMethod(headers) == "POST" ? .purge : nil, body: body, connection: connection)
+    case .configCheck:
+      serveConfig(
+        Self.requestMethod(headers) == "POST" ? .check : nil, body: body, connection: connection)
     case .telemetry:
       guard Self.requestMethod(headers) == "GET" else {
         sendText("method not allowed", status: "405 Method Not Allowed", connection: connection)
@@ -571,10 +586,9 @@ final class DebugServer {
     }
   }
 
-  private func serveConfig(purge: Bool, request: String, body: Data, connection: NWConnection) {
-    let method = Self.requestMethod(request)
-    let allowed = purge ? method == "POST" : method == "GET" || method == "PUT"
-    guard allowed else {
+  /// `operation` nil is a method its address does not answer.
+  private func serveConfig(_ operation: ConfigOperation?, body: Data, connection: NWConnection) {
+    guard let operation else {
       sendText("method not allowed", status: "405 Method Not Allowed", connection: connection)
       return
     }
@@ -582,7 +596,7 @@ final class DebugServer {
       sendText("unavailable", status: "503 Service Unavailable", connection: connection)
       return
     }
-    configHTTP(method, purge, body) { [weak self] status, contentType, body in
+    configHTTP(operation, body) { [weak self] status, contentType, body in
       guard let self else { return }
       self.queue.async {
         self.sendBytes(body, status: status, contentType: contentType, connection: connection)
@@ -1103,6 +1117,7 @@ final class DebugServer {
     case clipboardPin(id: String)
     case config
     case configPurge
+    case configCheck
     case telemetry
     /// A file of the bundled manual, relative to its root: `docs.json`,
     /// `search.json` or `files/<path>`.
@@ -1115,7 +1130,7 @@ final class DebugServer {
       switch self {
       case .app, .docs, .missingEndpoint: return false
       case .state, .logs, .traces, .events, .clipboardHistory, .clipboardItem, .clipboardPin,
-        .config, .configPurge, .telemetry:
+        .config, .configPurge, .configCheck, .telemetry:
         return true
       }
     }
@@ -1130,6 +1145,7 @@ final class DebugServer {
     case "/api/clipboard/history": return .clipboardHistory
     case "/api/config": return .config
     case "/api/config/purge": return .configPurge
+    case "/api/config/check": return .configCheck
     case "/api/telemetry": return .telemetry
     case "/api/docs": return .docs(file: "docs.json")
     case "/api/docs/search": return .docs(file: "search.json")

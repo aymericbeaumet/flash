@@ -80,6 +80,7 @@ time ([performance](performance.md#browser-help)).
 | `/api/docs`, `/api/docs/search` | The bundled documentation (`docs.json`: navigation, pages and their Markdown) and its search sections, read from `Contents/Resources/docs` off the main thread |
 | `/api/config` | `GET` returns `{"path", "toml"}`: the configuration file Flash loaded and its text. `PUT` replaces that file with the body once it parses as TOML and answers `{"ok": true}`; otherwise 400 with `{"error"}` and nothing is written. A linked `flash.toml` stays a link: the write replaces the file it names |
 | `/api/config/purge` | `POST` returns `{"toml"}`: the body without the single-line assignments that still equal their bundled default. It writes nothing |
+| `/api/config/check` | `POST` returns `{"path", "diagnostics"}`: what [`flash config check`](configuration.md) reports for the body as the configuration file at `path`, over the bundled defaults and without environment overrides. Each diagnostic is `{"path", "message"}` with `line` and `column` when it has a location, in file and line order; a TOML syntax error is one of them. The body is parsed off the main thread and nothing is written |
 | `/api/telemetry` | What the OTLP receiver holds: every metric with its series, history and derived values, then the retained log records and spans, oldest first ([telemetry](telemetry.md#the-telemetry-page)) |
 
 The page routes itself with the History API: same-origin page links navigate
