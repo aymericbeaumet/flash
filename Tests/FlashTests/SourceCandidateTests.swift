@@ -541,7 +541,7 @@ final class SourceCandidateTests: XCTestCase {
       kind: .plugin("note"), source: "notes.notes", name: "shopping",
       subtitle: "note", bundleIdentifier: "")
     let emoji = candidate(
-      kind: CandidateFinder.emojiKind, source: "emojis.glyphs", name: "🔥 fire",
+      kind: .plugin("emoji"), source: "emojis.glyphs", name: "🔥 fire",
       subtitle: "emoji", bundleIdentifier: "")
     let source = CandidateFinder.sourceCompletionCandidate(type: "notes", providers: [])
 
@@ -637,7 +637,7 @@ final class SourceCandidateTests: XCTestCase {
     func emoji(_ title: String, payload: String, aliases: String) -> Candidate {
       CandidateFinder.prepare(
         candidate(
-          kind: CandidateFinder.emojiKind, source: "emojis.glyphs", name: title,
+          kind: .plugin("emoji"), source: "emojis.glyphs", name: title,
           subtitle: "emoji", bundleIdentifier: "", sourcePayload: payload,
           searchAliases: aliases))
     }
@@ -1437,23 +1437,14 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(bookmark, precedence: table))
   }
 
-  func testInsertsTextOnlyForEmojiKind() {
-    // `app open --name=` resolution skips text-insertion candidates so a
-    // glyph in the emoji pool can't be typed into the focused field.
-    // Bangs are not "text insertion" — selecting one canonicalizes the
-    // buffer in the flashlight, not the focused app.
-    let emoji = candidate(
-      kind: .plugin("emoji"), source: "emoji", name: "fire",
-      subtitle: "emoji", bundleIdentifier: "")
-    let bang = candidate(
-      kind: .plugin("bang"), source: "bang", name: "!g",
-      subtitle: "", bundleIdentifier: "")
-    let app = candidate(
-      kind: .app, source: "core.apps", name: "Safari",
-      subtitle: "app", bundleIdentifier: "com.apple.Safari")
-    XCTAssertTrue(CandidateFinder.insertsText(emoji))
-    XCTAssertFalse(CandidateFinder.insertsText(bang))
-    XCTAssertFalse(CandidateFinder.insertsText(app))
+  /// One character is typed, leaving the clipboard alone; longer text is
+  /// pasted.
+  func testInsertedTextOfOneCharacterIsTyped() {
+    XCTAssertTrue(CandidateFinder.insertionTypesDirectly("🔥"))
+    XCTAssertTrue(CandidateFinder.insertionTypesDirectly("👨‍👩‍👧"))
+    XCTAssertTrue(CandidateFinder.insertionTypesDirectly("§"))
+    XCTAssertFalse(CandidateFinder.insertionTypesDirectly("ok"))
+    XCTAssertFalse(CandidateFinder.insertionTypesDirectly(""))
   }
 
   func testCandidateFinderScoreReturnsNilForUnmatchableQuery() {
@@ -1519,24 +1510,63 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sorted.map(\.candidate.title), ["🙏 folded hands", "📿 prayer beads"])
   }
 
-  func testEmojiCandidatesWithoutLocalColorGlyphAreHiddenFromCommandBar() {
-    let supported = Candidate(
-      kind: CandidateFinder.emojiKind,
-      sourceID: "plugin:reference",
-      source: "emojis.glyphs",
-      title: "🙏 person with folded hands",
-      subtitle: "emoji",
-      sourcePayload: "🙏")
-    let unsupported = Candidate(
-      kind: CandidateFinder.emojiKind,
-      sourceID: "plugin:reference",
-      source: "emojis.glyphs",
-      title: "🕲 no piracy",
-      subtitle: "emoji",
-      sourcePayload: "🕲")
+  /// A row that types one glyph the emoji font cannot draw would show as a
+  /// blank: it is left out, whichever plugin listed it.
+  func testARowTypingAGlyphTheEmojiFontLacksIsHiddenFromCommandBar() {
+    func row(_ title: String, _ effect: CandidateEffect?) -> Candidate {
+      Candidate(
+        kind: .plugin("symbol"), sourceID: "plugin:reference", source: "symbols.glyphs",
+        title: title, effect: effect)
+    }
+    XCTAssertTrue(
+      AppDelegate.candidateCanRenderInCommandBar(
+        row("🙏 person with folded hands", .insertText("🙏"))))
+    XCTAssertFalse(
+      AppDelegate.candidateCanRenderInCommandBar(row("🕲 no piracy", .insertText("🕲"))))
+    // Text the font was never asked to draw stays: a snippet, a plain
+    // symbol, a copied value, a row with no effect.
+    XCTAssertTrue(
+      AppDelegate.candidateCanRenderInCommandBar(row("sig", .insertText("🕲 Regards, A."))))
+    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(row("section sign", .insertText("§"))))
+    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(row("🕲 no piracy", .copyText("🕲"))))
+    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(row("🕲 no piracy", nil)))
+  }
 
-    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(supported))
-    XCTAssertFalse(AppDelegate.candidateCanRenderInCommandBar(unsupported))
+  /// A catalog row is labelled with where it comes from whether or not
+  /// selecting it runs a host effect; an evaluator's answer and a
+  /// `menu choose` line are the text alone.
+  func testACatalogRowWithAnEffectKeepsItsLabel() {
+    let emoji = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("emoji"), source: "emojis.glyphs", name: "🔥 fire",
+        subtitle: "emoji", bundleIdentifier: "", effect: .insertText("🔥")))
+    XCTAssertEqual(emoji.displayTitle, "[emojis.glyphs] 🔥 fire")
+    let snippet = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("snippet"), source: "snippets.snippets", name: "sig",
+        subtitle: "", bundleIdentifier: "", effect: .insertText("Regards, A.")))
+    XCTAssertEqual(snippet.displayTitle, "[snippets.snippets] sig")
+
+    let answer = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("query_answer"), source: "answers", name: "2",
+        subtitle: "", bundleIdentifier: "", effect: .copyText("2")))
+    XCTAssertEqual(answer.displayTitle, "2")
+    XCTAssertEqual(
+      CandidateFinder.prepare(MenuChoice.candidates(["main"])[0]).displayTitle, "main")
+  }
+
+  /// A row that inserts text is committed by Return and by Tab, like every
+  /// row with a host effect: it is never completed into the query.
+  func testARowThatInsertsTextIsAFinalDestination() {
+    let emoji = candidate(
+      kind: .plugin("emoji"), source: "emojis.glyphs", name: "🔥 fire",
+      subtitle: "emoji", bundleIdentifier: "", effect: .insertText("🔥"))
+    XCTAssertTrue(CandidateFinder.isFinalDestination(emoji))
+    XCTAssertTrue(
+      CandidateFinder.selectionSubmits(
+        emoji, query: "fi", submit: false, allowFinisher: false, submitFinalDestinations: true))
+    XCTAssertTrue(CandidateFinder.selectionSubmits(emoji, query: "fi", submit: false))
   }
 
   func testEmojiAliasPreparationTokenizesNormalizedAliases() throws {
@@ -1702,6 +1732,7 @@ final class SourceCandidateTests: XCTestCase {
       metadata: [
         CandidateMetadataKey.source: "answers",
         CandidateMetadataKey.sourceID: "plugin:answers",
+        CandidateMetadataKey.kind: "query_answer",
       ],
       effect: .copyText("2"))
 
@@ -1732,12 +1763,12 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(
       CandidateFinder.selectionFinishes(
         candidate(
-          kind: CandidateFinder.emojiKind,
+          kind: .plugin("emoji"),
           source: "emoji",
           name: "grinning face",
           subtitle: "emoji",
           bundleIdentifier: "",
-          sourcePayload: "😀"),
+          effect: .insertText("😀")),
         query: "grin"))
   }
 
@@ -1960,7 +1991,7 @@ final class SourceCandidateTests: XCTestCase {
       ("tmux", CandidateKind.plugin("tmux_window"), "scratch:1 flash", pid_t(77)),
       ("notes.notes", CandidateKind.plugin("note"), "Flash notes", nil),
       ("bang", CandidateFinder.bangKind, "!google", nil),
-      ("emojis.glyphs", CandidateFinder.emojiKind, "🔥 fire", nil),
+      ("emojis.glyphs", CandidateKind.plugin("emoji"), "🔥 fire", nil),
     ]
     for i in 0..<120 {
       let item = names[i % names.count]
@@ -1994,7 +2025,7 @@ final class SourceCandidateTests: XCTestCase {
     let pool = (0..<900).map { i in
       CandidateFinder.prepare(
         candidate(
-          kind: CandidateFinder.emojiKind,
+          kind: .plugin("emoji"),
           source: "emojis.glyphs",
           name: "emoji sample \(i) fire flame heart",
           subtitle: "emoji",
@@ -2123,7 +2154,8 @@ final class SourceCandidateTests: XCTestCase {
     finishesCommand: Bool = false,
     isLocation: Bool = false,
     isCurrentLocation: Bool = false,
-    priority: FlashPriority = .normal
+    priority: FlashPriority = .normal,
+    effect: CandidateEffect? = nil
   ) -> Candidate {
     Candidate(
       kind: kind,
@@ -2139,7 +2171,8 @@ final class SourceCandidateTests: XCTestCase {
       finishesCommand: finishesCommand,
       isLocation: isLocation,
       isCurrentLocation: isCurrentLocation,
-      priority: priority)
+      priority: priority,
+      effect: effect)
   }
 }
 

@@ -1519,7 +1519,9 @@ extension AppDelegate {
       NormalModeDispatcher.copy(text)
       return
     case .insertText(let text):
-      insertText(text, viaClipboard: true, targetPID: insertionTargetPID)
+      insertText(
+        text, viaClipboard: !CandidateFinder.insertionTypesDirectly(text),
+        targetPID: insertionTargetPID)
       return
     case .openURL(let raw):
       overlay.hide()
@@ -1544,16 +1546,6 @@ extension AppDelegate {
       return
     case nil:
       break
-    }
-    if CandidateFinder.insertsText(candidate) {
-      // Emoji type directly (no clipboard); other inserted values (e.g. a
-      // clipboard-history entry, which can be long) keep the reliable
-      // copy + paste.
-      insertText(
-        candidate.sourcePayload ?? "",
-        viaClipboard: candidate.kind != CandidateFinder.emojiKind,
-        targetPID: insertionTargetPID)
-      return
     }
     if shouldRecordMovement {
       recordMovement(.candidate(candidate), source: "source_open")

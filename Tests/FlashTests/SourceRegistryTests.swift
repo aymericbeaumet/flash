@@ -278,7 +278,7 @@ final class SourceRegistryTests: XCTestCase {
             candidatesHandler: { _ in
               [
                 Candidate(
-                  kind: CandidateFinder.emojiKind,
+                  kind: .plugin("emoji"),
                   sourceID: "plugin:reference",
                   source: "emoji",
                   pid: nil,
@@ -664,8 +664,9 @@ final class SourceRegistryTests: XCTestCase {
 
   // Regression: app open --name=<app> used to type a text-insertion candidate
   // into the focused field when a higher-priority plugin substring-matched
-  // the name (originally a copied "…slack.com…" clipboard URL; emoji is the
-  // remaining insert-text kind). `app open` must resolve the real app first.
+  // the name (originally a copied "…slack.com…" clipboard URL; a row with a
+  // host effect, an emoji here, is what remains). `app open` must resolve
+  // the real app first.
   func testCandidateMatchingPrefersAppSourceOverHigherPriorityInsertTextShadow() {
     let resolved = expectation(description: "app source")
     let slackApp = Candidate(
@@ -673,10 +674,10 @@ final class SourceRegistryTests: XCTestCase {
       title: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
     let emojiShadow = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
+      kind: .plugin("emoji"), sourceID: "plugin:reference",
       source: "emoji", pid: nil,
       title: "slack key cap",
-      subtitle: "emoji", bundleIdentifier: "", url: nil)
+      subtitle: "emoji", bundleIdentifier: "", url: nil, effect: .insertText("#️⃣"))
 
     let registry = SourceRegistry(
       descriptors: [
@@ -701,7 +702,7 @@ final class SourceRegistryTests: XCTestCase {
     registry.resolveCandidate(matching: "Slack") { match in
       XCTAssertEqual(match?.sourceID, "core.apps")
       XCTAssertEqual(match?.kind, .app)
-      XCTAssertFalse(match.map(CandidateFinder.insertsText) ?? true)
+      XCTAssertNil(match?.effect)
       resolved.fulfill()
     }
     wait(for: [resolved], timeout: 1)
@@ -718,9 +719,9 @@ final class SourceRegistryTests: XCTestCase {
       kind: .plugin("tmux"), sourceID: "plugin:tmux", source: "tmux", pid: 42,
       title: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
     let emojiEntry = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
+      kind: .plugin("emoji"), sourceID: "plugin:reference",
       source: "emoji", pid: nil, title: "editor pencil", subtitle: "emoji",
-      bundleIdentifier: "", url: nil)
+      bundleIdentifier: "", url: nil, effect: .insertText("✏️"))
 
     func makeRegistry(includeActivatablePlugin: Bool) -> SourceRegistry {
       var descriptors: [SourceDescriptor] = [
@@ -758,7 +759,7 @@ final class SourceRegistryTests: XCTestCase {
     // An activatable plugin candidate is still reachable as a fallback.
     makeRegistry(includeActivatablePlugin: true).resolveCandidate(matching: "editor") { match in
       XCTAssertEqual(match?.sourceID, "plugin:tmux")
-      XCTAssertFalse(match.map(CandidateFinder.insertsText) ?? true)
+      XCTAssertNil(match?.effect)
       resolved.fulfill()
     }
     wait(for: [skipped, resolved], timeout: 1)
@@ -949,12 +950,12 @@ final class SourceRegistryTests: XCTestCase {
       candidatesHandler: { _ in
         return [
           Candidate(
-            kind: CandidateFinder.emojiKind,
+            kind: .plugin("emoji"),
             sourceID: "plugin:locations",
             source: "terminal.windows",
             title: "bash emoji",
-            sourcePayload: "😀",
-            isLocation: true),
+            isLocation: true,
+            effect: .insertText("😀")),
           Candidate(
             kind: .plugin("terminal_window"),
             sourceID: "plugin:locations",

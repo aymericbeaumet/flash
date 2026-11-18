@@ -557,14 +557,13 @@ final class SourceRegistry {
     // names precisely (bundle id / exact running name / `<name>.app` lookup),
     // so consult it first — otherwise a higher-priority plugin shadows the app
     // with a loose substring match: e.g. a "[slack]" channel whose decorated
-    // title contains the query. Skip text-insertion candidates entirely so an
-    // `app open` can never type emoji content into the focused field.
+    // title contains the query. Skip rows with a host effect entirely so an
+    // `app open` can never type or copy a row's text instead of switching.
     let ordered =
       builtInSources.filter { $0.identifier == "core.apps" }
       + builtInSources.filter { $0.identifier != "core.apps" }
     for source in ordered {
       guard let item = source.candidate(matching: target, in: env),
-        !CandidateFinder.insertsText(item),
         item.effect == nil
       else { continue }
       return CandidateFinder.prepare(item)
@@ -585,9 +584,7 @@ final class SourceRegistry {
       let prepared = CandidateFinder.prepare(source.candidates(in: env, scope: .all))
       pool.append(
         contentsOf: prepared.filter { candidate in
-          candidate.isLocation
-            && candidate.effect == nil
-            && !CandidateFinder.insertsText(candidate)
+          candidate.isLocation && candidate.effect == nil
         })
     }
     guard !pool.isEmpty else { return nil }

@@ -163,7 +163,11 @@ result.
 ## Selecting a row
 
 Location rows are final destinations: `<tab>` or `<cr>` submits the selected
-row directly, the same as `<cmd-cr>`. App switches and focused-window changes
+row directly, the same as `<cmd-cr>`. So are rows that act when selected: an
+emoji or a snippet is typed into the app the flashlight covered, a network
+address is copied. One character is typed as a key event and leaves the
+clipboard alone; longer text is pasted, and the clipboard gets its previous
+content back. App switches and focused-window changes
 feed Flash's movement history with the current location when a source can
 identify it, so `ctrl-o` / `ctrl-i` can walk locations reached through
 ordinary desktop switching.

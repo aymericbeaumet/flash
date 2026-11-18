@@ -1985,8 +1985,8 @@ extension AppDelegate {
     returnToCommandTarget(targetPID, proceed: !text.isEmpty) { [weak self] pid, target in
       guard let self else { return }
       guard viaClipboard else {
-        // Emoji (and other short glyphs): type the Unicode directly so inserting
-        // it doesn't clobber the user's clipboard.
+        // One character (an emoji, a symbol): type the Unicode directly so
+        // inserting it doesn't touch the user's clipboard.
         NormalModeDispatcher.insertUnicode(text, to: pid)
         self.scheduleNormalModeRecapture()
         return

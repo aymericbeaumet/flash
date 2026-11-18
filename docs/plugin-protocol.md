@@ -157,8 +157,8 @@ its stdout to the end, keeps the catalog as it keeps every catalog across
 restarts, reports the plugin as `published`, and counts that exit as success:
 no restart, no failure budget spent, no event delivered (not even the
 running-apps snapshot). A perform for it is `unhandled`, so its rows must
-carry host effects (`copy_text`, `insert_text`, `open`) or a kind the host
-types itself, as the emoji rows do. A non-zero exit or a signal is still a
+carry host effects (`copy_text`, `insert_text`, `open`), as the emoji rows
+carry `insert_text`. A non-zero exit or a signal is still a
 crash and backs off like any other. The host runs it again only when its data
 can have changed: its `[plugins.<id>]` settings changed, a file named by one
 of its `watch_settings` changed (an atomic save, a creation and a removal all
@@ -682,7 +682,11 @@ rejected — bounded to 16 answers / 256 KiB with 16-KiB fields. `effect` runs
 only after explicit selection: `{"type": "copy_text", "text"}`, `{"type":
 "insert_text", "text"}`, or — **rows only** — `{"type": "open", "url"}` /
 `{"type": "open", "bundle_id"}` (answers reject `open` for the same reason
-they reject URLs: evaluators cannot manufacture navigation). An `open` URL
+they reject URLs: evaluators cannot manufacture navigation). `insert_text`
+of one character (an emoji, a symbol) is typed as a key event and leaves the
+clipboard alone; longer text is pasted through a borrowed clipboard. A row
+with an effect is committed by `<tab>` as by `<cr>`, and is never an
+`app open --name=` match. An `open` URL
 is never a `file:` URL; a row carrying one is rejected, as `host.open`
 refuses it. There is
 deliberately no `run` effect — a host-executed argv would escape the

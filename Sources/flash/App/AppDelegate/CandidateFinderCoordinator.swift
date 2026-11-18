@@ -1362,7 +1362,8 @@ extension AppDelegate {
       return CandidateDisplayItem(
         title: title,
         detail: detail,
-        highlightedRanges: finder.currentQuery.isEmpty || match.candidate.effect != nil
+        highlightedRanges: finder.currentQuery.isEmpty
+          || match.candidate.kind == CandidateFinder.answerKind
           ? []
           : NormalModeDispatcher.fuzzyHighlightRanges(
             query: finder.currentQuery,

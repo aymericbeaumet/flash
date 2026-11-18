@@ -9,9 +9,10 @@
 //! party popper); keywords therefore add only the vocabulary the names and
 //! shortcodes lack (`idk`, `hooray`, `thx`, `facepalm`).
 //!
-//! The emoji glyph catalog, published once at start. `lifecycle:
-//! publish_then_exit`: the process exits once the catalog is published and
-//! the host keeps the rows, so no child stays resident for static data.
+//! Selecting a row makes the host type its glyph (the `insert_text` effect),
+//! so the plugin serves no perform. `lifecycle: publish_then_exit`: the
+//! process exits once the catalog is published and the host keeps the rows,
+//! so no child stays resident for static data.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -116,7 +117,7 @@ fn emoji_candidates(emoji_data: &str, alias_data: &str, keyword_data: &str) -> V
             Candidate::new(EMOJIS, format!("{glyph} {name}"))
                 .kind("emoji")
                 .subtitle("emoji")
-                .payload(glyph)
+                .insert_text(glyph)
                 .aliases(shortcodes.chain(keywords))
         })
         .collect()
@@ -142,6 +143,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flash_plugin::CandidateEffect;
     use flash_plugin::testing::Harness;
 
     /// `protocol.json` `quotas`, pinned by the SDK's wire suite.
@@ -151,9 +153,17 @@ mod tests {
     const METADATA_KEY_BYTES_QUOTA: usize = 256;
     const METADATA_VALUE_BYTES_QUOTA: usize = 64 * 1024;
 
+    /// The glyph the host types when the row is selected.
+    fn typed(row: &Candidate) -> Option<&str> {
+        match &row.effect {
+            Some(CandidateEffect::InsertText { text }) => Some(text),
+            _ => None,
+        }
+    }
+
     fn aliases_of<'a>(rows: &'a [Candidate], glyph: &str) -> Option<&'a str> {
         rows.iter()
-            .find(|row| row.payload_str() == Some(glyph))
+            .find(|row| typed(row) == Some(glyph))
             .expect("glyph in catalog")
             .meta("aliases")
     }
@@ -186,10 +196,10 @@ mod tests {
         assert!(rows.iter().all(|row| row.source == EMOJIS));
         assert_eq!(rows[0].meta("kind"), Some("emoji"));
         assert_eq!(rows[0].meta("subtitle"), Some("emoji"));
-        assert_eq!(rows[0].payload_str(), Some("😀"));
+        assert_eq!(typed(&rows[0]), Some("😀"));
+        assert_eq!(rows[0].payload_str(), None);
         assert_eq!(rows[0].meta("aliases"), None);
         assert_eq!(rows[1].meta("aliases"), Some("pray thanks folded_hands"));
-        assert!(rows.iter().all(|row| row.effect.is_none()));
     }
 
     #[test]
@@ -228,7 +238,7 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "❤ heavy black heart");
-        assert_eq!(rows[0].payload_str(), Some("❤"));
+        assert_eq!(typed(&rows[0]), Some("❤"));
         assert_eq!(
             rows[0].meta("aliases"),
             Some("heart love red_heart emotion")

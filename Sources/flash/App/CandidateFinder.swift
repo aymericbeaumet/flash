@@ -83,7 +83,8 @@ enum CandidateFinder {
     "[\(source)] \(name)"
   }
 
-  static let emojiKind = CandidateKind.plugin("emoji")
+  /// An evaluator's answer, stamped by the host when it decodes one.
+  static let answerKind = CandidateKind.plugin("query_answer")
   /// Synthetic flashlight rows for registered plugin bangs (`!<token>`);
   /// selecting one dispatches the bang instead of resolving a candidate.
   static let bangKind = CandidateKind.plugin("bang")
@@ -92,12 +93,10 @@ enum CandidateFinder {
   /// on its own.
   static let sourceKind = CandidateKind.plugin("source")
 
-  /// Candidates whose "open" action inserts their payload as text rather than
-  /// activating an app or target. `app open --name=` matching must skip these:
-  /// otherwise an emoji whose searchable name contains the query would get
-  /// typed into the focused field instead of switching apps.
-  static func insertsText(_ candidate: Candidate) -> Bool {
-    candidate.kind == emojiKind
+  /// Inserted text of one character (an emoji, a symbol) is typed as a key
+  /// event, which leaves the clipboard alone; anything longer is pasted.
+  static func insertionTypesDirectly(_ text: String) -> Bool {
+    text.count == 1
   }
 
   static func commandInsertionText(_ candidate: Candidate) -> String {
@@ -106,9 +105,6 @@ enum CandidateFinder {
     }
     if candidate.kind == sourceKind, let source = candidate.sourcePayload, !source.isEmpty {
       return "@\(source) "
-    }
-    if candidate.kind == emojiKind, let glyph = candidate.sourcePayload, !glyph.isEmpty {
-      return glyph
     }
     let name = candidate.title.trimmed
     let source =
@@ -131,7 +127,7 @@ enum CandidateFinder {
   ) -> Bool {
     if candidate.kind == sourceKind { return false }
     if isFinalDestination(candidate) { return true }
-    if candidate.finishesCommand || insertsText(candidate) { return true }
+    if candidate.finishesCommand { return true }
     let parsed = NormalModeDispatcher.candidateFinderQuery(query)
     let normalizedQuery = normalize(parsed.text.trimmed)
     guard !normalizedQuery.isEmpty else { return false }
@@ -175,8 +171,8 @@ enum CandidateFinder {
   }
 
   static func displayTitle(_ candidate: Candidate) -> String {
-    // A `menu choose` row is the line as given, nothing more.
-    if candidate.effect != nil || candidate.kind == MenuChoice.kind {
+    // An answer and a `menu choose` row are the line as given, nothing more.
+    if candidate.kind == answerKind || candidate.kind == MenuChoice.kind {
       return candidate.title
     }
     if candidate.kind == bangKind {
@@ -766,8 +762,8 @@ enum CandidateFinder {
     }
     let prefilter = queryPrefilter(normalizedQuery: normalizedQuery)
     let parallelThreshold: Int
-    if pool.first?.kind == emojiKind {
-      parallelThreshold = emojiParallelScoreThreshold
+    if pool.first?.normalizedScoringFields.aliases.isEmpty == false {
+      parallelThreshold = aliasedParallelScoreThreshold
     } else if normalizedQuery.count >= 3 {
       parallelThreshold = complexQueryParallelScoreThreshold
     } else {
@@ -794,11 +790,12 @@ enum CandidateFinder {
   }
 
   private static let parallelScoreThreshold = 600
-  /// Emoji rows have aliases plus long Unicode names and therefore do more
-  /// fuzzy-field work than ordinary location rows, even while the one/two-char
-  /// word-start gate is active. Their explicit source pool is homogeneous, so
-  /// fan out a narrowed emoji result set before it consumes a full frame.
-  private static let emojiParallelScoreThreshold = 64
+  /// Rows with aliases (an emoji's shortcodes and keywords beside its long
+  /// Unicode name) do more fuzzy-field work than ordinary location rows, even
+  /// while the one/two-char word-start gate is active. A `@type` pool is
+  /// homogeneous, so its first row speaks for it: fan a narrowed aliased
+  /// result set out before it consumes a full frame.
+  private static let aliasedParallelScoreThreshold = 64
   /// At three characters the short-query word-start gate disengages and the
   /// typo ladder gains its first edit, making each surviving candidate much
   /// more expensive. Emoji aliases hit this boundary especially hard: after

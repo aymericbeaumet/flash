@@ -5,13 +5,12 @@ enum CandidateEmojiSupport {
   private static let emojiFontCoverage =
     NSFont(name: "Apple Color Emoji", size: 16)?.coveredCharacterSet
 
+  /// False for a row that types one glyph the emoji font cannot draw: its
+  /// line would show a blank where the glyph belongs.
   static func candidateCanRenderInCommandBar(_ candidate: Candidate) -> Bool {
-    guard candidate.kind == CandidateFinder.emojiKind else { return true }
-    let glyph =
-      candidate.sourcePayload?.trimmed
-      ?? candidate.title.split(separator: " ", maxSplits: 1).first.map(String.init)
-      ?? ""
-    guard !glyph.isEmpty, glyphContainsEmojiScalar(glyph), let coverage = emojiFontCoverage
+    guard case .insertText(let glyph) = candidate.effect,
+      CandidateFinder.insertionTypesDirectly(glyph),
+      glyphContainsEmojiScalar(glyph), let coverage = emojiFontCoverage
     else { return true }
 
     for scalar in glyph.unicodeScalars where !isSequenceGlue(scalar) {
