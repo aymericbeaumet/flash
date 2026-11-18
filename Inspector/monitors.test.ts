@@ -5,8 +5,9 @@ import { parseRoute } from "./src/lib/routes.ts";
 import type { MonitorInfo } from "./src/lib/types.ts";
 
 const monitor = (id: string, overrides: Partial<MonitorInfo> = {}): MonitorInfo => ({
-  id, name: id, origin: "default", enabled: true, value: 50, display: "50%", state: "ok", direction: "above",
-  warning: 80, error: 90, interval_s: 5, message: "", detail: "", since_ms: 0, last_alert_ms: null, expression: `#{${id}}`, ...overrides,
+  id, name: id, origin: "default", kind: "value", enabled: true, value: 50, display: "50%", state: "ok", direction: "above",
+  warning: 80, error: 90, interval_s: 5, message: "", detail: "", since_ms: 0, last_alert_ms: null, expression: `#{${id}}`,
+  run: null, timeout_s: 60, cooldown_s: 0, runs: 0, last_run_ms: null, last_run: null, ...overrides,
 });
 
 test("a run lists its steps in order and says how its last run went", () => {

@@ -166,8 +166,8 @@ link to the page of the documentation that covers it (`Documentation →`). Sect
 
 ## Frontend changes
 
-`Inspector/` is a Svelte app. Run `mise run test:inspector` (its type check
-and unit tests), then `mise run build:inspector` to update the
+`Inspector/` is a Svelte app. Run `mise run test:inspector` (the type check
+of the app, its build scripts and its tests, then the unit tests), then `mise run build:inspector` to update the
 committed `Sources/flash/Resources/inspector.html`. Plain SwiftPM builds serve
 that resource; CI checks that it matches the frontend source. A dev install
 builds a separate unminified page and stages it into the app at

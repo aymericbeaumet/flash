@@ -132,7 +132,7 @@ usage = 'arg "<id>" help="Plugin directory under Plugins/, such as terminals or 
 run = 'cd "Plugins/${usage_id}" && cargo test --workspace --locked'
 
 [tasks."test:inspector"]
-description = "Type-check the help UI (svelte-check) and run its unit tests"
+description = "Type-check the help UI, its scripts and its tests (svelte-check) and run the unit tests"
 dir = "{{config_root}}/Inspector"
 run = ["pnpm install --frozen-lockfile", "pnpm check", "node --test *.test.ts"]
 
