@@ -807,7 +807,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
         prologue:
           #"printf '{"method":"publish","params":{"rows":[{"source":"fix.items","title":"Early"}]}}\n'"#,
         onInitialize: """
-          printf '{"id":1,"method":"host.ping","params":{"phase":"before_nak"}}\\n'
+          printf '{"id":1,"method":"host.ping","params":{}}\\n'
           IFS= read -r response || exit 9
           case "$response" in *'"ok":true'*) ;; *) exit 9 ;; esac
           printf '{"id":%s,"result":{"ok":false,"protocol_version":1,"error":"nope"}}\\n' "$id"
@@ -823,7 +823,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     // the process queue so main-runloop load cannot hold initialize hostage.
     process.onHostRequest = { [weak process] method, params, _, _, reply in
       XCTAssertEqual(method, "host.ping")
-      XCTAssertEqual(params["phase"] as? String, "before_nak")
+      XCTAssertTrue(params.isEmpty)
       XCTAssertEqual(process?.runtimeStateSnapshot(), .launching)
       XCTAssertEqual(store.rows(for: "initnak").map(\.title), ["Previous"])
       reply(["ok": true])
