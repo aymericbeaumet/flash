@@ -1,5 +1,6 @@
 import FlashCore
 import XCTest
+import os
 
 final class ProcessEnvironmentTests: XCTestCase {
   // MARK: env -0 parsing
@@ -211,16 +212,16 @@ final class ProcessEnvironmentTests: XCTestCase {
     env.refresh()
     XCTAssertEqual(env.phase, .resolving)
     let resolved = expectation(description: "runs once resolved")
-    var ranBeforeRelease = false
+    let ranBeforeRelease = OSAllocatedUnfairLock(initialState: false)
     env.whenResolved(on: .global()) {
-      ranBeforeRelease = env.phase != .resolved
+      ranBeforeRelease.withLock { $0 = env.phase != .resolved }
       resolved.fulfill()
     }
     RunLoop.current.run(until: Date().addingTimeInterval(0.2))
     XCTAssertEqual(env.phase, .resolving, "the waiter is held")
     release.signal()
     wait(for: [resolved], timeout: 5)
-    XCTAssertFalse(ranBeforeRelease)
+    XCTAssertFalse(ranBeforeRelease.withLock { $0 })
     XCTAssertEqual(env.phase, .resolved, "a failed resolution still resolves")
     XCTAssertEqual(env.environment["PATH"], "/seed", "and keeps the seed")
     let later = expectation(description: "runs at once once resolved")

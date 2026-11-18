@@ -86,7 +86,7 @@ final class StartupRunner {
   ) -> Void
   /// Runs `body` on `queue` once commands can start: Flash's login
   /// environment resolved, so they inherit the user's PATH.
-  typealias ReadyGate = (_ queue: DispatchQueue, _ body: @escaping () -> Void) -> Void
+  typealias ReadyGate = (_ queue: DispatchQueue, _ body: @escaping @Sendable () -> Void) -> Void
 
   private let queue: DispatchQueue
   private let execute: Executor

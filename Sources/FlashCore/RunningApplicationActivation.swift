@@ -57,7 +57,7 @@ public enum RunningApplicationActivation {
   /// a bare `activate(options:)` are ignored there, and the cooperative
   /// handover is the request that moves activation. macOS 13 moves it with
   /// `activateIgnoringOtherApps` instead.
-  @discardableResult
+  @preconcurrency @MainActor @discardableResult
   public static func handOff(to app: NSRunningApplication, yielding: Bool) -> Bool {
     if #available(macOS 14.0, *) {
       if yielding { NSApp.yieldActivation(to: app) }

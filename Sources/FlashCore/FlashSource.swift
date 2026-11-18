@@ -532,14 +532,14 @@ extension FlashSource {
     scope: CandidateScope,
     completion: @escaping ([Candidate]) -> Void
   ) {
-    DispatchQueue.main.async { completion([]) }
+    MainQueueCompletion(completion).deliver { [] }
   }
   public func resolveCandidate(
     _ candidate: Candidate,
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   ) {
-    DispatchQueue.main.async { completion(.unresolved) }
+    MainQueueCompletion(completion).deliver { .unresolved }
   }
   public func candidate(
     matching target: String,
@@ -554,13 +554,13 @@ extension FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceCommandResult) -> Void
   ) {
-    DispatchQueue.main.async { completion(.unhandled) }
+    MainQueueCompletion(completion).deliver { .unhandled }
   }
   public func restoreNavigation(
     to url: URL,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceCommandResult) -> Void
   ) {
-    DispatchQueue.main.async { completion(.unhandled) }
+    MainQueueCompletion(completion).deliver { .unhandled }
   }
 }

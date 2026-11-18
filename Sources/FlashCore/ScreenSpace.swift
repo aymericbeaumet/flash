@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// The primary display's height: the pivot between AppKit's bottom-left and
 /// Quartz / Accessibility top-left coordinates. `NSScreen` is main-affine, so
@@ -6,16 +7,12 @@ import AppKit
 /// screen parameters change (`startObserving`) — and every thread reads the
 /// cached value.
 public enum ScreenSpace {
-  private static let lock = NSLock()
-  private static var cachedPrimaryHeight: CGFloat?
-  private static var observer: NSObjectProtocol?
+  private static let cachedPrimaryHeight = OSAllocatedUnfairLock<CGFloat?>(initialState: nil)
+  /// Main queue only: `startObserving` is its one reader and writer.
+  nonisolated(unsafe) private static var observer: NSObjectProtocol?
 
   public static var primaryHeight: CGFloat {
-    lock.lock()
-    let cached = cachedPrimaryHeight
-    lock.unlock()
-    if let cached { return cached }
-    return refresh()
+    cachedPrimaryHeight.withLock { $0 } ?? refresh()
   }
 
   /// The one Y flip between AppKit's bottom-left and Quartz / Accessibility
@@ -42,9 +39,7 @@ public enum ScreenSpace {
     let height =
       NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
       ?? NSScreen.main?.frame.height ?? 1080
-    lock.lock()
-    cachedPrimaryHeight = height
-    lock.unlock()
+    cachedPrimaryHeight.withLock { $0 = height }
     return height
   }
 }

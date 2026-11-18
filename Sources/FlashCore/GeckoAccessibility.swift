@@ -215,23 +215,24 @@ public struct GeckoAccessibilityLedger: Equatable, Sendable {
 
 /// The AX reads and writes `GeckoAccessibilityCoordinator` performs, and
 /// where it runs deferred releases; faked in tests.
-struct GeckoAccessibilityDriver {
-  var isGecko: (_ bundleIdentifier: String?, _ pid: pid_t) -> Bool
-  var makeApp: (pid_t) -> AXUIElement
+/// The coordinator calls it from whichever thread an operation runs on.
+struct GeckoAccessibilityDriver: Sendable {
+  var isGecko: @Sendable (_ bundleIdentifier: String?, _ pid: pid_t) -> Bool
+  var makeApp: @Sendable (pid_t) -> AXUIElement
   /// The mode as the app reports it; nil when it does not answer.
-  var readMode: (AXUIElement) -> Bool?
+  var readMode: @Sendable (AXUIElement) -> Bool?
   /// Wake the tree: read the application role.
-  var wake: (AXUIElement) -> Void
+  var wake: @Sendable (AXUIElement) -> Void
   /// Switch the mode off. Gecko reports `.cannotComplete` for this setter
   /// even though it applies the value, so the result is not inspected.
-  var switchOff: (AXUIElement) -> Void
+  var switchOff: @Sendable (AXUIElement) -> Void
   /// Run a deferred release off the calling thread.
-  var schedule: (@escaping () -> Void) -> Void
+  var schedule: @Sendable (@escaping @Sendable () -> Void) -> Void
 
   static let live: GeckoAccessibilityDriver = {
     let releases = DispatchQueue(label: "flash.gecko_accessibility", qos: .userInitiated)
     return GeckoAccessibilityDriver(
-      isGecko: GeckoAccessibility.matches(bundleIdentifier:pid:),
+      isGecko: { GeckoAccessibility.matches(bundleIdentifier: $0, pid: $1) },
       makeApp: { AXApp.make(pid: $0) },
       readMode: { app in
         var value: CFTypeRef?

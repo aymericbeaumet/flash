@@ -32,6 +32,10 @@ let optimizedInDebug: [SwiftSetting] = [
   .unsafeFlags(["-O", "-assert-config", "Debug"], .when(configuration: .debug))
 ]
 
+// Complete data-race checking, one module at a time from the leaves up. With
+// `-warnings-as-errors` a module that carries it stays clean.
+let checkedConcurrency: [SwiftSetting] = [.enableExperimentalFeature("StrictConcurrency")]
+
 let package = Package(
   name: "Flash",
   platforms: [.macOS(.v13)],
@@ -110,7 +114,7 @@ let package = Package(
     .target(
       name: "FlashCore",
       path: "Sources/FlashCore",
-      swiftSettings: strictSwiftSettings + optimizedInDebug
+      swiftSettings: strictSwiftSettings + optimizedInDebug + checkedConcurrency
     ),
     .target(
       name: "FlashProviders",
