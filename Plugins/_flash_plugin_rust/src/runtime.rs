@@ -177,6 +177,14 @@ struct EventPayload {
 pub(crate) const STATUS_OBSERVED_EVENT: &str = "core:status.observed";
 
 pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
+    // serde reads a struct from a positional array too; the wire has objects.
+    if !params.is_object()
+        || params
+            .get("payload")
+            .is_some_and(|payload| !payload.is_object())
+    {
+        return Err("invalid event params".to_string());
+    }
     match serde_json::from_value::<EventWire>(params) {
         Ok(wire) if wire.name.trim().is_empty() => Err("event name must not be empty".to_string()),
         Ok(wire)
@@ -215,6 +223,11 @@ pub(crate) fn decode_event(params: Value) -> Result<InboundEvent, String> {
 /// never an invitation to run the handler against a fabricated default value.
 /// The rejection stays content-free: no payload text, only the method name.
 fn decode<T: DeserializeOwned>(params: Value, method: &str) -> Result<T, String> {
+    // Params, and a `perform` row, are objects: serde alone would also read
+    // a struct from an array, taking its items as the fields in order.
+    if !params.is_object() {
+        return Err(format!("invalid {method} params"));
+    }
     serde_json::from_value::<T>(params).map_err(|_| format!("invalid {method} params"))
 }
 

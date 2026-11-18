@@ -243,8 +243,10 @@ interaction that caused it. A `log` notification emitted while serving that
 request carries it back as `params.trace` (the Rust SDK does both), so one
 interaction reads end to end across processes; see
 [observability](observability.md). Every request also carries `deadline_ms`,
-the milliseconds the host still waits for its reply as it writes it. Ids are positive
-monotonic integers per sender. Booleans and floating-point values are never
+the milliseconds the host still waits for its reply as it writes it.
+`params`, `result` and an event's `payload` are JSON objects, never
+positional arrays: either end refuses an array where an object belongs. Ids
+are positive monotonic integers per sender. Booleans and floating-point values are never
 integer IDs or protocol versions; `ok` and other Boolean fields accept only
 JSON booleans. Native process IDs are checked positive 32-bit integers.
 Host and plugin counters are independent and

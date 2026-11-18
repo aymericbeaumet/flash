@@ -5,6 +5,7 @@
 {"name": "evaluate", "expect": "accept", "reply": "evaluate.reply", "frame": {"id":3,"method":"evaluate","params":{"query":"2+2"},"deadline_ms":50,"trace":"k3f9"}}
 {"name": "evaluate.unclaimed", "expect": "accept", "reply": "evaluate.reply.empty", "frame": {"id":3,"method":"evaluate","params":{"query":"hello"},"deadline_ms":50}}
 {"name": "evaluate.query-not-a-string", "expect": "reject", "reply": "evaluate.reply.invalid-params", "frame": {"id":3,"method":"evaluate","params":{"query":4},"deadline_ms":50}}
+{"name": "evaluate.params-not-an-object", "expect": "reject", "reply": "evaluate.reply.invalid-params", "frame": {"id":3,"method":"evaluate","params":["2+2"],"deadline_ms":50}}
 {"name": "hints", "expect": "accept", "reply": "hints.reply", "frame": {"id":4,"method":"hints","params":{"bundle_id":"com.example.app","pid":512,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875},"display_scale":2},"deadline_ms":500,"trace":"k3f9"}}
 {"name": "hints.without-display-scale", "expect": "accept", "reply": "hints.reply", "frame": {"id":4,"method":"hints","params":{"bundle_id":"com.example.app","pid":512,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875}},"deadline_ms":500}}
 {"name": "hints.pid-zero", "expect": "reject", "reply": "hints.reply.invalid-params", "frame": {"id":4,"method":"hints","params":{"bundle_id":"com.example.app","pid":0,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875},"display_scale":2},"deadline_ms":500}}
@@ -18,6 +19,7 @@
 {"name": "perform.navigate", "expect": "accept", "reply": "perform.reply.navigated", "frame": {"id":6,"method":"perform","params":{"kind":"navigate","url":"https://example.com/a"},"deadline_ms":10000}}
 {"name": "perform.unknown-kind", "expect": "reject", "reply": "perform.reply.unknown-kind", "frame": {"id":6,"method":"perform","params":{"kind":"launch"},"deadline_ms":10000}}
 {"name": "perform.resolve-without-row", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"resolve"},"deadline_ms":10000}}
+{"name": "perform.row-not-an-object", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"resolve","row":["example.items","Alpha"]},"deadline_ms":10000}}
 {"name": "perform.args-not-strings", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"decline","args":[3]},"deadline_ms":10000}}
 {"name": "perform.url-not-a-string", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"navigate","url":7},"deadline_ms":10000}}
 {"name": "request.unknown-method", "expect": "reject", "reply": "reply.unknown-method", "frame": {"id":9,"method":"teleport","params":{},"deadline_ms":1000}}
@@ -47,6 +49,8 @@
 {"name": "event.blank-name", "expect": "reject", "frame": {"method":"event","params":{"name":" ","payload":{}}}}
 {"name": "event.without-name", "expect": "reject", "frame": {"method":"event","params":{"payload":{}}}}
 {"name": "event.name-not-a-string", "expect": "reject", "frame": {"method":"event","params":{"name":7,"payload":{}}}}
+{"name": "event.payload-not-an-object", "expect": "reject", "frame": {"method":"event","params":{"name":"core:space.changed","payload":[]}}}
+{"name": "event.params-not-an-object", "expect": "reject", "frame": {"method":"event","params":["core:space.changed",{}]}}
 {"name": "event.unknown-name", "expect": "accept", "schema": "reject", "frame": {"method":"event","params":{"name":"core:lid.closed","payload":{}}}}
 {"name": "event.without-payload", "expect": "accept", "schema": "reject", "frame": {"method":"event","params":{"name":"core:space.changed"}}}
 {"name": "host.ping.reply", "expect": "accept", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":true}}}
