@@ -49,6 +49,11 @@ run = [
   { task = "test" },
 ]
 
+[tasks."check:concurrency"]
+description = "Build flash under -strict-concurrency=complete and hold its diagnostic count to the baseline (-- --write: record it)"
+depends = ["build:ghostty"]
+run = "python3 -I Scripts/check-concurrency.py"
+
 # Builds.
 
 [tasks.build]

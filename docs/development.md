@@ -91,6 +91,7 @@ else.
 | --- | --- | --- |
 | `setup` | Locked installation of project tools, then `build:ghostty` | Optional: fetch every tool and build libghostty-vt ahead of time |
 | `check` | `fmt`, `lint`, `guardrails`, `test:plugins`, `test`, in order | Before every commit: the required checks |
+| `check:concurrency` | `Scripts/check-concurrency.py`, after `build:ghostty` | A change to threading in `flash`: its diagnostic count under complete data-race checking against the baseline; `-- --write` records a lower one |
 | `fmt` | `swift format format --in-place` over `Sources`, `Tests` and `Package.swift` | Format Swift sources |
 | `lint` | `swift format lint --strict` over the same paths | Lint Swift sources |
 | `guardrails` | `Scripts/check-guardrails.sh` | The hard-constraint guardrails, this environment's rules included |
@@ -207,6 +208,19 @@ mise run install:dev
 
 The Swift suite's status drawing tests compare against the pinned tmux in
 `build/tmux-oracle` and skip without it; `mise run build:tmux-oracle` builds it.
+
+`FlashCore`, `FlashProviders` and `FlashTerminal` compile under complete
+data-race checking (`checkedConcurrency` in `Package.swift`), so a race the
+compiler can see fails their build. `flash` compiles under targeted checking:
+the compiler checks the code that names a `@Sendable` closure, an actor or
+`async`, and nothing else. `mise run check:concurrency` builds `flash` under
+`-strict-concurrency=complete` in `build/concurrency` and compares the number
+of diagnostics with `Scripts/concurrency-baseline.txt`, which lists them per
+file. The count only falls: more diagnostics fail the task, and fewer fail it
+until `mise run check:concurrency -- --write` records the gain. It is not
+part of `check`, because it compiles everything from clean, and its CI job
+reports without blocking. The count belongs to one compiler version; record a
+new baseline with the toolchain bump that changes it.
 
 `swift test` runs on the same desktop as the installed resident, and many tests
 drive real Flash windows that production code orders front. Drawn there, they

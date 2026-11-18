@@ -110,7 +110,7 @@ jobs:
           install_args: python rust
       - name: Plugin gate
         # `mise run test:plugins -- --lane all` is the whole Rust gate: `lint`
-        # (fmt --check + clippy -D warnings) and `units` (the plugin-publication
+        # (crate agreement, fmt --check + clippy -D warnings) and `units` (the plugin-publication
         # test plus per-crate `cargo test --locked`, where the SDK's
         # wire/runtime suites and its probe member are the protocol conformance
         # authority) over the SDK workspace and every plugin crate, then `build`
@@ -224,6 +224,32 @@ jobs:
         run: mise run build:plugins
       - name: Test
         run: mise run test
+
+  concurrency:
+    name: Concurrency ratchet (not required)
+    runs-on: macos-26
+    # Reports, never blocks: the `flash` module is not yet clean under complete
+    # concurrency checking, and no release job needs this one. A failure here
+    # says the diagnostic count moved off Scripts/concurrency-baseline.txt.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.6
+          install_args: python zig
+      - name: Cache libghostty-vt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/ghostty/ghostty-vt.xcframework
+          key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ hashFiles('mise.lock', 'Scripts/build-ghostty.sh', 'Scripts/build-ghostty-notices.py', 'Scripts/ghostty-notices/**') }}
+      - name: Show Swift version
+        run: swift --version
+      - name: Count flash's data-race diagnostics against the baseline
+        # A clean build of `flash` with -strict-concurrency=complete into
+        # build/concurrency. The count depends on the compiler: a toolchain
+        # bump records a new baseline with `-- --write`.
+        run: mise run check:concurrency
 
   inspector:
     name: Inspector
