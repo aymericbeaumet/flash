@@ -340,18 +340,28 @@ final class CommandGrammarTests: XCTestCase {
 
   /// `docs/commands.md` carries the full command table: one row per
   /// command, in order, with its syntax and summary.
+  /// `FLASH_WRITE_SCHEMA=1 swift test --filter CommandGrammarTests` (or
+  /// `mise run build:schema`) rewrites the rows of the committed table.
   func testTheCommandManualListsEveryCommand() throws {
-    let manual = try String(
-      contentsOf: Self.root.appendingPathComponent("docs/commands.md"), encoding: .utf8)
+    let url = Self.root.appendingPathComponent("docs/commands.md")
+    let expected = URLEventHandler.commandNames.map { name in
+      "| `\(URLEventHandler.syntax(for: name, prefix: "") ?? "")` | "
+        + "\(URLEventHandler.summary(of: name) ?? "") |"
+    }
+    if ProcessInfo.processInfo.environment["FLASH_WRITE_SCHEMA"] == "1" {
+      let lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
+      let header = try XCTUnwrap(lines.firstIndex(of: "| Command | What it does |"))
+      let first = header + 2
+      let end = lines[first...].firstIndex { !$0.hasPrefix("| ") } ?? lines.endIndex
+      try (lines[..<first] + expected + lines[end...]).joined(separator: "\n")
+        .write(to: url, atomically: true, encoding: .utf8)
+    }
+    let manual = try String(contentsOf: url, encoding: .utf8)
     let rows = manual.split(separator: "\n").map(String.init).filter {
       $0.hasPrefix("| `")
         && CommandName(
           $0.dropFirst(3).split(separator: " ").prefix(2).joined(separator: " ")
             .replacingOccurrences(of: "`", with: "")) != nil
-    }
-    let expected = URLEventHandler.commandNames.map { name in
-      "| `\(URLEventHandler.syntax(for: name, prefix: "") ?? "")` | "
-        + "\(URLEventHandler.summary(of: name) ?? "") |"
     }
     XCTAssertEqual(rows, expected, "docs/commands.md's table drifted from the command table")
     for (row, line) in zip(rows, expected) where row != line {

@@ -117,7 +117,7 @@ else.
 | `build:ghostty` | `Scripts/build-ghostty.sh` | libghostty-vt for this Mac; `-- --release` builds it universal |
 | `build:plugins` | `Scripts/build-plugins.sh dev` | Dev plugin binaries, signed with the "Flash Dev" identity once `install:dev` created it, so an unchanged plugin is never republished under the running resident; `-- <id>` builds only that plugin |
 | `build:inspector` | `Scripts/build-inspector.sh` | Frontend edits: rebuild the committed `inspector.html` |
-| `build:schema` | `ConfigSchemaTests` and `HelpRoutesTests` with `FLASH_WRITE_SCHEMA=1` | Config key or default changes: rewrite the committed `docs/schema/flash.schema.json`. A new help page: rewrite `Inspector/src/lib/help-routes.json` |
+| `build:schema` | `ConfigSchemaTests`, `HelpRoutesTests` and the command manual test with `FLASH_WRITE_SCHEMA=1` | Config key or default changes: rewrite the committed `docs/schema/flash.schema.json`. A new help page: rewrite `Inspector/src/lib/help-routes.json`. A new command, or a changed syntax or summary: rewrite the rows of the command reference in `docs/commands.md` |
 | `build:site` | `Scripts/build-site.sh` | Docs changes: the published documentation and its link check |
 | `build:tmux-oracle` | `Scripts/build-tmux-oracle.sh` | The pinned tmux the status-format tests compare against |
 | `build:release` | `Scripts/build.sh --release` | The universal release package, as CI builds it |
