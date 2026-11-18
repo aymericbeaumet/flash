@@ -461,6 +461,77 @@ enum PluginWireCodec {
     }
   }
 
+  // MARK: - Poll registrations and status segments
+
+  /// Registration names ride inside the event name, so keep them to
+  /// characters that cannot be confused with the `core:poll:` prefix.
+  static let pollNameAllowed = CharacterSet(
+    charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+  /// `nil` rejects the frame; an empty dictionary clears every registration.
+  static func pollRegistrations(
+    from params: [String: Any]
+  ) -> [String: PluginProcess.PollRegistration]? {
+    guard Set(params.keys) == ["registrations"],
+      let raw = params["registrations"] as? [String: Any],
+      raw.count <= PluginProtocol.pollMaxRegistrations
+    else { return nil }
+    var decoded: [String: PluginProcess.PollRegistration] = [:]
+    for (name, value) in raw {
+      guard !name.isEmpty, name.utf8.count <= PluginProtocol.pollMaxNameBytes,
+        name.unicodeScalars.allSatisfy({ Self.pollNameAllowed.contains($0) }),
+        let entry = value as? [String: Any],
+        let priorityName = entry["priority"] as? String,
+        let priority = PluginProtocol.pollPriorities.first(where: { $0.name == priorityName })?
+          .scheduler
+      else { return nil }
+      let kinds = entry.keys.filter { $0 != "priority" }
+      guard kinds.count == 1, let kind = PluginProcess.PollRegistration.Kind(rawValue: kinds[0]),
+        let seconds = PluginJSON.number(entry[kind.rawValue]),
+        seconds >= 0, seconds <= Double(PluginProtocol.pollMaxSeconds)
+      else { return nil }
+      let ms = Int((seconds * 1000).rounded())
+      // Below the floor a cadence is a busy loop; a deadline may be due now.
+      guard kind == .after || ms >= PollScheduler.minimumIntervalMs else { return nil }
+      decoded[name] = PluginProcess.PollRegistration(kind: kind, ms: ms, priority: priority)
+    }
+    return decoded
+  }
+
+  enum DecodedStatusSegment: Equatable {
+    case clear
+    case value(PluginStatusSegment)
+    case malformed
+  }
+
+  /// A segment value is markup (`""` clears) or a carousel object
+  /// `{"prefix"?: markup, "lines": [markup], "cycle_seconds": ≥ 1}`; blank
+  /// lines are dropped and no lines clears. Anything else is rejected whole.
+  static func statusSegment(from value: Any) -> DecodedStatusSegment {
+    if let text = value as? String {
+      let trimmed = text.trimmed
+      return trimmed.isEmpty ? .clear : .value(.text(trimmed))
+    }
+    guard let object = value as? [String: Any],
+      let rawLines = object["lines"] as? [Any],
+      let seconds = PluginJSON.number(object["cycle_seconds"]), seconds >= 1
+    else { return .malformed }
+    let prefix: String
+    switch object["prefix"] {
+    case nil: prefix = ""
+    case let text as String: prefix = text
+    default: return .malformed
+    }
+    var lines: [String] = []
+    for line in rawLines {
+      guard let text = line as? String else { return .malformed }
+      let trimmed = text.trimmed
+      if !trimmed.isEmpty { lines.append(trimmed) }
+    }
+    guard !lines.isEmpty else { return .clear }
+    return .value(.carousel(prefix: prefix, lines: lines, cycleSeconds: seconds))
+  }
+
   /// Serialize a candidate back to the wire row shape for `perform
   /// {kind: "resolve"}`. Rows must be resolvable from their own content — a
   /// restarted plugin sees exactly this.

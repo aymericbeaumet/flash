@@ -2031,7 +2031,7 @@ final class PluginProcess {
     for (name, value) in raw {
       let key = name.trimmed
       guard declared.contains(key) else { continue }
-      switch Self.decodeStatusSegment(value) {
+      switch PluginWireCodec.statusSegment(from: value) {
       case .clear: decoded.append((key, nil))
       case .value(let segment): decoded.append((key, segment))
       case .malformed:
@@ -2105,7 +2105,7 @@ final class PluginProcess {
   /// over-bound frame is rejected whole so a typo cannot silently leave a
   /// collector running at the wrong rate.
   func applyPollRegistrations(_ params: [String: Any]) {
-    guard let decoded = Self.decodePollRegistrations(params) else {
+    guard let decoded = PluginWireCodec.pollRegistrations(from: params) else {
       FlashLog.plugin(
         .warn, pluginID: manifest.id,
         message: "[plugin] poll registration rejected: expected at most "
@@ -2153,11 +2153,6 @@ final class PluginProcess {
       ])
   }
 
-  /// Registration names ride inside the event name, so keep them to
-  /// characters that cannot be confused with the `core:poll:` prefix.
-  static let pollNameAllowed = CharacterSet(
-    charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
-
   static func pollClientID(pluginID: String, name: String) -> String {
     "plugin:\(pluginID):\(name)"
   }
@@ -2187,68 +2182,6 @@ final class PluginProcess {
     for name in names {
       scheduler.unregister(Self.pollClientID(pluginID: manifest.id, name: name))
     }
-  }
-
-  /// `nil` rejects the frame; an empty dictionary clears every registration.
-  static func decodePollRegistrations(_ params: [String: Any]) -> [String: PollRegistration]? {
-    guard Set(params.keys) == ["registrations"],
-      let raw = params["registrations"] as? [String: Any],
-      raw.count <= PluginProtocol.pollMaxRegistrations
-    else { return nil }
-    var decoded: [String: PollRegistration] = [:]
-    for (name, value) in raw {
-      guard !name.isEmpty, name.utf8.count <= PluginProtocol.pollMaxNameBytes,
-        name.unicodeScalars.allSatisfy({ Self.pollNameAllowed.contains($0) }),
-        let entry = value as? [String: Any],
-        let priorityName = entry["priority"] as? String,
-        let priority = PluginProtocol.pollPriorities.first(where: { $0.name == priorityName })?
-          .scheduler
-      else { return nil }
-      let kinds = entry.keys.filter { $0 != "priority" }
-      guard kinds.count == 1, let kind = PollRegistration.Kind(rawValue: kinds[0]),
-        let seconds = PluginJSON.number(entry[kind.rawValue]),
-        seconds >= 0, seconds <= Double(PluginProtocol.pollMaxSeconds)
-      else { return nil }
-      let ms = Int((seconds * 1000).rounded())
-      // Below the floor a cadence is a busy loop; a deadline may be due now.
-      guard kind == .after || ms >= PollScheduler.minimumIntervalMs else { return nil }
-      decoded[name] = PollRegistration(kind: kind, ms: ms, priority: priority)
-    }
-    return decoded
-  }
-
-  enum DecodedStatusSegment: Equatable {
-    case clear
-    case value(PluginStatusSegment)
-    case malformed
-  }
-
-  /// A segment value is markup (`""` clears) or a carousel object
-  /// `{"prefix"?: markup, "lines": [markup], "cycle_seconds": ≥ 1}`; blank
-  /// lines are dropped and no lines clears. Anything else is rejected whole.
-  static func decodeStatusSegment(_ value: Any) -> DecodedStatusSegment {
-    if let text = value as? String {
-      let trimmed = text.trimmed
-      return trimmed.isEmpty ? .clear : .value(.text(trimmed))
-    }
-    guard let object = value as? [String: Any],
-      let rawLines = object["lines"] as? [Any],
-      let seconds = PluginJSON.number(object["cycle_seconds"]), seconds >= 1
-    else { return .malformed }
-    let prefix: String
-    switch object["prefix"] {
-    case nil: prefix = ""
-    case let text as String: prefix = text
-    default: return .malformed
-    }
-    var lines: [String] = []
-    for line in rawLines {
-      guard let text = line as? String else { return .malformed }
-      let trimmed = text.trimmed
-      if !trimmed.isEmpty { lines.append(trimmed) }
-    }
-    guard !lines.isEmpty else { return .clear }
-    return .value(.carousel(prefix: prefix, lines: lines, cycleSeconds: seconds))
   }
 
   private func setState(_ state: PluginRuntimeState) {

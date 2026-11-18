@@ -385,9 +385,8 @@ final class PollSchedulerTests: XCTestCase {
   // MARK: - The plugin-facing registration
 
   func testPluginPollRegistrationsDecodeKindPeriodAndPriority() {
-    typealias Process = PluginProcess
     XCTAssertEqual(
-      Process.decodePollRegistrations([
+      PluginWireCodec.pollRegistrations(from: [
         "registrations": [
           "sample": ["every": 1, "priority": "high"],
           "discover": ["every": 30.5, "priority": "low"],
@@ -400,15 +399,15 @@ final class PollSchedulerTests: XCTestCase {
         "settle": .init(kind: .after, ms: 300, priority: .normal),
       ])
     // An empty set is how a plugin stops polling entirely.
-    XCTAssertEqual(Process.decodePollRegistrations(["registrations": [String: Any]()]), [:])
+    XCTAssertEqual(PluginWireCodec.pollRegistrations(from: ["registrations": [String: Any]()]), [:])
     // The core-only priority never reaches a plugin registration.
     XCTAssertNil(
-      Process.decodePollRegistrations([
+      PluginWireCodec.pollRegistrations(from: [
         "registrations": ["probe": ["every": 0.08, "priority": "system"]]
       ]))
     // A huge period is rejected, never trapped converting to milliseconds.
     XCTAssertNil(
-      Process.decodePollRegistrations([
+      PluginWireCodec.pollRegistrations(from: [
         "registrations": ["d0": ["after": 1e300, "priority": "low"]]
       ]))
   }

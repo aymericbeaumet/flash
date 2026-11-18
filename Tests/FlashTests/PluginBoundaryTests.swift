@@ -75,7 +75,7 @@ final class PluginBoundaryTests: XCTestCase {
       let value = try XCTUnwrap(item["value"] as? [String: Any])
       let valid = try XCTUnwrap(item["valid"] as? Bool)
       XCTAssertEqual(
-        PluginProcess.decodePollRegistrations(value) != nil, valid,
+        PluginWireCodec.pollRegistrations(from: value) != nil, valid,
         "poll: \(item["name"] ?? "")")
     }
   }
