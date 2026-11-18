@@ -69,7 +69,7 @@ extension AppDelegate {
         }
         self.serveConfigHTTP(method: method, purge: purge, body: body, completion: completion)
       },
-      telemetryHTTP: { [telemetryStore] in telemetryStore.snapshotJSON() },
+      telemetryHTTP: { [store = telemetry.store] in store.snapshotJSON() },
       sectionsProvider: { [weak self] sections in
         self?.debugStateJSON(sections: sections) ?? [:]
       },
@@ -340,7 +340,7 @@ extension AppDelegate {
   /// | `clipboard` | `clipboardEntries` (the core clipboard history page) |
   /// | `statusbar`, `terminals`, `widgets` | Status model publishes and menu-bar yielding; popup presentation and terminal sessions; widget placement; their windows' notifications (below) |
   /// | `monitors` | `monitorsDidChange`: a monitor evaluated to a new value, message or state, alerted, or its definition changed |
-  /// | `telemetry` | `configureTelemetry`; the receiver's and exporter's status changes and each received request (`TelemetryStatePush`, one push per main turn) |
+  /// | `telemetry` | `TelemetryCoordinator.configure`; the receiver's and exporter's status changes and each received request (`TelemetryStatePush`, one push per main turn) |
   /// | `windows` | Flash's windows moving, resizing, ordering in or out, changing screen or key status, or closing; the active Space |
   ///
   /// Plugin `memory_bytes` and `cpu_time_ms` and the status bar's in-flight
@@ -539,7 +539,7 @@ extension AppDelegate {
       },
       "plugins": statuses.map(\.jsonObject),
       "monitors": monitorsJSON(),
-      "telemetry": telemetryStateJSON(),
+      "telemetry": telemetry.stateJSON(for: config.telemetry),
     ]
   }
 }

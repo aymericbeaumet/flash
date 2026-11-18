@@ -33,7 +33,7 @@ extension AppDelegate {
   /// One measurement into the store status formats and monitors read, and
   /// into the exporter's recorder when it sends metrics.
   func performMetricRecord(_ record: MetricRecord) {
-    telemetryStore.record(record, scope: MetricRecord.recordedScope)
+    telemetry.store.record(record, scope: MetricRecord.recordedScope)
     FlashTelemetry.current?.record(record.instrument, record.value, attributes: record.attributes)
   }
 

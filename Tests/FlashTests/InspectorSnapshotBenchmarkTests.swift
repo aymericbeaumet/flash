@@ -50,7 +50,10 @@ final class InspectorSnapshotBenchmarkTests: XCTestCase {
         ms(n) { _ = NormalModeDispatcher.mappingsJSON(mode: config.mode) }))
     lines.append(String(format: "keyboard %.2f ms", ms(n) { _ = delegate.keyboardStateJSON() }))
     lines.append(String(format: "monitors %.2f ms", ms(n) { _ = delegate.monitorsJSON() }))
-    lines.append(String(format: "telemetry %.2f ms", ms(n) { _ = delegate.telemetryStateJSON() }))
+    lines.append(
+      String(
+        format: "telemetry %.2f ms",
+        ms(n) { _ = delegate.telemetry.stateJSON(for: delegate.config.telemetry) }))
     print("INSPECTOR_BENCH " + lines.joined(separator: " | "))
   }
 }

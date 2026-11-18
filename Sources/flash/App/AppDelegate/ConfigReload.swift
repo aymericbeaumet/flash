@@ -253,7 +253,7 @@ extension AppDelegate {
     reconcileHostEventSources()
     emitHostEvent(PluginEvent(.configChanged))
     configureDebugServer(for: cfg)
-    configureTelemetry(for: cfg)
+    telemetry.configure(cfg.telemetry)
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
     registry.scheduleRunningApplicationsRefresh()

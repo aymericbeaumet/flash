@@ -24,101 +24,117 @@ final class TelemetryStatePush {
   }
 }
 
-/// `[telemetry.receiver]` and `[telemetry.exporter]`: the loopback OTLP
-/// receiver feeding `#{flash.otel…}` values and the help's telemetry page,
-/// and the exporter sending Flash's own telemetry. Reconciled from the
-/// configuration on launch and every reload.
-extension AppDelegate {
-  /// Once, beside the status controller: received changes push the
-  /// inspector, and changes to metrics a surface reads re-evaluate it.
-  func wireTelemetryStore() {
-    let controller = statusBarController
-    let push = telemetryStatePush
-    telemetryStore.setHandlers(
-      changed: { [weak self] in push.schedule { self?.debugStateDidChange() } },
-      observedChanged: { [weak controller] in controller?.telemetryDidChange() })
+/// `[telemetry.receiver]` and `[telemetry.exporter]`: the store of received
+/// and recorded telemetry, the loopback OTLP receiver feeding
+/// `#{flash.otel…}` values and the help's telemetry page, and the exporter
+/// sending Flash's own telemetry. Reconciled from the configuration on launch
+/// and every reload. Main queue only, like the configuration that drives it;
+/// the store, receiver and exporter it owns work on their own queues.
+final class TelemetryCoordinator {
+  /// Received OpenTelemetry data; empty while the receiver is off.
+  let store = TelemetryStore()
+  private var receiver: OTLPReceiver?
+  private var exporter: TelemetryExporter?
+  private var logSink: UUID?
+  private let statePush = TelemetryStatePush()
+  /// The state `stateJSON` reports changed. Called on main, at most once per
+  /// main turn for changes that arrive on another queue.
+  private var stateChanged: () -> Void = {}
+
+  /// Once, beside the status controller: received changes report a state
+  /// change, and changes to metrics a surface reads re-evaluate it
+  /// (`observedChanged`, on the store's queue).
+  func wire(stateChanged: @escaping () -> Void, observedChanged: @escaping () -> Void) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    self.stateChanged = stateChanged
+    store.setHandlers(changed: statusChanged, observedChanged: observedChanged)
     // Flash's own metrics join the store once a status format or monitor
     // reads them: one model for received, recorded and Flash's metrics.
-    FlashTelemetry.installStore(telemetryStore)
+    FlashTelemetry.installStore(store)
   }
 
-  func configureTelemetry(for cfg: Config) {
-    let receiver = cfg.telemetry.receiver
-    telemetryStore.setLimits(receiver.limits)
-    if receiver.enabled {
-      if telemetryReceiver?.port != receiver.port || telemetryReceiver?.token != receiver.token {
-        telemetryReceiver?.stop()
-        let started = OTLPReceiver(
-          port: receiver.port, store: telemetryStore, token: receiver.token)
-        let push = telemetryStatePush
-        started.onStatusChange = { [weak self] in push.schedule { self?.debugStateDidChange() } }
-        telemetryReceiver = started
+  func configure(_ telemetry: Config.Telemetry) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    let configured = telemetry.receiver
+    store.setLimits(configured.limits)
+    if configured.enabled {
+      if receiver?.port != configured.port || receiver?.token != configured.token {
+        receiver?.stop()
+        let started = OTLPReceiver(port: configured.port, store: store, token: configured.token)
+        started.onStatusChange = statusChanged
+        receiver = started
         started.start()
       }
-    } else if let running = telemetryReceiver {
+    } else if let running = receiver {
       running.stop()
-      telemetryReceiver = nil
-      telemetryStore.reset()
+      receiver = nil
+      store.reset()
     }
-    let settings = cfg.telemetry.exportEndpoint.map { endpoint in
+    let settings = telemetry.exportEndpoint.map { endpoint in
       TelemetryExporter.Settings(
-        endpoint: endpoint, encoding: cfg.telemetry.exporter.encoding,
-        gzip: cfg.telemetry.exporter.gzip, headers: cfg.telemetry.exporter.headers,
-        serviceName: cfg.telemetry.exporter.serviceName,
-        signals: cfg.telemetry.exporter.signals,
-        intervalSeconds: TimeInterval(cfg.telemetry.exporter.intervalSeconds),
+        endpoint: endpoint, encoding: telemetry.exporter.encoding,
+        gzip: telemetry.exporter.gzip, headers: telemetry.exporter.headers,
+        serviceName: telemetry.exporter.serviceName,
+        signals: telemetry.exporter.signals,
+        intervalSeconds: TimeInterval(telemetry.exporter.intervalSeconds),
         version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
           ?? "development")
     }
-    if settings != telemetryExporter?.settings {
-      stopTelemetryExporter()
+    if settings != exporter?.settings {
+      stopExporter()
       if let settings, !settings.signals.isEmpty {
-        startTelemetryExporter(settings)
+        startExporter(settings)
       }
     }
-    debugStateDidChange()
+    stateChanged()
   }
 
-  private func startTelemetryExporter(_ settings: TelemetryExporter.Settings) {
+  /// A status change on any queue: one report on main, whatever arrives
+  /// before it runs.
+  private var statusChanged: () -> Void {
+    { [weak self, statePush] in statePush.schedule { self?.stateChanged() } }
+  }
+
+  private func startExporter(_ settings: TelemetryExporter.Settings) {
     let recorder = TelemetryRecorder(signals: settings.signals)
     let exporter = TelemetryExporter(settings: settings, recorder: recorder)
-    let push = telemetryStatePush
-    exporter.onStatusChange = { [weak self] in push.schedule { self?.debugStateDidChange() } }
+    exporter.onStatusChange = statusChanged
     FlashTelemetry.install(recorder)
     if settings.signals.contains(.logs) {
       // Follows `[debug] log_level`, as the log file does: exporting never
       // forces lower-level messages on hot paths to be built.
-      telemetryLogSink = FlashLog.addSink(minLevel: nil) { [weak recorder] record in
+      logSink = FlashLog.addSink(minLevel: nil) { [weak recorder] record in
         recorder?.log(record)
       }
     }
     exporter.start()
-    telemetryExporter = exporter
+    self.exporter = exporter
     FlashLog.info(
       "[telemetry] exporting signals=\(settings.signals.sorted().map(\.rawValue).joined(separator: ","))"
         + " protocol=\(settings.encoding.rawValue)")
   }
 
-  private func stopTelemetryExporter() {
-    if let telemetryLogSink { FlashLog.removeSink(telemetryLogSink) }
-    telemetryLogSink = nil
+  private func stopExporter() {
+    if let logSink { FlashLog.removeSink(logSink) }
+    logSink = nil
     FlashTelemetry.install(nil)
-    telemetryExporter?.stop()
-    telemetryExporter = nil
+    exporter?.stop()
+    exporter = nil
   }
 
-  func stopTelemetry() {
-    stopTelemetryExporter()
-    telemetryReceiver?.stop()
-    telemetryReceiver = nil
+  func stop() {
+    dispatchPrecondition(condition: .onQueue(.main))
+    stopExporter()
+    receiver?.stop()
+    receiver = nil
   }
 
-  /// The receiver's and exporter's state for `/api/state`. Header values are
-  /// never included, only their names.
-  func telemetryStateJSON() -> [String: Any] {
-    let configured = config.telemetry
-    let counters = telemetryStore.counterSnapshot()
-    let receiverStatus = telemetryReceiver?.currentStatus
+  /// The receiver's and exporter's state for `/api/state`, beside what
+  /// `configured` asks for. Header values are never included, only their
+  /// names.
+  func stateJSON(for configured: Config.Telemetry) -> [String: Any] {
+    let counters = store.counterSnapshot()
+    let receiverStatus = receiver?.currentStatus
     func bySignal(_ values: [TelemetrySignal: Int]) -> [String: Int] {
       Dictionary(
         uniqueKeysWithValues: TelemetrySignal.allCases.map { ($0.rawValue, values[$0] ?? 0) })
@@ -150,13 +166,13 @@ extension AppDelegate {
     if let port = receiverStatus?.listeningPort {
       receiver["endpoint"] = "http://127.0.0.1:\(port)"
     }
-    let exporterStatus = telemetryExporter?.currentStatus
+    let exporterStatus = self.exporter?.currentStatus
     let loop =
       URLParsing.url(configured.exporter.endpoint).map {
         Config.Telemetry.targetsReceiver($0, receiver: configured.receiver)
       } ?? false
     let exporter: [String: Any] = [
-      "enabled": telemetryExporter != nil,
+      "enabled": self.exporter != nil,
       "endpoint": configured.exporter.endpoint,
       "blocked": loop ? "targets Flash's own receiver" : NSNull(),
       "protocol": configured.exporter.encoding.rawValue,

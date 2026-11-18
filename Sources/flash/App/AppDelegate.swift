@@ -43,14 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return HelpAccess.newToken()
     }
   }()
-  /// Received OpenTelemetry data; empty while the receiver is off.
-  let telemetryStore = TelemetryStore()
-  /// `[telemetry.receiver]` and `[telemetry.exporter]`, when enabled; see
-  /// `configureTelemetry`.
-  var telemetryReceiver: OTLPReceiver?
-  var telemetryExporter: TelemetryExporter?
-  var telemetryLogSink: UUID?
-  let telemetryStatePush = TelemetryStatePush()
+  /// The telemetry store with `[telemetry.receiver]` and
+  /// `[telemetry.exporter]`, when enabled; see `TelemetryCoordinator`.
+  let telemetry = TelemetryCoordinator()
   /// The notifications only the inspector needs; see `attachDebugServer`.
   var inspectorChangeObservers: InspectorChangeObservers?
   var overlay: OverlayPanel!
@@ -713,10 +708,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           name, title: alert.title, body: alert.value ?? "", error: alert.style == .error)
       },
       monitorTriggerSink: { [weak self] name, level in self?.emitMonitorTriggered(name, level) },
-      telemetry: telemetryStore,
+      telemetry: telemetry.store,
       calendarObserver: { [weak calendar] observed in calendar?.observe(observed) })
     launchStages.add("statusbar", since: statusBarStartedAt)
-    wireTelemetryStore()
+    telemetry.wire(
+      stateChanged: { [weak self] in self?.debugStateDidChange() },
+      observedChanged: { [weak statusBarController] in statusBarController?.telemetryDidChange() })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
     if let front = NSWorkspace.shared.frontmostApplication,
       front.processIdentifier != ProcessInfo.processInfo.processIdentifier
@@ -783,7 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     runStartupCommandsAtLaunch()
     selectInitialModeIfNeeded()
     configureDebugServer(for: config)
-    configureTelemetry(for: config)
+    telemetry.configure(config.telemetry)
     checkAccessibilityAtLaunch()
     installDismissObservers()
     reconcileClipboardMonitor()
@@ -1933,7 +1930,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.statusTerminals.shutdown()
     monitor?.stop()
     pluginManager.stop()
-    stopTelemetry()
+    telemetry.stop()
     stopDebugServer()
     stopIPCServer()
     frecencyStore?.drain()

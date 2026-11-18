@@ -304,7 +304,7 @@ final class TelemetryConfigTests: XCTestCase {
       endpoint = "https://collector.example"
       headers = { "x-api-key" = "very-secret" }
       """)
-    let state = delegate.telemetryStateJSON()
+    let state = delegate.telemetry.stateJSON(for: delegate.config.telemetry)
     let data = try JSONSerialization.data(withJSONObject: state)
     let text = String(decoding: data, as: UTF8.self)
     XCTAssertFalse(text.contains("very-secret"), text)
