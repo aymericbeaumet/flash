@@ -1572,7 +1572,7 @@ extension AppDelegate {
       guard let self else { return }
       if let movementGeneration {
         guard movementGeneration == self.movementLocationResolutionGeneration else { return }
-        if !result.didResolve { self.movementNavigationTargetKey = nil }
+        if !result.didResolve { self.movementHistory.stopSettling() }
       }
       if let pid = result.targetPID {
         // Plugin candidates (e.g. a tmux window) run their side effect
@@ -1595,10 +1595,9 @@ extension AppDelegate {
         )
       }
       if shouldRecordMovement, let navigationURL = result.navigationURL {
-        self.movementCurrent = .route(
-          navigationURL,
-          pid: result.targetPID ?? candidate.pid)
-        self.pruneMovementStacks()
+        self.movementHistory.refine(
+          current: .route(navigationURL, pid: result.targetPID ?? candidate.pid),
+          identify: self.movementIdentity)
       }
       self.refreshCurrentModeSideEffects(reason: "source_resolved")
       self.scheduleNormalModeRecapture()

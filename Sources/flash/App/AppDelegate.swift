@@ -4,51 +4,6 @@ import Carbon.HIToolbox
 import FlashCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
-  struct MovementEntry {
-    enum Kind {
-      case app
-      case candidate
-      case route
-    }
-
-    var kind: Kind
-    var key: String
-    var pid: pid_t?
-    var candidate: Candidate?
-    var navigationURL: URL?
-
-    static func app(pid: pid_t) -> MovementEntry {
-      MovementEntry(kind: .app, key: "app:\(pid)", pid: pid, candidate: nil, navigationURL: nil)
-    }
-
-    static func candidate(_ candidate: Candidate) -> MovementEntry {
-      let target =
-        candidate.navigationURL?.absoluteString
-        ?? candidate.url?.absoluteString
-        ?? candidate.sourcePayload
-        ?? candidate.title
-      return MovementEntry(
-        kind: .candidate,
-        key: "candidate:\(candidate.sourceID):\(candidate.pid ?? 0):\(target)",
-        pid: candidate.pid,
-        candidate: candidate,
-        navigationURL: candidate.navigationURL)
-    }
-
-    static func route(_ url: URL, pid: pid_t?) -> MovementEntry {
-      MovementEntry(
-        kind: .route,
-        key: "route:\(url.absoluteString)",
-        pid: pid,
-        candidate: nil,
-        navigationURL: url)
-    }
-  }
-
-  struct MovementIdentity: Equatable {
-    var key: String
-  }
-
   var config = Config.default {
     // What the inspector derived from the previous configuration.
     didSet { inspectorConfigCache = nil }
@@ -293,11 +248,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var lastCommittedClick: LastCommittedClick?
   /// `mouse position`'s saved pointer positions.
   var positionHistory = PositionHistory()
-  var movementCurrent: MovementEntry?
-  var movementBackStack: [MovementEntry] = []
-  var movementForwardStack: [MovementEntry] = []
-  var movementNavigationTargetKey: String?
-  var movementCatalogSnapshot: (pid: pid_t, keys: Set<String>)?
+  /// The stops behind `movement back` / `movement forward`; see
+  /// `MovementHistory`.
+  var movementHistory = MovementHistory()
   var ambientLocationRecordToken: UInt64 = 0
   /// The pending ambient-location record or its retry; a newer focus
   /// replaces it.
@@ -817,7 +770,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     if let app = NSWorkspace.shared.frontmostApplication,
       app.bundleIdentifier != Bundle.main.bundleIdentifier
     {
-      movementCurrent = .app(pid: app.processIdentifier)
+      movementHistory = MovementHistory(current: .app(pid: app.processIdentifier))
       appNavigation = AppNavigationHistory(current: app.processIdentifier)
       observedFocusedAppPID = app.processIdentifier
     }

@@ -54,54 +54,24 @@ extension AppDelegate {
   }
 
   func recordMovement(_ entry: MovementEntry, source: String, isAmbient: Bool = false) {
-    guard let identity = movementIdentity(entry) else { return }
-    if isAmbient, let target = movementNavigationTargetKey, target != identity.key {
-      guard let current = movementCurrent, movementEntryIsApp(current),
-        current.pid != nil, current.pid == entry.pid
-      else { return }
-    }
-    if !isAmbient {
-      movementLocationResolutionGeneration &+= 1
-      movementNavigationTargetKey = nil
-    }
-    if movementNavigationTargetKey == identity.key {
-      movementNavigationTargetKey = nil
-      movementCurrent = entry
-      pruneMovementStacks()
+    let recorded = movementHistory.record(entry, isAmbient: isAmbient, identify: movementIdentity)
+    // A move the user made supersedes every location resolution in flight.
+    if !isAmbient, recorded != .unidentified { movementLocationResolutionGeneration &+= 1 }
+    switch recorded {
+    case .unidentified, .dropped:
+      break
+    case .arrived(let key):
+      FlashLog.trace("[movement] activation target=\(key) raw=\(entry.key) source=navigation")
+    case .coalesced(let key):
+      FlashLog.trace("[movement] coalesced source=\(source) current=\(key) raw=\(entry.key)")
+    case .coalescedActivation(let key):
       FlashLog.trace(
-        "[movement] activation target=\(identity.key) raw=\(entry.key) source=navigation")
-      return
-    }
-    if let current = movementCurrent,
-      let currentIdentity = movementIdentity(current),
-      currentIdentity.key == identity.key
-    {
-      movementCurrent = entry
-      movementNavigationTargetKey = nil
-      pruneMovementStacks()
+        "[movement] coalesced_activation source=\(source) current=\(key) raw=\(entry.key)")
+    case .stop(let key):
       FlashLog.trace(
-        "[movement] coalesced source=\(source) current=\(identity.key) raw=\(entry.key)")
-      return
+        "[movement] record source=\(source) current=\(key) raw=\(entry.key) "
+          + "back=\(movementHistory.back.count) forward=\(movementHistory.forward.count)")
     }
-    if let current = movementCurrent,
-      movementEntriesShareActivation(current, entry)
-    {
-      if movementEntryIsApp(current) { movementCurrent = entry }
-      movementNavigationTargetKey = nil
-      pruneMovementStacks()
-      FlashLog.trace(
-        "[movement] coalesced_activation source=\(source) current=\(identity.key) raw=\(entry.key)")
-      return
-    }
-    if let current = movementCurrent {
-      appendMovementEntry(current, to: &movementBackStack)
-    }
-    movementCurrent = entry
-    movementForwardStack.removeAll(keepingCapacity: true)
-    pruneMovementStacks()
-    FlashLog.trace(
-      "[movement] record source=\(source) current=\(identity.key) raw=\(entry.key) back=\(movementBackStack.count) "
-        + "forward=\(movementForwardStack.count)")
   }
 
   /// A switch a source performed, naming where it landed (a tmux window, a
@@ -115,8 +85,7 @@ extension AppDelegate {
   /// record supersedes it.
   func recordPerformedNavigation(_ entry: MovementEntry, source: String) {
     recordMovement(entry, source: source)
-    guard let identity = movementIdentity(entry) else { return }
-    movementNavigationTargetKey = identity.key
+    movementHistory.settle(on: entry, identify: movementIdentity)
   }
 
   /// Gathering and preparing every location catalog costs tens of
@@ -159,17 +128,16 @@ extension AppDelegate {
       guard let identity = movementIdentity(.candidate(candidate)) else { return nil }
       return (identity.key, candidate)
     }
-    let keys = Set(keyed.map(\.0))
-    let previous = movementCatalogSnapshot.flatMap { $0.pid == processID ? $0.keys : nil }
-    guard previous != keys else { return true }
-    movementCatalogSnapshot = (processID, keys)
-    let added = keys.subtracting(previous ?? [])
-    let choice = added.count == 1 ? added.first : keys.count == 1 ? keys.first : nil
-    guard let choice, let candidate = keyed.first(where: { $0.0 == choice })?.1 else {
+    switch movementHistory.noteSelection(Set(keyed.map(\.0)), pid: processID) {
+    case .unchanged:
+      return true
+    case .ambiguous:
       return false
+    case .selected(let key):
+      guard let candidate = keyed.first(where: { $0.0 == key })?.1 else { return false }
+      recordAmbientLocation(candidate, processID: processID, source: "location_catalog")
+      return true
     }
-    recordAmbientLocation(candidate, processID: processID, source: "location_catalog")
-    return true
   }
 
   /// Record where focus landed once it settles. Each focus change re-arms
@@ -261,8 +229,8 @@ extension AppDelegate {
     ambientLocationRecordToken &+= 1
     movementLocationResolutionGeneration &+= 1
     let generation = movementLocationResolutionGeneration
-    if movementNavigationTargetKey != nil {
-      finishNavigateMovementHistory(direction: direction, current: movementCurrent)
+    if movementHistory.isSettling {
+      finishNavigateMovementHistory(direction: direction, current: movementHistory.current)
       return
     }
     currentMovementEntry { [weak self] current in
@@ -286,46 +254,16 @@ extension AppDelegate {
     direction: NavigationDirection,
     current: MovementEntry?
   ) -> MovementEntry? {
-    if let current { recordMovement(current, source: "navigation_origin", isAmbient: true) }
-    let current = movementCurrent
-
-    var sourceStack: [MovementEntry]
-    var destinationStack: [MovementEntry]
-    let label: String
-    switch direction {
-    case .back:
-      sourceStack = movementBackStack
-      destinationStack = movementForwardStack
-      label = "back"
-    case .forward:
-      sourceStack = movementForwardStack
-      destinationStack = movementBackStack
-      label = "forward"
+    let label = direction == .back ? "back" : "forward"
+    guard
+      let target = movementHistory.take(direction, from: current, identify: movementIdentity)
+    else {
+      FlashLog.debug("[movement] no \(label) target")
+      return nil
     }
-
-    while let target = sourceStack.popLast() {
-      guard movementEntryIsRestorable(target) else {
-        continue
-      }
-      let targetIdentity = movementIdentity(target)
-      if let current, movementIdentity(current) == targetIdentity { continue }
-      if let current,
-        let currentIdentity = movementIdentity(current),
-        currentIdentity.key != targetIdentity?.key
-      {
-        appendMovementEntry(current, to: &destinationStack)
-      }
-      movementCurrent = target
-      movementNavigationTargetKey = targetIdentity?.key
-      storeMovementStacks(source: sourceStack, destination: destinationStack, direction: direction)
-      FlashLog.debug("[movement] navigate \(label) target=\(targetIdentity?.key ?? target.key)")
-      return target
-    }
-
-    storeMovementStacks(source: sourceStack, destination: destinationStack, direction: direction)
-    pruneMovementStacks()
-    FlashLog.debug("[movement] no \(label) target")
-    return nil
+    FlashLog.debug(
+      "[movement] navigate \(label) target=\(movementHistory.settlingKey ?? target.key)")
+    return target
   }
 
   private func currentMovementEntry(completion: @escaping (MovementEntry?) -> Void) {
@@ -345,7 +283,7 @@ extension AppDelegate {
       }
       return
     }
-    if let current = movementCurrent {
+    if let current = movementHistory.current {
       completion(current)
       return
     }
@@ -360,7 +298,7 @@ extension AppDelegate {
     switch entry.kind {
     case .app:
       guard let pid = entry.pid, let item = registry.candidate(forProcessID: pid) else {
-        movementNavigationTargetKey = nil
+        movementHistory.stopSettling()
         applyModeOverlay()
         return
       }
@@ -368,7 +306,7 @@ extension AppDelegate {
         item, recordMovement: false, movementGeneration: movementLocationResolutionGeneration)
     case .candidate:
       guard let candidate = entry.candidate else {
-        movementNavigationTargetKey = nil
+        movementHistory.stopSettling()
         applyModeOverlay()
         return
       }
@@ -383,7 +321,7 @@ extension AppDelegate {
       }
     case .route:
       guard let navigationURL = entry.navigationURL else {
-        movementNavigationTargetKey = nil
+        movementHistory.stopSettling()
         applyModeOverlay()
         return
       }
@@ -406,13 +344,12 @@ extension AppDelegate {
           self.normalModeTargetPID = targetPID
         }
         if let route = result.navigationURL {
-          self.movementCurrent = .route(route, pid: targetPID)
-          self.movementNavigationTargetKey =
-            self.movementCurrent.flatMap(self.movementIdentity)?.key
+          self.movementHistory.arrive(
+            at: .route(route, pid: targetPID), identify: self.movementIdentity)
         }
         self.scheduleNormalModeRecapture()
       case .failed:
-        self.movementNavigationTargetKey = nil
+        self.movementHistory.stopSettling()
         FlashLog.warn("[movement] route restore failed scheme=\(url.scheme ?? "nil")")
         self.scheduleNormalModeRecapture()
       case .unhandled:
@@ -420,7 +357,7 @@ extension AppDelegate {
           self.openSourceItem(
             fallback, recordMovement: false, movementGeneration: generation)
         } else {
-          self.movementNavigationTargetKey = nil
+          self.movementHistory.stopSettling()
           FlashLog.debug("[movement] route restore unhandled scheme=\(url.scheme ?? "nil")")
           self.applyModeOverlay()
         }
@@ -428,29 +365,7 @@ extension AppDelegate {
     }
   }
 
-  private func appendMovementEntry(_ entry: MovementEntry, to stack: inout [MovementEntry]) {
-    guard let identity = movementIdentity(entry) else { return }
-    if let last = stack.last, movementIdentity(last) == identity { return }
-    stack.append(entry)
-    if stack.count > 20 {
-      stack.removeFirst(stack.count - 20)
-    }
-  }
-
-  private func movementEntriesShareActivation(
-    _ current: MovementEntry,
-    _ next: MovementEntry
-  ) -> Bool {
-    (movementEntryIsApp(current) || movementEntryIsApp(next))
-      && current.pid != nil
-      && current.pid == next.pid
-  }
-
-  private func movementEntryIsApp(_ entry: MovementEntry) -> Bool {
-    entry.kind == .app || entry.candidate?.kind == .app
-  }
-
-  private func movementIdentity(_ entry: MovementEntry) -> MovementIdentity? {
+  func movementIdentity(_ entry: MovementEntry) -> MovementIdentity? {
     switch entry.kind {
     case .app:
       guard let pid = entry.pid, pid > 0,
@@ -505,30 +420,6 @@ extension AppDelegate {
       return MovementIdentity(key: "app.pid:\(pid)")
     }
     return nil
-  }
-
-  private func movementEntryIsRestorable(_ entry: MovementEntry) -> Bool {
-    movementIdentity(entry) != nil
-  }
-
-  private func storeMovementStacks(
-    source: [MovementEntry],
-    destination: [MovementEntry],
-    direction: NavigationDirection
-  ) {
-    switch direction {
-    case .back:
-      movementBackStack = source
-      movementForwardStack = destination
-    case .forward:
-      movementForwardStack = source
-      movementBackStack = destination
-    }
-  }
-
-  func pruneMovementStacks() {
-    movementBackStack.removeAll { !movementEntryIsRestorable($0) }
-    movementForwardStack.removeAll { !movementEntryIsRestorable($0) }
   }
 
   func currentNonFlashContext() -> AppContext? {
