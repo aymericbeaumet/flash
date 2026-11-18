@@ -217,10 +217,18 @@ the remaining misses are, and the misses table of `bench:log-summary` says
 which a scheduling change would remove. Read it by `pending`:
 
 - `throttled` with a `refresh in` in seconds: a refresh was asked for and
-  the grown interval held it back. The walk's cost is spacing its
-  event-driven refreshes as well as its maintenance.
+  the app's cost spacing held it back (2.5 s, or ten times its last walk).
+  A static app's grown maintenance interval no longer does: until
+  2026-11-18 one interval both aged the model and spaced the walk after a
+  real change, so a layout change in an app walked every 24 s waited up to
+  24 s for its model.
 - `none` after `invalidated`, with a long `no model`: something discarded
-  the model and nothing was armed to rebuild it. `causes` names what.
+  the model and nothing was armed to rebuild it. `causes` names what. Value
+  and title changes were the known case (`AXValueChanged`, `AXTitleChanged`:
+  three of the four attributed misses in the first sample, with no model for
+  3 to 68 s); they now arm one walk for when the app has been quiet for
+  400 ms, so this pairing points at an app Flash is not warming or at a
+  storm.
 - `suspended` after `expired`: the model aged out at an idle desk, and the
   first activation back paid for the walk.
 - `walking`, `debounce` and `readiness`: the rebuild was under way and the

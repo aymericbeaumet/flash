@@ -94,6 +94,7 @@ final class AppMonitor {
       self.backgroundWalkGate.reset()
       // Providers may have changed with it, and walk costs with them.
       self.modelIntervalsMs.removeAll()
+      self.modelWalkCostsMs.removeAll()
       guard let app = NSWorkspace.shared.frontmostApplication else { return }
       let pid = app.processIdentifier
       guard pid > 0 else { return }
@@ -113,6 +114,10 @@ final class AppMonitor {
   /// the next activation performs a complete walk on demand.
   static let maintenanceIdleSuspendSeconds: Double = 60
   static let modelDebounceMs: Int = 80
+  /// How long an app's value and title churn must stay quiet before the one
+  /// walk that follows it: longer than the gap between two typed keys, so
+  /// typing is walked once it pauses and never between keystrokes.
+  static let modelChurnQuietMs: Int = 400
   static let modelMaintenanceLeadMs: Int = 250
   static let backgroundModelMinIntervalMs: Int = 2500
   /// A walk is slow when repeating it every maintenance interval would cost
@@ -158,6 +163,16 @@ final class AppMonitor {
       next = halved
     }
     return next
+  }
+
+  /// How far apart an app's event-driven walks run: the spacing at which a
+  /// walk costing `walkMs` stays under `slowAutomaticModelRefreshFraction` of
+  /// a core, never under the fixed minimum nor over the freshness ceiling.
+  /// Cost only: a static app's grown maintenance interval says its model
+  /// stays valid for long, not that the walk after a real change may wait.
+  static func eventRefreshSpacingMs(walkMs: Double?) -> Int {
+    let costed = ((walkMs ?? 0) / slowAutomaticModelRefreshFraction).rounded(.up)
+    return min(modelFreshnessMaxMs, max(backgroundModelMinIntervalMs, Int(costed)))
   }
 
   /// AX event storm visibility. `onAXEvent` is otherwise silent, so a
@@ -224,13 +239,17 @@ final class AppMonitor {
   /// background warming pauses until a quiet window proves the burst ended.
   var axEventStormingPIDs: Set<pid_t> = []
   /// Each app's maintenance interval: how long its models are served and how
-  /// far apart its speculative walks run (`nextModelIntervalMs`). It outlives
+  /// far apart its maintenance walks run (`nextModelIntervalMs`). It outlives
   /// the models — an AX event discards a model, not the evidence that the
   /// app walks slowly — and is forgotten when the app quits or the
   /// configuration changes. Absent means the 1.5 s floor.
   var modelIntervalsMs: [pid_t: Int] = [:]
+  /// What each app's last complete walk cost: the spacing of its event-driven
+  /// walks (`eventRefreshSpacingMs`). Kept and forgotten with the interval.
+  var modelWalkCostsMs: [pid_t: Double] = [:]
   var modelScheduler = PreparedModelScheduler(
     debounceMs: modelDebounceMs,
+    churnQuietMs: modelChurnQuietMs,
     minimumIntervalMs: backgroundModelMinIntervalMs,
     freshnessMs: modelFreshnessMs,
     maintenanceLeadMs: modelMaintenanceLeadMs)
@@ -459,9 +478,12 @@ final class AppMonitor {
     return lightObservedNotifications
   }
 
-  static func notificationShouldSchedulePreparedModelRefresh(_ notification: String) -> Bool {
-    notification != kAXValueChangedNotification as String
-      && notification != kAXTitleChangedNotification as String
+  /// Value and title changes are churn: they arrive per keystroke or per
+  /// tick and rarely move a target. They discard the model like any event,
+  /// then walk once the app has been quiet for `modelChurnQuietMs`.
+  static func notificationIsChurn(_ notification: String) -> Bool {
+    notification == kAXValueChangedNotification as String
+      || notification == kAXTitleChangedNotification as String
   }
 
   static func notificationMayChangeActiveWindowBorder(

@@ -10,7 +10,8 @@ final class PreparedModelSchedulingTests: XCTestCase {
 
   private func scheduler() -> PreparedModelScheduler {
     PreparedModelScheduler(
-      debounceMs: 80, minimumIntervalMs: 2500, freshnessMs: 1500, maintenanceLeadMs: 250)
+      debounceMs: 80, churnQuietMs: 400, minimumIntervalMs: 2500, freshnessMs: 1500,
+      maintenanceLeadMs: 250)
   }
 
   /// A waiter is a promise: the one a newer activation displaces, and the
@@ -65,6 +66,60 @@ final class PreparedModelSchedulingTests: XCTestCase {
     XCTAssertEqual(extended.deadline, 140_000_000)
     clock.advance(60)
     XCTAssertEqual(state.wake(extended.ticket, now: clock.now), .fire(.refresh(.axEvent("resize"))))
+  }
+
+  /// Value and title churn arms one walk for when the app goes quiet: every
+  /// further change pushes it back, so typing is walked once it pauses.
+  func testChurnArmsOneWalkForWhenTheAppGoesQuiet() throws {
+    var clock = Clock()
+    var state = scheduler()
+    let first = try XCTUnwrap(
+      state.scheduleRefresh(pid: 42, reason: .axChurn("value"), now: clock.now))
+    XCTAssertEqual(first.deadline, 400_000_000)
+    XCTAssertEqual(state.pending(pid: 42, now: clock.now).state, .debounce)
+    clock.advance(300)
+    XCTAssertNil(state.scheduleRefresh(pid: 42, reason: .axChurn("title"), now: clock.now))
+    clock.advance(100)
+    guard case .wait(let extended) = state.wake(first.ticket, now: clock.now) else {
+      return XCTFail("The wake must wait for the churn to settle")
+    }
+    XCTAssertEqual(extended.deadline, 700_000_000)
+    clock.advance(300)
+    XCTAssertEqual(state.wake(extended.ticket, now: clock.now), .fire(.refresh(.axChurn("title"))))
+
+    // The cost spacing holds a churn walk back like any event-driven one.
+    state.noteRefreshStarted(pid: 42, now: clock.now)
+    clock.advance(100)
+    let spaced = try XCTUnwrap(
+      state.scheduleRefresh(pid: 42, reason: .axChurn("value"), now: clock.now))
+    XCTAssertEqual(spaced.deadline, 700_000_000 + 2_500_000_000)
+    XCTAssertEqual(state.pending(pid: 42, now: clock.now).state, .throttled)
+  }
+
+  /// Churn never postpones or demotes a walk something else asked for, and a
+  /// layout change does not wait out the quiet window churn armed.
+  func testChurnNeverPostponesAnotherRefresh() throws {
+    var clock = Clock()
+    var state = scheduler()
+    let layout = try XCTUnwrap(
+      state.scheduleRefresh(pid: 42, reason: .axEvent("layout"), now: clock.now))
+    clock.advance(10)
+    XCTAssertNil(state.scheduleRefresh(pid: 42, reason: .axChurn("value"), now: clock.now))
+    XCTAssertEqual(state.refreshDeadline(pid: 42), 80_000_000)
+    clock.advance(70)
+    XCTAssertEqual(state.wake(layout.ticket, now: clock.now), .fire(.refresh(.axEvent("layout"))))
+
+    let churn = try XCTUnwrap(
+      state.scheduleRefresh(pid: 42, reason: .axChurn("value"), now: clock.now))
+    XCTAssertEqual(churn.deadline, 480_000_000)
+    clock.advance(10)
+    let preempting = try XCTUnwrap(
+      state.scheduleRefresh(pid: 42, reason: .axEvent("layout"), now: clock.now))
+    XCTAssertEqual(preempting.deadline, 170_000_000)
+    clock.advance(80)
+    XCTAssertEqual(state.wake(churn.ticket, now: clock.now), .stale)
+    XCTAssertEqual(
+      state.wake(preempting.ticket, now: clock.now), .fire(.refresh(.axEvent("layout"))))
   }
 
   func testFocusRefreshPreemptsThrottledNoiseAndRetainsPriority() throws {
@@ -143,10 +198,10 @@ final class PreparedModelSchedulingTests: XCTestCase {
     XCTAssertEqual(backedOff.deadline, 2_750_000_000)
   }
 
-  /// An app's interval also spaces its event-driven refreshes: the fixed
-  /// 2.5 s minimum is the floor, the app's interval the throttle, and only
+  /// An app's cost spacing holds back its event-driven refreshes: the fixed
+  /// 2.5 s minimum is the floor, the app's spacing the throttle, and only
   /// throttled reasons wait.
-  func testAnAppsIntervalThrottlesItsEventRefreshesBeyondTheFixedMinimum() throws {
+  func testAnAppsSpacingThrottlesItsEventRefreshesBeyondTheFixedMinimum() throws {
     var clock = Clock()
     var state = scheduler()
     state.noteRefreshStarted(pid: 42, now: clock.now)
@@ -287,8 +342,8 @@ final class PreparedModelSchedulingTests: XCTestCase {
       state.pending(pid: 7, now: clock.now).state, PreparedModelMissContext.Pending.none)
   }
 
-  /// A refresh the app's interval holds back is told apart from one inside
-  /// its debounce: that interval is what a cost-only spacing would shorten.
+  /// A refresh the app's spacing holds back is told apart from one inside
+  /// its debounce.
   func testPendingTellsAThrottledRefreshFromADebouncedOne() throws {
     var clock = Clock()
     var state = scheduler()

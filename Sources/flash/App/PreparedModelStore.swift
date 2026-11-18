@@ -86,7 +86,7 @@ struct PreparedModelMissContext: Equatable {
   /// How long the app had been without a model; nil when it had one, or
   /// never had one to lose.
   var noModelMs: Int?
-  /// The app's interval between speculative walks (`modelIntervalMs`).
+  /// The app's maintenance interval (`modelIntervalMs`).
   var intervalMs: Int
   var pending: Pending
   /// How far away the pending wake was; nil when nothing was timed.

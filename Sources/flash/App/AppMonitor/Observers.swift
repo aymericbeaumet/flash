@@ -97,6 +97,7 @@ extension AppMonitor {
     axEventStormCounts.removeValue(forKey: pid)
     healthyTargetCounts.removeValue(forKey: pid)
     modelIntervalsMs.removeValue(forKey: pid)
+    modelWalkCostsMs.removeValue(forKey: pid)
     backgroundWalkGate.forget(pid: pid)
     cancelRefreshWork(for: pid)
   }
@@ -112,7 +113,11 @@ extension AppMonitor {
     let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid, because: .invalidated, cause: notification)
-    if Self.notificationShouldSchedulePreparedModelRefresh(notification), !eventStorming {
+    if eventStorming {
+      // A storming app is walked on demand until a quiet window ends it.
+    } else if Self.notificationIsChurn(notification) {
+      scheduleModelRefresh(for: pid, reason: .axChurn(notification))
+    } else {
       scheduleModelRefresh(for: pid, reason: .axEvent(notification))
       uiDidChange?(pid)
     }

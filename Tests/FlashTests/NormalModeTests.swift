@@ -709,13 +709,27 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testBackgroundModelRefreshThrottleAppliesOnlyToNoisyRefreshes() {
-    XCTAssertTrue(ModelRefreshReason.axEvent("AXValueChanged").isThrottled)
+    XCTAssertTrue(ModelRefreshReason.axEvent("AXLayoutChanged").isThrottled)
     XCTAssertTrue(ModelRefreshReason.queued.isThrottled)
     XCTAssertFalse(ModelRefreshReason.maintenance.isThrottled)
     XCTAssertTrue(ModelRefreshReason.maintenance.isSpeculative)
     XCTAssertFalse(ModelRefreshReason.focus.isThrottled)
     XCTAssertFalse(ModelRefreshReason.userAction("normal_scroll").isSpeculative)
-    XCTAssertEqual(ModelRefreshReason.axEvent("AXValueChanged").logValue, "ax:AXValueChanged")
+    XCTAssertEqual(ModelRefreshReason.axEvent("AXLayoutChanged").logValue, "ax:AXLayoutChanged")
+    // Churn is throttled and speculative like any event, named apart in the
+    // log, and never outranks a walk something else asked for.
+    XCTAssertTrue(ModelRefreshReason.axChurn("AXValueChanged").isThrottled)
+    XCTAssertTrue(ModelRefreshReason.axChurn("AXValueChanged").isSpeculative)
+    XCTAssertEqual(
+      ModelRefreshReason.axChurn("AXValueChanged").logValue, "ax_quiet:AXValueChanged")
+    XCTAssertLessThan(
+      ModelRefreshReason.axChurn("AXValueChanged").priority,
+      ModelRefreshReason.axEvent("AXLayoutChanged").priority)
+    XCTAssertEqual(
+      ModelRefreshReason.queued.priority, ModelRefreshReason.axEvent("AXLayoutChanged").priority)
+    XCTAssertLessThan(
+      ModelRefreshReason.queued.priority, ModelRefreshReason.maintenance.priority)
+    XCTAssertLessThan(ModelRefreshReason.maintenance.priority, ModelRefreshReason.focus.priority)
     // The walk a readiness ladder ends in is owed, not speculative: storms and
     // slow walks must not suppress it, and noise must not demote it.
     XCTAssertFalse(ModelRefreshReason.readiness.isThrottled)
@@ -730,7 +744,9 @@ final class NormalModeTests: XCTestCase {
     let pid = pid_t(44)
     _ = monitor.modelScheduler.scheduleReadiness(
       pid: pid, step: 0, then: .focus, deadline: DispatchTime.now().uptimeNanoseconds)
-    for reason: ModelRefreshReason in [.axEvent("AXLayoutChanged"), .queued, .maintenance] {
+    for reason: ModelRefreshReason in [
+      .axEvent("AXLayoutChanged"), .axChurn("AXValueChanged"), .queued, .maintenance,
+    ] {
       monitor.scheduleModelRefresh(for: pid, reason: reason)
       XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid), reason.logValue)
     }
@@ -790,6 +806,10 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.scheduleModelRefresh(for: pid, reason: .axEvent("AXUIElementDestroyed"))
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
+    monitor.onAXEvent(
+      pid: pid, notification: kAXValueChangedNotification as String,
+      observedElementIsFocusedWindow: false, observedWindow: nil)
+    XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid), "churn waits the storm out too")
     monitor.scheduleModelRefresh(for: pid, reason: .maintenance)
     XCTAssertFalse(monitor.modelScheduler.hasRefresh(pid: pid))
 
@@ -893,8 +913,9 @@ final class NormalModeTests: XCTestCase {
 
   /// A 60 ms focus walk keeps the maintenance wake at the 1.5 s floor. A
   /// 200 ms one backs off by doubling the app's interval, not by cancelling
-  /// maintenance: the next wake is armed at the longer interval, and the
-  /// app's event-driven refreshes wait that interval out too.
+  /// maintenance: the next wake is armed at the longer interval. The app's
+  /// event-driven refreshes are spaced by what the walk cost, not by that
+  /// interval.
   func testASlowAutomaticWalkBacksOffByDoublingNotByCancellingMaintenance() {
     let registry = SourceRegistry(descriptors: [], runningApplications: [])
     let scheduler = PollScheduler()
@@ -934,13 +955,23 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(monitor.modelScheduler.hasRefresh(pid: pid))
     monitor.modelScheduler.cancelRefresh(pid: pid)
 
-    // The interval, not only the fixed 2.5 s minimum, spaces event refreshes.
-    let now = DispatchTime.now().uptimeNanoseconds
-    monitor.modelScheduler.noteRefreshStarted(pid: pid, now: now)
-    monitor.scheduleModelRefresh(for: pid, reason: .axEvent("AXLayoutChanged"))
-    let deadline = monitor.modelScheduler.refreshDeadline(pid: pid)
-    XCTAssertNotNil(deadline)
-    XCTAssertGreaterThanOrEqual(deadline ?? 0, now + 3_000_000_000)
+    // A 200 ms walk is spaced by the fixed 2.5 s minimum, a 400 ms one by
+    // ten times its cost.
+    func eventDeadline() -> (now: UInt64, deadline: UInt64?) {
+      let now = DispatchTime.now().uptimeNanoseconds
+      monitor.modelScheduler.noteRefreshStarted(pid: pid, now: now)
+      monitor.scheduleModelRefresh(for: pid, reason: .axEvent("AXLayoutChanged"))
+      defer { monitor.modelScheduler.cancelRefresh(pid: pid) }
+      return (now, monitor.modelScheduler.refreshDeadline(pid: pid))
+    }
+    XCTAssertEqual(monitor.eventRefreshSpacingMs(pid: pid), 2500)
+    let cheap = eventDeadline()
+    XCTAssertEqual(cheap.deadline, cheap.now + 2_500_000_000)
+    XCTAssertEqual(walked(400), AppMonitor.modelFreshnessMs * 4)
+    XCTAssertEqual(monitor.eventRefreshSpacingMs(pid: pid), 4000)
+    let costly = eventDeadline()
+    XCTAssertEqual(costly.deadline, costly.now + 4_000_000_000)
+    XCTAssertEqual(walked(200), AppMonitor.modelFreshnessMs * 2)
 
     // A cheap walk lets the interval shrink back to the floor; a degenerate
     // one is fast because there was nothing to read, so it never does.
@@ -971,21 +1002,45 @@ final class NormalModeTests: XCTestCase {
       AppMonitor.observedNotifications)
   }
 
-  func testPreparedModelRefreshSkipsValueAndTitleChurn() {
-    XCTAssertFalse(
-      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
-        kAXValueChangedNotification as String))
-    XCTAssertFalse(
-      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
-        kAXTitleChangedNotification as String)
-    )
-    XCTAssertTrue(
-      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
-        kAXLayoutChangedNotification as String)
-    )
-    XCTAssertTrue(
-      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
-        kAXFocusedWindowChangedNotification as String))
+  func testValueAndTitleChangesAreChurn() {
+    XCTAssertTrue(AppMonitor.notificationIsChurn(kAXValueChangedNotification as String))
+    XCTAssertTrue(AppMonitor.notificationIsChurn(kAXTitleChangedNotification as String))
+    XCTAssertFalse(AppMonitor.notificationIsChurn(kAXLayoutChangedNotification as String))
+    XCTAssertFalse(AppMonitor.notificationIsChurn(kAXFocusedWindowChangedNotification as String))
+  }
+
+  /// An app's event-driven walks are spaced so they stay under a tenth of a
+  /// core: by the fixed minimum for a cheap walk, never past the ceiling.
+  func testEventRefreshSpacingFollowsTheWalksCost() {
+    XCTAssertEqual(AppMonitor.eventRefreshSpacingMs(walkMs: nil), 2500)
+    XCTAssertEqual(AppMonitor.eventRefreshSpacingMs(walkMs: 70), 2500)
+    XCTAssertEqual(AppMonitor.eventRefreshSpacingMs(walkMs: 250), 2500)
+    XCTAssertEqual(AppMonitor.eventRefreshSpacingMs(walkMs: 286.4), 2864)
+    XCTAssertEqual(AppMonitor.eventRefreshSpacingMs(walkMs: 1200), 12_000)
+    XCTAssertEqual(AppMonitor.eventRefreshSpacingMs(walkMs: 9000), 30_000)
+
+    // A static app's grown maintenance interval does not hold back the walk
+    // after a real change; a degenerate walk never makes the app look cheap.
+    let monitor = AppMonitor(
+      registry: SourceRegistry(descriptors: [], runningApplications: []), config: .default)
+    let pid = pid_t(47)
+    defer { monitor.cancelAllRefreshWork() }
+    func walked(_ elapsedMs: Double, unchanged: Bool = false, degenerate: Bool = false) {
+      monitor.recordModelWalk(
+        pid: pid, bundleIdentifier: "com.example.app", reason: .maintenance,
+        elapsedMs: elapsedMs, unchanged: unchanged, degenerate: degenerate)
+    }
+    for _ in 0..<4 { walked(60, unchanged: true) }
+    XCTAssertEqual(monitor.modelIntervalMs(pid: pid), 24_000)
+    XCTAssertEqual(monitor.eventRefreshSpacingMs(pid: pid), 2500)
+    walked(600)
+    XCTAssertEqual(monitor.eventRefreshSpacingMs(pid: pid), 6000)
+    walked(3, degenerate: true)
+    XCTAssertEqual(monitor.eventRefreshSpacingMs(pid: pid), 6000)
+    walked(900, degenerate: true)
+    XCTAssertEqual(monitor.eventRefreshSpacingMs(pid: pid), 9000)
+    monitor.updateConfig(.default)
+    XCTAssertEqual(monitor.eventRefreshSpacingMs(pid: pid), 2500, "forgotten with the interval")
   }
 
   func testPointerScrollPassesThroughInIdleNormalMode() {

@@ -81,6 +81,7 @@ extension AppMonitor {
     releaseRefreshWakes(pid: nil)
     for waiter in pendingModelWaiters.takeAll() { waiter(nil) }
     modelIntervalsMs.removeAll()
+    modelWalkCostsMs.removeAll()
     readinessRewalkBudget.removeAll()
   }
 
@@ -88,7 +89,7 @@ extension AppMonitor {
   /// pause while the app storms or has a readiness ladder pending: that
   /// ladder owes the app a walk once its tree is ready, and a speculative
   /// walk before then reads the tree it is waiting for. A slow app is not
-  /// paused: its interval spaces its walks instead (`modelIntervalMs`).
+  /// paused: its cost spaces its walks instead (`eventRefreshSpacingMs`).
   private func allowsAutomaticRefresh(pid: pid_t, reason: ModelRefreshReason) -> Bool {
     guard !backgroundWalkGate.isGated(pid) else { return false }
     guard reason.isSpeculative else { return true }
@@ -100,14 +101,19 @@ extension AppMonitor {
     modelIntervalsMs[pid] ?? Self.modelFreshnessMs
   }
 
+  /// How far apart the app's event-driven walks run: what its last walk cost.
+  func eventRefreshSpacingMs(pid: pid_t) -> Int {
+    Self.eventRefreshSpacingMs(walkMs: modelWalkCostsMs[pid])
+  }
+
   /// New events extend one debounce wake per burst. Higher-priority requests
   /// can move it earlier; an obsolete callback never owns the replacement.
-  /// Throttled reasons keep the app's interval between walks.
+  /// Throttled reasons keep the app's cost spacing between walks.
   func scheduleModelRefresh(for pid: pid_t, reason: ModelRefreshReason) {
     guard allowsAutomaticRefresh(pid: pid, reason: reason),
       let arm = modelScheduler.scheduleRefresh(
         pid: pid, reason: reason, now: DispatchTime.now().uptimeNanoseconds,
-        minimumIntervalNs: UInt64(modelIntervalMs(pid: pid)) * 1_000_000)
+        minimumIntervalNs: UInt64(eventRefreshSpacingMs(pid: pid)) * 1_000_000)
     else { return }
     armRefreshTimer(arm)
   }
@@ -212,8 +218,10 @@ extension AppMonitor {
 
   /// Every completed walk sets the app's interval from its cost
   /// (`nextModelIntervalMs`) and returns it: the freshness of the model it
-  /// built and the spacing of the app's next speculative walks. Logged when
-  /// it changes, so a backoff and its recovery are visible.
+  /// built and the spacing of the app's maintenance walks. Logged when it
+  /// changes, so a backoff and its recovery are visible. The cost itself
+  /// spaces the app's event-driven walks; a degenerate walk, fast because
+  /// there was nothing to read, never lowers it.
   @discardableResult
   func recordModelWalk(
     pid: pid_t, bundleIdentifier: String, reason: ModelRefreshReason, elapsedMs: Double,
@@ -223,6 +231,7 @@ extension AppMonitor {
     let next = Self.nextModelIntervalMs(
       current: current, elapsedMs: elapsedMs, unchanged: unchanged, degenerate: degenerate)
     modelIntervalsMs[pid] = next
+    modelWalkCostsMs[pid] = degenerate ? max(modelWalkCostsMs[pid] ?? 0, elapsedMs) : elapsedMs
     if next != current {
       FlashLog.debug(
         "[ax] model_interval",

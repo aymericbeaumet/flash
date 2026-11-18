@@ -15,6 +15,10 @@ enum ModelRefreshReason: Equatable {
   case queued
   /// An Accessibility notification from the app, by name.
   case axEvent(String)
+  /// Value or title churn, by notification name: typing, a ticking label, a
+  /// document title. It says nothing about layout, so it walks once the app
+  /// has gone quiet instead of after every change.
+  case axChurn(String)
   /// A Flash action that changed the app (`normal_scroll`, …).
   case userAction(String)
   /// The walk a readiness ladder ends in, after a degenerate automatic walk
@@ -25,18 +29,26 @@ enum ModelRefreshReason: Equatable {
   /// AX churn and queued follow-ups honor the minimum interval between walks.
   var isThrottled: Bool {
     switch self {
-    case .axEvent, .queued: return true
+    case .axEvent, .axChurn, .queued: return true
     default: return false
     }
+  }
+
+  /// Churn waits for a quiet window instead of the burst debounce.
+  var isChurn: Bool {
+    if case .axChurn = self { return true }
+    return false
   }
 
   /// Rebuilds nobody is waiting on, paused while an app storms or walks slow.
   var isSpeculative: Bool { isThrottled || self == .maintenance }
 
-  /// A pending refresh is never demoted to a lower-priority reason.
+  /// A pending refresh is never demoted to a lower-priority reason, and
+  /// churn never postpones a walk something else already asked for.
   var priority: Int {
-    if isThrottled { return 0 }
-    return self == .maintenance ? 1 : 2
+    if isChurn { return 0 }
+    if isThrottled { return 1 }
+    return self == .maintenance ? 2 : 3
   }
 
   var logValue: String {
@@ -50,6 +62,7 @@ enum ModelRefreshReason: Equatable {
     case .maintenance: return "maintenance"
     case .queued: return "queued"
     case .axEvent(let notification): return "ax:\(notification)"
+    case .axChurn(let notification): return "ax_quiet:\(notification)"
     case .userAction(let action): return action
     case .readiness: return "readiness"
     }
@@ -102,6 +115,7 @@ struct PreparedModelScheduler {
   }
 
   private let debounceNs: UInt64
+  private let churnQuietNs: UInt64
   private let minimumIntervalNs: UInt64
   private let defaultFreshnessNs: UInt64
   private let maintenanceLeadNs: UInt64
@@ -111,8 +125,12 @@ struct PreparedModelScheduler {
   /// Apps whose maintenance fired and was dropped because the user was idle.
   private var suspendedMaintenance: Set<pid_t> = []
 
-  init(debounceMs: Int, minimumIntervalMs: Int, freshnessMs: Int, maintenanceLeadMs: Int) {
+  init(
+    debounceMs: Int, churnQuietMs: Int, minimumIntervalMs: Int, freshnessMs: Int,
+    maintenanceLeadMs: Int
+  ) {
     debounceNs = UInt64(debounceMs) * 1_000_000
+    churnQuietNs = UInt64(churnQuietMs) * 1_000_000
     minimumIntervalNs = UInt64(minimumIntervalMs) * 1_000_000
     defaultFreshnessNs = UInt64(freshnessMs) * 1_000_000
     maintenanceLeadNs = UInt64(maintenanceLeadMs) * 1_000_000
@@ -153,13 +171,15 @@ struct PreparedModelScheduler {
   }
 
   /// `minimumIntervalNs` is the app's own spacing for throttled reasons —
-  /// its maintenance interval, grown by slow walks — and never shortens the
-  /// fixed minimum.
+  /// what its walks cost (`AppMonitor.eventRefreshSpacingMs`) — and never
+  /// shortens the fixed minimum. Churn settles for its quiet window, every
+  /// other reason for the burst debounce; later churn extends a pending
+  /// churn wake and leaves any other pending refresh alone.
   mutating func scheduleRefresh(
     pid: pid_t, reason: ModelRefreshReason, now: UInt64, minimumIntervalNs: UInt64? = nil
   ) -> Arm? {
     let key = Key(pid: pid, kind: .refresh)
-    let debounced = now + debounceNs
+    let debounced = now + (reason.isChurn ? churnQuietNs : debounceNs)
     var deadline = debounced
     if reason.isThrottled, let last = lastStartedAt[pid] {
       deadline = max(deadline, last + max(minimumIntervalNs ?? 0, self.minimumIntervalNs))

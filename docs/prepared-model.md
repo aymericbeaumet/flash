@@ -17,10 +17,28 @@ In-flight walks also hold generation tickets. Removing an app or stopping the
 monitor revokes them before teardown; a revoked completion cannot publish,
 consume a replacement walk's waiter or re-arm a refresh, even for the same PID.
 
-AX and queued refreshes debounce for 80 ms and observe a minimum interval
-between automatic walks: 2.5 seconds, or the app's maintenance interval when
-that is longer. Maintenance has a separate identity and bypasses that minimum
-interval: it wakes 250 ms before the model's freshness ceiling, then uses the
+AX and queued refreshes debounce for 80 ms and observe a minimum spacing
+between automatic walks: 2.5 seconds, or ten times what the app's last
+complete walk cost when that is longer, 30 s at most
+(`AppMonitor.eventRefreshSpacingMs`). The spacing is cost only: a walk
+repeated at it stays under a tenth of a core. It is not the maintenance
+interval below, which also grows when a static app reproduces its model: that
+growth says the model stays valid for long, not that the walk after a real
+change may wait. A degenerate walk, fast because there was nothing to read,
+never lowers the cost.
+
+Value and title changes (`AXValueChanged`, `AXTitleChanged`) are *churn*: one
+per keystroke or per tick, rarely moving a target. They discard the model like
+any event, since a value can resize what holds it, and arm one `ax_quiet`
+refresh for when the app has been quiet for 400 ms
+(`AppMonitor.modelChurnQuietMs`): every further change pushes it back, so
+typing is walked once it pauses, never between two keys, and the same spacing
+holds it back. Churn has the lowest priority: it never postpones or demotes a
+refresh something else asked for, and a layout change replaces a pending
+quiet wake with its own 80-ms debounce. An app that ticks faster than the
+window never goes quiet and is walked on demand, as before.
+
+Maintenance has a separate identity and bypasses that spacing: it wakes 250 ms before the model's freshness ceiling, then uses the
 same 80-ms debounce. The ceiling is the app's *maintenance interval*
 (`AppMonitor.modelIntervalMs`), one per app, carried by each model it builds
 as `freshnessMs`. It starts at 1.5 s and doubles (up to 30 s) every time a
@@ -70,10 +88,10 @@ re-observation and teardown run on a serial queue of their own, so a walk, a
 readiness probe or a commit on the AX queue never waits behind an app slow to
 answer a registration; a multi-app screen-scope walk steps one app per turn
 and asks main between apps whether its activation still stands. AX storms
-suppress AX, queued, and maintenance warming until a quiet window. A slow
-walk suppresses nothing: it lengthens the app's maintenance interval, which
-spaces its maintenance and event-driven walks alike, and maintenance keeps
-re-arming at that interval instead of letting the model expire. Focus and
+suppress AX, churn, queued, and maintenance warming until a quiet window. A slow
+walk suppresses nothing: it lengthens the app's maintenance interval and the
+spacing of its event-driven walks, and maintenance keeps re-arming at that
+interval instead of letting the model expire. Focus and
 configuration requests can reassess a storming app; explicit activation
 remains available and complete. Suppression, invalidation, termination, and
 shutdown revoke the applicable tickets. No timer is a second source of model
