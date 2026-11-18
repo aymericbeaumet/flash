@@ -91,6 +91,7 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(quotas["fetch_response_bytes"] as? Int, PluginProtocol.maxFetchResponseBytes)
     XCTAssertEqual(quotas["fetch_timeout_ms"] as? Int, PluginProtocol.fetchTimeoutMs)
     XCTAssertEqual(quotas["text_grid_dimension"] as? Int, PluginProtocol.maxTextGridDimension)
+    XCTAssertEqual(quotas["inline_preview_bytes"] as? Int, PluginProtocol.maxInlinePreviewBytes)
   }
 
   /// `host.applescript` runs under the contract's bounds: the host clamps a

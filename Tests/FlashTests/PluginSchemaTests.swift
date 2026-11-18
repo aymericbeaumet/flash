@@ -171,6 +171,14 @@ final class PluginSchemaTests: XCTestCase {
         dimension)
       XCTAssertEqual(bound["maximum"] as? Int, PluginProtocol.maxTextGridDimension, dimension)
     }
+    // A cap on bytes inside a marker is beyond a schema; its comment still
+    // quotes the contract's number.
+    let markup = node(
+      "status.schema.json", "properties", "params", "properties", "segments",
+      "additionalProperties", "anyOf", 0)
+    let quotas = try XCTUnwrap(try Self.protocolSpec()["quotas"] as? [String: Any])
+    let cap = try XCTUnwrap(quotas["inline_preview_bytes"] as? Int)
+    XCTAssertTrue((markup["$comment"] as? String ?? "").contains("at most \(cap) "))
   }
 
   // MARK: - Every line against its schema

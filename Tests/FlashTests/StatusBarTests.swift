@@ -284,13 +284,20 @@ final class StatusBarTests: XCTestCase {
       from: "#[popup=inline:%ZZ]visible#[nopopup]",
       font: font,
       popupTexts: [:])
-    let oversizedBody = String(repeating: "a", count: 16_385)
+    // The cap is the contract's (`quotas.inline_preview_bytes`), counted on
+    // the encoded body: a body of exactly that many bytes still previews.
+    let cap = PluginProtocol.maxInlinePreviewBytes
+    let largest = FlashStatusBarRenderer.popupRuns(
+      from: "#[popup=inline:\(String(repeating: "a", count: cap))]visible#[nopopup]",
+      font: font,
+      popupTexts: [:])
     let oversized = FlashStatusBarRenderer.popupRuns(
-      from: "#[popup=inline:\(oversizedBody)]visible#[nopopup]",
+      from: "#[popup=inline:\(String(repeating: "a", count: cap + 1))]visible#[nopopup]",
       font: font,
       popupTexts: [:])
 
     XCTAssertTrue(malformed.runs.isEmpty)
+    XCTAssertEqual(largest.runs.map(\.content.count), [cap])
     XCTAssertTrue(oversized.runs.isEmpty)
     XCTAssertEqual(
       FlashStatusBarRenderer.attributedStatusString(

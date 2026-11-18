@@ -15,7 +15,7 @@ use std::ops::{Add, AddAssign};
 use std::time::Duration;
 
 /// The host rejects an inline preview whose percent-encoded body exceeds this
-/// many bytes (`StatusFormatDocument`).
+/// many bytes (`quotas.inline_preview_bytes` in `protocol.json`).
 pub const MAX_INLINE_PREVIEW_ENCODED_BYTES: usize = 16_384;
 
 // ---------------------------------------------------------------------------
@@ -1130,6 +1130,16 @@ free form"
                 .render()
                 .unwrap(),
             "NET"
+        );
+    }
+
+    #[test]
+    fn the_inline_preview_cap_matches_the_shared_protocol_contract() {
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["quotas"]["inline_preview_bytes"],
+            MAX_INLINE_PREVIEW_ENCODED_BYTES
         );
     }
 

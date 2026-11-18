@@ -378,7 +378,7 @@ struct StatusFormatStyleState {
         let value = String(raw.dropFirst(6))
         if value.hasPrefix("inline:") {
           let encoded = String(value.dropFirst(7))
-          guard !encoded.isEmpty, encoded.utf8.count <= 16_384,
+          guard !encoded.isEmpty, encoded.utf8.count <= PluginProtocol.maxInlinePreviewBytes,
             let content = encoded.removingPercentEncoding, !content.isEmpty
           else {
             FlashLog.debug(

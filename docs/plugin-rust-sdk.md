@@ -224,7 +224,8 @@ Handed to every handler; cheap to clone. Key surface:
   A preview travels inside the segment string as a percent-encoded
   `#[popup=inline:…]` marker, so the visible text and its hover document
   publish atomically. The host rejects an encoded body above 16384 bytes
-  (`MAX_INLINE_PREVIEW_ENCODED_BYTES`); `StatusValue::render` reports that
+  (`MAX_INLINE_PREVIEW_ENCODED_BYTES`, the contract's
+  `quotas.inline_preview_bytes`); `StatusValue::render` reports that
   as `PreviewTooLarge`, and `status` then logs a content-free warning
   (segment name and encoded size only) and publishes the visible text alone
   rather than losing the segment.

@@ -50,6 +50,9 @@ enum PluginProtocol {
   static let fetchTimeoutMs = 8_000
   /// Columns and rows of a `text_grid` reply are each at most this.
   static let maxTextGridDimension = 10_000
+  /// Percent-encoded bytes of one `#[popup=inline:…]` body in a status
+  /// segment; a larger one leaves the markup without its preview.
+  static let maxInlinePreviewBytes = 16 * 1024
 
   // MARK: - host.applescript bounds (`applescript` in protocol.json)
 

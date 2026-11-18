@@ -564,8 +564,12 @@ surface that shows it again never reads stale figures.
   marks that line as carousel content for the transition; a scroll over it
   steps the carousel by hand, with nothing for the plugin to handle; blank
   lines are dropped, no lines clears, and a malformed object, one with any
-  other key included, is rejected whole with a content-free warning. Undeclared names are ignored. Segments are live
-  state: cleared on any teardown (unlike catalogs).
+  other key included, is rejected whole with a content-free warning.
+  Undeclared names are ignored. Segments are live state: cleared on any
+  teardown (unlike catalogs). Markup may carry its own hover preview as
+  `#[popup=inline:<percent-encoded body>]`; the encoded body is at most
+  16,384 bytes (`quotas.inline_preview_bytes`), and a larger or undecodable
+  one leaves the visible markup without a preview.
 - `poll` — `{"registrations": {"<name>": {"every": <seconds>, "priority": <p>}
   | {"after": <seconds>, "priority": <p>}}}`, the plugin's complete set of
   cadences (`every`) and one-shot deadlines (`after`, measured from receipt)

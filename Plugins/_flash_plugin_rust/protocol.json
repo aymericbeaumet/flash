@@ -286,7 +286,7 @@
     ]
   },
   "quotas": {
-    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated. catalog_rows and catalog_bytes bound the plugin's whole catalog after a per-source merge. catalog_bytes counts the `rows` array as written on the wire \u2014 each row object's span in the publish frame, one separator byte per row and the two brackets \u2014 measured by the host from the frame it received, never by re-encoding: the compact encoding is the floor, and a plugin pays for whitespace or escaping it adds inside a row (the Rust SDK writes compact rows, so its count is the compact encoding exactly). answers_bytes counts the compact encoding of `answers`.",
+    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated. catalog_rows and catalog_bytes bound the plugin's whole catalog after a per-source merge. catalog_bytes counts the `rows` array as written on the wire \u2014 each row object's span in the publish frame, one separator byte per row and the two brackets \u2014 measured by the host from the frame it received, never by re-encoding: the compact encoding is the floor, and a plugin pays for whitespace or escaping it adds inside a row (the Rust SDK writes compact rows, so its count is the compact encoding exactly). answers_bytes counts the compact encoding of `answers`. inline_preview_bytes is the one bound that drops a part, not the payload: it counts the percent-encoded body of a `#[popup=inline:\u2026]` marker in a status segment as written, and a larger body leaves the segment's visible markup without its preview.",
     "frame_bytes": 10485760,
     "catalog_rows": 10000,
     "catalog_bytes": 4194304,
@@ -301,7 +301,8 @@
     "answer_field_bytes": 16384,
     "fetch_response_bytes": 1048576,
     "fetch_timeout_ms": 8000,
-    "text_grid_dimension": 10000
+    "text_grid_dimension": 10000,
+    "inline_preview_bytes": 16384
   },
   "errors": {
     "$comment": "Canonical EXACT protocol-level error strings (spec-pinned; domain failures stay free-form and content-free). The response law: every result carries boolean `ok`; ok:false carries a non-empty `error` \u2014 except perform's {ok:false, unhandled:true} (not mine; host MAY fall back). A perform {ok:false, error} means mine-but-broke: the host MUST NOT fall back.",
