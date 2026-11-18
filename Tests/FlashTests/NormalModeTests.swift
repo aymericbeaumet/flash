@@ -1310,19 +1310,19 @@ final class NormalModeTests: XCTestCase {
   func testAnActivationWithACachedFramePaintsItAndDefersTheReadToTheSettlePass() {
     let delegate = borderDelegate()
     let frame = CGRect(x: 10, y: 20, width: 300, height: 200)
-    delegate.activeWindowBorderFrameCache[4242] = frame
+    delegate.activeWindowBorder.frames[4242] = frame
     delegate.paintActiveWindowBorder(pid: 4242, reason: "app_activated", read: .onlyWithoutCache)
     XCTAssertEqual(delegate.overlay.activeWindowBorderFrame, frame)
-    XCTAssertNil(delegate.activeWindowBorderPendingRead, "the 80 ms pass is the first read")
+    XCTAssertNil(delegate.activeWindowBorder.pendingRead, "the 80 ms pass is the first read")
 
     delegate.paintActiveWindowBorder(pid: 4343, reason: "app_activated", read: .onlyWithoutCache)
-    XCTAssertEqual(delegate.activeWindowBorderPendingRead?.pid, 4343, "nothing cached: read now")
+    XCTAssertEqual(delegate.activeWindowBorder.pendingRead?.pid, 4343, "nothing cached: read now")
 
-    delegate.activeWindowBorderFrameCache[4242] = frame
+    delegate.activeWindowBorder.frames[4242] = frame
     delegate.paintActiveWindowBorder(pid: 4242, reason: "AXWindowCreated", read: .nextTurn)
     XCTAssertEqual(
-      delegate.activeWindowBorderPendingRead?.pid, 4242, "an event's cache is only a guess")
-    delegate.activeWindowBorderPendingRead = nil
+      delegate.activeWindowBorder.pendingRead?.pid, 4242, "an event's cache is only a guess")
+    delegate.activeWindowBorder.pendingRead = nil
     delegate.overlay.setActiveWindowBorder(around: nil)
   }
 
@@ -1335,17 +1335,17 @@ final class NormalModeTests: XCTestCase {
     delegate.activeWindowBorderFrameReader = { _ in
       CGRect(x: 10.5, y: 20, width: 300, height: 199.5)
     }
-    let series = delegate.activeWindowBorderReconciliationGeneration
-    delegate.activeWindowBorderPendingRead = ActiveWindowBorderRead(
+    let series = delegate.activeWindowBorder.settleSeries
+    delegate.activeWindowBorder.pendingRead = ActiveWindowBorderRead(
       pid: 4242, reason: "app_activated_settled_80ms",
-      generation: delegate.activeWindowBorderUpdateGeneration, reconciles: true,
+      generation: delegate.activeWindowBorder.updateGeneration, reconciles: true,
       endsSettleSeries: series)
     delegate.performActiveWindowBorderRead()
     XCTAssertNotEqual(
-      delegate.activeWindowBorderReconciliationGeneration, series, "later passes are stale")
+      delegate.activeWindowBorder.settleSeries, series, "later passes are stale")
     XCTAssertEqual(delegate.overlay.activeWindowBorderFrame, frame, "within a point: no redraw")
     XCTAssertEqual(
-      delegate.activeWindowBorderFrameCache[4242]?.minX, 10.5, "the read refreshes the cache")
+      delegate.activeWindowBorder.frames[4242]?.minX, 10.5, "the read refreshes the cache")
     delegate.overlay.setActiveWindowBorder(around: nil)
   }
 
@@ -1358,21 +1358,21 @@ final class NormalModeTests: XCTestCase {
     let moved = CGRect(x: 40, y: 20, width: 300, height: 200)
     delegate.overlay.setActiveWindowBorder(around: drawn)
     delegate.activeWindowBorderFrameReader = { _ in moved }
-    let series = delegate.activeWindowBorderReconciliationGeneration
-    delegate.activeWindowBorderPendingRead = ActiveWindowBorderRead(
+    let series = delegate.activeWindowBorder.settleSeries
+    delegate.activeWindowBorder.pendingRead = ActiveWindowBorderRead(
       pid: 4242, reason: "app_activated_settled_80ms",
-      generation: delegate.activeWindowBorderUpdateGeneration, reconciles: true,
+      generation: delegate.activeWindowBorder.updateGeneration, reconciles: true,
       endsSettleSeries: series)
     delegate.performActiveWindowBorderRead()
-    XCTAssertEqual(delegate.activeWindowBorderReconciliationGeneration, series)
+    XCTAssertEqual(delegate.activeWindowBorder.settleSeries, series)
     XCTAssertEqual(delegate.overlay.activeWindowBorderFrame, moved)
 
-    delegate.activeWindowBorderPendingRead = ActiveWindowBorderRead(
+    delegate.activeWindowBorder.pendingRead = ActiveWindowBorderRead(
       pid: 4242, reason: "AXWindowCreated_settled_45ms",
-      generation: delegate.activeWindowBorderUpdateGeneration, reconciles: true,
+      generation: delegate.activeWindowBorder.updateGeneration, reconciles: true,
       endsSettleSeries: nil)
     delegate.performActiveWindowBorderRead()
-    XCTAssertEqual(delegate.activeWindowBorderReconciliationGeneration, series)
+    XCTAssertEqual(delegate.activeWindowBorder.settleSeries, series)
     delegate.overlay.setActiveWindowBorder(around: nil)
   }
 

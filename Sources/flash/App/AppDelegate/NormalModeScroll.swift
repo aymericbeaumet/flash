@@ -44,7 +44,7 @@ extension AppDelegate {
   func lineScrollLocation() -> CGPoint? {
     let pid = lastFocusedApplicationPID ?? normalModeTargetPID
     let window =
-      overlay?.activeWindowBorderFrame ?? pid.flatMap { activeWindowBorderFrameCache[$0] }
+      overlay?.activeWindowBorderFrame ?? pid.flatMap { activeWindowBorder.frames[$0] }
     let area = pid.flatMap { focusRegionTracker.cachedReading(for: $0)?.scrollFrame }
     return NormalModeDispatcher.lineScrollPoint(
       pointer: NSEvent.mouseLocation, window: window, scrollArea: area)

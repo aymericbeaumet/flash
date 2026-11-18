@@ -480,29 +480,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// See `noteSecureInput`.
   var secureInputObserved = false
   let secureInputFixer = SecureInputFixer()
-  var activeWindowBorderReconciliationGeneration: UInt64 = 0
-  var activeWindowBorderUpdateGeneration: UInt64 = 0
-  /// The authoritative front-window read queued for the next main turn.
-  var activeWindowBorderPendingRead: ActiveWindowBorderRead?
+  /// What the active-window stroke knows between events; see
+  /// `ActiveWindowBorderState`.
+  var activeWindowBorder = ActiveWindowBorderState()
   /// The window-list read behind `performActiveWindowBorderRead`, on main
   /// (see `scheduleActiveWindowBorderRead`); tests substitute a frame.
   var activeWindowBorderFrameReader: (pid_t) -> CGRect? = {
     AppMonitor.topApplicationWindowFrame(for: $0, primaryH: ScreenSpace.primaryHeight)
   }
-  /// Last frame observed for each app's front window, fed by the AX geometry
-  /// notifications Flash already subscribes to, so an app switch paints the
-  /// right rectangle on the activation itself and the settle pass 80 ms
-  /// later, after the activation animation, corrects it.
-  var activeWindowBorderFrameCache: [pid_t: CGRect] = [:]
-  /// Bumped by every event that can move, raise or replace an app's front
-  /// window: a border-relevant AX notification, an activation, a quit, a
-  /// Space or display change.
-  var activeWindowBorderEventEpoch: UInt64 = 0
-  /// The epoch each app's cached frame was read at: while no event has
-  /// followed, the cache is the window list's answer and a mode change
-  /// does not ask again.
-  var activeWindowBorderReadEpochs: [pid_t: UInt64] = [:]
-  var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
   /// The latest `input focus` request; an older one still queued is dropped.
   var focusTextInputRequest: UInt64 = 0
   var activationLifecycle = ActivationLifecycle<HintActivationRequest>() {
@@ -634,7 +619,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.clickChainUIDidChange(pid: pid)
     }
     monitor.activeWindowMayHaveChanged = { [weak self] pid, notification, window in
-      self?.activeWindowBorderEventEpoch &+= 1
+      self?.activeWindowBorder.noteWindowEvent()
       self?.activeWindowMayHaveChanged(
         pid: pid, notification: notification, observedWindow: window)
     }
@@ -1266,7 +1251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
-      self.activeWindowBorderEventEpoch &+= 1
+      self.activeWindowBorder.noteWindowEvent()
       // The inspector's `focused_app` follows every activation, Flash's own too.
       self.debugStateDidChange()
       // Ignore Flash itself activating (it shouldn't, but be safe).
@@ -1313,7 +1298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       guard let self else { return }
-      self.activeWindowBorderEventEpoch &+= 1
+      self.activeWindowBorder.noteWindowEvent()
       self.reconcileFrontmostApplication()
       // Entering or leaving native full screen switches Spaces.
       self.refreshNativeFullScreen(pid: self.lastFocusedApplicationPID, reason: "space_changed")
@@ -1366,7 +1351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] note in
       guard let self else { return }
-      self.activeWindowBorderEventEpoch &+= 1
+      self.activeWindowBorder.noteWindowEvent()
       self.registry.scheduleRunningApplicationsRefresh()
       self.windowLayoutManager.refreshNavigationCatalog(
         statusBarReservesSpace: self.statusBarVisible,
@@ -1478,7 +1463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       guard let self else { return }
-      self.activeWindowBorderEventEpoch &+= 1
+      self.activeWindowBorder.noteWindowEvent()
       self.windowLayoutManager.screenParametersDidChange(
         statusBarReservesSpace: self.statusBarVisible,
         statusBarMonitor: self.config.statusBar.monitor,
@@ -1963,7 +1948,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clearHintSessionState()
     releaseHeldMouseButton(reason: "quit")
     ActionDispatcher.waitForPendingMouseEvents()
-    activeWindowBorderReconciliationGeneration &+= 1
+    activeWindowBorder.settleSeries &+= 1
     for token in workspaceTokens {
       NSWorkspace.shared.notificationCenter.removeObserver(token)
     }

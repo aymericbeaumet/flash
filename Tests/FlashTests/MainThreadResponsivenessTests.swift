@@ -25,19 +25,39 @@ final class MainThreadResponsivenessTests: XCTestCase {
   /// A mode change repaints the cached stroke and reads the window list
   /// only when a window event followed the cached read.
   func testAModeChangeReadsTheWindowListOnlyAfterAWindowEvent() {
-    func needsRead(
-      _ timing: ActiveWindowBorderReadTiming, cached: Bool = true, read: UInt64? = 7,
-      event: UInt64 = 7
-    ) -> Bool {
-      AppDelegate.activeWindowBorderNeedsRead(
-        timing, cached: cached, readEpoch: read, eventEpoch: event)
+    var border = ActiveWindowBorderState()
+    let pid: pid_t = 4242
+    XCTAssertTrue(border.needsRead(.unlessFresh, of: pid), "nothing cached")
+    XCTAssertTrue(border.needsRead(.onlyWithoutCache, of: pid))
+    border.frames[pid] = CGRect(x: 10, y: 20, width: 300, height: 200)
+    XCTAssertTrue(border.needsRead(.unlessFresh, of: pid), "the cache came from an AX event")
+    border.noteRead(of: pid)
+    XCTAssertFalse(border.needsRead(.unlessFresh, of: pid))
+    XCTAssertTrue(border.needsRead(.nextTurn, of: pid))
+    border.noteWindowEvent()
+    XCTAssertTrue(border.needsRead(.unlessFresh, of: pid), "an event followed the read")
+    XCTAssertFalse(border.needsRead(.onlyWithoutCache, of: pid))
+    border.forget(pid)
+    border.frames[pid] = .zero
+    XCTAssertTrue(border.needsRead(.unlessFresh, of: pid), "a forgotten app's read is forgotten")
+  }
+
+  /// Reads queued within one turn collapse into the latest, and a read an
+  /// update superseded is dropped.
+  func testTheBordersQueuedReadIsTheLatestAndDropsOnceSuperseded() {
+    var border = ActiveWindowBorderState()
+    func read(_ pid: pid_t) -> ActiveWindowBorderRead {
+      ActiveWindowBorderRead(
+        pid: pid, reason: "test", generation: border.updateGeneration, reconciles: false)
     }
-    XCTAssertFalse(needsRead(.unlessFresh))
-    XCTAssertTrue(needsRead(.unlessFresh, event: 8), "an event followed the read")
-    XCTAssertTrue(needsRead(.unlessFresh, read: nil), "the cache came from an AX event")
-    XCTAssertTrue(needsRead(.unlessFresh, cached: false))
-    XCTAssertTrue(needsRead(.nextTurn))
-    XCTAssertFalse(needsRead(.onlyWithoutCache, event: 8))
-    XCTAssertTrue(needsRead(.onlyWithoutCache, cached: false))
+    XCTAssertTrue(border.queue(read(1)), "the first one schedules the turn")
+    XCTAssertFalse(border.queue(read(2)))
+    XCTAssertEqual(border.takePendingRead()?.pid, 2)
+    XCTAssertNil(border.takePendingRead())
+
+    XCTAssertTrue(border.queue(read(3)))
+    border.updateGeneration &+= 1
+    XCTAssertNil(border.takePendingRead(), "superseded")
+    XCTAssertNil(border.pendingRead, "and not kept")
   }
 }

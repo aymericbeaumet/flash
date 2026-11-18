@@ -174,7 +174,7 @@ extension AppDelegate {
     whichKeyShown = true
     let focusedFrame =
       overlay.activeWindowBorderFrame
-      ?? lastFocusedApplicationPID.flatMap { activeWindowBorderFrameCache[$0] }
+      ?? lastFocusedApplicationPID.flatMap { activeWindowBorder.frames[$0] }
     overlay.displayWindowSwitcher(
       WindowSwitcherDisplay(
         rows: palette.entries.map {

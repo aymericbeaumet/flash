@@ -56,7 +56,7 @@ extension AppDelegate: OverlayWindowSwitching {
     // the border), else the pointer's.
     let focusedFrame =
       overlay.activeWindowBorderFrame
-      ?? lastFocusedApplicationPID.flatMap { activeWindowBorderFrameCache[$0] }
+      ?? lastFocusedApplicationPID.flatMap { activeWindowBorder.frames[$0] }
     let anchor = focusedFrame.map { CGPoint(x: $0.midX, y: $0.midY) } ?? NSEvent.mouseLocation
     guard prepareHintActivation(.windowSwitcher) else { return }
     windowSwitcherFocusGeneration &+= 1
