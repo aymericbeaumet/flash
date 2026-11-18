@@ -425,16 +425,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// The tiling workspaces as last published: what `core:workspace.changed`
   /// compares against.
   var lastTilingStatus: TilingStatus?
-  /// `[app] updates` and the `updates` commands; see `reconcileUpdates`.
-  /// Nil in the test runner, so no test reaches GitHub or replaces a bundle.
-  lazy var updates: UpdateController? =
-    NSClassFromString("XCTestCase") == nil ? UpdateController.live() : nil
-  var updateMode: UpdateMode = .install
-  var updatesSettled = false
-  var updateCheckArmed = false
-  /// The screen-lock and display-sleep observers armed while an update
-  /// waits that may install itself.
-  var updateApplyTokens: [(NotificationCenter, NSObjectProtocol)] = []
+  /// `[app] updates` and the `updates` commands; see `UpdateCoordinator`.
+  /// Without a controller in the test runner, so no test reaches GitHub or
+  /// replaces a bundle.
+  lazy var updates = UpdateCoordinator(
+    controller: NSClassFromString("XCTestCase") == nil ? UpdateController.live() : nil,
+    host: UpdateCoordinator.Host(
+      alert: { [weak self] alert in self?.overlay.displayAlert(alert) },
+      activity: { [weak self] in self?.updateActivity ?? UpdateApplyPolicy.Activity() },
+      installAboutActions: { [weak self] actions in
+        self?.statusItemController.updateActions = actions
+      }))
+  /// What the user is in the middle of: an update never applies over it.
+  var updateActivity: UpdateApplyPolicy.Activity {
+    var activity = UpdateApplyPolicy.Activity()
+    activity.hintSession = hintSession.isActive
+    activity.popup = overlay.statusPopupController.presentation.name != nil
+    if case .command = modeStore.mode { activity.commandLine = true }
+    activity.holdingButton = modeStore.mode.isHold
+    return activity
+  }
   /// `@notes`, `@reminders`, `@contacts` and the
   /// `<catalog> open` / `<catalog> refresh` commands; see `AppleCatalogs`.
   let appleCatalogs = AppleCatalogs(readers: AppleCatalogReaders.live())
@@ -1167,7 +1177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
     case .updates(let command):
       completesLater = true
-      performUpdatesCommand(command) { [weak self] outcome, text in
+      updates.perform(command) { [weak self] outcome, text in
         if let completion {
           completion(outcome, text)
         } else if let text {
@@ -2008,7 +2018,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     frecencyStore = nil
     commandHistoryStore?.drain()
     commandHistoryStore = nil
-    applyUpdateAtQuit()
+    updates.applyAtQuit()
   }
 
 }

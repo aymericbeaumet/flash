@@ -264,7 +264,7 @@ extension AppDelegate {
     statusBarVisible = cfg.statusBar.enabled
     overlay.statusBarMonitor = cfg.statusBar.monitor
     NativeMenuBarAutoHide.reconcile(hidden: statusBarVisible)
-    reconcileUpdates(cfg.app.updates)
+    updates.reconcile(cfg.app.updates)
     windowLayoutManager.setDeclaredLayouts(cfg.mode.declaredWindowLayouts)
     windowLayoutManager.screenParametersDidChange(
       statusBarReservesSpace: statusBarVisible,
