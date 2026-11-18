@@ -160,7 +160,7 @@ coarse main-thread unit of work. A
 timeout-disabled event tap also logs before being re-enabled; either message is
 evidence of main-thread work that needs moving or narrowing.
 
-Two debug-level probes measure the path itself: `[latency] tap_to_route` is the
+Two `trace`-level probes measure the path itself: `[latency] tap_to_route` is the
 delay from the HID timestamp to the main-thread turn that routes a swallowed
 key, and `[latency] normal_dispatch` is the synchronous cost of one normal-mode
 action. At `info`, `[latency] hints_visible` times each hint activation from

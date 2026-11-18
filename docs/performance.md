@@ -150,7 +150,8 @@ input's interaction (`origin` names it: `key`, `hotkey`, `pointer`, `cli` or
 All log at `info` except `flashlight_key`, which runs per key and logs at
 `trace`. A landing catalog or a re-render also evaluates the list, as
 `origin=-`. A popup already showing, a hover preview and a `menu choose`
-list are not measured. The same values are the `flash.flow.latency`
+list are not measured, nor is typing after a confirmed search bang
+(`!g rust`), which evaluates no list. The same values are the `flash.flow.latency`
 histogram ([telemetry](telemetry.md)).
 
 ## Running the benchmark
@@ -733,7 +734,7 @@ popup anchors, a tenth of a whole snapshot in a test resident.
 ### Guards
 
 - `Inspector/budget.test.ts` (in `mise run test:inspector`) holds the
-  committed page to 460 KiB, 135 KiB gzipped (425 and 123 KiB now).
+  committed page to 460 KiB, 135 KiB gzipped (429 and 125 KiB now).
 - `DebugServerTests`: a patch carries only changed sections and a stream
   without a state gets it whole; a scoped change rebuilds only its sections;
   cached replies never wait on main (the requests block it) and cost under

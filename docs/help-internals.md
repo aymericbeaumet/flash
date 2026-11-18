@@ -78,6 +78,8 @@ time ([performance](performance.md#browser-help)).
 | `/api/clipboard/<id>/pin` | `PUT` pins that entry, `DELETE` unpins it; 409 with the reason when pins would fill the history |
 | `/api/clipboard/history?offset=<n>` | Up to 100 history entries, pinned ones first, then from newest to oldest, plus the next offset or null at the end |
 | `/api/docs`, `/api/docs/search` | The bundled documentation (`docs.json`: navigation, pages and their Markdown) and its search sections, read from `Contents/Resources/docs` off the main thread |
+| `/api/config` | `GET` returns `{"path", "toml"}`: the configuration file Flash loaded and its text. `PUT` replaces that file with the body once it parses as TOML and answers `{"ok": true}`; otherwise 400 with `{"error"}` and nothing is written |
+| `/api/config/purge` | `POST` returns `{"toml"}`: the body without the single-line assignments that still equal their bundled default. It writes nothing |
 | `/api/telemetry` | What the OTLP receiver holds: every metric with its series, history and derived values, then the retained log records and spans, oldest first ([telemetry](telemetry.md#the-telemetry-page)) |
 
 The page routes itself with the History API: same-origin page links navigate

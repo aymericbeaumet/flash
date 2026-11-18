@@ -43,7 +43,11 @@ text plus a sorted trigger index, about 4 MiB live. It publishes its
 serializes rows straight into the frame rather than through a JSON tree,
 which took the same start from 29 MiB.
 
-Those figures predate status-bound activation. A status-only plugin such as
+Those counts describe the plugin set of their dates. The bundled plugins have
+since merged into twelve, eight of them resident by default
+([what starts at launch](architecture.md#what-starts-at-launch)), so the 28
+and 33 resident children above no longer exist as such. The figures also
+predate status-bound activation. A status-only plugin such as
 `feed` now spawns only while the enabled status bar shows one of its
 segments, so with the bar off (the default) it does not run until its command
 does, unless a mapping keeps it warm (see
