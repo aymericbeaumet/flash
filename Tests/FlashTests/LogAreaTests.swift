@@ -36,7 +36,7 @@ final class LogAreaTests: XCTestCase {
   /// `SystemSurfaceHints` passes to its shared presenter (`area: "dock"`).
   static func literalAreas(under directory: String, suffix: String) throws -> [String: Set<String>]
   {
-    let tag = try NSRegularExpression(pattern: #""\[([a-z][a-zA-Z0-9_-]*)\] "#)
+    let tag = try NSRegularExpression(pattern: #""\[([^\]"\\]+)\] "#)
     let parameter = try NSRegularExpression(pattern: #"area: "([a-z][a-zA-Z0-9_-]*)""#)
     let base = root.appendingPathComponent(directory)
     let files = try XCTUnwrap(
@@ -73,6 +73,61 @@ final class LogAreaTests: XCTestCase {
       "unlisted areas: \(unlisted.sorted().map { "\($0) in \(found[$0]!.sorted())" })")
     let unused = Self.areas.subtracting(found.keys)
     XCTAssertTrue(unused.isEmpty, "areas no line uses: \(unused.sorted())")
+  }
+
+  /// The lines of `text` where a literal log message opens with something
+  /// other than `[`: a direct level call, `FlashLog.log(level, "…")` or
+  /// `FlashLog.plugin(…, message: "…")`. A message built at run time is not a
+  /// literal and is not judged here.
+  static func unnamedLiteralMessages(in text: String) throws -> [Int] {
+    let patterns = try [
+      #"FlashLog\.(?:trace|debug|info|warn|error)\(\s*"(?!\[)"#,
+      #"FlashLog\.log\(\s*[^,()]+,\s*"(?!\[)"#,
+      #"FlashLog\.plugin\([^"]{0,200}?message:\s*"(?!\[)"#,
+    ].map { try NSRegularExpression(pattern: $0) }
+    let range = NSRange(text.startIndex..., in: text)
+    var lines: [Int] = []
+    for pattern in patterns {
+      for match in pattern.matches(in: text, range: range) {
+        guard let start = Range(match.range, in: text)?.lowerBound else { continue }
+        lines.append(text[..<start].utf8.reduce(1) { $1 == 10 ? $0 + 1 : $0 })
+      }
+    }
+    return lines.sorted()
+  }
+
+  func testALiteralMessageWithoutAnAreaIsFound() throws {
+    let source = """
+      FlashLog.info("[tap] installed")
+      FlashLog.warn("tap failed")
+      FlashLog.log(level, "[poll] tick")
+      FlashLog.log(.debug, "tick")
+      FlashLog.plugin(
+        id, level: .info,
+        message: "started")
+      FlashLog.plugin(id, level: .info, message: "[plugin] started")
+      FlashLog.error(message)
+      """
+    XCTAssertEqual(try Self.unnamedLiteralMessages(in: source), [2, 4, 5])
+  }
+
+  /// Every literal message in the resident's sources is `[area] event`.
+  func testEveryLiteralLogMessageStartsWithAnArea() throws {
+    var unnamed: [String] = []
+    var scanned = 0
+    for directory in ["flash", "FlashCore", "FlashProviders", "FlashTerminal"] {
+      let base = Self.root.appendingPathComponent("Sources").appendingPathComponent(directory)
+      let files = try XCTUnwrap(
+        FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil))
+      for case let url as URL in files where url.pathExtension == "swift" {
+        scanned += 1
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let path = url.path.dropFirst(Self.root.path.count + 1)
+        unnamed += try Self.unnamedLiteralMessages(in: text).map { "\(path):\($0)" }
+      }
+    }
+    XCTAssertGreaterThan(scanned, 300)
+    XCTAssertEqual(unnamed, [], "log messages are named [area] event")
   }
 
   func testEveryPluginLogLineNamesASnakeCaseArea() throws {

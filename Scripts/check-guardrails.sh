@@ -492,35 +492,14 @@ check_absent \
   Sources Inspector/src config.default.toml Plugins/*/manifest.json
 
 # Every command is `flash <topic> <action>`: no default, doc, help text or
-# bundled manifest names a one-word command in an argv, and every bundled
-# plugin command is two words of [a-z][a-z0-9_]*. CommandGrammarTests holds
-# the command table and plugin loading to the same shape.
+# bundled manifest names a one-word command in an argv. CommandGrammarTests
+# holds the command table, the bundled manifests and plugin loading to the
+# same shape.
 check_absent \
   "every Flash command is two words: flash <topic> <action>" \
   '"flash",[[:space:]]*"[a-z][a-z0-9_]*"[[:space:]]*(\]|,[[:space:]]*"--)' \
   config.default.toml README.md AGENTS.md docs Inspector/src Plugins/*/manifest.json \
   Sources/flash/App/HelpDocs.swift Sources/flash/App/NormalMode/HelpText.swift
-
-if ! plugin_command_report="$(python3 - <<'PY'
-import json
-import pathlib
-import re
-
-word = re.compile(r"[a-z][a-z0-9_]*\Z")
-bad = []
-for path in sorted(pathlib.Path("Plugins").glob("*/manifest.json")):
-    for command in json.loads(path.read_text()).get("commands", []):
-        pair = (command.get("command", ""), command.get("subcommand", ""))
-        if not all(word.match(part) for part in pair):
-            bad.append(f"{path}: flash {pair[0]} {pair[1]}")
-print("\n".join(bad))
-raise SystemExit(1 if bad else 0)
-PY
-)"; then
-  echo "GUARDRAIL FAILED: bundled plugin commands are two words of [a-z][a-z0-9_]*" >&2
-  echo "$plugin_command_report" >&2
-  fail=1
-fi
 
 if tracked="$(git ls-files -- 'Tests/BrowserSnapshots/snapshots/collected-*' 'Tests/BrowserSnapshots/allowlists/collected-*')" &&
   [[ -n "$tracked" ]]; then
@@ -744,42 +723,6 @@ check_absent_except \
   "^[[:space:]]*(print|NSLog|debugPrint)\\(" \
   '^Sources/flash/FlashCLI\.swift:' \
   "${RUNTIME_SWIFT[@]}"
-
-# Every literal log message names its event `[area] event`
-# (docs/observability.md); values go in `fields`. The area is one snake_case
-# word (`LogAreaTests` pins the set); an interpolated area is checked there.
-if ! log_name_report="$(python3 -I - "${RUNTIME_SWIFT[@]}" <<'PY'
-import pathlib, re, sys
-
-patterns = [
-    re.compile(r'FlashLog\.(?:trace|debug|info|warn|error)\(\s*"(?!\[)'),
-    re.compile(r'FlashLog\.log\(\s*[^,()]+,\s*"(?!\[)'),
-    re.compile(r'FlashLog\.plugin\([^"]{0,200}?message:\s*"(?!\[)', re.S),
-]
-area = re.compile(r'"\[([^\]"]+)\] ')
-word = re.compile(r'[a-z][a-z0-9_]*')
-failures = []
-for root in sys.argv[1:]:
-    for file in sorted(pathlib.Path(root).rglob("*.swift")):
-        text = file.read_text(encoding="utf-8")
-        for pattern in patterns:
-            for match in pattern.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1
-                failures.append(f"{file}:{line}: log message does not start with [area]")
-        for match in area.finditer(text):
-            name = match.group(1)
-            if "\\(" in name or word.fullmatch(name):
-                continue
-            line = text.count("\n", 0, match.start()) + 1
-            failures.append(f"{file}:{line}: [{name}] is not a snake_case area")
-print("\n".join(failures))
-sys.exit(1 if failures else 0)
-PY
-)"; then
-  echo "GUARDRAIL FAILED: log messages are named [area] event, the area one snake_case word" >&2
-  echo "$log_name_report" >&2
-  fail=1
-fi
 
 # Every GitHub Action runs at a full commit, never a movable tag or branch:
 # `uses: owner/repo@<40 hex> # vX.Y.Z` (supply-chain pinning).
