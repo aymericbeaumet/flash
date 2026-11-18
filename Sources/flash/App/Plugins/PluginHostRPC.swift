@@ -69,15 +69,30 @@ final class PluginHostRPC {
     reply: @escaping ([String: Any]) -> Void
   ) {
     guard scope.isCurrent() else { return }
-    switch method {
-    case "host.ping":
+    guard let kind = PluginHostRequest.Method(rawValue: method) else {
+      FlashLog.warn(
+        "[plugin] unknown host method \(method) from \(pluginID)",
+        fields: ["method": method, "plugin": pluginID])
+      reply(["ok": false, "error": PluginProtocol.unknownMethodError(method)])
+      return
+    }
+    // The capability guard runs before any param is read.
+    if let capability = kind.capability, !capabilities.contains(capability) {
+      reply(["ok": false, "error": PluginProtocol.capabilityDeniedError(capability.rawValue)])
+      return
+    }
+    let request: PluginHostRequest
+    do {
+      request = try PluginHostRequest(kind, params: params)
+    } catch {
+      reply(["ok": false, "error": error.message])
+      return
+    }
+    switch request {
+    case .ping:
       // Round-trip validation of the bidirectional channel.
       reply(["ok": true])
-    case "host.normal_mode_target":
-      guard capabilities.contains(.appControl) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("app_control")])
-        return
-      }
+    case .normalModeTarget:
       scope.enqueue(on: .main) { [weak self] in
         guard let target = self?.onNormalModeTargetRequested?() else {
           reply(["ok": true, "present": false])
@@ -92,47 +107,17 @@ final class PluginHostRPC {
         if let windowID = target.windowID { payload["window_id"] = Int(windowID) }
         reply(payload)
       }
-    case "host.activate":
-      guard capabilities.contains(.appControl) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("app_control")])
-        return
-      }
-      activatePluginApp(params, scope: scope, reply: reply)
-    case "host.post_keys":
-      guard capabilities.contains(.accessibility) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
-        return
-      }
-      postSyntheticKeys(params, scope: scope, reply: reply)
-    case let method where method.hasPrefix("host.ax_"):
-      guard capabilities.contains(.accessibility) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
-        return
-      }
-      axBroker.handle(
-        method: method, params: params, pluginID: pluginID, scope: scope, reply: reply)
-    case "host.fetch":
-      guard capabilities.contains(.networkFetch) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("network_fetch")])
-        return
-      }
-      hostFetch(params, allowlist: fetchURLs, pluginID: pluginID, scope: scope, reply: reply)
-    case "host.wifi_info":
-      guard capabilities.contains(.wifiInfo) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("wifi_info")])
-        return
-      }
-      guard
-        let requestAuthorizationValue = params["request_authorization"] as? NSNumber,
-        CFGetTypeID(requestAuthorizationValue) == CFBooleanGetTypeID()
-      else {
-        reply([
-          "ok": false,
-          "error": "host.wifi_info requires a boolean request_authorization param",
-        ])
-        return
-      }
-      let requestAuthorization = requestAuthorizationValue.boolValue
+    case .activate(let pid):
+      activatePluginApp(pid: pid, scope: scope, reply: reply)
+    case .postKeys(let pid, let chords, let intervalMs):
+      postSyntheticKeys(
+        pid: pid, chords: chords, intervalMs: intervalMs, scope: scope, reply: reply)
+    case .ax(let request):
+      axBroker.handle(request, pluginID: pluginID, scope: scope, reply: reply)
+    case .fetch(let url, let text):
+      hostFetch(
+        url: url, text: text, allowlist: fetchURLs, pluginID: pluginID, scope: scope, reply: reply)
+    case .wifiInfo(let requestAuthorization):
       guard let wifiInfoProvider else {
         reply(["ok": true, "present": false])
         return
@@ -146,25 +131,12 @@ final class PluginHostRPC {
           reply(["ok": true, "present": true, "ssid": ssid])
         }
       }
-    case "host.open":
-      guard capabilities.contains(.open) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("open")])
-        return
-      }
-      hostOpen(params, scope: scope, reply: reply)
-    case "host.applescript":
-      guard capabilities.contains(.appleEvents) else {
-        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("apple_events")])
-        return
-      }
+    case .open(let target):
+      hostOpen(target, scope: scope, reply: reply)
+    case .appleScript(let params):
       PluginHostAppleScript.handle(
         params, targets: appleEventsTargets, pluginID: pluginID, scope: scope,
         runner: appleScriptRunner, reply: reply)
-    default:
-      FlashLog.warn(
-        "[plugin] unknown host method \(method) from \(pluginID)",
-        fields: ["method": method, "plugin": pluginID])
-      reply(["ok": false, "error": PluginProtocol.unknownMethodError(method)])
     }
   }
 
@@ -183,18 +155,11 @@ final class PluginHostRPC {
   }
 
   private func hostFetch(
-    _ params: [String: Any], allowlist: [String], pluginID: String,
+    url: URL, text: String, allowlist: [String], pluginID: String,
     scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let urlString = params["url"] as? String,
-      let url = URLParsing.url(urlString),
-      url.scheme == "https"
-    else {
-      reply(["ok": false, "error": "host.fetch requires a valid https url param"])
-      return
-    }
-    guard allowlist.contains(where: { Self.urlIsAllowed(urlString, byPrefix: $0) }) else {
+    guard allowlist.contains(where: { Self.urlIsAllowed(text, byPrefix: $0) }) else {
       reply(["ok": false, "error": "url not in fetch_urls allowlist"])
       return
     }
@@ -237,20 +202,12 @@ final class PluginHostRPC {
   /// reply names the app that handles it (`bundle_id`), so a plugin can check
   /// that app still has focus before acting on it.
   private func hostOpen(
-    _ params: [String: Any],
+    _ target: PluginHostRequest.OpenTarget,
     scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
-    if let urlString = params["url"] as? String,
-      let url = URLParsing.url(urlString), url.scheme != nil
-    {
-      // Never a local file: a sandboxed plugin could write a `.command`,
-      // a script or an app into its data directory, and LaunchServices
-      // would run it outside the sandbox.
-      guard url.scheme?.lowercased() != "file" else {
-        reply(["ok": false, "error": "host.open does not open local files"])
-        return
-      }
-      scope.enqueue(on: .main) {
+    scope.enqueue(on: .main) {
+      switch target {
+      case .url(let url):
         // Response law: ok:false always carries a non-empty, content-free
         // error (a bare {"ok": false} is a spec violation).
         if Self.urlOpener(url) {
@@ -260,11 +217,7 @@ final class PluginHostRPC {
         } else {
           reply(["ok": false, "error": "open failed"])
         }
-      }
-      return
-    }
-    if let bundleID = params["bundle_id"] as? String {
-      scope.enqueue(on: .main) {
+      case .app(let bundleID):
         Self.appOpener(bundleID) { error in
           if let error {
             reply(["ok": false, "error": error])
@@ -273,19 +226,12 @@ final class PluginHostRPC {
           }
         }
       }
-      return
     }
-    reply(["ok": false, "error": "host.open requires url or bundle_id"])
   }
 
   private func activatePluginApp(
-    _ params: [String: Any],
-    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
+    pid: pid_t, scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = PluginJSON.pid(params["pid"]) else {
-      reply(["ok": false, "error": "host.activate requires pid"])
-      return
-    }
     scope.enqueue(on: .main) {
       guard let app = NSRunningApplication(processIdentifier: pid) else {
         reply(["ok": false, "error": "no running app for pid"])
@@ -296,54 +242,18 @@ final class PluginHostRPC {
     }
   }
 
-  private static let syntheticKeyModifierNames: [String: CGEventFlags] = [
-    "command": .maskCommand,
-    "control": .maskControl,
-    "option": .maskAlternate,
-    "shift": .maskShift,
-  ]
-
   /// `host.post_keys`: post a short synthesized chord sequence to a pid
   /// (plugin fast paths like the browsers plugin's Firefox tab jump: ⌘8 + n×ctrl+PgDn).
   /// Modifier chords dispatch through the target's key-equivalent path, so
   /// the app does NOT need to be frontmost — that's the point: the switch
-  /// runs in parallel with `host.activate`. Chord-only (every step must name
-  /// at least one modifier) and bounded, so this can never be used to type
-  /// text into the target.
+  /// runs in parallel with `host.activate`. Chord-only (every step names at
+  /// least one modifier) and bounded by `PluginHostRequest`, so this can
+  /// never be used to type text into the target.
   private func postSyntheticKeys(
-    _ params: [String: Any],
+    pid: pid_t, chords: [PluginHostRequest.Chord], intervalMs: Int?,
     scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
-    if let interval = params["interval_ms"], PluginJSON.integer(interval) == nil {
-      reply(["ok": false, "error": "host.post_keys requires an integer interval_ms"])
-      return
-    }
-    guard let pid = PluginJSON.pid(params["pid"]), pid > 0,
-      let steps = params["keys"] as? [[String: Any]],
-      !steps.isEmpty, steps.count <= 32
-    else {
-      reply(["ok": false, "error": "host.post_keys requires pid and 1-32 keys"])
-      return
-    }
-    var chords: [(key: CGKeyCode, flags: CGEventFlags)] = []
-    for step in steps {
-      guard let rawCode = PluginJSON.integer(step["key_code"]), rawCode >= 0, rawCode < 0x80,
-        let names = step["modifiers"] as? [String], !names.isEmpty
-      else {
-        reply(["ok": false, "error": "each key needs key_code and non-empty modifiers"])
-        return
-      }
-      var flags: CGEventFlags = []
-      for name in names {
-        guard let flag = Self.syntheticKeyModifierNames[name.lowercased()] else {
-          reply(["ok": false, "error": "unknown modifier: \(name)"])
-          return
-        }
-        flags.insert(flag)
-      }
-      chords.append((key: CGKeyCode(rawCode), flags: flags))
-    }
-    let intervalMs = min(max(PluginJSON.integer(params["interval_ms"]) ?? 35, 8), 100)
+    let intervalMs = min(max(intervalMs ?? 35, 8), 100)
     guard let post = onSyntheticKeysRequested else {
       reply(["ok": false, "error": "key posting unavailable"])
       return

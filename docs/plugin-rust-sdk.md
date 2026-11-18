@@ -183,6 +183,9 @@ Handed to every handler; cheap to clone. Key surface:
   `normal_mode_target` (pid, bundle id and the focused window's id),
   `wifi_ssid(request_authorization)`, `post_keys`,
   `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`, `ping`).
+  `post_keys` and `ax_snapshot` take their params as the protocol spells
+  them, and so does a bare `call_host`: the host refuses a key the method
+  does not define (`invalid host.post_keys params`).
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.

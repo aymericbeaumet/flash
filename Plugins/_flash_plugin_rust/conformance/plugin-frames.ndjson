@@ -179,6 +179,24 @@
 {"name": "host.ax_set.value-not-a-boolean", "expect": "reject", "reply": "host.ax_set.reply.value-not-a-boolean", "frame": {"id":1,"method":"host.ax_set","params":{"handle":7,"attribute":"AXSelected","value":1}}}
 {"name": "host.ax_select_child", "expect": "accept", "frame": {"id":1,"method":"host.ax_select_child","params":{"parent":7,"child":9}}}
 {"name": "host.ax_select_child.without-a-child", "expect": "reject", "reply": "host.ax_select_child.reply.invalid-params", "frame": {"id":1,"method":"host.ax_select_child","params":{"parent":7}}}
+{"name": "host.ping.unknown-param", "expect": "reject", "reply": "host.ping.reply.params-refused", "frame": {"id":1,"method":"host.ping","params":{"echo":"hello"}}}
+{"name": "host.fetch.unknown-param", "expect": "reject", "reply": "host.fetch.reply.params-refused", "frame": {"id":1,"method":"host.fetch","params":{"url":"https://api.example.com/v1/items","method":"POST"}}}
+{"name": "host.wifi_info.unknown-param", "expect": "reject", "reply": "host.wifi_info.reply.params-refused", "frame": {"id":1,"method":"host.wifi_info","params":{"request_authorization":false,"interface":"en0"}}}
+{"name": "host.normal_mode_target.unknown-param", "expect": "reject", "reply": "host.normal_mode_target.reply.params-refused", "frame": {"id":1,"method":"host.normal_mode_target","params":{"pid":512}}}
+{"name": "host.activate.unknown-param", "expect": "reject", "reply": "host.activate.reply.params-refused", "frame": {"id":1,"method":"host.activate","params":{"pid":512,"all_windows":true}}}
+{"name": "host.open.unknown-param", "expect": "reject", "reply": "host.open.reply.params-refused", "frame": {"id":1,"method":"host.open","params":{"url":"https://example.com/a","background":true}}}
+{"name": "host.post_keys.unknown-param", "expect": "reject", "reply": "host.post_keys.reply.params-refused", "frame": {"id":1,"method":"host.post_keys","params":{"pid":512,"keys":[{"key_code":36,"modifiers":["command"]}],"repeat":2}}}
+{"name": "host.post_keys.unknown-key-field", "expect": "reject", "reply": "host.post_keys.reply.params-refused", "frame": {"id":1,"method":"host.post_keys","params":{"pid":512,"keys":[{"key_code":36,"modifiers":["command"],"down":true}]}}}
+{"name": "host.ax_snapshot.unknown-param", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"depth":3}}}
+{"name": "host.ax_snapshot.follow-not-an-array", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"follow":"AXChildren"}}}
+{"name": "host.ax_snapshot.collect-item-not-a-string", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"collect":["AXRole",7]}}}
+{"name": "host.ax_snapshot.prune-roles-not-an-array", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"prune_roles":"AXMenuBar"}}}
+{"name": "host.ax_perform.unknown-param", "expect": "reject", "reply": "host.ax_perform.reply.params-refused", "frame": {"id":1,"method":"host.ax_perform","params":{"handle":7,"action":"AXPress","wait":true}}}
+{"name": "host.ax_perform.action-not-a-string", "expect": "reject", "reply": "host.ax_perform.reply.params-refused", "frame": {"id":1,"method":"host.ax_perform","params":{"handle":7,"action":7}}}
+{"name": "host.ax_set.unknown-param", "expect": "reject", "reply": "host.ax_set.reply.params-refused", "frame": {"id":1,"method":"host.ax_set","params":{"handle":7,"attribute":"AXSelected","value":true,"wait":true}}}
+{"name": "host.ax_select_child.unknown-param", "expect": "reject", "reply": "host.ax_select_child.reply.params-refused", "frame": {"id":1,"method":"host.ax_select_child","params":{"parent":7,"child":9,"extend":true}}}
+{"name": "host.open.url-and-app", "expect": "reject", "reply": "host.open.reply.invalid-params", "frame": {"id":1,"method":"host.open","params":{"url":"https://example.com/a","bundle_id":"com.example.app"}}}
+{"name": "host.post_keys.uppercase-modifier", "expect": "reject", "reply": "host.post_keys.reply.uppercase-modifier", "frame": {"id":1,"method":"host.post_keys","params":{"pid":512,"keys":[{"key_code":36,"modifiers":["Command"]}]}}}
 {"name": "host.unknown-method", "expect": "reject", "reply": "host-reply.unknown-method", "frame": {"id":1,"method":"host.teleport","params":{}}}
 {"name": "envelope.unknown-key", "expect": "reject", "reply_to": "ping", "frame": {"id":2,"result":{"ok":true},"trace":"k3f9"}}
 {"name": "envelope.id-zero", "expect": "reject", "reply_to": "ping", "frame": {"id":0,"result":{"ok":true}}}

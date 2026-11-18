@@ -133,17 +133,15 @@ final class AXBrokerTests: XCTestCase {
         return [app]
       }, now: clock.read,
       readAttributes: { _, _ in (.success, ["AXGroup", []] as CFArray) })
-    let params: [String: Any] = [
-      "pid": Int(getpid()), "collect": ["AXRole"], "follow": ["FlashNoSuchChildren"],
-    ]
+    let snapshot = PluginHostRequest.AX.snapshot(
+      pid: getpid(), follow: ["FlashNoSuchChildren"], collect: ["AXRole"], pruneRoles: [],
+      maxNodes: nil)
     broker.handle(
-      method: "host.ax_snapshot", params: params, pluginID: "a",
-      scope: PluginHostRequestScope(isCurrent: { true })
+      snapshot, pluginID: "a", scope: PluginHostRequestScope(isCurrent: { true })
     ) { _ in firstReply.fulfill() }
     wait(for: [entered], timeout: 2)
     broker.handle(
-      method: "host.ax_snapshot", params: params, pluginID: "b",
-      scope: PluginHostRequestScope(isCurrent: { true })
+      snapshot, pluginID: "b", scope: PluginHostRequestScope(isCurrent: { true })
     ) { reply in
       XCTAssertEqual(reply["error"] as? String, "accessibility snapshot timed out")
       XCTAssertNil(reply["nodes"])
@@ -180,7 +178,8 @@ final class AXBrokerTests: XCTestCase {
   }
 
   /// Synchronously collect one broker reply (the broker replies on its own
-  /// serial queue).
+  /// serial queue). The params decode as the dispatcher decodes them, and a
+  /// call the decoder refuses answers as the dispatcher answers it.
   private func brokerReply(
     _ broker: AXBroker,
     _ method: String,
@@ -188,13 +187,22 @@ final class AXBrokerTests: XCTestCase {
     pluginID: String,
     scope: PluginHostRequestScope = PluginHostRequestScope(isCurrent: { true })
   ) -> [String: Any] {
+    let request: PluginHostRequest.AX
+    do {
+      guard let kind = PluginHostRequest.Method(rawValue: method),
+        case .ax(let decoded) = try PluginHostRequest(kind, params: params)
+      else {
+        XCTFail("\(method) is not an AX broker call")
+        return [:]
+      }
+      request = decoded
+    } catch {
+      return ["ok": false, "error": error.message]
+    }
     let lock = NSLock()
     var reply: [String: Any] = [:]
     let replied = expectation(description: method)
-    broker.handle(
-      method: method, params: params, pluginID: pluginID,
-      scope: scope
-    ) { result in
+    broker.handle(request, pluginID: pluginID, scope: scope) { result in
       lock.lock()
       reply = result
       lock.unlock()
@@ -238,12 +246,6 @@ final class AXBrokerTests: XCTestCase {
       headlessBroker(), "host.ax_snapshot", ["pid": Int(getpid()), "max_nodes": "1"],
       pluginID: "a")
     XCTAssertEqual(reply["error"] as? String, "invalid snapshot scalar params")
-  }
-
-  func testUnknownAXMethodRepliesTheCanonicalError() {
-    let reply = brokerReply(AXBroker(), "host.ax_bogus", [:], pluginID: "a")
-    XCTAssertEqual(reply["ok"] as? Bool, false)
-    XCTAssertEqual(reply["error"] as? String, "unknown method: host.ax_bogus")
   }
 
   func testUnregisteredHandlesAreStaleForPerformSetAndSelectChild() {

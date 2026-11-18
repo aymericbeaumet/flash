@@ -90,48 +90,42 @@ final class AXBroker {
     kAXChildrenAttribute as String,
     "AXChildrenInNavigationOrder",
   ]
+  /// The node budget of a snapshot that names none.
+  private static let defaultMaxNodes = 3_000
 
   func handle(
-    method: String,
-    params: [String: Any],
+    _ request: PluginHostRequest.AX,
     pluginID: String,
     scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
-    switch method {
-    case "host.ax_snapshot":
-      snapshot(params, owner: pluginID, scope: scope, reply: reply)
-    case "host.ax_perform":
-      perform(params, owner: pluginID, scope: scope, reply: reply)
-    case "host.ax_set":
-      setAttribute(params, owner: pluginID, scope: scope, reply: reply)
-    case "host.ax_select_child":
-      selectChild(params, owner: pluginID, scope: scope, reply: reply)
-    default:
-      reply(["ok": false, "error": PluginProtocol.unknownMethodError(method)])
+    switch request {
+    case .snapshot(let pid, let follow, let collect, let pruneRoles, let maxNodes):
+      snapshot(
+        pid: pid, follow: follow.isEmpty ? Self.defaultFollow : follow, collect: collect,
+        pruneRoles: pruneRoles, maxNodes: maxNodes ?? Self.defaultMaxNodes,
+        owner: pluginID, scope: scope, reply: reply)
+    case .perform(let handle, let action):
+      perform(
+        handle: handle, action: action ?? (kAXPressAction as String),
+        owner: pluginID, scope: scope, reply: reply)
+    case .set(let handle, let attribute, let value):
+      setAttribute(
+        handle: handle, attribute: attribute, flag: value,
+        owner: pluginID, scope: scope, reply: reply)
+    case .selectChild(let parent, let child):
+      selectChild(
+        parentHandle: parent, childHandle: child, owner: pluginID, scope: scope, reply: reply)
     }
   }
 
   // MARK: - Snapshot
 
   private func snapshot(
-    _ params: [String: Any], owner: String, scope: PluginHostRequestScope,
+    pid: pid_t, follow: [String], collect: [String], pruneRoles: Set<String>, maxNodes: Int,
+    owner: String, scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = pidParam(params, key: "pid") else {
-      reply(["ok": false, "error": "host.ax_snapshot requires pid"])
-      return
-    }
-    let follow =
-      (params["follow"] as? [String]).flatMap { $0.isEmpty ? nil : $0 }
-      ?? Self.defaultFollow
-    let collect = params["collect"] as? [String] ?? []
-    let pruneRoles = Set(params["prune_roles"] as? [String] ?? [])
-    guard params["max_nodes"] == nil || PluginJSON.integer(params["max_nodes"]) != nil else {
-      reply(["ok": false, "error": "invalid snapshot scalar params"])
-      return
-    }
-    let maxNodes = PluginJSON.integer(params["max_nodes"]) ?? 3_000
     let deadline = now() + .milliseconds(Self.snapshotTimeoutMs)
 
     scope.enqueue(on: queue) { [weak self] in
@@ -191,14 +185,9 @@ final class AXBroker {
   // MARK: - Actions
 
   private func perform(
-    _ params: [String: Any], owner: String, scope: PluginHostRequestScope,
+    handle: UInt64, action: String, owner: String, scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let handle = handleParam(params) else {
-      reply(["ok": false, "error": "host.ax_perform requires handle"])
-      return
-    }
-    let action = params["action"] as? String ?? (kAXPressAction as String)
     scope.enqueue(on: queue) { [weak self] in
       self?.dropTerminatedApps()
       guard let self, let entry = self.entries[handle], entry.owner == owner else {
@@ -214,17 +203,9 @@ final class AXBroker {
   }
 
   private func setAttribute(
-    _ params: [String: Any], owner: String, scope: PluginHostRequestScope,
-    reply: @escaping ([String: Any]) -> Void
+    handle: UInt64, attribute: String, flag: Bool, owner: String,
+    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let handle = handleParam(params), let attribute = params["attribute"] as? String else {
-      reply(["ok": false, "error": "host.ax_set requires handle and attribute"])
-      return
-    }
-    guard let flag = PluginJSON.boolean(params["value"]) else {
-      reply(["ok": false, "error": "host.ax_set value must be a bool"])
-      return
-    }
     scope.enqueue(on: queue) { [weak self] in
       self?.dropTerminatedApps()
       guard let self, let entry = self.entries[handle], entry.owner == owner else {
@@ -241,15 +222,9 @@ final class AXBroker {
   }
 
   private func selectChild(
-    _ params: [String: Any], owner: String, scope: PluginHostRequestScope,
-    reply: @escaping ([String: Any]) -> Void
+    parentHandle: UInt64, childHandle: UInt64, owner: String,
+    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let parentHandle = uint64Param(params["parent"]),
-      let childHandle = uint64Param(params["child"])
-    else {
-      reply(["ok": false, "error": "host.ax_select_child requires parent and child"])
-      return
-    }
     scope.enqueue(on: queue) { [weak self] in
       self?.dropTerminatedApps()
       guard let self,
@@ -411,21 +386,6 @@ final class AXBroker {
     if let url = value as? URL { return url.absoluteString }
     if let number = value as? NSNumber { return number.stringValue }
     return nil
-  }
-
-  // MARK: - Param coercion
-
-  private func handleParam(_ params: [String: Any]) -> UInt64? {
-    uint64Param(params["handle"])
-  }
-
-  private func uint64Param(_ value: Any?) -> UInt64? {
-    guard let number = PluginJSON.integer(value), number >= 0 else { return nil }
-    return UInt64(exactly: number)
-  }
-
-  private func pidParam(_ params: [String: Any], key: String) -> pid_t? {
-    PluginJSON.pid(params[key])
   }
 
 }

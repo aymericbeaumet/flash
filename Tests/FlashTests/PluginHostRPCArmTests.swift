@@ -91,6 +91,77 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertEqual(reply["error"] as? String, "unknown method: host.bogus")
   }
 
+  /// A method the contract does not name is unknown whatever its prefix and
+  /// whatever the plugin holds: `host.ax_bogus` is not an Accessibility call
+  /// to deny.
+  func testAnUnknownAXMethodIsUnknownWithAndWithoutTheCapability() {
+    for capabilities in [[], [.accessibility]] as [Set<PluginCapability>] {
+      let reply = hostReply(PluginHostRPC(), "host.ax_bogus", [:], capabilities: capabilities)
+      XCTAssertEqual(
+        reply as NSDictionary,
+        ["ok": false, "error": "unknown method: host.ax_bogus"] as NSDictionary)
+    }
+  }
+
+  /// The dispatcher's method table is the contract's: every
+  /// `plugin_to_host_rpcs` method, under the capability the contract names.
+  func testTheMethodTableIsTheContracts() throws {
+    let methods = try XCTUnwrap(
+      (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
+        as? [String: Any])
+    let contract = methods.mapValues { $0 as? String }
+    let table = Dictionary(
+      uniqueKeysWithValues: PluginHostRequest.Method.allCases.map {
+        ($0.rawValue, $0.capability?.rawValue)
+      })
+    XCTAssertEqual(table, contract)
+  }
+
+  /// Params are closed: a key the method does not define refuses the call
+  /// before any of it runs. The conformance corpus pins one line per method;
+  /// this pins that nothing reached a seam.
+  func testAnUndefinedParamRefusesTheCallBeforeItRuns() {
+    let originalURLOpener = PluginHostRPC.urlOpener
+    let originalAppOpener = PluginHostRPC.appOpener
+    defer {
+      PluginHostRPC.urlOpener = originalURLOpener
+      PluginHostRPC.appOpener = originalAppOpener
+    }
+    var ran = 0
+    PluginHostRPC.urlOpener = { _ in
+      ran += 1
+      return true
+    }
+    PluginHostRPC.appOpener = { _, done in
+      ran += 1
+      done(nil)
+    }
+    let rpc = PluginHostRPC()
+    rpc.onSyntheticKeysRequested = { _, _, _ in ran += 1 }
+    rpc.onNormalModeTargetRequested = {
+      ran += 1
+      return nil
+    }
+    let chord: [String: Any] = ["key_code": Int(kVK_ANSI_8), "modifiers": ["command"]]
+    let calls: [(String, [String: Any], PluginCapability)] = [
+      ("host.open", ["url": "https://example.com/", "background": true], .open),
+      ("host.normal_mode_target", ["pid": 1], .appControl),
+      ("host.post_keys", ["pid": 123, "keys": [chord], "repeat": 2], .accessibility),
+    ]
+    for (method, params, capability) in calls {
+      XCTAssertEqual(
+        hostReply(rpc, method, params, capabilities: [capability]) as NSDictionary,
+        ["ok": false, "error": "invalid \(method) params"] as NSDictionary)
+    }
+    // Naming both is naming neither: `host.open` opens one thing.
+    XCTAssertEqual(
+      hostReply(
+        rpc, "host.open", ["url": "https://example.com/", "bundle_id": "com.example.app"],
+        capabilities: [.open])["error"] as? String,
+      "host.open requires url or bundle_id")
+    XCTAssertEqual(ran, 0)
+  }
+
   // MARK: - host.ping
 
   func testHostPingAnswersOkAndNothingElse() {
@@ -504,6 +575,13 @@ final class PluginHostRPCArmTests: XCTestCase {
         ["pid": 123, "keys": [["key_code": Int(kVK_ANSI_8), "modifiers": ["hyper"]]]],
         capabilities: [.accessibility])["error"] as? String,
       "unknown modifier: hyper")
+    // Modifier names are the four the contract spells, lowercase.
+    XCTAssertEqual(
+      hostReply(
+        rpc, "host.post_keys",
+        ["pid": 123, "keys": [["key_code": Int(kVK_ANSI_8), "modifiers": ["Command"]]]],
+        capabilities: [.accessibility])["error"] as? String,
+      "unknown modifier: Command")
     XCTAssertEqual(captured.count, 2, "rejected payloads must never reach the poster")
   }
 

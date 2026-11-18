@@ -93,6 +93,18 @@
 {"name": "host.ax_set.reply.value-not-a-boolean", "expect": "accept", "reply_to": "host.ax_set", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_set value must be a bool"}}}
 {"name": "host.ax_select_child.reply", "expect": "accept", "reply_to": "host.ax_select_child", "frame": {"id":1,"result":{"ok":true}}}
 {"name": "host.ax_select_child.reply.invalid-params", "expect": "accept", "reply_to": "host.ax_select_child", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_select_child requires parent and child"}}}
+{"name": "host.ping.reply.params-refused", "expect": "accept", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ping params"}}}
+{"name": "host.fetch.reply.params-refused", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.fetch params"}}}
+{"name": "host.wifi_info.reply.params-refused", "expect": "accept", "reply_to": "host.wifi_info", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.wifi_info params"}}}
+{"name": "host.normal_mode_target.reply.params-refused", "expect": "accept", "reply_to": "host.normal_mode_target", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.normal_mode_target params"}}}
+{"name": "host.activate.reply.params-refused", "expect": "accept", "reply_to": "host.activate", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.activate params"}}}
+{"name": "host.open.reply.params-refused", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.open params"}}}
+{"name": "host.post_keys.reply.params-refused", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.post_keys params"}}}
+{"name": "host.ax_snapshot.reply.params-refused", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_snapshot params"}}}
+{"name": "host.ax_perform.reply.params-refused", "expect": "accept", "reply_to": "host.ax_perform", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_perform params"}}}
+{"name": "host.ax_set.reply.params-refused", "expect": "accept", "reply_to": "host.ax_set", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_set params"}}}
+{"name": "host.ax_select_child.reply.params-refused", "expect": "accept", "reply_to": "host.ax_select_child", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_select_child params"}}}
+{"name": "host.post_keys.reply.uppercase-modifier", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"unknown modifier: Command"}}}
 {"name": "host-reply.unknown-method", "expect": "accept", "frame": {"id":1,"result":{"ok":false,"error":"unknown method: host.teleport"}}}
 {"name": "host-reply.without-ok", "expect": "reject", "reply_to": "host.fetch", "frame": {"id":1,"result":{"status":200}}}
 {"name": "host-reply.ok-not-a-boolean", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":1}}}

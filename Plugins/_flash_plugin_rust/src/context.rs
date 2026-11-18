@@ -622,15 +622,17 @@ impl Context {
 
     /// Post a keystroke plan to a target app (`host.post_keys`), e.g.
     /// `{"pid": …, "keys": [{"key_code": …, "modifiers": […]}], "interval_ms": …}`.
-    /// Requires the `accessibility` capability.
+    /// The host refuses any other key, and a modifier that is not `command`,
+    /// `control`, `option` or `shift`. Requires the `accessibility` capability.
     pub async fn post_keys(&self, params: Value) -> bool {
         ok(&self.call_host("host.post_keys", params).await)
     }
 
     /// BFS-walk an app's AX windows through the host broker
     /// (`host.ax_snapshot`); nodes come back flat with opaque handles.
-    /// Returns the raw result object. Requires the `accessibility`
-    /// capability.
+    /// `params` is `{"pid": …, "follow"?, "collect"?, "max_nodes"?,
+    /// "prune_roles"?}`; the host refuses any other key. Returns the raw
+    /// result object. Requires the `accessibility` capability.
     pub async fn ax_snapshot(&self, params: Value) -> Value {
         self.call_host("host.ax_snapshot", params).await
     }
