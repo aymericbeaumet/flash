@@ -14,7 +14,7 @@
     thresholds,
     type MonitorState,
   } from "./monitors";
-  import PageHeader from "./PageHeader.svelte";
+  import LivePageHeader from "./LivePageHeader.svelte";
   import SourceBadge from "./SourceBadge.svelte";
   import { sourceFromOrigin } from "./source";
   import type { EventMonitorInfo, MonitorInfo } from "./types";
@@ -46,12 +46,11 @@
 </script>
 
 <div class="page">
-  <PageHeader
+  <LivePageHeader
     id="monitors"
     title="Monitors"
     purpose="The values Flash watches on this Mac, worst first."
     {manual}
-    live
   >
     {#snippet help()}
       <p
@@ -71,7 +70,7 @@
         value, the names a plugin's <code>listen</code> takes, and runs on each one.</p
       >
     {/snippet}
-  </PageHeader>
+  </LivePageHeader>
 
   {#if list.length}
     <div class="summary" role="group" aria-label="Show monitors by state">

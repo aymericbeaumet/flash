@@ -34,9 +34,9 @@ in the order `docs/nav.json` gives, bundled with the app so it describes the
 installed version. The same pages are published at
 <https://aymericbeaumet.github.io/flash/>: one source, one renderer. The help
 serves a page at `/docs/<page>` (`/docs/alternatives/neru`) and the site at
-`/flash/<page>/`, with the same content, sidebar, outline and design; only
-the shell differs, since the site has no resident behind it. There the live
-pages are a note pointing at `?` in NORMAL and `:help`, and the top bar links
+`/flash/<page>/`, with the same content, sidebar, outline and design. The
+site has no resident behind it, so it ships none of the live pages: there
+they are a note pointing at `?` in NORMAL and `:help`, and the top bar links
 the repository instead of showing the connection.
 
 ## Live reference

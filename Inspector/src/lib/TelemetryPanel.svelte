@@ -2,7 +2,7 @@
   import { now } from "./clock.svelte";
   import { ago, clockTime } from "./format";
   import Icon from "./Icon.svelte";
-  import PageHeader from "./PageHeader.svelte";
+  import LivePageHeader from "./LivePageHeader.svelte";
   import { paths } from "./routes";
   import { classify, contractError, describeFailure, requestJSON, withRetry } from "./request";
   import SectionHead from "./SectionHead.svelte";
@@ -148,12 +148,11 @@
 </script>
 
 <div class="page">
-  <PageHeader
+  <LivePageHeader
     id="telemetry"
     title="Telemetry"
     purpose="OpenTelemetry Flash received on this Mac, and what it sends of its own."
     {manual}
-    live
   >
     {#snippet help()}
       <p
@@ -167,7 +166,7 @@
         to the endpoint you configured. Header values never appear here, only their names.</p
       >
     {/snippet}
-  </PageHeader>
+  </LivePageHeader>
 
   <div class="status-row">
     <section class="surface status status-{receiverState}" aria-labelledby="receiver-title">

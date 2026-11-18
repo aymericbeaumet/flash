@@ -7,7 +7,6 @@
   import Markdown from "./Markdown.svelte";
   import { renderMarkdown } from "./markdown";
   import type { RenderContext, Rendered } from "./markdown-tree";
-  import { markGuideRead } from "./onboarding";
   import PageHeader from "./PageHeader.svelte";
   import {
     bodyHash,
@@ -234,9 +233,6 @@
       }),
     );
     return () => toasts.close(id);
-  });
-  $effect(() => {
-    if (page) markGuideRead(page.path);
   });
   // An alias settles on its page's path, keeping the anchor.
   $effect(() => {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import PageHeader from "./PageHeader.svelte";
+  import LivePageHeader from "./LivePageHeader.svelte";
   import { store } from "./store.svelte";
   import { router } from "./router.svelte";
   import { paths } from "./routes";
@@ -99,12 +99,11 @@
 </script>
 
 <div class="page">
-  <PageHeader
+  <LivePageHeader
     id="plugins"
     title="Plugins"
     purpose="What runs alongside Flash: health, resources and commands."
     manual={paths.docs("plugins")}
-    live
   >
     {#snippet help()}
       <p
@@ -118,7 +117,7 @@
         in a plugin's details takes a fresh one.</p
       >
     {/snippet}
-  </PageHeader>
+  </LivePageHeader>
   <div class="overview" role="list" aria-label="Plugin health">
     <div role="listitem"
       ><span class="eyebrow">Loaded</span><strong>{plugins.length}</strong><span

@@ -1,5 +1,5 @@
 import { mount } from "svelte";
-import App from "./App.svelte";
+import HelpApp from "./HelpApp.svelte";
 import { adopt } from "./lib/access";
 import "./app.css";
 
@@ -8,6 +8,6 @@ import "./app.css";
 const clean = adopt(location.href);
 if (clean !== location.href) history.replaceState(history.state, "", clean);
 
-const app = mount(App, { target: document.getElementById("app")! });
+const app = mount(HelpApp, { target: document.getElementById("app")! });
 
 export default app;

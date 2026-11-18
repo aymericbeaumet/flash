@@ -17,6 +17,32 @@ const lexer = {
   regex: "(^|/)markdown(\\.ts)?$",
   message: "This module stays free of the Markdown lexer; markdown-tree.ts has the tree.",
 };
+// The resident's own modules: the live pages, and the stream and snapshot they read. The
+// published site has no resident, so nothing it loads may import one of them. A module that
+// imports one is itself the resident's, and joins the list.
+const residentOnly = [
+  "src/main.ts",
+  "src/HelpApp.svelte",
+  "src/lib/store.svelte.ts",
+  "src/lib/state-patch.ts",
+  "src/lib/onboarding.ts",
+  "src/lib/LivePageHeader.svelte",
+  "src/lib/LogList.svelte",
+  "src/lib/HomePanel.svelte",
+  "src/lib/MappingsPanel.svelte",
+  "src/lib/CommandsPanel.svelte",
+  "src/lib/PluginsPanel.svelte",
+  "src/lib/RuntimePanel.svelte",
+  "src/lib/MonitorsPanel.svelte",
+  "src/lib/TelemetryPanel.svelte",
+  "src/lib/ClipboardPanel.svelte",
+];
+const resident = {
+  regex: `(^|/)(${residentOnly
+    .map((file) => file.split("/").pop().replace(/\.ts$/, "").replaceAll(".", "\\."))
+    .join("|")})(\\.ts)?$`,
+  message: "The published site has no resident: only the help's own modules read live state.",
+};
 const boundary = (files, paths, patterns) => ({
   files,
   rules: { "no-restricted-imports": ["error", { paths, patterns }] },
@@ -65,8 +91,14 @@ export default [
     files: ["src/**"],
     rules: { "no-console": "error" },
   },
-  boundary(["src/**"], [marked], [buildScripts]),
-  boundary(["src/lib/markdown.ts"], [], [buildScripts]),
+  boundary(["src/**"], [marked], [buildScripts, resident]),
+  // The build's server render draws both products.
+  boundary([...residentOnly, "src/site/server.ts"], [marked], [buildScripts]),
+  boundary(["src/lib/markdown.ts"], [], [buildScripts, resident]),
   // What the page needs of the manual without rendering Markdown.
-  boundary(["src/lib/markdown-tree.ts", "src/lib/docsite.ts"], [marked], [buildScripts, lexer]),
+  boundary(
+    ["src/lib/markdown-tree.ts", "src/lib/docsite.ts"],
+    [marked],
+    [buildScripts, lexer, resident],
+  ),
 ];

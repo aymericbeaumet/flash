@@ -2,7 +2,7 @@
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
   import { monitorCounts } from "./monitors";
-  import PageHeader from "./PageHeader.svelte";
+  import LivePageHeader from "./LivePageHeader.svelte";
   import SectionHead from "./SectionHead.svelte";
   import {
     buildOnboarding,
@@ -185,12 +185,11 @@
 </script>
 
 <div class="page home">
-  <PageHeader
+  <LivePageHeader
     id="home"
     title={model.title}
     purpose={model.lede}
     manual={paths.docs("getting-started")}
-    live
   >
     {#snippet help()}
       <p
@@ -203,7 +202,7 @@
         <code>flash help show --topic=&lt;topic&gt;</code>.</p
       >
     {/snippet}
-  </PageHeader>
+  </LivePageHeader>
 
   <nav class="gauges" aria-label="This Mac now">
     {#each gauges as gauge}<a class="gauge-tile surface" data-state={gauge.state} href={gauge.href}

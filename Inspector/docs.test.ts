@@ -671,7 +671,7 @@ test("search sections land on the rendered heading ids", async () => {
 });
 
 /**
- * The whole published site: every page prerendered through the App, the
+ * The whole published site: every page prerendered through its app, the
  * build's own checks of each page for both sites (it renders the help's
  * spelling too and fails on a link to the published site), then every href
  * of the published HTML read back here.

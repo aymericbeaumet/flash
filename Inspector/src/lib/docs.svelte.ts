@@ -74,6 +74,13 @@ class DocsStore {
     return this.loading;
   }
 
+  /** Loads once the page is idle, for a page that shows without the whole manual. */
+  loadWhenIdle() {
+    const load = () => void this.load();
+    if ("requestIdleCallback" in window) requestIdleCallback(load, { timeout: 2000 });
+    else setTimeout(load, 200);
+  }
+
   loadSections(): Promise<void> {
     if (this.sections) return Promise.resolve();
     this.searching ??= withRetry((signal) => requestJSON(this.url("search"), { signal }))

@@ -180,6 +180,16 @@ builds a separate unminified page and stages it into the app at
 that copy. The generated `Bundle.module` path does not, so leaving the new
 page only in `.build` does not change what the installed app serves.
 
+The page is two products over one shell. `src/Shell.svelte` is what they
+share: the sidebar, the top bar with its path and search, the search and
+not-found pages, the shortcuts sheet, the toasts, the router and the
+keyboard. `src/HelpApp.svelte` (mounted by `src/main.ts`) fills it with the
+live pages, the manual and the plugins' guides, and owns the stream, the
+connection mark and the offline banner. `src/SiteApp.svelte` (hydrated by
+`src/site/client.ts`) fills it with the manual alone. A page that shows
+resident state heads itself with `LivePageHeader.svelte`, which marks it
+stale while Flash is unreachable; `PageHeader.svelte` knows no resident.
+
 Prettier formats the sources: `mise run fmt:inspector` rewrites them and
 `mise run lint:inspector` checks them. It runs whitespace-strict
 (`htmlWhitespaceSensitivity` in `Inspector/.prettierrc.json`), so formatting a
@@ -188,8 +198,11 @@ ESLint with a short list of rules (`Inspector/eslint.config.js`), none about
 style: no string is parsed as HTML or run as code, no debugging leftover
 stays, nothing escapes the type check and the page never writes to the
 console. It also holds the import boundaries: only `src/lib/markdown.ts`
-imports the Markdown lexer, and nothing under `src/` imports the build
-scripts.
+imports the Markdown lexer, nothing under `src/` imports the build
+scripts, and the modules that read a resident (`residentOnly` in the
+configuration: the live pages, the store and what they alone use) are
+imported only by one another, so the published site loads none of them. A
+module that starts importing one joins that list.
 
 Check browser routes (direct loads, back/forward, heading anchors, aliases),
 search, page links, live/disconnected states, narrow layouts and print preview after
@@ -238,8 +251,8 @@ the inspector's own renderer and components:
   with each page's Markdown and its hash, `search.json` and `files/`), which
   the app assembly copies to `Contents/Resources/docs` for `/api/docs` and
   `/docs/<file>`.
-- `mise run build:site` builds the published site into `build/site`: the
-  same App in its site mode, rendered on the server for every page (plus
+- `mise run build:site` builds the published site into `build/site`:
+  `SiteApp.svelte` rendered on the server for every page (plus
   search and 404) and hydrated in the browser, with the documentation, its search
   index and the files under `docs/`. `.github/workflows/pages.yml` deploys
   it; the CI documentation job runs the same build.

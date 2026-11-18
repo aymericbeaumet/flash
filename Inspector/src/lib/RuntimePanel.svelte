@@ -5,7 +5,7 @@
   import ConfigJSON from "./ConfigJSON.svelte";
   import { duration } from "./format";
   import { now } from "./clock.svelte";
-  import PageHeader from "./PageHeader.svelte";
+  import LivePageHeader from "./LivePageHeader.svelte";
   import { describeFailure, requestJSON, withRetry } from "./request";
   import SectionHead from "./SectionHead.svelte";
   import { doneToast } from "./toast";
@@ -120,12 +120,11 @@
 </script>
 
 <div class="page">
-  <PageHeader
+  <LivePageHeader
     id="state"
     title="Runtime & configuration"
     purpose="The running resident: permissions, input routing and resolved settings."
     manual={paths.docs("configuration")}
-    live
   >
     {#snippet actions()}<button
         type="button"
@@ -145,7 +144,7 @@
         layer that set it.</p
       >
     {/snippet}
-  </PageHeader>
+  </LivePageHeader>
   {#if runtime?.config_error}<div class="notice error"
       ><strong>Configuration error</strong><p>{runtime.config_error}</p><a
         href={paths.docs("configuration")}>Configuration reference →</a

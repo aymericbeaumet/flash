@@ -15,7 +15,7 @@
   import ClipboardRegisters from "./ClipboardRegisters.svelte";
   import Icon from "./Icon.svelte";
   import { linkSegments } from "./linkify";
-  import PageHeader from "./PageHeader.svelte";
+  import LivePageHeader from "./LivePageHeader.svelte";
   import { describeFailure, requestJSON, withRetry } from "./request";
   import SectionHead from "./SectionHead.svelte";
   import { store } from "./store.svelte";
@@ -490,12 +490,11 @@
       >{:else}{segment.text}{/if}{/each}{/snippet}
 
 <div class="page">
-  <PageHeader
+  <LivePageHeader
     id="clipboard"
     title="Clipboard"
     purpose="Text registers and the copies Flash keeps, pinned first, then newest first."
     manual={paths.docs("clipboard")}
-    live
   >
     {#snippet help()}
       <p
@@ -513,7 +512,7 @@
         opens an entry, <kbd>p</kbd> pins or unpins it and <kbd>⌫</kbd> deletes it.</p
       >
     {/snippet}
-  </PageHeader>
+  </LivePageHeader>
   <ClipboardRegisters {registers} />
   <section aria-labelledby="history-heading">
     <SectionHead

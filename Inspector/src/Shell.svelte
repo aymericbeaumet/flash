@@ -1,187 +1,96 @@
 <script lang="ts">
-  import { tick, untrack } from "svelte";
-  import ClipboardPanel from "./lib/ClipboardPanel.svelte";
-  import { now } from "./lib/clock.svelte";
-  import CommandsPanel from "./lib/CommandsPanel.svelte";
+  import { tick, untrack, type Snippet } from "svelte";
   import { docsStore } from "./lib/docs.svelte";
-  import DocsPanel from "./lib/DocsPanel.svelte";
-  import { ago, clockTime } from "./lib/format";
-  import HomePanel from "./lib/HomePanel.svelte";
-  import FreshMark from "./lib/FreshMark.svelte";
   import Icon from "./lib/Icon.svelte";
-  import LogList from "./lib/LogList.svelte";
-  import MappingsPanel from "./lib/MappingsPanel.svelte";
-  import { monitorCounts } from "./lib/monitors";
-  import MonitorsPanel from "./lib/MonitorsPanel.svelte";
-  import PageHeader from "./lib/PageHeader.svelte";
-  import PluginsPanel from "./lib/PluginsPanel.svelte";
   import { renderMarkdown } from "./lib/markdown";
+  import PageHeader from "./lib/PageHeader.svelte";
   import { prepareOnIntent } from "./lib/prefetch";
-  import { freshness, loadSeen } from "./lib/reading";
-  import RuntimePanel from "./lib/RuntimePanel.svelte";
-  import TelemetryPanel from "./lib/TelemetryPanel.svelte";
-  import { configToast, doneToast, failedToast } from "./lib/toast";
-  import Toaster from "./lib/Toaster.svelte";
-  import { toasts } from "./lib/toasts.svelte";
   import { router } from "./lib/router.svelte";
-  import { parseRoute, paths, site } from "./lib/routes";
-  import { buildIndex, search as runSearch } from "./lib/search";
-  import { store } from "./lib/store.svelte";
+  import { parseRoute, paths } from "./lib/routes";
+  import { search as runSearch, type SearchIndex } from "./lib/search";
+  import type { Crumb, Section } from "./lib/shell";
+  import Toaster from "./lib/Toaster.svelte";
 
   /**
-   * The resident's help has every page; the published site is the manual
-   * alone, with a note that the live pages are in Flash's own help.
+   * What the resident's help and the published site share: the sidebar, the
+   * top bar with its path and its search, the search and not-found pages, the
+   * shortcuts sheet, the toasts, the router and the keyboard. Each product
+   * names its sections and fills in its own pages and marks.
    */
-  const published = site.public;
-  const allSections = [
-    { id: "home", href: "/", label: "Home", group: "Explore", key: "h" },
-    { id: "docs", href: paths.docs(), label: "Documentation", group: "Explore", key: "d" },
-    {
-      id: "mappings",
-      href: paths.mappings(),
-      label: "Key mappings",
-      group: "Your Flash",
-      key: "m",
-    },
-    { id: "commands", href: paths.commands(), label: "Commands", group: "Your Flash", key: "c" },
-    { id: "plugins", href: paths.plugins(), label: "Plugins", group: "Your Flash", key: "p" },
-    { id: "state", href: "/state", label: "Runtime & config", group: "Inspect", key: "r" },
-    { id: "monitors", href: "/monitors", label: "Monitors", group: "Inspect", key: "o" },
-    { id: "telemetry", href: "/telemetry", label: "Telemetry", group: "Inspect", key: "t" },
-    { id: "logs", href: "/logs", label: "Live logs", group: "Inspect", key: "l" },
-    { id: "clipboard", href: "/clipboard", label: "Clipboard", group: "Inspect", key: "b" },
-  ];
-  const sections = published ? allSections.filter((item) => item.id === "docs") : allSections;
-  const groups = published ? ["Explore"] : ["Explore", "Your Flash", "Inspect"];
+  let {
+    sections,
+    home,
+    crumbs,
+    index,
+    searchLabel,
+    searchPlaceholder,
+    searchHint,
+    searching = false,
+    lost,
+    host,
+    version,
+    note,
+    badge,
+    status,
+    banner,
+    page,
+    shortcutNotes,
+    content = $bindable(),
+  }: {
+    sections: Section[];
+    /** Where the brand leads, and what it is called there. */
+    home: { href: string; label: string };
+    /** The path to the page shown; empty on the home page. */
+    crumbs: Crumb[];
+    /** What search finds. */
+    index: SearchIndex;
+    searchLabel: string;
+    searchPlaceholder: string;
+    /** What the search page says before a query is typed. */
+    searchHint: string;
+    /** The index is still loading: an empty result is not final. */
+    searching?: boolean;
+    /** What the not-found page says. */
+    lost: string;
+    /** Who serves the page, at the foot of the sidebar; a link when `href` is set. */
+    host?: { icon: string; label: string; href?: string };
+    /** The running Flash's version. */
+    version?: string;
+    /** A note closing the sidebar's navigation. */
+    note?: { label: string; body: Snippet };
+    /** What a section's link shows beside its label. */
+    badge?: Snippet<[Section]>;
+    /** The top bar's mark, a `.connection` link. */
+    status?: Snippet;
+    /** What stands between the top bar and the page. */
+    banner?: Snippet;
+    /** The page shown, when it is neither search nor a missing address. */
+    page: Snippet;
+    /** What the shortcuts sheet says after search and navigation. */
+    shortcutNotes: Snippet;
+    /** The scrolling element the pages render in. */
+    content?: HTMLElement;
+  } = $props();
+
+  const groups = $derived([...new Set(sections.map((item) => item.group))]);
+  const homePage = $derived(sections.find((item) => item.id === "home"));
   const route = $derived(router.route);
+  const manual = $derived(docsStore.manual);
+  const currentPage = $derived(route.page === "docs" ? manual?.page(route.param) : undefined);
   let search = $state("");
   let searchInput = $state<HTMLInputElement>();
   let selectedResult = $state(0);
   let mobileNav = $state(false);
   let shortcuts = $state(false);
   let pendingG = $state(false);
-  let content = $state<HTMLElement>();
   /** How much of the window's bottom the toasts cover; the content scrolls clear of it. */
   let toastSpace = $state(0);
-  const docs = $derived(store.state.docs ?? []);
-  const plugins = $derived(store.state.plugins ?? []);
-  const commands = $derived(store.state.commands ?? []);
-  const mappings = $derived(store.state.mappings ?? { normal_leader: "", rows: [] });
-  const loaded = $derived(store.state.snapshot_at_unix_ms != null);
-  const monitorAlarm = $derived.by(() => {
-    const counts = monitorCounts(store.state.monitors ?? []);
-    return counts.error
-      ? { count: counts.error, state: "error" }
-      : counts.warning
-        ? { count: counts.warning, state: "warning" }
-        : null;
-  });
-  const manual = $derived(docsStore.manual);
-  const currentPage = $derived(route.page === "docs" ? manual?.page(route.param) : undefined);
-  /** A plugin's guide, at a docs path the manual leaves free. */
-  const currentGuide = $derived(
-    route.page === "docs" && manual && !currentPage
-      ? docs.find((doc) => doc.name === route.param)
-      : undefined,
-  );
-  const section = $derived(sections.find((candidate) => candidate.id === route.page));
-  const hasFresh = $derived(freshness(docsStore.readable(docs), loadSeen()).size > 0);
-  // How long the page has been without its stream; the clock ticks only then.
-  const offlineFor = $derived(store.connected ? 0 : now() - store.offlineSince);
-  // A first connection gets a moment before the page calls Flash unreachable.
-  const offline = $derived(
-    !published && !store.connected && (store.everConnected || offlineFor > 2500),
-  );
-  const snapshotAt = $derived(store.state.snapshot_at_unix_ms);
-  const connectionMessage = $derived(
-    snapshotAt
-      ? `Connection to Flash lost. Showing the snapshot from ${clockTime(snapshotAt)}; it may be stale. Reconnecting automatically.`
-      : "Connecting to Flash. Live information will appear when the resident app is available.",
-  );
-  /** The path shown in the top bar: every crumb but the last is a link. */
-  const crumbs = $derived.by(() => {
-    const list: { label: string; href?: string }[] = [];
-    if (route.page === "home") return list;
-    if (route.page === "search")
-      return [
-        ...list,
-        { label: "Search" },
-        ...(route.param ? [{ label: `“${route.param}”` }] : []),
-      ];
-    if (route.page === "not-found") return [...list, { label: "Page not found" }];
-    if (route.page === "docs") {
-      list.push({ label: "Documentation", href: paths.docs() });
-      if (currentPage?.path)
-        list.push(...currentPage.trail.map((label) => ({ label })), {
-          label: currentPage.heading ?? currentPage.title,
-        });
-      else if (currentGuide) list.push({ label: "Plugin guides" }, { label: currentGuide.title });
-      else if (route.param && !currentPage) list.push({ label: route.param });
-      return list;
-    }
-    list.push({ label: section?.label ?? route.page, href: section?.href });
-    if (route.page === "plugins" && route.param) {
-      list.push({
-        label: plugins.find((plugin) => plugin.id === route.param)?.name ?? route.param,
-      });
-    } else if ((route.page === "mappings" || route.page === "commands") && route.param) {
-      list.push({ label: `“${route.param}”` });
-    }
-    return list;
-  });
-  const current = $derived(crumbs[crumbs.length - 1]?.label ?? "Flash");
-  const siteName = $derived(manual?.bundle.site.name ?? "Flash");
-  /** The tab title; the published site names the page then the site, as before. */
-  const title = $derived(
-    published
-      ? route.page === "docs" && !route.param
-        ? siteName
-        : `${current} - ${siteName}`
-      : route.page === "home"
-        ? "Flash"
-        : `${current} · Flash`,
-  );
-  const canonical = $derived(
-    published && manual && route.page === "docs" && currentPage
-      ? new URL(paths.docs(currentPage.path), manual.bundle.site.url).href
-      : undefined,
-  );
-  const index = $derived(
-    buildIndex(
-      published ? [] : docs,
-      published ? [] : commands,
-      published ? [] : (mappings.effective_rows ?? mappings.rows),
-      published ? [] : plugins,
-      docsStore.sections ?? [],
-    ),
-  );
   const results = $derived(route.page === "search" ? runSearch(index, route.param) : []);
   let announcement = $state("");
 
-  // Runs once: nothing it reads may restart the stream or the router.
+  // Runs once: nothing it reads may restart the router.
   $effect(() =>
     untrack(() => {
-      const idle = (callback: () => void) =>
-        "requestIdleCallback" in window
-          ? requestIdleCallback(callback, { timeout: 2000 })
-          : setTimeout(callback, 200);
-      if (published) {
-        // Links load prerendered pages until the whole manual is here.
-        router.handles = (target) => target.page === "search" || docsStore.complete;
-        idle(() => {
-          void docsStore.load();
-        });
-      } else {
-        store.start();
-        // A live page needs the manual only for the sidebar's reading marks:
-        // it loads once the page is idle, or as soon as a manual page or a
-        // search asks for it (below).
-        if (router.route.page === "docs" || router.route.page === "search") void docsStore.load();
-        else
-          idle(() => {
-            void docsStore.load();
-          });
-      }
       const stopRouter = router.start(content!, () => {
         mobileNav = false;
         shortcuts = false;
@@ -202,33 +111,9 @@
         window.removeEventListener("keydown", onKey);
         stopPreparing();
         stopRouter();
-        if (!published) store.stop();
       };
     }),
   );
-  $effect(() => {
-    if (!published && (route.page === "docs" || route.page === "search")) void docsStore.load();
-  });
-  // Configuration diagnostics that appear, change or clear while the page is
-  // open reach the reader on any page; the runtime page lists them in full.
-  let configShown: string | null | undefined;
-  $effect(() => {
-    const runtime = store.state.runtime;
-    if (!runtime) return;
-    const error = runtime.config_error ?? null;
-    untrack(() => {
-      const options = configToast(configShown, error, () => {
-        if (router.route.page === "state") content?.scrollTo({ top: 0 });
-        else router.navigate("/state");
-      });
-      configShown = error;
-      if (options) toasts.show(options);
-    });
-  });
-  // A manual that failed to load retries once Flash answers again.
-  $effect(() => {
-    if (!published && store.connected && docsStore.error) void docsStore.load();
-  });
   // Search reads the manual's sections, fetched the first time it is needed:
   // as the search field takes focus, before the first word is typed.
   $effect(() => {
@@ -240,27 +125,17 @@
   });
   // Pages arrive after the first render; reveal a linked heading once it renders.
   $effect(() => {
-    void docs;
     void docsStore.bundle;
     void docsStore.complete;
     void tick().then(() => router.revealAnchor());
   });
   $effect(() => {
-    const label = current;
+    const label = crumbs[crumbs.length - 1]?.label ?? home.label;
     void tick().then(() => {
-      announcement = route.page === "home" ? "Flash help home" : label;
+      announcement = label;
     });
   });
 
-  /** The runtime page's Refresh says how it went. */
-  async function refresh() {
-    await store.refresh();
-    toasts.show(
-      store.refreshError
-        ? failedToast("refresh", `${store.refreshError} The page keeps the last snapshot.`)
-        : doneToast("refresh", "Refreshed: the page shows Flash's latest snapshot."),
-    );
-  }
   function typing(event: KeyboardEvent): boolean {
     const target = event.target;
     return (
@@ -356,15 +231,6 @@
   }
 </script>
 
-<svelte:head>
-  <title>{title}</title>
-  {#if canonical && manual}
-    <link rel="canonical" href={canonical} />
-    <meta property="og:title" content={current} />
-    <meta property="og:url" content={canonical} />
-  {/if}
-</svelte:head>
-
 <a
   class="skip-link"
   href="#main-content"
@@ -382,10 +248,7 @@
       onclick={() => (mobileNav = false)}
     ></button>{/if}
   <aside class="sidebar" class:expanded={mobileNav} id="sidebar">
-    <a
-      href={published ? paths.docs() : "/"}
-      class="brand"
-      aria-label={published ? "Flash documentation home" : "Flash help home"}
+    <a href={home.href} class="brand" aria-label={home.label}
       ><span class="brand-mark"><Icon name="bolt" size={20} /></span><span class="brand-text"
         >Flash</span
       ></a
@@ -399,48 +262,33 @@
               href={item.href}
               class:active={route.page === item.id}
               aria-current={route.page === item.id ? "page" : undefined}
-              ><Icon name={item.id} size={16} /><span>{item.label}</span
-              >{#if item.id === "plugins"}<span class="nav-count">{plugins.length}</span
-                >{/if}{#if item.id === "monitors" && monitorAlarm}<span
-                  class="nav-alarm nav-alarm-{monitorAlarm.state}"
-                  title="{monitorAlarm.count} {monitorAlarm.state === 'error'
-                    ? 'in error'
-                    : 'warning'}">{monitorAlarm.count}</span
-                >{/if}{#if item.id === "docs" && hasFresh}<span class="nav-fresh"
-                  ><FreshMark
-                    state="new"
-                    label="New or updated pages since your last visit"
-                  /></span
-                >{/if}<kbd class="nav-key" aria-hidden="true">g {item.key}</kbd></a
+              ><Icon name={item.id} size={16} /><span>{item.label}</span>{@render badge?.(item)}<kbd
+                class="nav-key"
+                aria-hidden="true">g {item.key}</kbd
+              ></a
             >
           {/each}
         </div>
       {/each}
-      {#if published}<div class="nav-group live-note"
-          ><div class="nav-label">Your Flash</div><p
-            >Your key mappings, commands, plugins, runtime, monitors, logs and clipboard are live
-            pages in Flash's own help: press <kbd>?</kbd> in NORMAL mode or run
-            <code>:help</code>.</p
-          ></div
+      {#if note}<div class="nav-group live-note"
+          ><div class="nav-label">{note.label}</div><p>{@render note.body()}</p></div
         >{/if}
     </nav>
     <div class="sidebar-footer"
-      >{#if published && manual}<a
+      >{#if host?.href}<a
           class="local-mark"
-          href={manual.bundle.site.repository}
+          href={host.href}
           target="_blank"
           rel="noopener noreferrer"
-          ><Icon name="docs" size={14} />
-          {manual.bundle.site.repository_name} <span aria-hidden="true">↗</span></a
-        >{:else if !published}<span class="local-mark"
-          ><Icon name="shield" size={14} /> Served by Flash on this Mac</span
+          ><Icon name={host.icon} size={14} />
+          {host.label} <span aria-hidden="true">↗</span></a
+        >{:else if host}<span class="local-mark"
+          ><Icon name={host.icon} size={14} /> {host.label}</span
         >{/if}<a href={paths.docs("privacy")}>Privacy & permissions</a><button
         type="button"
         class="shortcut-hint"
         onclick={() => (shortcuts = true)}>Keyboard shortcuts <kbd>?</kbd></button
-      >{#if store.state.runtime?.version}<span class="version"
-          >Flash {store.state.runtime.version}</span
-        >{/if}</div
+      >{#if version}<span class="version">Flash {version}</span>{/if}</div
     >
   </aside>
   <div class="main-column">
@@ -479,57 +327,13 @@
           onfocus={() => void docsStore.loadSections()}
           type="search"
           name="q"
-          aria-label={published
-            ? "Search the documentation"
-            : "Search all documentation, commands, mappings and plugins"}
-          placeholder={published ? "Search the docs…" : "Search anything…"}
+          aria-label={searchLabel}
+          placeholder={searchPlaceholder}
         /><kbd>/</kbd></form
       >
-      {#if published}{#if manual}<a
-            href={manual.bundle.site.repository}
-            class="connection repository"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Flash on GitHub">GitHub <span aria-hidden="true">↗</span></a
-          >{/if}
-      {:else}<a
-          href="/state"
-          class="connection"
-          class:connected={store.connected}
-          class:offline
-          aria-label={store.connected ? "Live connection to Flash" : connectionMessage}
-          title={store.connected ? "Live connection to Flash" : connectionMessage}
-          >{#if store.connected}<i></i>Live{:else}<Icon name="warning" size={16} /><span
-              >{offline ? "Offline" : "Connecting"}</span
-            >{/if}</a
-        >{/if}
+      {@render status?.()}
     </header>
-    {#if !published}<span class="sr-only" role="status"
-        >{store.connected
-          ? "Connected to Flash. Live information is current."
-          : connectionMessage}</span
-      >{/if}
-    {#if offline}
-      <div class="offline-banner" role="alert">
-        <Icon name="warning" size={18} />
-        <div>
-          {#if store.everConnected && snapshotAt}<strong
-              >Flash stopped answering {ago(store.offlineSince, now())}.</strong
-            >
-            Everything below is the snapshot from {clockTime(snapshotAt)} and may be stale.
-          {:else if snapshotAt}<strong>Flash is not answering.</strong> Everything below is the
-            snapshot from {clockTime(snapshotAt)} and may be stale.
-          {:else}<strong>Flash is not answering.</strong> No live information yet.{/if}
-          <span class="offline-hint"
-            >If Flash quit or restarted, reopen help with <kbd>?</kbd> in NORMAL or
-            <code>:help</code>. This page reconnects by itself.</span
-          >
-        </div>
-        <button type="button" onclick={() => store.reconnect()}
-          ><Icon name="refresh" size={14} /> Reconnect now</button
-        >
-      </div>
-    {/if}
+    {@render banner?.()}
     <main
       id="main-content"
       tabindex="-1"
@@ -543,9 +347,7 @@
             title="Search"
             purpose={route.param
               ? `${results.length} ${results.length === 1 ? "result" : "results"} for “${route.param}”`
-              : published
-                ? "Type a feature, command or setting. Every word must match."
-                : "Type a feature, command, key or plugin name. Every word must match."}
+              : searchHint}
           />
           {#if route.param}<div class="search-results surface" aria-live="polite">
               {#each results as result, position}<a
@@ -564,79 +366,23 @@
                   /></a
                 >{/each}
               {#if results.length === 0}<div class="empty"
-                  ><strong>{published && !docsStore.sections ? "Searching…" : "No matches"}</strong
-                  >Try fewer words, or a command name such as <code>mouse target</code>.</div
+                  ><strong>{searching ? "Searching…" : "No matches"}</strong>Try fewer words, or a
+                  command name such as <code>mouse target</code>.</div
                 >{/if}
               {#if results.length >= 80}<p class="empty"
                   >Showing the first 80 matches. Add another word to narrow your search.</p
                 >{/if}
             </div>{/if}
         </div>
-      {:else if route.page === "home"}<HomePanel
-          snapshot={store.state}
-          connected={store.connected}
-        />
-      {:else if route.page === "docs"}<DocsPanel param={route.param} {docs} />
-      {:else if route.page === "mappings"}<MappingsPanel
-          {mappings}
-          keyboard={store.state.keyboard}
-          {commands}
-          filter={route.param}
-        />
-      {:else if route.page === "commands"}<CommandsPanel
-          {commands}
-          rows={mappings.effective_rows ?? mappings.rows}
-          filter={route.param}
-        />
-      {:else if route.page === "plugins"}<PluginsPanel
-          {plugins}
-          {commands}
-          filter={route.param}
-          sampledAt={store.state.snapshot_at_unix_ms}
-          onresample={() => store.refresh()}
-        />
-      {:else if route.page === "state"}<RuntimePanel
-          state={store.state}
-          connected={store.connected}
-          onrefresh={refresh}
-        />
-      {:else if route.page === "monitors"}<MonitorsPanel monitors={store.state.monitors} {loaded} />
-      {:else if route.page === "telemetry"}<TelemetryPanel
-          telemetry={store.state.telemetry}
-          {loaded}
-        />
-      {:else if route.page === "logs"}<div class="page log-page"
-          ><PageHeader
-            id="logs"
-            title="Live logs"
-            purpose="What Flash and its plugins are doing, newest last."
-            manual={paths.docs("troubleshooting")}
-            live
-            >{#snippet help()}<p
-                >Flash streams structured diagnostics here as they happen. Filter by level or
-                source, search messages and fields, and select a record to read or copy it as JSON.
-                The tail follows new records until you scroll up or pause it.</p
-              >{/snippet}</PageHeader
-          ><div class="surface log-surface"><LogList logs={store.logs} /></div></div
-        >
-      {:else if route.page === "clipboard"}<ClipboardPanel
-          entries={store.state.clipboard ?? []}
-          registers={store.state.clipboard_registers ?? []}
-          nextOffset={store.state.clipboard_next_offset ?? null}
-          total={store.state.clipboard_total ?? 0}
-        />
-      {:else}<div class="page"
-          ><PageHeader
-            id="not-found"
-            title="Page not found"
-            purpose={published
-              ? "This address is not part of the Flash documentation. Start from its home page, or search above."
-              : "This address is not part of Flash's help. Start from its home page, browse the documentation, or search above."}
-          /><p class="not-found-links"
-            >{#if !published}<a href="/">Home →</a>{/if}<a href={paths.docs()}>Documentation →</a
+      {:else if route.page === "not-found"}<div class="page"
+          ><PageHeader id="not-found" title="Page not found" purpose={lost} /><p
+            class="not-found-links"
+            >{#if homePage}<a href={homePage.href}>Home →</a>{/if}<a href={paths.docs()}
+              >Documentation →</a
             ></p
           ></div
-        >{/if}
+        >
+      {:else}{@render page()}{/if}
     </main>
   </div>
   {#if shortcuts}
@@ -665,22 +411,7 @@
           >{/each}
         <dt><kbd>?</kbd></dt><dd>Show or hide this sheet</dd>
       </dl>
-      {#if !published}
-        <h3>Clipboard history</h3>
-        <dl>
-          <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next or previous entry</dd>
-          <dt><kbd>↩</kbd></dt><dd>Copy the selected entry</dd>
-          <dt><kbd>space</kbd></dt><dd>Expand or collapse it</dd>
-          <dt><kbd>⌫</kbd></dt><dd>Delete it from history</dd>
-        </dl>
-        <p class="muted"
-          >Shortcuts pause while you type in a field. Flash's own keys are on the <a
-            href={paths.mappings()}>key mappings</a
-          > page.</p
-        >
-      {:else}
-        <p class="muted">Shortcuts pause while you type in a field.</p>
-      {/if}
+      {@render shortcutNotes()}
     </div>
   {/if}
 </div>
@@ -785,32 +516,6 @@
   .sidebar nav a.active :global(svg) {
     color: var(--accent);
   }
-  .nav-count {
-    margin-left: auto;
-    font: 12px var(--mono);
-    color: var(--faint);
-  }
-  .nav-alarm {
-    margin-left: auto;
-    min-width: 20px;
-    padding: 0 6px;
-    border-radius: 9px;
-    font: 600 12px/18px var(--mono);
-    text-align: center;
-  }
-  .nav-alarm-error {
-    color: var(--danger);
-    background: var(--danger-soft);
-    box-shadow: inset 0 0 0 1px rgba(229, 115, 94, 0.4);
-  }
-  .nav-alarm-warning {
-    color: var(--amber);
-    background: var(--amber-soft);
-    box-shadow: inset 0 0 0 1px rgba(227, 165, 63, 0.4);
-  }
-  .nav-fresh {
-    margin-left: auto;
-  }
   .nav-key {
     display: none;
     flex: none;
@@ -822,11 +527,6 @@
   .sidebar nav a:hover .nav-key,
   .sidebar nav a:focus-visible .nav-key {
     display: inline-block;
-  }
-  .sidebar nav a:hover .nav-count,
-  .sidebar nav a:hover .nav-fresh,
-  .sidebar nav a:hover .nav-alarm {
-    display: none;
   }
   .sidebar-footer {
     display: flex;
@@ -854,7 +554,7 @@
     line-height: 1.6;
     color: var(--muted);
   }
-  .live-note kbd {
+  .live-note :global(kbd) {
     font-size: 12px;
     padding: 0 4px;
   }
@@ -975,7 +675,8 @@
     padding: 0 5px;
     color: var(--muted);
   }
-  .connection {
+  /* The top bar's mark: each product draws its own link and picks its state. */
+  .topbar :global(.connection) {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -992,70 +693,35 @@
     min-width: 32px;
     min-height: 32px;
   }
-  .connection:hover {
+  .topbar :global(.connection:hover) {
     text-decoration: none;
     color: var(--amber);
   }
-  .connection.offline {
+  .topbar :global(.connection.offline) {
     color: var(--danger);
     background: var(--danger-soft);
     border-color: rgba(229, 115, 94, 0.4);
   }
-  .connection.connected {
+  .topbar :global(.connection.connected) {
     color: var(--muted);
     background: none;
     border-color: transparent;
   }
-  .connection.repository {
+  .topbar :global(.connection.repository) {
     color: var(--muted);
     background: none;
     border-color: var(--border);
   }
-  .connection.repository:hover {
+  .topbar :global(.connection.repository:hover) {
     color: var(--accent);
     border-color: var(--accent-dim);
   }
-  .connection i {
+  .topbar :global(.connection i) {
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: var(--verdigris);
     box-shadow: 0 0 0 2px var(--verdigris-soft);
-  }
-  .offline-banner {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 32px;
-    border-bottom: 1px solid rgba(229, 115, 94, 0.35);
-    background: #1f1617;
-    color: var(--text);
-    font-size: 13px;
-  }
-  .offline-banner > :global(svg) {
-    flex: none;
-    color: var(--danger);
-  }
-  .offline-banner strong {
-    color: var(--danger);
-    font-weight: 600;
-  }
-  .offline-banner > div {
-    flex: 1;
-    min-width: 0;
-  }
-  .offline-hint {
-    display: block;
-    color: var(--muted);
-    margin-top: 2px;
-  }
-  .offline-banner button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: none;
-    min-height: 32px;
-    font-size: 12px;
   }
   main {
     flex: 1;
@@ -1139,26 +805,6 @@
   .search-results a > :global(svg:last-child) {
     color: var(--faint);
   }
-  /* Percentage height does not resolve against main's flex size, so this page
-     grows as a flex child and the record list fills the space under the heading. */
-  .log-page {
-    flex: 1 1 auto;
-    width: 100%;
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    padding-bottom: 16px;
-  }
-  .log-surface {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
   .skip-link {
     position: fixed;
     top: -100px;
@@ -1203,35 +849,35 @@
     gap: 10px;
     font-size: 17px;
   }
-  .sheet h3 {
+  .sheet :global(h3) {
     color: var(--muted);
     font: 500 12px var(--mono);
     text-transform: uppercase;
     letter-spacing: 0.12em;
     margin: 16px 0 6px;
   }
-  .sheet dl {
+  .sheet :global(dl) {
     display: grid;
     grid-template-columns: 94px minmax(0, 1fr);
     gap: 2px 18px;
     margin: 0;
     font-size: 13px;
   }
-  .sheet dt {
+  .sheet :global(dt) {
     white-space: nowrap;
   }
-  .sheet dt,
-  .sheet dd {
+  .sheet :global(dt),
+  .sheet :global(dd) {
     display: flex;
     align-items: center;
     gap: 4px;
     min-height: 30px;
   }
-  .sheet dd {
+  .sheet :global(dd) {
     margin: 0;
     color: var(--muted);
   }
-  .sheet p {
+  .sheet :global(p) {
     margin-top: 16px;
     font-size: 13px;
   }
@@ -1239,9 +885,6 @@
     .topbar {
       padding: 10px 22px;
       gap: 14px;
-    }
-    .offline-banner {
-      padding: 10px 22px;
     }
   }
   @media (max-width: 850px) {
@@ -1293,10 +936,6 @@
       padding: 10px 14px;
       gap: 10px;
     }
-    .offline-banner {
-      padding: 10px 14px;
-      flex-wrap: wrap;
-    }
     .breadcrumb li:not(:last-child) {
       display: none;
     }
@@ -1310,10 +949,10 @@
     .searchbox kbd {
       display: none;
     }
-    .connection span {
+    .topbar :global(.connection span) {
       display: none;
     }
-    .sheet dl {
+    .sheet :global(dl) {
       grid-template-columns: 80px minmax(0, 1fr);
       gap: 2px 8px;
     }
@@ -1321,8 +960,7 @@
   @media print {
     .workspace,
     .main-column,
-    main,
-    .log-page {
+    main {
       display: block;
       height: auto;
       overflow: visible;
@@ -1335,12 +973,10 @@
     .skip-link,
     .sheet,
     .sheet-backdrop,
-    .scrim,
-    .offline-banner {
+    .scrim {
       display: none !important;
     }
-    .search-results,
-    .log-surface {
+    .search-results {
       overflow: visible;
       min-height: 0;
       border: 0;
