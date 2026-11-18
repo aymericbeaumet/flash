@@ -344,7 +344,7 @@ those holds (`PollScheduler.Gate`, fed by the same workspace notifications
 that hide the window border). Registrations keep changing while held; the
 last release runs each one that fell due meanwhile exactly once, then
 repeating ones return to their grid. The scheduler's clock counts time spent
-asleep (`CLOCK_MONOTONIC`), so a wake finds those deadlines overdue rather than
+asleep (`CLOCK_MONOTONIC_RAW`), so a wake finds those deadlines overdue rather than
 each waiting out its interval again. Clients never check the gate themselves.
 
 Each registration carries a priority — there is no default — which sets how

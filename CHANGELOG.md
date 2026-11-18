@@ -319,6 +319,17 @@ monitors read that no plugin publishes any more, with its replacement.
   seconds). `flash config check` reports a `[plugins.feed] url` that is not
   an `https://` URL. The Rust SDK's `fetch` returns the body of a 2xx
   response alone; another status is an error.
+- The plugin wire has a schema for every frame (`docs/schema/plugin/`) and
+  a conformance corpus both the host and the Rust SDK run, and the host
+  holds plugins to it. For a third-party plugin: `host.ping` answers
+  `{"ok": true}` alone; a host RPC with a parameter its method does not
+  define, or an optional one of the wrong type, is refused; `host.open`
+  takes a URL or a bundle id, not both; `host.post_keys` modifier names are
+  exact lowercase; a `status` notification or a carousel with a key the
+  contract does not name is rejected whole; a `poll` cadence is held to the
+  floor before it is rounded. The SDK now delivers the `status` a failed
+  `host.applescript` carries (a script's exit, 124 for a timeout), where the
+  reply used to arrive as `invalid host response`.
 - The emoticons the flashlight understands (`:)` finds 🙂) are the `emojis`
   plugin's data: the new manifest key `query_aliases` maps a query token of
   punctuation to the words scored in its place. Flash itself knows no
