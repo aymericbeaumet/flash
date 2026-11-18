@@ -581,7 +581,7 @@ pub(crate) fn observer_argv(tmux_path: &str, socket: &str, session_id: &str) -> 
     if is_session_id(session_id) {
         args.extend(["-t", session_id]);
     }
-    crate::tmux_socket_argv(tmux_path, socket, &args)
+    crate::invocation::tmux_socket_argv(tmux_path, socket, &args)
 }
 
 /// The observers, one per followed server, keyed by socket path.
