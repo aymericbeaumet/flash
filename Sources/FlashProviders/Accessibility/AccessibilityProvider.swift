@@ -1,5 +1,5 @@
 import AppKit
-import ApplicationServices
+@preconcurrency import ApplicationServices
 import FlashCore
 
 /// LIFO worklist whose append operation preserves recursive depth-first visit
@@ -70,7 +70,7 @@ struct AXTraversalWorklist<Element> {
 ///     `pendingTargets` during the walk and resolved in parallel after
 ///     it completes, so the IPC pipeline isn't serialised on inline
 ///     follow-up reads.
-public final class AccessibilityProvider: FlashSource {
+public final class AccessibilityProvider: FlashSource, Sendable {
   public let identifier: String = "accessibility"
   public let displayName: String = "accessibility"
   public let priority: Int = 10
@@ -193,10 +193,11 @@ public final class AccessibilityProvider: FlashSource {
     // window for tablist children and presses the Nth tab. Everything else
     // falls through so the next source (or the host's binding fallback)
     // can run.
+    let completion = MainQueueCompletion(completion)
     guard command.name == Self.tabSelect,
       let index = command.argument("index").flatMap(Int.init), index > 0
     else {
-      DispatchQueue.main.async { completion(.unhandled) }
+      completion.deliver { .unhandled }
       return
     }
     let pid = context.processID
@@ -223,12 +224,12 @@ public final class AccessibilityProvider: FlashSource {
           || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
             == .success
       }
-      DispatchQueue.main.async {
+      completion.deliver {
         if selected, let runningApp = NSRunningApplication(processIdentifier: pid) {
           RunningApplicationActivation.activate(
             runningApp, options: [.activateAllWindows], restoringMinimizedWindows: false)
         }
-        completion(selected ? .performed(pid: pid) : .unhandled)
+        return selected ? .performed(pid: pid) : .unhandled
       }
     }
   }
@@ -608,8 +609,9 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
-  // Indices are hot-path constants — keep them in sync with `walk`.
-  private static let batchAttrs: CFArray =
+  // Indices are hot-path constants — keep them in sync with `walk`. The
+  // array is never mutated, so every walker thread reads it.
+  nonisolated(unsafe) private static let batchAttrs: CFArray =
     [
       kAXRoleAttribute,  // 0
       kAXPositionAttribute,  // 1
@@ -1280,6 +1282,7 @@ public final class AccessibilityProvider: FlashSource {
       // child slots; the merge below still runs in child order.
       let width = min(childrenSnapshot.count, Self.maxFanoutWidth)
       workerStates.withUnsafeMutableBufferPointer { buf in
+        nonisolated(unsafe) let slots = buf
         DispatchQueue.concurrentPerform(iterations: width) { worker in
           for i in stride(from: worker, to: childrenSnapshot.count, by: width) {
             var workerState = WalkState()
@@ -1299,7 +1302,7 @@ public final class AccessibilityProvider: FlashSource {
               fanoutBudget: captureNewBudget,
               state: &workerState
             )
-            buf[i] = workerState
+            slots[i] = workerState
           }
         }
       }
@@ -1371,12 +1374,13 @@ public final class AccessibilityProvider: FlashSource {
     // type, never mutated during the parallel pass.)
     var outcomes = [PendingOutcome](repeating: .drop, count: pending.count)
     outcomes.withUnsafeMutableBufferPointer { buf in
+      nonisolated(unsafe) let slots = buf
       DispatchQueue.concurrentPerform(iterations: pending.count) { i in
         switch pending[i].check {
         case .pressAction:
-          buf[i] = AXClick.hasPressAction(pending[i].element) ? .keep : .drop
+          slots[i] = AXClick.hasPressAction(pending[i].element) ? .keep : .drop
         case .keyboardFocus:
-          buf[i] =
+          slots[i] =
             IOSContent.canTakeKeyboardFocus(pending[i].element) ? .keep : .keepAsText
         }
       }

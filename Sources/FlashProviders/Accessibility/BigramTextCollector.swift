@@ -1,5 +1,5 @@
 import AppKit
-import ApplicationServices
+@preconcurrency import ApplicationServices
 import FlashCore
 import Foundation
 
@@ -278,7 +278,8 @@ public enum BigramTextCollector {
     var subrole: String?
   }
 
-  private static let batchNames: CFArray =
+  /// Never mutated, so every collector thread reads it.
+  nonisolated(unsafe) private static let batchNames: CFArray =
     [
       kAXRoleAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
       kAXTitleAttribute, kAXValueAttribute, kAXHiddenAttribute, kAXSubroleAttribute,

@@ -120,7 +120,7 @@ let package = Package(
       name: "FlashProviders",
       dependencies: ["FlashCore"],
       path: "Sources/FlashProviders",
-      swiftSettings: strictSwiftSettings + optimizedInDebug
+      swiftSettings: strictSwiftSettings + optimizedInDebug + checkedConcurrency
     ),
     .target(
       name: "FlashIntegrationTestSupport",
