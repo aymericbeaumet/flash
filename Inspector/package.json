@@ -10,15 +10,22 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "format": "prettier --write .",
+    "lint": "prettier --check . && eslint --max-warnings 0 ."
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/node": "^26.6.6",
+    "eslint": "^10.15.0",
+    "eslint-plugin-svelte": "^3.24.1",
     "marked": "^18.2.0",
+    "prettier": "^3.10.1",
+    "prettier-plugin-svelte": "^4.1.1",
     "svelte": "^5.57.3",
     "svelte-check": "^4.7.8",
     "typescript": "6.0.3",
+    "typescript-eslint": "^8.73.0",
     "vite": "^8.3.7",
     "vite-plugin-singlefile": "^2.3.4"
   }

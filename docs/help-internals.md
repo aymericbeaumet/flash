@@ -171,7 +171,7 @@ link to the page of the documentation that covers it (`Documentation →`). Sect
 
 ## Frontend changes
 
-`Inspector/` is a Svelte app. Run `mise run test:inspector` (the type check
+`Inspector/` is a Svelte app. Run `mise run test:inspector` (the lint, the type check
 of the app, its build scripts and its tests, then the unit tests), then `mise run build:inspector` to update the
 committed `Sources/flash/Resources/inspector.html`. Plain SwiftPM builds serve
 that resource; CI checks that it matches the frontend source. A dev install
@@ -179,6 +179,15 @@ builds a separate unminified page and stages it into the app at
 `Contents/Resources/Flash_flash.bundle/inspector.html`. The resident reads
 that copy. The generated `Bundle.module` path does not, so leaving the new
 page only in `.build` does not change what the installed app serves.
+
+Prettier formats the sources: `mise run fmt:inspector` rewrites them and
+`mise run lint:inspector` checks them. It runs whitespace-strict
+(`htmlWhitespaceSensitivity` in `Inspector/.prettierrc.json`), so formatting a
+template never adds or removes a text node of the page. The lint also runs
+ESLint with a short list of rules (`Inspector/eslint.config.js`), none about
+style: no string is parsed as HTML or run as code, no debugging leftover
+stays, nothing escapes the type check and the page never writes to the
+console.
 
 Check browser routes (direct loads, back/forward, heading anchors, aliases),
 search, page links, live/disconnected states, narrow layouts and print preview after

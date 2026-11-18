@@ -97,7 +97,9 @@ else.
 | `test` | `swift test`, after `build:ghostty` and `build:plugins` | The Swift suite against real plugin binaries; `-- --filter <name>` narrows it |
 | `test:plugins` | `Scripts/test-plugins.sh` | The plugin gate; `-- --lane lint`, `units`, `build` or `all` (the default) |
 | `test:plugin` | `cargo test --workspace --locked` in `Plugins/<id>` | One crate while iterating: `mise run test:plugin terminals` |
-| `test:inspector` | `pnpm check` and `node --test *.test.ts` in `Inspector/` | Help UI changes |
+| `fmt:inspector` | `prettier --write` in `Inspector/` | Format the help UI sources |
+| `lint:inspector` | `prettier --check` and `eslint` in `Inspector/` | Lint the help UI sources |
+| `test:inspector` | `pnpm lint`, `pnpm check` and `node --test *.test.ts` in `Inspector/` | Help UI changes |
 | `test:status-format` | `Scripts/test-status-format-oracle.py`, after `build:tmux-oracle` | Status-language changes; `-- --record` updates the corpus |
 | `test:integration` | `test:integration:native`, `:browser`, `:electron`, in turn | Hint discovery or commit changes |
 | `test:integration:native` | `Scripts/test-integration-native.sh`, after `install:dev` | AppKit fixture: real host clicks |

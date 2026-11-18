@@ -131,10 +131,20 @@ description = "Run one plugin crate's cargo tests: mise run test:plugin <id> (a 
 usage = 'arg "<id>" help="Plugin directory under Plugins/, such as terminals or _flash_plugin_rust"'
 run = 'cd "Plugins/${usage_id}" && cargo test --workspace --locked'
 
-[tasks."test:inspector"]
-description = "Type-check the help UI, its scripts and its tests (svelte-check) and run the unit tests"
+[tasks."fmt:inspector"]
+description = "Format the help UI sources in place (prettier)"
 dir = "{{config_root}}/Inspector"
-run = ["pnpm install --frozen-lockfile", "pnpm check", "node --test *.test.ts"]
+run = ["pnpm install --frozen-lockfile", "pnpm format"]
+
+[tasks."lint:inspector"]
+description = "Lint the help UI sources (prettier --check, eslint)"
+dir = "{{config_root}}/Inspector"
+run = ["pnpm install --frozen-lockfile", "pnpm lint"]
+
+[tasks."test:inspector"]
+description = "Lint and type-check the help UI, its scripts and its tests (svelte-check) and run the unit tests"
+dir = "{{config_root}}/Inspector"
+run = ["pnpm install --frozen-lockfile", "pnpm lint", "pnpm check", "node --test *.test.ts"]
 
 [tasks."test:status-format"]
 description = "Check the status-format corpus against the pinned tmux oracle (-- --record: update it)"

@@ -554,7 +554,8 @@ It runs, in order, `fmt` (swift format in place), `lint` (strict swift-format
 lint), `guardrails`, `test:plugins` (every plugin lane) and `test` (the Swift
 suite against real plugin binaries). Changes to `docs/` or `Inspector/` also
 run `rtk proxy mise run build:site` (the published manual and its link check)
-and `rtk proxy mise run test:inspector`.
+and `rtk proxy mise run test:inspector` (lint, type check, unit tests);
+`rtk proxy mise run fmt:inspector` formats `Inspector/` first.
 
 The plugin gate (`mise run test:plugins`) has three lanes over the SDK
 workspace — including its `probe` member — and every plugin crate: `lint`
