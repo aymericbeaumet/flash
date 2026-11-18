@@ -624,6 +624,14 @@ can name a window without asking the user to pick one) +
 `{"ok": true}`, nothing else: it proves the plugin's requests reach the host
 and the replies come back.
 
+Each method's `params` are closed, as its
+[schema](#schemas-and-constants) spells them. A key the method does not
+define, or an optional value of the wrong type, answers `{"ok": false,
+"error": "invalid <method> params"}` and nothing runs; a required param that
+is missing or malformed answers the method's own error (`host.activate
+requires pid`). The capability is checked first, so a plugin without it reads
+the denial whatever it sent.
+
 `host.applescript` accepts a named `operation`, data fields and optional
 `timeout_ms`; it returns `{ok: true, result}` or `{ok: false, error, status?}`.
 It accepts no `script` field or executable source. The fixed operations are
@@ -650,7 +658,7 @@ starting the prompt; callers retry after authorization instead of holding an
 RPC open. The method returns
 `{"ok": true, "present": true, "ssid": "…"}` for an associated network or
 `{"ok": true, "present": false}` when Wi-Fi information is unavailable.
-`host.open` takes `{"url"}` or `{"bundle_id"}`; a URL's reply also
+`host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL
 is refused (`host.open does not open local files`): a sandboxed plugin could
@@ -668,6 +676,9 @@ An AX timeout is not retried once per requested attribute: the broker shares Gec
 lock with hint discovery, and abandoned snapshots must release it promptly.
 `host.ax_set` takes `{handle, attribute, value}` and sets a boolean
 attribute such as `AXFocused`; a non-boolean value is rejected.
+`host.post_keys` takes `{pid, keys, interval_ms?}`: 1 to 32 chords of
+`{key_code, modifiers}`, each under at least one of `command`, `control`,
+`option` and `shift`, spelled exactly so. It cannot type text.
 `capabilities` also includes `network` (composes
 `network-outbound` into the sandbox profile, so only a sandboxed plugin
 declares it) and `network_fetch` (the host
