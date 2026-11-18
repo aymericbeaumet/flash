@@ -60,6 +60,7 @@ extension AppMonitor {
   }
 
   func onFocusedAppChanged(to app: NSRunningApplication) {
+    dispatchPrecondition(condition: .onQueue(.main))
     let pid = app.processIdentifier
     guard pid > 0 else { return }
     // Gecko keeps the tree Flash woke only while its app is focused.
@@ -110,6 +111,7 @@ extension AppMonitor {
     observedWindow: AXUIElement?,
     menu: AXUIElement? = nil
   ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid, because: .invalidated, cause: notification)

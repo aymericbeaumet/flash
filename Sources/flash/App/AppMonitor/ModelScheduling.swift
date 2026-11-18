@@ -14,6 +14,7 @@ extension AppMonitor {
   func invalidatePreparedModel(
     for pid: pid_t, because miss: PreparedModelMiss, cause: String? = nil
   ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     preparedModels.discardModel(pid: pid, because: miss, cause: cause)
     cancelMaintenance(pid: pid)
   }
@@ -68,6 +69,7 @@ extension AppMonitor {
   }
 
   func cancelRefreshWork(for pid: pid_t) {
+    dispatchPrecondition(condition: .onQueue(.main))
     modelScheduler.reset(pid: pid)
     releaseMaintenanceWake(pid: pid)
     releaseRefreshWakes(pid: pid)
@@ -76,6 +78,7 @@ extension AppMonitor {
   }
 
   func cancelAllRefreshWork() {
+    dispatchPrecondition(condition: .onQueue(.main))
     modelScheduler.reset()
     releaseMaintenanceWake(pid: nil)
     releaseRefreshWakes(pid: nil)
@@ -110,6 +113,7 @@ extension AppMonitor {
   /// can move it earlier; an obsolete callback never owns the replacement.
   /// Throttled reasons keep the app's cost spacing between walks.
   func scheduleModelRefresh(for pid: pid_t, reason: ModelRefreshReason) {
+    dispatchPrecondition(condition: .onQueue(.main))
     guard allowsAutomaticRefresh(pid: pid, reason: reason),
       let arm = modelScheduler.scheduleRefresh(
         pid: pid, reason: reason, now: DispatchTime.now().uptimeNanoseconds,
@@ -379,6 +383,7 @@ extension AppMonitor {
     reason: ModelRefreshReason,
     completion: ((PreparedModel?) -> Void)?
   ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     // Activation may jump a debounce, maintenance or readiness wake. Invalidate
     // every ticket before starting so no callback can consume a later rearmed
     // request.

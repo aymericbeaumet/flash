@@ -153,6 +153,7 @@ extension AppDelegate {
   private func reloadConfig(
     _ file: ConfigLoader.UserFile, reason: ConfigReloadReason, environment: [String: String]
   ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     MainThreadActivity.note("config_reload")
     let probe = LatencyProbe.arm(.configReload)
     var stages = LatencyStages()
@@ -175,6 +176,7 @@ extension AppDelegate {
   private func applyConfig(
     _ cfg: Config, reason: ConfigReloadReason, probe: LatencyProbe, stages: LatencyStages
   ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     var stages = stages
     let applyStartedAt = LatencyProbe.now
     if hintSession.isActive || activationInFlight { cancelOverlay() }
