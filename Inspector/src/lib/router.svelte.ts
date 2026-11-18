@@ -26,8 +26,8 @@ class Router {
     typeof location === "undefined" ? { page: "home", param: "" } : parseRoute(location),
   );
   /**
-   * Whether a click on a page link stays in the app. The published site
-   * lets the browser load a prerendered page until the whole manual is here.
+   * Whether a page is shown in place. The published site shows its search
+   * in place and lets the browser load every other page, each a document.
    */
   handles: (route: Route) => boolean = () => true;
   private main: HTMLElement | null = null;
@@ -73,6 +73,10 @@ class Router {
 
   navigate(href: string) {
     const url = new URL(href, location.href);
+    if (!this.handles(parseRoute(url))) {
+      location.assign(url);
+      return;
+    }
     if (this.main) this.positions.set(this.key, this.main.scrollTop);
     if (url.href === location.href) {
       history.replaceState(history.state, "", url);

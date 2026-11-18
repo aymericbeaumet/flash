@@ -43,9 +43,6 @@ export const site = {
   get links(): SiteLinks {
     return current;
   },
-  get public(): boolean {
-    return current.mode === "public";
-  },
 };
 
 const pages = new Set(table.pages);

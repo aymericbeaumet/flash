@@ -17,12 +17,16 @@ const lexer = {
   regex: "(^|/)markdown(\\.ts)?$",
   message: "This module stays free of the Markdown lexer; markdown-tree.ts has the tree.",
 };
-// The resident's own modules: the live pages, and the stream and snapshot they read. The
-// published site has no resident, so nothing it loads may import one of them. A module that
-// imports one is itself the resident's, and joins the list.
+// The resident's own modules: the live pages, the stream and snapshot they read, and the
+// manual as the help holds it, which it renders from Markdown in the page. The published site
+// has no resident and ships its articles as HTML, so nothing it loads may import one of them.
+// A module that imports one, or the lexer, is itself the resident's, and joins the list.
 const residentOnly = [
   "src/main.ts",
   "src/HelpApp.svelte",
+  "src/lib/docs.svelte.ts",
+  "src/lib/DocsPanel.svelte",
+  "src/lib/help-search.ts",
   "src/lib/store.svelte.ts",
   "src/lib/state-patch.ts",
   "src/lib/onboarding.ts",
@@ -91,14 +95,9 @@ export default [
     files: ["src/**"],
     rules: { "no-console": "error" },
   },
-  boundary(["src/**"], [marked], [buildScripts, resident]),
-  // The build's server render draws both products.
+  // What the published site loads: no resident, and no Markdown lexer.
+  boundary(["src/**"], [marked], [buildScripts, lexer, resident]),
+  // The build's server render draws both products, the site's articles included.
   boundary([...residentOnly, "src/site/server.ts"], [marked], [buildScripts]),
   boundary(["src/lib/markdown.ts"], [], [buildScripts, resident]),
-  // What the page needs of the manual without rendering Markdown.
-  boundary(
-    ["src/lib/markdown-tree.ts", "src/lib/docsite.ts"],
-    [marked],
-    [buildScripts, lexer, resident],
-  ),
 ];

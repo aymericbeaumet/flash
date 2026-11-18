@@ -1,19 +1,41 @@
-// The published site in the browser: hydrate the prerendered page with the
-// bundle it was rendered from, then let the site's app take over navigation.
+// The published site in the browser. A page arrives whole: its article is
+// HTML, and its links load other pages. This hydrates what surrounds the
+// article (the navigation, the search, the shortcuts) from the navigation
+// every page shares, which the page's head preloads.
 
 import { hydrate } from "svelte";
 import "../app.css";
-import { docsStore } from "../lib/docs.svelte";
-import { siteLinks, type DocsBundle } from "../lib/docsite";
+import { ManualIndex, siteLinks, type DocsIndex } from "../lib/docsite";
 import { router } from "../lib/router.svelte";
 import { useSite } from "../lib/routes";
 import SiteApp from "../SiteApp.svelte";
 
-const boot = JSON.parse(document.getElementById("flash-docs")!.textContent!) as {
-  bundle: DocsBundle;
-  route: string;
-};
-useSite(siteLinks("public", boot.bundle.site));
-docsStore.prime(boot.bundle, false);
-router.prime(new URL(boot.route, location.href));
-hydrate(SiteApp, { target: document.getElementById("app")! });
+async function start() {
+  const nav = document.querySelector<HTMLLinkElement>("link#flash-nav");
+  const route = document.querySelector<HTMLMetaElement>('meta[name="flash-route"]');
+  if (!nav || !route) return;
+  let index: DocsIndex;
+  try {
+    const response = await fetch(nav.href);
+    if (!response.ok) return;
+    index = (await response.json()) as DocsIndex;
+  } catch {
+    // Without its navigation the page stays as served: an article and links.
+    return;
+  }
+  useSite(siteLinks("public", index.site));
+  // Only a search is shown in place; every page is its own document.
+  router.handles = (target) => target.page === "search";
+  // The document hydrates as rendered; `router.start` then reads the address.
+  router.prime(new URL(route.content, location.href));
+  hydrate(SiteApp, {
+    target: document.getElementById("app")!,
+    props: { manual: new ManualIndex(index) },
+  });
+  // The keyboard starts in the reading area, which is what scrolls; a
+  // fragment keeps the browser's own starting point.
+  if (!location.hash && document.activeElement === document.body)
+    document.getElementById("main-content")?.focus({ preventScroll: true });
+}
+
+void start();

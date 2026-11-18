@@ -1,34 +1,21 @@
 <script lang="ts">
+  import { copyButton } from "./article";
   import type { MdNode } from "./markdown-tree";
-  import { site } from "./routes";
-  import { copyText } from "./toasts.svelte";
 
   /**
    * Mounts a rendered Markdown tree: each element is created with its
-   * attributes and each string is a text node, on the server and in the
-   * browser alike, so a prerendered page hydrates the same nodes. Code
-   * blocks gain a copy button once the page runs (`interactive`); a toast
-   * says whether the copy worked.
+   * attributes and each string is a text node. Code blocks gain a copy
+   * button where the page runs.
    */
-  let { nodes, interactive = false }: { nodes: MdNode[]; interactive?: boolean } = $props();
+  let { nodes }: { nodes: MdNode[] } = $props();
   /**
-   * The resident's help never hydrates: it builds the same elements and
-   * text nodes with plain DOM calls. A long page is thousands of nodes, and
-   * a reactive block for each made opening one take tens of milliseconds.
-   * The server render, and the published site that hydrates it, keep the
-   * template.
+   * The browser builds the elements and text nodes with plain DOM calls: a
+   * long page is thousands of nodes, and a reactive block for each made
+   * opening one take tens of milliseconds. The build's server render, which
+   * no browser hydrates, keeps the template.
    */
-  const direct = typeof document !== "undefined" && !site.public;
+  const direct = typeof document !== "undefined";
   const voids = new Set(["br", "hr", "img", "input"]);
-
-  function copy(event: MouseEvent) {
-    const code = (event.currentTarget as HTMLButtonElement).closest("pre")?.querySelector("code");
-    void copyText(
-      code?.textContent ?? "",
-      "the code block",
-      "Select the code and copy it instead.",
-    );
-  }
 
   function append(parent: Node, list: MdNode[]) {
     for (const node of list) {
@@ -40,15 +27,7 @@
       for (const [name, value] of Object.entries(node.attrs ?? {}))
         element.setAttribute(name, value);
       if (!voids.has(node.tag)) append(element, node.children ?? []);
-      if (node.tag === "pre") {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "copy-code";
-        button.setAttribute("aria-label", "Copy code");
-        button.textContent = "Copy";
-        button.addEventListener("click", copy);
-        element.appendChild(button);
-      }
+      if (node.tag === "pre") element.appendChild(copyButton());
       parent.appendChild(element);
     }
   }
@@ -68,21 +47,17 @@
 )}{#each list as node}{#if typeof node === "string"}{node}{:else if voids.has(node.tag)}<svelte:element
         this={node.tag}
         {...node.attrs}
-      />{:else if node.tag === "pre"}<pre {...node.attrs}
-        >{@render tree(node.children ?? [])}{#if interactive}<button
-            type="button"
-            class="copy-code"
-            aria-label="Copy code"
-            onclick={copy}>Copy</button
-          >{/if}</pre
-      >{:else}<svelte:element this={node.tag} {...node.attrs}
+      />{:else}<svelte:element this={node.tag} {...node.attrs}
         >{@render tree(node.children ?? [])}</svelte:element
       >{/if}{/each}{/snippet}
 {#if direct}<div class="markdown" {@attach build(nodes)}></div>{:else}{@render tree(nodes)}{/if}
 
 <style>
-  /* No box of its own: the article's rules and layout see the content directly. */
-  .markdown {
+  /*
+   * No box of its own: the article's rules and layout see the content
+   * directly. Global, so the template's elements take no class from it.
+   */
+  :global(.markdown) {
     display: contents;
   }
 </style>

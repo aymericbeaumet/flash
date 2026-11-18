@@ -5,8 +5,10 @@ import type { RenderContext, Target } from "./markdown-tree.ts";
  * The manual: `docs/*.md` ordered by `docs/nav.json`. The build bundles it
  * once (`docs.json`, `search.json` and the other files under `docs/`); the
  * resident serves that bundle at `/docs/<page>` and the published site
- * prerenders the same pages at `<site>/<page>/`. Only the spelling of a link
- * differs between the two, through `SiteLinks`.
+ * prerenders the same pages at `<site>/<page>/`, where a page carries its
+ * article as HTML and reads the navigation (`DocsIndex`) from one asset every
+ * page shares. Only the spelling of a link differs between the two, through
+ * `SiteLinks`.
  */
 
 export interface SiteInfo {
@@ -27,24 +29,16 @@ export interface NavNode {
   items?: NavNode[];
 }
 
-export interface ManualPage {
+/** What the navigation knows of a page: where it is, what it is called and what leads to it. */
+export interface PageEntry {
   /** Route path: `""`, `normal-mode`, `alternatives/neru`. */
   path: string;
-  /** File under `docs/`. */
-  file: string;
   /** The navigation title. */
   title: string;
   /** The page's own level-one heading. */
   heading?: string;
   /** Titles of the navigation groups above the page. */
   trail: string[];
-  markdown: string;
-  /**
-   * `hashBody` of the page's Markdown, taken by the build: what the reader
-   * compares to tell an updated page, without hashing the manual in the
-   * browser.
-   */
-  hash: string;
   /** In the navigation, rather than `unlisted`. */
   listed: boolean;
   /**
@@ -52,6 +46,26 @@ export interface ManualPage {
    * in-app topic names `:help <topic>` has always taken.
    */
   aliases: string[];
+}
+
+export interface ManualPage extends PageEntry {
+  /** File under `docs/`. */
+  file: string;
+  markdown: string;
+  /**
+   * `hashBody` of the page's Markdown, taken by the build: what the reader
+   * compares to tell an updated page, without hashing the manual in the
+   * browser.
+   */
+  hash: string;
+}
+
+/** The manual without its text: the published site's navigation asset. */
+export interface DocsIndex {
+  site: SiteInfo;
+  nav: NavNode[];
+  /** Listed pages in reading order, then unlisted ones. */
+  pages: PageEntry[];
 }
 
 /** `docs.json`. */
@@ -74,6 +88,21 @@ export interface DocsBundle {
    * show what this Flash runs; the published site keeps `main`.
    */
   revision?: string;
+}
+
+export function docsIndex(bundle: DocsBundle): DocsIndex {
+  return {
+    site: bundle.site,
+    nav: bundle.nav,
+    pages: bundle.pages.map(({ path, title, heading, trail, listed, aliases }) => ({
+      path,
+      title,
+      heading,
+      trail,
+      listed,
+      aliases,
+    })),
+  };
 }
 
 /** One section of a page in `search.json`. */
@@ -142,40 +171,55 @@ export function isLivePath(path: string): boolean {
   return livePages.test(path);
 }
 
-export class Manual {
-  readonly bundle: DocsBundle;
-  readonly links: SiteLinks;
-  private byPath = new Map<string, ManualPage>();
-  private byAlias = new Map<string, ManualPage>();
-  private known: Set<string>;
-  private contexts = new Map<string, RenderContext>();
+/** The manual's pages by path and alias, in reading order: all a sidebar, a path or a title needs. */
+export class ManualIndex<Page extends PageEntry = PageEntry> {
+  readonly site: SiteInfo;
+  readonly nav: NavNode[];
+  readonly pages: Page[];
+  protected byPath = new Map<string, Page>();
+  private byAlias = new Map<string, Page>();
 
-  constructor(bundle: DocsBundle, links: SiteLinks) {
-    this.bundle = bundle;
-    this.links = links;
-    for (const page of bundle.pages) {
+  constructor(index: { site: SiteInfo; nav: NavNode[]; pages: Page[] }) {
+    this.site = index.site;
+    this.nav = index.nav;
+    this.pages = index.pages;
+    for (const page of index.pages) {
       this.byPath.set(page.path, page);
       for (const alias of page.aliases ?? []) this.byAlias.set(alias, page);
     }
-    this.known = new Set([...bundle.pages.map((page) => page.file), ...bundle.files]);
   }
 
   /** A page by its path, or by one of its aliases. */
-  page(path: string): ManualPage | undefined {
+  page(path: string): Page | undefined {
     const name = path.replace(/^\/+|\/+$/g, "");
     return this.byPath.get(name) ?? this.byAlias.get(name.toLowerCase());
   }
 
   /** Listed pages in reading order. */
-  get listed(): ManualPage[] {
-    return this.bundle.pages.filter((page) => page.listed);
+  get listed(): Page[] {
+    return this.pages.filter((page) => page.listed);
   }
 
-  neighbours(path: string): { previous?: ManualPage; next?: ManualPage } {
+  neighbours(path: string): { previous?: Page; next?: Page } {
     const listed = this.listed;
     const index = listed.findIndex((page) => page.path === path);
     if (index < 0) return {};
     return { previous: listed[index - 1], next: listed[index + 1] };
+  }
+}
+
+/** The whole manual: every page's text, and how this site spells a link. */
+export class Manual extends ManualIndex<ManualPage> {
+  readonly bundle: DocsBundle;
+  readonly links: SiteLinks;
+  private known: Set<string>;
+  private contexts = new Map<string, RenderContext>();
+
+  constructor(bundle: DocsBundle, links: SiteLinks) {
+    super(bundle);
+    this.bundle = bundle;
+    this.links = links;
+    this.known = new Set([...bundle.pages.map((page) => page.file), ...bundle.files]);
   }
 
   hasFile(path: string): boolean {

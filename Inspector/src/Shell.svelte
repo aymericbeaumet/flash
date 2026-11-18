@@ -1,12 +1,10 @@
 <script lang="ts">
   import { tick, untrack, type Snippet } from "svelte";
-  import { docsStore } from "./lib/docs.svelte";
   import Icon from "./lib/Icon.svelte";
-  import { renderMarkdown } from "./lib/markdown";
   import PageHeader from "./lib/PageHeader.svelte";
   import { prepareOnIntent } from "./lib/prefetch";
   import { router } from "./lib/router.svelte";
-  import { parseRoute, paths } from "./lib/routes";
+  import { paths } from "./lib/routes";
   import { search as runSearch, type SearchIndex } from "./lib/search";
   import type { Crumb, Section } from "./lib/shell";
   import Toaster from "./lib/Toaster.svelte";
@@ -26,6 +24,9 @@
     searchPlaceholder,
     searchHint,
     searching = false,
+    onsearch,
+    neighbours,
+    prepare,
     lost,
     host,
     version,
@@ -50,6 +51,12 @@
     searchHint: string;
     /** The index is still loading: an empty result is not final. */
     searching?: boolean;
+    /** Search is about to be used: the field took focus, or a query is here. */
+    onsearch?: () => void;
+    /** Where `[` and `]` lead from the page shown. */
+    neighbours?: { previous?: string; next?: string };
+    /** Readies the page a link leads to, while the pointer rests on it or the keyboard reaches it. */
+    prepare?: (url: URL) => void;
     /** What the not-found page says. */
     lost: string;
     /** Who serves the page, at the foot of the sidebar; a link when `href` is set. */
@@ -75,8 +82,6 @@
   const groups = $derived([...new Set(sections.map((item) => item.group))]);
   const homePage = $derived(sections.find((item) => item.id === "home"));
   const route = $derived(router.route);
-  const manual = $derived(docsStore.manual);
-  const currentPage = $derived(route.page === "docs" ? manual?.page(route.param) : undefined);
   let search = $state("");
   let searchInput = $state<HTMLInputElement>();
   let selectedResult = $state(0);
@@ -97,14 +102,8 @@
         selectedResult = 0;
         if (router.route.page !== "search") search = "";
       });
-      // A manual page renders while its link is pointed at or focused; the
-      // click then only mounts it.
       const stopPreparing = prepareOnIntent(window, (url) => {
-        if (url.origin !== location.origin || !router.handles(parseRoute(url))) return;
-        const target = parseRoute(url);
-        const known = docsStore.manual;
-        const page = target.page === "docs" ? known?.page(target.param) : undefined;
-        if (known && page?.markdown) renderMarkdown(page.markdown, known.context(page.file));
+        if (url.origin === location.origin) prepare?.(url);
       });
       window.addEventListener("keydown", onKey);
       return () => {
@@ -114,22 +113,17 @@
       };
     }),
   );
-  // Search reads the manual's sections, fetched the first time it is needed:
-  // as the search field takes focus, before the first word is typed.
+  // What search reads is fetched the first time it is needed: as the search
+  // field takes focus, before the first word is typed.
   $effect(() => {
-    if (route.page === "search" || search) void docsStore.loadSections();
+    if (route.page === "search" || search) onsearch?.();
   });
-  // A reload of /search?q= restores the query in the box.
+  // A reload of /search?q= restores the query in the box. Only the address
+  // drives this: a keystroke reaches the box before it reaches the address.
   $effect(() => {
     if (route.page !== "search") return;
     const query = route.param;
     if (untrack(() => search) !== query) search = query;
-  });
-  // Pages arrive after the first render; reveal a linked heading once it renders.
-  $effect(() => {
-    void docsStore.bundle;
-    void docsStore.complete;
-    void tick().then(() => router.revealAnchor());
   });
   $effect(() => {
     const label = crumbs[crumbs.length - 1]?.label ?? home.label;
@@ -197,12 +191,7 @@
         break;
       case "[":
       case "]": {
-        let target: string | undefined;
-        if (route.page === "docs" && currentPage && manual) {
-          const { previous, next } = manual.neighbours(currentPage.path);
-          const page = event.key === "[" ? previous : next;
-          target = page && paths.docs(page.path);
-        }
+        const target = event.key === "[" ? neighbours?.previous : neighbours?.next;
         if (target) {
           event.preventDefault();
           router.navigate(target);
@@ -326,7 +315,7 @@
           bind:value={search}
           oninput={onSearchInput}
           onkeydown={onSearchKey}
-          onfocus={() => void docsStore.loadSections()}
+          onfocus={() => onsearch?.()}
           type="search"
           name="q"
           aria-label={searchLabel}

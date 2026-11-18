@@ -12,6 +12,7 @@
   import LivePageHeader from "./lib/LivePageHeader.svelte";
   import LogList from "./lib/LogList.svelte";
   import MappingsPanel from "./lib/MappingsPanel.svelte";
+  import { renderMarkdown } from "./lib/markdown";
   import { monitorCounts } from "./lib/monitors";
   import MonitorsPanel from "./lib/MonitorsPanel.svelte";
   import { markGuideRead } from "./lib/onboarding";
@@ -22,8 +23,8 @@
   import { configToast, doneToast, failedToast } from "./lib/toast";
   import { toasts } from "./lib/toasts.svelte";
   import { router } from "./lib/router.svelte";
-  import { paths } from "./lib/routes";
-  import { buildIndex } from "./lib/search";
+  import { parseRoute, paths } from "./lib/routes";
+  import { buildIndex } from "./lib/help-search";
   import { sharedCrumbs, type Crumb, type Section } from "./lib/shell";
   import { store } from "./lib/store.svelte";
   import Shell from "./Shell.svelte";
@@ -102,6 +103,15 @@
   });
   const current = $derived(crumbs[crumbs.length - 1]?.label ?? "Flash");
   const title = $derived(route.page === "home" ? "Flash" : `${current} · Flash`);
+  /** The manual pages `[` and `]` lead to. */
+  const neighbours = $derived.by(() => {
+    if (!manual || !currentPage) return undefined;
+    const { previous, next } = manual.neighbours(currentPage.path);
+    return {
+      previous: previous && paths.docs(previous.path),
+      next: next && paths.docs(next.path),
+    };
+  });
   const index = $derived(
     buildIndex(
       docs,
@@ -146,16 +156,25 @@
   $effect(() => {
     if (store.connected && docsStore.error) void docsStore.load();
   });
-  // The plugins' guides arrive with the snapshot, after the first render;
-  // reveal a linked heading once it renders.
+  // The manual and the plugins' guides arrive after the first render; reveal
+  // a linked heading once it renders.
   $effect(() => {
     void docs;
+    void docsStore.bundle;
     void tick().then(() => router.revealAnchor());
   });
   // The home page's checklist counts the guides this browser has opened.
   $effect(() => {
     if (currentPage) markGuideRead(currentPage.path);
   });
+
+  /** A manual page renders while its link is pointed at or focused; the click then only mounts it. */
+  function prepare(url: URL) {
+    const target = parseRoute(url);
+    const known = docsStore.manual;
+    const page = target.page === "docs" ? known?.page(target.param) : undefined;
+    if (known && page?.markdown) renderMarkdown(page.markdown, known.context(page.file));
+  }
 
   /** The runtime page's Refresh says how it went. */
   async function refresh() {
@@ -294,6 +313,9 @@
   searchLabel="Search all documentation, commands, mappings and plugins"
   searchPlaceholder="Search anything…"
   searchHint="Type a feature, command, key or plugin name. Every word must match."
+  onsearch={() => void docsStore.loadSections()}
+  {neighbours}
+  {prepare}
   lost="This address is not part of Flash's help. Start from its home page, browse the documentation, or search above."
   host={{ icon: "shield", label: "Served by Flash on this Mac" }}
   version={store.state.runtime?.version}

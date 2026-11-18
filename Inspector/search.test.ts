@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildIndex, search, sections } from "./src/lib/search.ts";
+import { buildIndex, sections } from "./src/lib/help-search.ts";
+import { search } from "./src/lib/search.ts";
 import type { DocTopic } from "./src/lib/types.ts";
 
 const hints: DocTopic = {

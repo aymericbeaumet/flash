@@ -1,4 +1,4 @@
-import type { ManualPage } from "./docsite.ts";
+import type { PageEntry } from "./docsite.ts";
 import { paths, type Route } from "./routes.ts";
 import type { DocTopic } from "./types.ts";
 
@@ -25,7 +25,7 @@ export interface Crumb {
  */
 export function sharedCrumbs(
   route: Route,
-  page: ManualPage | undefined,
+  page: PageEntry | undefined,
   guide?: DocTopic,
 ): Crumb[] | undefined {
   if (route.page === "search")

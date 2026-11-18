@@ -10,10 +10,17 @@
 // strict documentation build this replaces. `site` also renders every page
 // for both sites and checks each link the HTML carries.
 
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { livePageNames, siteLinks, type DocsBundle, type SiteMode } from "../src/lib/docsite.ts";
+import {
+  docsIndex,
+  livePageNames,
+  siteLinks,
+  type DocsBundle,
+  type SiteMode,
+} from "../src/lib/docsite.ts";
 import { searchSections, type Problem } from "./docs-bundle.ts";
 import { docsDirectory, loadDocs } from "./docs-source.ts";
 
@@ -88,7 +95,16 @@ type Renderer = (
   mode: SiteMode,
   bundle: DocsBundle,
   path: string,
-) => { head: string; body: string };
+) => { head: string; body: string; article?: string };
+
+/** A name that changes with the content, so the file caches for good. */
+const hashed = (name: string, extension: string, content: string) =>
+  `${name}-${createHash("sha256").update(content).digest("base64url").slice(0, 8)}.${extension}`;
+
+/** The reading area the site's app renders empty, for the page's article. */
+const readingArea = /(<div class="reading-area[^"]*">)(<\/div>)/g;
+/** What a server render leaves for a hydration to find its place by. */
+const hydrationMarkers = /<!--[^>]*-->/g;
 
 /** The published pages' links all lead somewhere on the site, and nowhere local. */
 function checkPublished(
@@ -176,7 +192,10 @@ function favicon() {
 }
 
 /**
- * The published site: one prerendered page per manual page, readable without JavaScript.
+ * The published site: one prerendered page per manual page, readable without
+ * JavaScript. A page is the site's app around its article: the app hydrates
+ * from the navigation asset all pages share, and the article is HTML alone,
+ * with nothing left for a hydration, set into the app's empty reading area.
  *
  * Each run builds in its own directory under `dist-site/` (inside the package,
  * so the server render resolves its dependencies) and removes it afterwards:
@@ -220,7 +239,7 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
     renderPage: Renderer;
   };
   const template = await readFile(join(work, "client", "site.html"), "utf8");
-  for (const marker of ["<!--site-head-->", "<!--site-boot-->", "<!--site-body-->"]) {
+  for (const marker of ["<!--site-head-->", "<!--site-body-->"]) {
     if (!template.includes(marker)) throw new Error(`site.html lost its ${marker} marker`);
   }
 
@@ -230,18 +249,14 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
   await mkdir(out, { recursive: true });
   const html = new Map<string, string>();
   const problems: string[] = [];
-  const page = (path: string | null, route: string) => {
-    const current = bundle.pages.find((candidate) => candidate.path === path);
-    // Each page carries its own text (search and 404 none); the rest of the
-    // manual loads when idle.
-    const boot = {
-      ...bundle,
-      pages: bundle.pages.map((candidate) =>
-        candidate === current ? candidate : { ...candidate, markdown: "" },
-      ),
-    };
-    const rendered = renderPage("public", boot, route);
-    const description = escapeHTML(bundle.site.description);
+  const assets = new Set<string>();
+  const navigation = JSON.stringify(docsIndex(bundle));
+  const navigationFile = `_app/${hashed("nav", "json", navigation)}`;
+  await write(join(out, navigationFile), navigation);
+  assets.add(navigationFile);
+  const description = escapeHTML(bundle.site.description);
+  const page = (route: string) => {
+    const rendered = renderPage("public", bundle, route);
     const head = [
       `<meta name="description" content="${description}" />`,
       `<link rel="icon" href="${favicon()}" />`,
@@ -249,25 +264,29 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
       `<meta property="og:site_name" content="${escapeHTML(bundle.site.name)}" />`,
       `<meta property="og:description" content="${description}" />`,
       `<meta name="twitter:card" content="summary" />`,
+      // What the page hydrates from: the address it was rendered for, and
+      // the navigation, fetched while the script loads.
+      `<meta name="flash-route" content="${escapeHTML(route)}" />`,
+      `<link rel="preload" as="fetch" crossorigin="anonymous" id="flash-nav" href="${escapeHTML(`${root}/${navigationFile}`)}" />`,
       rendered.head,
     ].join("\n    ");
-    return template
-      .replace("<!--site-head-->", () => head)
-      .replace(
-        "<!--site-boot-->",
-        () =>
-          `<script id="flash-docs" type="application/json">${scriptJSON({ bundle: boot, route })}</script>`,
-      )
-      .replace("<!--site-body-->", () => rendered.body);
+    let body = rendered.body;
+    if (rendered.article !== undefined) {
+      const article = rendered.article.replace(hydrationMarkers, "");
+      if (body.match(readingArea)?.length !== 1)
+        throw new Error(`${route}: the page has no single reading area for its article`);
+      body = body.replace(readingArea, (_, open: string, close: string) => open + article + close);
+    }
+    return template.replace("<!--site-head-->", () => head).replace("<!--site-body-->", () => body);
   };
   for (const entry of bundle.pages) {
     const file = entry.path ? `${entry.path}/index.html` : "index.html";
-    html.set(file, page(entry.path, links.page(entry.path)));
+    html.set(file, page(links.page(entry.path)));
     const local = renderPage("local", bundle, siteLinks("local").page(entry.path));
     problems.push(...checkLocal(file, local.body, bundle));
   }
-  html.set("search/index.html", page(null, `${root}/search/`));
-  html.set("404.html", page(null, `${root}/404.html`));
+  html.set("search/index.html", page(`${root}/search/`));
+  html.set("404.html", page(`${root}/404.html`));
   for (const [file, text] of html) await write(join(out, file), text);
   // `:help config` names a page by alias; the published URL does too.
   const stubs = new Map<string, string>();
@@ -285,7 +304,6 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
   }
   for (const [file, text] of stubs) await write(join(out, file), text);
 
-  const assets = new Set<string>();
   await mkdir(join(out, "_app"), { recursive: true });
   for (const file of await readdir(join(work, "client", "_app"))) {
     await copyFile(join(work, "client", "_app", file), join(out, "_app", file));
@@ -305,8 +323,12 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
     join(out, "sitemap.xml"),
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join("\n")}\n</urlset>\n`,
   );
+  await write(
+    join(out, "robots.txt"),
+    `User-agent: *\nAllow: /\n\nSitemap: ${new URL("sitemap.xml", bundle.site.url).href}\n`,
+  );
   await write(join(out, ".nojekyll"), "");
-  for (const file of ["docs.json", "search.json", "sitemap.xml"]) assets.add(file);
+  for (const file of ["docs.json", "search.json", "sitemap.xml", "robots.txt"]) assets.add(file);
 
   problems.push(...checkPublished(new Map([...html, ...stubs]), assets, root, bundle.site.url));
   for (const [file, text] of html) {
