@@ -81,6 +81,16 @@ extension AppDelegate {
     server.start()
   }
 
+  /// Replace the configuration file's text. A dotfiles checkout links
+  /// `flash.toml` into place: the atomic write renames over its target, so
+  /// the link survives and the file it names carries the new text.
+  static func writeConfig(_ text: String, to url: URL) throws {
+    let target = url.resolvingSymlinksInPath()
+    try FileManager.default.createDirectory(
+      at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(text.utf8).write(to: target, options: .atomic)
+  }
+
   /// `GET /api/config` reads the file Flash loaded. `PUT` replaces it after
   /// the body parses as TOML. `POST /api/config/purge` returns the editor
   /// text with bundled defaults removed and does not write.
@@ -110,9 +120,7 @@ extension AppDelegate {
           return
         }
         do {
-          try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-          try Data(text.utf8).write(to: url, options: .atomic)
+          try Self.writeConfig(text, to: url)
         } catch {
           completion(
             "500 Internal Server Error", type,

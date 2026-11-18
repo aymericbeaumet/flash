@@ -84,4 +84,28 @@ final class ConfigReloadTests: XCTestCase {
     }
     XCTAssertEqual(lines, Array(repeating: "[config] reload_skipped reason=unchanged", count: 2))
   }
+
+  /// The browser editor saves through a linked `flash.toml`: the link stays
+  /// a link and the file it names carries the new text.
+  func testSavingThroughASymbolicLinkWritesItsTarget() throws {
+    let dotfiles = directory.appendingPathComponent("dotfiles")
+    try FileManager.default.createDirectory(at: dotfiles, withIntermediateDirectories: true)
+    let target = dotfiles.appendingPathComponent("flash.toml")
+    try Data("[hints]\nmin_length = 2\n".utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+
+    try AppDelegate.writeConfig("[hints]\nmin_length = 3\n", to: file)
+
+    XCTAssertEqual(
+      try FileManager.default.destinationOfSymbolicLink(atPath: file.path), target.path)
+    XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "[hints]\nmin_length = 3\n")
+    let loaded = ConfigLoader.load(
+      ConfigLoader.userFile(environment: environment), environment: environment)
+    XCTAssertEqual(loaded.hints.minLength, 3)
+
+    // A plain file, and one whose directory does not exist yet, still save.
+    let fresh = directory.appendingPathComponent("new/flash.toml")
+    try AppDelegate.writeConfig("[hints]\nmin_length = 4\n", to: fresh)
+    XCTAssertEqual(try String(contentsOf: fresh, encoding: .utf8), "[hints]\nmin_length = 4\n")
+  }
 }
