@@ -16,7 +16,7 @@ mapping claims, and lets the key mapped to `app cancel` through
 its own Escape.
 
 Normal mode mappings are owned by `Sources/flash/App/NormalMode.swift` and the
-default mapping list in `Sources/flash/Config/Config.swift`.
+default mapping list in `Sources/flash/Config/Config+ModeDefaults.swift`.
 
 ## Input capture and latency
 
