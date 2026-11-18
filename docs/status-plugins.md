@@ -62,7 +62,7 @@ settings. For live charts and per-process tables, run `btop` in a
 | Domain | Nominal fast path | Slower path | Command |
 | --- | --- | --- | --- |
 | `cpu` | CPU ticks every second (`host_processor_info`, in-process) | GPU utilization every 15 seconds (IOKit registry, in-process) | `:sysinfo cpu` |
-| `memory` | Memory composition and the kernel's available-memory level every second (`host_statistics64` + `sysctl`, in-process) | — | `:sysinfo memory` |
+| `memory` | Memory composition and the kernel's available-memory level every second (`host_statistics64` + `sysctl`, in-process) | The same sample once a minute while `memory_pressure` is the only memory segment read | `:sysinfo memory` |
 | `disks` | I/O counters every three seconds (IOKit registry, in-process) | Mounted volumes re-read on `core:volumes.changed`; free space every 30 seconds (`getfsstat` + `statfs`, in-process) | `:sysinfo disks` |
 | `network` | Default-interface traffic every second while a traffic segment is shown (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route (`NET_RT_DUMP2` sysctl, in-process), address, and SSID discovery at start and on `core:network.changed`; no poll | `:sysinfo network`; the `network.addresses` catalog |
 | `power` | Battery/power snapshot on `core:power.changed` (IOKit power-source notification; IOPowerSources, in-process); no poll | Health from the battery's IOKit registry entry during refreshes, with a 30-second TTL; an explicit refresh forces it | `:sysinfo power` |
@@ -148,7 +148,8 @@ while a surface shows it.
 | `sysinfo` · CPU sample | 1 s while a `cpu_` segment is observed | high | A one-second figure ticks visibly |
 | `sysinfo` · first CPU-sample bracket | One 1 s wait per process | high | The first figure on screen waits on it |
 | `sysinfo` · GPU sample | 15 s while a `cpu_` segment is observed | normal | Nobody watches it tick |
-| `sysinfo` · memory sample | 1 s while a `memory_` segment is observed | high | A one-second figure ticks visibly |
+| `sysinfo` · memory sample | 1 s while a `memory_` segment other than `memory_pressure` is observed | high | A one-second figure ticks visibly |
+| `sysinfo` · memory pressure alone | 60 s while `memory_pressure` is the only `memory_` segment observed | low | A monitor compares it with a threshold; nobody watches it tick |
 | `sysinfo` · network traffic | 1 s while a traffic segment is shown | high | One-second rates tick visibly |
 | `sysinfo` · disk I/O activity | 3 s while a `disks_` segment is observed | normal | A tenth of a second is invisible at three seconds |
 | `terminals` · tmux inventory settle | 100 ms quiet, 1 s at most, after a control-mode change | high | It redraws the session and window segments |

@@ -1,5 +1,6 @@
 //! Memory: the kernel counters `vm_stat` and `sysctl` print, sampled once
-//! per second while a segment is shown.
+//! per second while a segment is shown, and once a minute while only the
+//! pressure is read.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -24,10 +25,16 @@ pub(crate) const SEGMENTS: [&str; 6] = [
     "memory_details",
     "memory_percent",
     "memory_history",
-    "memory_pressure",
+    PRESSURE,
 ];
 
+/// The pressure segment: the one a monitor reads with nothing on screen.
+const PRESSURE: &str = "memory_pressure";
+
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+/// The sample behind the pressure alone. A threshold a monitor compares it
+/// with moves over minutes, and nobody watches the figure tick.
+const PRESSURE_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MemorySnapshot {
@@ -98,7 +105,12 @@ struct MonitorState {
 pub(crate) struct Memory {
     state: Arc<Mutex<MonitorState>>,
     refresh_gate: Arc<tokio::sync::Mutex<()>>,
+    /// The one-second sample, while a segment other than the pressure is
+    /// observed.
     cadences: ObservedCadences,
+    /// The one-minute sample, while the pressure is the only segment
+    /// observed.
+    pressure_cadences: ObservedCadences,
 }
 
 impl Default for Memory {
@@ -107,6 +119,7 @@ impl Default for Memory {
             state: Arc::new(Mutex::new(MonitorState::default())),
             refresh_gate: Arc::new(tokio::sync::Mutex::new(())),
             cadences: ObservedCadences::default(),
+            pressure_cadences: ObservedCadences::default(),
         }
     }
 }
@@ -128,11 +141,33 @@ impl Memory {
                     refresh_and_publish(&ctx, &state, &gate, GatePolicy::Wait).await;
                 }
             });
+
+        let state = Arc::clone(&self.state);
+        let gate = Arc::clone(&self.refresh_gate);
+        // `Low`: a minute-scale reading behind a threshold; any slack is
+        // invisible.
+        self.pressure_cadences
+            .interval(ctx, PRESSURE_INTERVAL, PollPriority::Low, move |ctx| {
+                let state = Arc::clone(&state);
+                let gate = Arc::clone(&gate);
+                async move {
+                    refresh_and_publish(&ctx, &state, &gate, GatePolicy::Wait).await;
+                }
+            });
     }
 
-    /// `core:status.observed`, reduced to this domain's segments.
+    /// `core:status.observed`, reduced to this domain's segments with the
+    /// prefix removed. The one-second sample carries the pressure too, so
+    /// the slow one runs only while the pressure is all that is observed.
     pub(crate) fn observe(&self, ctx: &Context, segments: &[String]) {
-        if self.cadences.observe(segments) {
+        let (pressure, shown): (Vec<String>, Vec<String>) = segments
+            .iter()
+            .cloned()
+            .partition(|segment| PRESSURE.strip_prefix(PREFIX) == Some(segment));
+        let pressure_only: &[String] = if shown.is_empty() { &pressure } else { &[] };
+        let shown_armed = self.cadences.observe(&shown);
+        let pressure_armed = self.pressure_cadences.observe(pressure_only);
+        if shown_armed || pressure_armed {
             let ctx = ctx.clone();
             let (state, gate) = (Arc::clone(&self.state), Arc::clone(&self.refresh_gate));
             tokio::spawn(async move {
@@ -141,8 +176,8 @@ impl Memory {
         }
     }
 
-    /// The details; unobserved, nothing samples between commands, so it
-    /// samples first.
+    /// The details; with no segment shown the last sample is up to a minute
+    /// old, or older with nothing observed, so it samples first.
     pub(crate) async fn show(&self, ctx: &Context) -> PerformResponse {
         if !self.cadences.observed() {
             self.refresh(ctx).await;

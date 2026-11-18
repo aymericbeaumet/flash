@@ -287,13 +287,24 @@ mod tests {
             .await;
         assert_eq!(cadences(&mut harness), [(1.0, "high".to_string())]);
 
-        // A monitor reading the pressure alone keeps the memory sample.
-        plugin.on_event(ctx.clone(), observed(&[])).await;
-        harness.drain();
+        // A monitor reading the pressure alone, with nothing on screen,
+        // keeps a slow sample; a shown segment beside it brings back the
+        // one-second cadence, which carries the pressure too.
         plugin
             .on_event(ctx.clone(), observed(&["memory_pressure"]))
             .await;
+        assert_eq!(cadences(&mut harness), [(60.0, "low".to_string())]);
+        plugin
+            .on_event(
+                ctx.clone(),
+                observed(&["memory_pressure", "memory_percent"]),
+            )
+            .await;
         assert_eq!(cadences(&mut harness), [(1.0, "high".to_string())]);
+        plugin
+            .on_event(ctx.clone(), observed(&["memory_pressure"]))
+            .await;
+        assert_eq!(cadences(&mut harness), [(60.0, "low".to_string())]);
 
         plugin
             .on_event(ctx.clone(), observed(&["disks_read_bps"]))

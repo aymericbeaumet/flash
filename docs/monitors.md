@@ -342,7 +342,8 @@ Two tools need their unattended flags:
 `flash.plugin.sysinfo.memory_pressure` is the share of memory the kernel does
 not count as available, 0–100: `100 − kern.memorystatus_level`, the free
 percentage `memory_pressure` prints. The `sysinfo` plugin reads it on its
-memory sample. It is not the plugin's `memory_percent`, which counts file
+memory sample: once a second while the bar or a widget shows a memory
+segment, once a minute while this monitor is its only reader. It is not the plugin's `memory_percent`, which counts file
 cache as used and sits near 100 on a healthy Mac.
 
 `flash.plugin.errors` lists the plugins `flash.plugin.error_count` counts,
