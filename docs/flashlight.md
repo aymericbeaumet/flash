@@ -137,7 +137,7 @@ reads Firefox's history alone, where `@history` reads every browser's.
 | `tabs` | browsers plugin | an open browser tab, with its URL; selecting it switches to it |
 | `history`, `bookmarks` | browsers plugin | a visited page or a bookmark, with its URL; selecting it opens it |
 | `terminals` | terminals plugin | a tmux window; selecting it switches to it |
-| `emojis` | emojis plugin | an emoji or symbol, by its Unicode name, shortcode or CLDR keyword (`idk`, `hooray`); selecting it types it |
+| `emojis` | emojis plugin | an emoji or symbol, by its Unicode name, shortcode, CLDR keyword (`idk`, `hooray`) or emoticon (`:)`, `<3`); selecting it types it |
 | `bangs` | searchproviders plugin | a `!token` search shortcut; selecting it completes the bang |
 | `snippets`, `shortcuts` | snippets, shortcuts plugins | a text snippet to type, or a Shortcuts app shortcut to run |
 | `network` | sysinfo plugin | a network address of this Mac; selecting it copies it |

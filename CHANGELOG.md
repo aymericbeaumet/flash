@@ -316,6 +316,12 @@ monitors read that no plugin publishes any more, with its replacement.
   seconds). `flash config check` reports a `[plugins.feed] url` that is not
   an `https://` URL. The Rust SDK's `fetch` returns the body of a 2xx
   response alone; another status is an error.
+- The emoticons the flashlight understands (`:)` finds 🙂) are the `emojis`
+  plugin's data: the new manifest key `query_aliases` maps a query token of
+  punctuation to the words scored in its place. Flash itself knows no
+  emoticon. `xd` and `xp` are no longer rewritten to "laughing" and
+  "tongue", so an app or a file named that way is found by its name; `x-d`
+  still finds 😆.
 - A `text_grid` reply may say where its cells are (`cell`: size and
   padding in points), and `terminals` does: a letter search in Alacritty
   under tmux lands on the cells Alacritty reports, the ones `f` already

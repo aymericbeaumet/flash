@@ -161,6 +161,27 @@ mod tests {
         }
     }
 
+    /// An emoticon the manifest declares (`query_aliases`) stands for words
+    /// the flashlight then scores: each must be a shortcode some glyph of
+    /// the catalog carries, or the emoticon would find nothing.
+    #[test]
+    fn every_emoticon_the_manifest_declares_names_a_shortcode_of_the_catalog() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        let declared = manifest["query_aliases"].as_object().unwrap();
+        assert!(declared.len() > 40);
+        let rows = emoji_candidates(EMOJI_DATA, ALIAS_DATA, KEYWORD_DATA);
+        let shortcodes: HashSet<&str> = rows
+            .iter()
+            .filter_map(|row| row.meta("aliases"))
+            .flat_map(str::split_whitespace)
+            .collect();
+        for (emoticon, words) in declared {
+            let words = words.as_str().unwrap();
+            assert!(shortcodes.contains(words), "{emoticon} -> {words}");
+        }
+    }
+
     fn aliases_of<'a>(rows: &'a [Candidate], glyph: &str) -> Option<&'a str> {
         rows.iter()
             .find(|row| typed(row) == Some(glyph))

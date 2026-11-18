@@ -582,6 +582,11 @@ struct PluginManifest: Decodable, Equatable {
   /// `BrowserEngines`, and a browser an earlier plugin declared keeps its
   /// engine.
   var browserEngines: BrowserEngineTable
+  /// `query_aliases`: flashlight query tokens this plugin's rows are not
+  /// indexed under, and the words scored in their place; across plugins they
+  /// are `QueryAliases`, and a token an earlier plugin declared keeps its
+  /// words.
+  var queryAliases: QueryAliasTable
   var priority: Int
   /// Global active-window selector for this plugin, compounded with
   /// mapping-entry selectors.
@@ -751,6 +756,7 @@ struct PluginManifest: Decodable, Equatable {
     case onDemandHints = "on_demand_hints"
     case ownTextEditing = "own_text_editing"
     case browserEngines = "browser_engines"
+    case queryAliases = "query_aliases"
   }
 
   init(
@@ -777,6 +783,7 @@ struct PluginManifest: Decodable, Equatable {
     onDemandHints: [String] = [],
     ownTextEditing: [String] = [],
     browserEngines: BrowserEngineTable = BrowserEngineTable(),
+    queryAliases: QueryAliasTable = QueryAliasTable(),
     priority: Int = 25,
     selector: PluginSelector = PluginSelector(),
     sources: [CandidateSourceDescriptor] = [],
@@ -811,6 +818,7 @@ struct PluginManifest: Decodable, Equatable {
     self.onDemandHints = Self.uniqueTrimmed(onDemandHints)
     self.ownTextEditing = Self.uniqueTrimmed(ownTextEditing)
     self.browserEngines = browserEngines
+    self.queryAliases = queryAliases
     self.priority = priority
     self.selector = selector
     self.sources = Self.uniqueSourceDescriptors(sources)
@@ -876,6 +884,8 @@ struct PluginManifest: Decodable, Equatable {
       try c.decodeIfPresent([String].self, forKey: .ownTextEditing) ?? [])
     self.browserEngines = try Self.browserEngines(
       try c.decodeIfPresent([String: [String]].self, forKey: .browserEngines) ?? [:])
+    self.queryAliases = try Self.queryAliases(
+      try c.decodeIfPresent([String: String].self, forKey: .queryAliases) ?? [:])
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.selector = PluginSelector(
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
@@ -917,6 +927,46 @@ struct PluginManifest: Decodable, Equatable {
       out.append(descriptor)
     }
     return out
+  }
+
+  /// The most aliases one manifest declares, and the longest token and
+  /// words, in UTF-8 bytes.
+  static let maxQueryAliases = 256
+  static let maxQueryAliasTokenBytes = 16
+  static let maxQueryAliasWordsBytes = 64
+
+  /// `query_aliases` as a table. A token is lowercase, without whitespace,
+  /// and carries a character that is neither a letter nor a digit: a word
+  /// the flashlight already scores stays that word. Its words are lowercase
+  /// letters, digits and `_`.
+  private static func queryAliases(_ declared: [String: String]) throws -> QueryAliasTable {
+    guard declared.count <= maxQueryAliases else {
+      throw PluginError.failure(
+        "manifest.json query_aliases declares more than \(maxQueryAliases) tokens")
+    }
+    let words = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_")
+    for token in declared.keys.sorted() {
+      let scalars = token.unicodeScalars
+      guard !token.isEmpty, token.utf8.count <= maxQueryAliasTokenBytes,
+        token == token.lowercased(),
+        !scalars.contains(where: { $0.properties.isWhitespace }),
+        scalars.contains(where: { !CharacterSet.alphanumerics.contains($0) })
+      else {
+        throw PluginError.failure(
+          "manifest.json query_aliases: \"\(token)\" is not a token (lowercase, no "
+            + "whitespace, at most \(maxQueryAliasTokenBytes) bytes, with a character that "
+            + "is neither a letter nor a digit)")
+      }
+      let value = declared[token] ?? ""
+      guard !value.isEmpty, value.utf8.count <= maxQueryAliasWordsBytes,
+        value.unicodeScalars.allSatisfy({ words.contains($0) })
+      else {
+        throw PluginError.failure(
+          "manifest.json query_aliases.\(token): words are lowercase letters, digits and _ "
+            + "(at most \(maxQueryAliasWordsBytes) bytes)")
+      }
+    }
+    return QueryAliasTable(declared)
   }
 
   /// `browser_engines` as a table. An engine the host does not know, an id
@@ -1121,7 +1171,7 @@ struct PluginManifest: Decodable, Equatable {
       // that would need RPC into (or events delivered to) the plugin is
       // invalid. Mappings, help topics, bindings and app declarations
       // (terminal emulators, on-demand hints, own text editing, browser
-      // engines) are the complete allowed surface; a core `commands[]` entry needs a process
+      // engines) and query aliases are the complete allowed surface; a core `commands[]` entry needs a process
       // like any other.
       let processBound: [(String, Bool)] = [
         ("listen", !listen.isEmpty),

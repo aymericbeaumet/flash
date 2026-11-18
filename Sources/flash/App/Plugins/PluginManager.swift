@@ -288,6 +288,7 @@ final class PluginManager {
     var onDemandHintApps: Set<String> = []
     var ownTextEditingApps: Set<String> = []
     var browserEngines = BrowserEngineTable()
+    var queryAliases = QueryAliasTable()
     var helpTopics: [HelpTopic] = []
     var order = 0
     for plugin in plugins {
@@ -344,6 +345,7 @@ final class PluginManager {
       onDemandHintApps.formUnion(manifest.onDemandHints)
       ownTextEditingApps.formUnion(manifest.ownTextEditing)
       browserEngines.merge(manifest.browserEngines)
+      queryAliases.merge(manifest.queryAliases)
 
       commandBindings.add(manifest)
       commandConfirmations.add(manifest)
@@ -406,6 +408,7 @@ final class PluginManager {
     TerminalEmulators.declared.declare(terminalEmulators)
     OnDemandHintApps.declared.declare(onDemandHintApps)
     BrowserEngines.declared.declare(browserEngines)
+    QueryAliases.declared.declare(queryAliases)
     let ownTextEditingChanged = OwnTextEditingApps.declared.all != ownTextEditingApps
     OwnTextEditingApps.declared.declare(ownTextEditingApps)
     hotSnapshotLock.lock()

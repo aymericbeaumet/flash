@@ -848,12 +848,12 @@ extension AppDelegate {
     // The heaviest pools (full installed-app + plugin candidate
     // counts) stay below ~5k so the synchronous path stays cheap.
     let tScoringStart = LatencyProbe.now
-    // Rewrite standalone emoticons (`:)`, `:-(`, `;)`, …) to the emoji
-    // shortcodes the `emojis` plugin indexes before normalization strips
-    // their punctuation — otherwise `@emojis :)` collapses to an empty query
-    // and lists every glyph unranked.
+    // Rewrite the tokens plugins declare aliases for (`query_aliases`: an
+    // emoticon and its emoji's shortcode) before normalization strips their
+    // punctuation — otherwise `@emojis :)` collapses to an empty query and
+    // lists every glyph unranked.
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(
-      NormalModeDispatcher.expandEmoticons(scoringText))
+      QueryAliases.declared.table.expand(scoringText))
     let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: normalizedQuery)
     let signature = scope?.signature ?? ""
     // Incremental narrowing: if the new query extends the previous one

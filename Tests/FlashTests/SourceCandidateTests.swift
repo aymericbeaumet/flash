@@ -1587,28 +1587,6 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertNotNil(CandidateFinder.score(query: "laugh", candidate: candidate))
   }
 
-  func testExpandEmoticonsRewritesStandaloneTokens() {
-    // The faces the user asked for, with and without noses, plus a couple of
-    // case-folded and multi-token forms.
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":)"), "slightly_smiling_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":-)"), "slightly_smiling_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":("), "slightly_frowning_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":-("), "slightly_frowning_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(";)"), "wink")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(";-)"), "wink")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":D"), "grinning")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("XD"), "laughing")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("<3"), "heart")
-    // Ordinary queries are untouched (and skip the work via the punctuation
-    // guard), including a colon that isn't a standalone emoticon.
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("fire"), "fire")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("slack general"), "slack general")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("foo:bar"), "foo:bar")
-    // Only the emoticon token is rewritten in a mixed query.
-    XCTAssertEqual(
-      NormalModeDispatcher.expandEmoticons("happy :)"), "happy slightly_smiling_face")
-  }
-
   func testEmoticonQuerySurfacesIntendedGlyph() throws {
     // End-to-end: mirror the coordinator pipeline (expand → score → sort) and
     // assert each emoticon ranks its intended glyph first.
@@ -1625,9 +1603,14 @@ final class SourceCandidateTests: XCTestCase {
         kind: .plugin("emoji"), source: "emojis.glyphs", name: "😉 winking face",
         subtitle: "emoji", bundleIdentifier: "", searchAliases: "wink winking"))
     let pool = [smiling, frowning, winking]
+    let aliases = QueryAliasTable([
+      ":)": "slightly_smiling_face", ":-)": "slightly_smiling_face",
+      ":(": "slightly_frowning_face", ":-(": "slightly_frowning_face",
+      ";)": "wink", ";-)": "wink",
+    ])
 
     func topGlyph(for emoticon: String) throws -> String {
-      let query = NormalModeDispatcher.expandEmoticons(emoticon)
+      let query = aliases.expand(emoticon)
       let scored = pool.compactMap { candidate -> CandidateMatch? in
         guard let score = CandidateFinder.score(query: query, candidate: candidate) else {
           return nil

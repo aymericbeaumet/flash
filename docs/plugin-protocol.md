@@ -760,7 +760,7 @@ forensics. `exec` (argv array) is required for any plugin that runs a
 process; omitting it declares a **manifest-only plugin** — no child process
 ever runs, and the manifest may only carry surfaces the host serves alone:
 `mappings`, `help`, `bindings`, `terminal_emulators`, `own_text_editing`,
-`on_demand_hints` and `browser_engines` (the bundled `defaults` plugin is the exemplar). Anything process-bound is
+`on_demand_hints`, `browser_engines` and `query_aliases` (the bundled `defaults` plugin is the exemplar). Anything process-bound is
 rejected, a core `commands[]` entry included. Loading is strict — unknown top-level or nested
 keys and malformed known fields are rejected outright, and new manifest
 surface only ever arrives together with a protocol change, so "unknown key"
@@ -1073,6 +1073,20 @@ Section semantics:
   only when hints are requested and observed with the reduced notification
   set that drives mode, border and focus. The bundled `defaults` plugin
   declares Notes.
+- **`query_aliases`** — `{ "<token>": "<words>" }`: flashlight query tokens
+  the plugin's rows are not indexed under, and the words scored in their
+  place. The flashlight keeps only letters and digits of a query, so a token
+  of punctuation would match nothing; the bundled `emojis` plugin declares
+  the emoticons (`":)": "slightly_smiling_face"`), which is why `:)` finds 🙂.
+  A whitespace-delimited token of the query that equals a declared one,
+  whatever its case, is replaced; the rest of the query is scored as written,
+  in every scope. A token is lowercase, without whitespace, at most 16 bytes,
+  and carries a character that is neither a letter nor a digit, so no plugin
+  rewrites an ordinary word; its words are lowercase letters, digits and `_`,
+  at most 64 bytes; a manifest declares at most 256. Across plugins the
+  tables merge and a token an earlier plugin declared keeps its words. Flash
+  itself knows no emoticon: with `emojis` disabled a query is scored as
+  written.
 - **`browser_engines`** — the browsers this plugin declares, as bundle ids
   under their engine: `{"chromium": [...], "webkit": [...], "gecko": [...]}`.
   The host names no browser, so the engine is how it knows one: the
