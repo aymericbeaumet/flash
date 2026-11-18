@@ -8,6 +8,7 @@
   import { sharedCrumbs, type Section } from "./lib/shell";
   import Shell from "./Shell.svelte";
   import { island } from "./site/island";
+  import { preparePage } from "./site/navigation";
   import { siteSearch } from "./site/search.svelte";
 
   /**
@@ -116,9 +117,10 @@
   searchLabel="Search the documentation"
   searchPlaceholder="Search the docs…"
   searchHint="Type a feature, command or setting. Every word must match."
-  searching={!siteSearch.sections}
+  searchStage={siteSearch.stage}
   onsearch={() => void siteSearch.load()}
   {neighbours}
+  prepare={preparePage}
   lost="This address is not part of the Flash documentation. Start from its home page, or search above."
   {host}
   note={{ label: "Your Flash", body: liveNote }}

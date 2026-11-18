@@ -7,8 +7,8 @@ import type { RenderContext, Target } from "./markdown-tree.ts";
  * resident serves that bundle at `/docs/<page>` and the published site
  * prerenders the same pages at `<site>/<page>/`, where a page carries its
  * article as HTML and reads the navigation (`DocsIndex`) from one asset every
- * page shares. Only the spelling of a link differs between the two, through
- * `SiteLinks`.
+ * page shares, with the search sections in two more (`src/site/assets.ts`).
+ * Only the spelling of a link differs between the two, through `SiteLinks`.
  */
 
 export interface SiteInfo {
@@ -105,7 +105,7 @@ export function docsIndex(bundle: DocsBundle): DocsIndex {
   };
 }
 
-/** One section of a page in `search.json`. */
+/** One section of a page, as search reads it: the resident's `search.json`, the published site's two files. */
 export interface SearchSection {
   path: string;
   title: string;

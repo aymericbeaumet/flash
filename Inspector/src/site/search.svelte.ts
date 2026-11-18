@@ -1,28 +1,35 @@
 import type { SearchSection } from "../lib/docsite";
 import { site } from "../lib/routes";
+import type { SearchStage } from "../lib/search";
+import { SearchLoader, type SearchAssets } from "./assets";
+
+async function read(file: string): Promise<unknown> {
+  const response = await fetch(`${site.links.root}/${file}`);
+  if (!response.ok) throw new Error(`${file}: ${response.status}`);
+  return response.json();
+}
 
 /**
- * What the published site searches: the manual's sections (`search.json`),
- * fetched the first time a search needs them.
+ * What the published site searches: the manual's sections, fetched the first
+ * time a search needs them. Their outline arrives first and finds a page by
+ * its title or a heading; their text follows, and completes the results.
  */
 class SiteSearch {
   sections = $state.raw<SearchSection[] | null>(null);
-  private loading: Promise<void> | null = null;
+  /** Whether a query's results are final: only once the text is here. */
+  stage = $state<SearchStage>("loading");
+  private readonly loader = new SearchLoader(read, (progress) => {
+    this.sections = progress.sections;
+    this.stage = progress.complete ? "complete" : progress.failed ? "failed" : "loading";
+  });
+
+  /** Where the navigation says the search is. */
+  use(assets: SearchAssets) {
+    this.loader.use(assets);
+  }
 
   load(): Promise<void> {
-    if (this.sections) return Promise.resolve();
-    this.loading ??= fetch(`${site.links.root}/search.json`)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((value: unknown) => {
-        if (Array.isArray(value)) this.sections = value as SearchSection[];
-      })
-      .catch(() => {
-        /* Search stays empty; the next use asks again. */
-      })
-      .finally(() => {
-        this.loading = null;
-      });
-    return this.loading;
+    return this.loader.load();
   }
 }
 

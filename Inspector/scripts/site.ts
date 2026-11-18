@@ -3,7 +3,8 @@
 //   node scripts/site.ts check            every link of every page, both sites
 //   node scripts/site.ts bundle <dir> [--revision=<commit>]
 //                                         docs.json, search.json, routes.json and files/ for the app bundle
-//   node scripts/site.ts site <dir>       the published site, prerendered page by page
+//   node scripts/site.ts site <dir>       the published site, prerendered page by page, with its
+//                                         navigation and its search as hashed files under _app/
 //
 // Every command fails on a broken link or anchor, a page missing from
 // docs/nav.json or a navigation entry without its file: the parity of the
@@ -21,6 +22,8 @@ import {
   type DocsBundle,
   type SiteMode,
 } from "../src/lib/docsite.ts";
+import { splitSections, type SiteIndex } from "../src/site/assets.ts";
+import { speculationRules } from "../src/site/navigation.ts";
 import { searchSections, type Problem } from "./docs-bundle.ts";
 import { docsDirectory, loadDocs } from "./docs-source.ts";
 
@@ -196,6 +199,8 @@ function favicon() {
  * JavaScript. A page is the site's app around its article: the app hydrates
  * from the navigation asset all pages share, and the article is HTML alone,
  * with nothing left for a hydration, set into the app's empty reading area.
+ * The navigation names the search's two files (`src/site/assets.ts`); the
+ * manual's Markdown is not published.
  *
  * Each run builds in its own directory under `dist-site/` (inside the package,
  * so the server render resolves its dependencies) and removes it afterwards:
@@ -250,10 +255,26 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
   const html = new Map<string, string>();
   const problems: string[] = [];
   const assets = new Set<string>();
-  const navigation = JSON.stringify(docsIndex(bundle));
-  const navigationFile = `_app/${hashed("nav", "json", navigation)}`;
-  await write(join(out, navigationFile), navigation);
-  assets.add(navigationFile);
+  /** A file every page shares, named by its content so it caches for good. */
+  const asset = async (name: string, value: unknown) => {
+    const text = JSON.stringify(value);
+    const file = `_app/${hashed(name, "json", text)}`;
+    await write(join(out, file), text);
+    assets.add(file);
+    return file;
+  };
+  // The search in two files, read one after the other: the outline answers
+  // by title or heading while the text of every section is on its way.
+  const search = splitSections(searchSections(bundle));
+  const index: SiteIndex = {
+    ...docsIndex(bundle),
+    search: {
+      outline: await asset("search-outline", search.outline),
+      text: await asset("search-text", search.text),
+    },
+  };
+  const navigationFile = await asset("nav", index);
+  const speculation = `<script type="speculationrules">${scriptJSON(speculationRules(root))}</script>`;
   const description = escapeHTML(bundle.site.description);
   const page = (route: string) => {
     const rendered = renderPage("public", bundle, route);
@@ -268,6 +289,8 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
       // the navigation, fetched while the script loads.
       `<meta name="flash-route" content="${escapeHTML(route)}" />`,
       `<link rel="preload" as="fetch" crossorigin="anonymous" id="flash-nav" href="${escapeHTML(`${root}/${navigationFile}`)}" />`,
+      // Which links the browser may fetch or render ahead of the click.
+      speculation,
       rendered.head,
     ].join("\n    ");
     let body = rendered.body;
@@ -311,8 +334,6 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
   }
   await copyFiles(bundle, out);
   for (const file of bundle.files) assets.add(file);
-  await write(join(out, "docs.json"), JSON.stringify(bundle));
-  await write(join(out, "search.json"), JSON.stringify(searchSections(bundle)));
   const urls = bundle.pages
     .filter((entry) => entry.listed)
     .map(
@@ -328,7 +349,7 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
     `User-agent: *\nAllow: /\n\nSitemap: ${new URL("sitemap.xml", bundle.site.url).href}\n`,
   );
   await write(join(out, ".nojekyll"), "");
-  for (const file of ["docs.json", "search.json", "sitemap.xml", "robots.txt"]) assets.add(file);
+  for (const file of ["sitemap.xml", "robots.txt"]) assets.add(file);
 
   problems.push(...checkPublished(new Map([...html, ...stubs]), assets, root, bundle.site.url));
   for (const [file, text] of html) {

@@ -1,5 +1,5 @@
-// The manual's build: `docs/` into the bundle the resident and the published
-// site load (`docs.json`), its search sections (`search.json`) and the link
+// The manual's build: `docs/` into the bundle the resident loads (`docs.json`)
+// and the published site renders from, its search sections and the link
 // check of a strict build. Only the build scripts and the tests import it;
 // the page reads the bundle through `src/lib/docsite.ts`.
 
@@ -32,8 +32,6 @@ const reservedPaths = new Set(["search", "404", "_app"]);
 const servableFiles = /\.(toml|json|txt|png|jpe?g|gif|webp)$/i;
 /** Generated files at the site root. */
 const reservedFiles = new Set([
-  "docs.json",
-  "search.json",
   "favicon.svg",
   "404.html",
   "sitemap.xml",

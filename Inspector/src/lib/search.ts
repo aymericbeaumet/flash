@@ -27,7 +27,19 @@ export interface SearchIndex {
   entries: SearchEntry[];
 }
 
-/** The manual's sections (`search.json`) as entries: all the published site searches. */
+/** Whether what a search finds is final: its index is whole, still arriving, or stopped short. */
+export type SearchStage = "complete" | "loading" | "failed";
+
+/** The line above the results: how many, and whether more may follow. */
+export function searchSummary(count: number, query: string, stage: SearchStage): string {
+  const found = `${count} ${count === 1 ? "result" : "results"}`;
+  if (stage === "loading")
+    return count ? `${found} so far for “${query}”, still searching…` : `Searching for “${query}”…`;
+  if (stage === "failed") return `${found} for “${query}”, from part of the search`;
+  return `${found} for “${query}”`;
+}
+
+/** The manual's search sections as entries: all the published site searches. */
 export function manualEntries(manual: SearchSection[]): SearchEntry[] {
   return manual.map((section) => {
     const text = `${section.heading ?? section.title} ${section.text}`;

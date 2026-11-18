@@ -5,7 +5,12 @@
   import { prepareOnIntent } from "./lib/prefetch";
   import { router } from "./lib/router.svelte";
   import { paths } from "./lib/routes";
-  import { search as runSearch, type SearchIndex } from "./lib/search";
+  import {
+    search as runSearch,
+    searchSummary,
+    type SearchIndex,
+    type SearchStage,
+  } from "./lib/search";
   import type { Crumb, Section } from "./lib/shell";
   import Toaster from "./lib/Toaster.svelte";
 
@@ -23,7 +28,7 @@
     searchLabel,
     searchPlaceholder,
     searchHint,
-    searching = false,
+    searchStage = "complete",
     onsearch,
     neighbours,
     prepare,
@@ -49,8 +54,8 @@
     searchPlaceholder: string;
     /** What the search page says before a query is typed. */
     searchHint: string;
-    /** The index is still loading: an empty result is not final. */
-    searching?: boolean;
+    /** Whether the index is whole: results from part of it are never shown as final. */
+    searchStage?: SearchStage;
     /** Search is about to be used: the field took focus, or a query is here. */
     onsearch?: () => void;
     /** Where `[` and `]` lead from the page shown. */
@@ -337,7 +342,7 @@
             id="search"
             title="Search"
             purpose={route.param
-              ? `${results.length} ${results.length === 1 ? "result" : "results"} for “${route.param}”`
+              ? searchSummary(results.length, route.param, searchStage)
               : searchHint}
           />
           {#if route.param}<div class="search-results surface" aria-live="polite">
@@ -357,8 +362,13 @@
                   /></a
                 >{/each}
               {#if results.length === 0}<div class="empty"
-                  ><strong>{searching ? "Searching…" : "No matches"}</strong>Try fewer words, or a
-                  command name such as <code>mouse target</code>.</div
+                  ><strong>{searchStage === "loading" ? "Searching…" : "No matches"}</strong>Try
+                  fewer words, or a command name such as <code>mouse target</code>.</div
+                >{/if}
+              {#if searchStage === "loading" && results.length}<p class="empty"
+                  >Still searching the text of every page: more results may follow.</p
+                >{:else if searchStage === "failed"}<p class="empty"
+                  >Part of the search did not load, so results may be missing. Type again to retry.</p
                 >{/if}
               {#if results.length >= 80}<p class="empty"
                   >Showing the first 80 matches. Add another word to narrow your search.</p

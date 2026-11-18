@@ -25,6 +25,8 @@ import {
 import table from "./src/lib/help-routes.json" with { type: "json" };
 import { hashBody } from "./src/lib/reading.ts";
 import { parseRoute } from "./src/lib/routes.ts";
+import { joinSections, splitSections, type SiteIndex } from "./src/site/assets.ts";
+import { speculationRules } from "./src/site/navigation.ts";
 
 const site = { url: "https://example.github.io/flash/" };
 const local = siteLinks("local");
@@ -668,6 +670,10 @@ test("search sections land on the rendered heading ids", async () => {
       assert.ok(ids.has(section.id!), `${page.file}#${section.id}`);
   }
   assert.ok(sections.some((section) => section.path === "normal-mode" && section.heading));
+  // The published site ships them as an outline and its text.
+  const { outline, text } = splitSections(sections);
+  assert.deepEqual(joinSections(outline, text), sections);
+  assert.equal(outline.length, new Set(sections.map((section) => section.path)).size);
 });
 
 /**
@@ -716,16 +722,44 @@ test("the published site builds, and its pages link only within it", async () =>
       .filter((name) => name.startsWith("build-"))
       .map((name) => join(work, name));
     assert.deepEqual(left, [foreign], "a build removes its own intermediate files");
+    // What every page shares is under `_app/`, named by its content: the
+    // navigation each page preloads, which names the search's two files.
+    // The manual's Markdown and its sections in one file are not published.
+    assert.ok(!built.includes("docs.json") && !built.includes("search.json"));
+    const home = await readFile(join(out, "index.html"), "utf8");
+    const preload =
+      /<link rel="preload" as="fetch"[^>]* href="\/flash\/(_app\/nav-[\w-]{8}\.json)"/;
+    const navigation = home.match(preload)?.[1];
+    assert.ok(navigation && built.includes(navigation), "the page preloads its navigation");
+    const index = JSON.parse(await readFile(join(out, navigation), "utf8")) as SiteIndex;
+    assert.match(index.search.outline, /^_app\/search-outline-[\w-]{8}\.json$/);
+    assert.match(index.search.text, /^_app\/search-text-[\w-]{8}\.json$/);
+    const { bundle } = await loadDocs();
+    assert.deepEqual(
+      joinSections(
+        JSON.parse(await readFile(join(out, index.search.outline), "utf8")),
+        JSON.parse(await readFile(join(out, index.search.text), "utf8")),
+      ),
+      searchSections(bundle),
+    );
+    const rules = `<script type="speculationrules">${JSON.stringify(speculationRules("/flash"))}</script>`;
     const pages = built.filter((name) => name.endsWith(".html")).map((name) => join(out, name));
     assert.ok(pages.length > 50);
+    let prepared = 0;
     for (const page of pages) {
       const html = await readFile(page, "utf8");
+      // An alias is a stub that moves on; every other document is a page of the app.
+      if (html.includes('<div id="app">')) {
+        assert.ok(html.includes(rules), `${page} says which links to prepare`);
+        prepared += 1;
+      }
       for (const [, href] of html.matchAll(/<a\b[^>]*?\shref="([^"]*)"/g)) {
         assert.doesNotMatch(href, helpAddress, `${page} links ${href}`);
         if (!/^[a-z][a-z\d+.-]*:/i.test(href) && !href.startsWith("#"))
           assert.match(href, /^\/flash\//, `${page} links ${href}`);
       }
     }
+    assert.equal(prepared, index.pages.length + 2, "every page, the search and the 404");
   } finally {
     for (const directory of [out, other, foreign])
       await rm(directory, { recursive: true, force: true });

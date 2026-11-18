@@ -216,7 +216,7 @@ the mapping keyboard's keycaps. List rows and navigation links are at least
 `mise run test:inspector` runs the pure tests (search,
 reading state, onboarding, mapping search, keyboard, request retry, clipboard
 history paging and resume, monitors, toasts, state patches, and the documentation: rendering, routes on
-both sites and every link of every page), renders the toast components on the server and holds the
+both sites, every link of every page, and the published site's search files and their loader), renders the toast components on the server and holds the
 committed page to its size budget (`Inspector/budget.test.ts`). The page must remain
 self-contained and must render plugin-authored Markdown as untrusted content.
 
@@ -236,9 +236,10 @@ has the numbers and how to measure them. What keeps it there:
 - The resident's help builds a page's Markdown tree with plain DOM calls
   (`Markdown.svelte`); the server render and the published site, which
   hydrates it, use the template. Neither parses a string as HTML.
-- A manual page renders while its link is pointed at or focused
-  (`prepareOnIntent`), and the search sections load as the search field
-  takes focus.
+- In the resident's help a manual page renders while its link is pointed at
+  or focused (`prepareOnIntent`), and the search sections load as the search
+  field takes focus. The published site [prepares the next page and splits
+  its search](#building-the-documentation) instead.
 - The page shell is one file the browser revalidates; keep it within its
   budget, and keep the bundled documentation and runtime data behind their
   endpoints rather than in the page.
@@ -254,9 +255,35 @@ the inspector's own renderer and components:
   `/docs/<file>`.
 - `mise run build:site` builds the published site into `build/site`:
   `SiteApp.svelte` rendered on the server for every page (plus
-  search and 404) and hydrated in the browser, with the documentation, its search
-  index and the files under `docs/`. `.github/workflows/pages.yml` deploys
-  it; the CI documentation job runs the same build.
+  search and 404) and hydrated in the browser, with the files under `docs/`.
+  `.github/workflows/pages.yml` deploys it; the CI documentation job runs the
+  same build.
+
+A published page is a document of its own: its article is HTML the browser
+never hydrates, and a link loads another page. What the pages share are files
+under `_app/`, each named by a hash of its content so it caches for good:
+
+| File | Holds | Loaded |
+| --- | --- | --- |
+| `site-<hash>.js`, `style-<hash>.css` | The site's app and its styles | With every page |
+| `nav-<hash>.json` | The navigation (`SiteIndex`: the site, the tree, every page's path, title and aliases) and the names of the two search files | Preloaded by every page's head; the app hydrates from it |
+| `search-outline-<hash>.json` | Every page's title and its headings with their anchors (`PageOutline`) | When the search field takes focus |
+| `search-text-<hash>.json` | The text of every section, in the outline's order | Right after the outline |
+
+The search answers from the outline as soon as it is here, by title or
+heading, and says it is still searching; the text completes the results.
+`splitSections` and `joinSections` (`src/site/assets.ts`) are the two halves
+of that format, and `SearchLoader` reads the files in turn: one that arrived
+is never fetched again, and a failed load keeps what arrived, says results
+may be missing and resumes on the next keystroke. The site publishes neither
+the manual's Markdown nor a `docs.json`.
+
+Each page's head carries speculation rules (`speculationRules`,
+`src/site/navigation.ts`) for links to other pages of the site, never to a
+file, an asset or the page itself: the browser fetches a page while the
+pointer rests on its link and renders it once the link is pressed. A browser
+that reads no speculation rules fetches the linked document while its link is
+pointed at or focused (`prepareOnIntent`, `preparePage`).
 
 The build's half of the manual lives in `Inspector/scripts/docs-bundle.ts`:
 bundling `docs/`, the search sections and the link check. The page reads
