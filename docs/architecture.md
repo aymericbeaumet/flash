@@ -405,9 +405,9 @@ itself, and the HTTP inspector pushes its state on the changes it shows.
 The active-window stroke reads the window list on main (see
 `scheduleActiveWindowBorderRead`), so it reads only when a window may have
 changed: every border-relevant AX notification, activation, quit, Space and
-display change bumps `activeWindowBorderEventEpoch`, each read records the
-epoch it saw, and a mode change repaints the cached frame without reading
-while the two agree.
+display change bumps the event epoch of `ActiveWindowBorderState`, each read
+records the epoch it saw, and a mode change repaints the cached frame without
+reading while the two agree.
 
 Visible regions subtract every higher window from the active one, except fully
 transparent windows. The frontmost app's window can sit under another app's
