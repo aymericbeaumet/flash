@@ -563,8 +563,8 @@ surface that shows it again never reads stale figures.
   draws `prefix` still before the visible line, and
   marks that line as carousel content for the transition; a scroll over it
   steps the carousel by hand, with nothing for the plugin to handle; blank
-  lines are dropped, no lines clears, and a malformed object is rejected whole
-  with a content-free warning. Undeclared names are ignored. Segments are live
+  lines are dropped, no lines clears, and a malformed object, one with any
+  other key included, is rejected whole with a content-free warning. Undeclared names are ignored. Segments are live
   state: cleared on any teardown (unlike catalogs).
 - `poll` — `{"registrations": {"<name>": {"every": <seconds>, "priority": <p>}
   | {"after": <seconds>, "priority": <p>}}}`, the plugin's complete set of

@@ -97,6 +97,7 @@
 {"name": "status.carousel-lines-not-an-array", "expect": "reject", "frame": {"method":"status","params":{"segments":{"feed":{"prefix":"News ","lines":"First","cycle_seconds":30.0}}}}}
 {"name": "status.carousel-line-not-markup", "expect": "reject", "frame": {"method":"status","params":{"segments":{"feed":{"prefix":"News ","lines":["First",2],"cycle_seconds":30.0}}}}}
 {"name": "status.carousel-prefix-not-markup", "expect": "reject", "frame": {"method":"status","params":{"segments":{"feed":{"prefix":7,"lines":["First","Second"],"cycle_seconds":30.0}}}}}
+{"name": "status.carousel-unknown-key", "expect": "reject", "frame": {"method":"status","params":{"segments":{"feed":{"prefix":"News ","lines":["First","Second"],"cycle_seconds":30.0,"pause_seconds":2}}}}}
 {"name": "poll", "expect": "accept", "frame": {"method":"poll","params":{"registrations":{"i0":{"every":30.0,"priority":"normal"}}}}}
 {"name": "poll.deadline", "expect": "accept", "frame": {"method":"poll","params":{"registrations":{"d0":{"after":0.25,"priority":"low"}}}}}
 {"name": "poll.clear", "expect": "accept", "frame": {"method":"poll","params":{"registrations":{}}}}

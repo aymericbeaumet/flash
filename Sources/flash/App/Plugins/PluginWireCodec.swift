@@ -537,15 +537,19 @@ enum PluginWireCodec {
     case malformed
   }
 
+  private static let carouselKeys: Set<String> = ["prefix", "lines", "cycle_seconds"]
+
   /// A segment value is markup (`""` clears) or a carousel object
   /// `{"prefix"?: markup, "lines": [markup], "cycle_seconds": ≥ 1}`; blank
-  /// lines are dropped and no lines clears. Anything else is rejected whole.
+  /// lines are dropped and no lines clears. Anything else, a carousel with
+  /// another key included, is rejected whole.
   static func statusSegment(from value: Any) -> DecodedStatusSegment {
     if let text = value as? String {
       let trimmed = text.trimmed
       return trimmed.isEmpty ? .clear : .value(.text(trimmed))
     }
     guard let object = value as? [String: Any],
+      Set(object.keys).isSubset(of: carouselKeys),
       let rawLines = object["lines"] as? [Any],
       let seconds = PluginJSON.number(object["cycle_seconds"]), seconds >= 1
     else { return .malformed }
