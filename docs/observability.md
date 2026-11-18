@@ -103,6 +103,13 @@ rebuilt and its clipboard, plugin and mapping counts — the cost of building
 `/api/state` on the main thread,
 which the watchdog's `main_busy` report also names as `inspector_snapshot`.
 
+Launch, a configuration reload, the flashlight opening, each key typed into
+it and a popup showing log `[latency] launch_ready`, `config_reload`,
+`flashlight_open`, `flashlight_key` and `popup_show` with their stages, at
+`info` except the per-key one at `trace`; a hint activation that missed its
+prepared model also says what was armed to rebuild it. Both are described in
+[performance](performance.md#other-flows).
+
 Repairs of a degenerate walk log `[discover] retry` and
 `[discover] retry_result` at `info` (`repair=retry|readiness`, the ladder
 `steps` taken and `waited_ms`). At `debug`, `[discover] complete` carries `retried`, and

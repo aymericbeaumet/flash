@@ -111,6 +111,11 @@ final class CandidateFinderSession {
   /// A `menu choose` pick the command line shows instead of the catalogs:
   /// its rows are the whole pool, and its answer waits on Return or a close.
   var menu: MenuSession?
+  /// The open being measured as `[latency] flashlight_open`: armed when the
+  /// session opens, spent when its first snapshot is drawn.
+  var openProbe: LatencyProbe?
+  /// When that open's prompt was laid out, before any candidate arrived.
+  var openPromptAt: TimeInterval?
   /// Bumped every time a flashlight session is (re)seeded. Plugin replies and
   /// the first-paint deadline capture this value so work from a closed or
   /// superseded session cannot publish a stale snapshot.

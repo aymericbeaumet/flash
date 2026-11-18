@@ -97,6 +97,8 @@ struct PreparedModelScheduler {
     let ticket: Ticket
     var deadline: UInt64
     var request: Request
+    /// A refresh whose deadline is the app's interval, not the debounce.
+    var throttled = false
   }
 
   private let debounceNs: UInt64
@@ -106,6 +108,8 @@ struct PreparedModelScheduler {
   private var generation: UInt64 = 0
   private var entries: [Key: Entry] = [:]
   private var lastStartedAt: [pid_t: UInt64] = [:]
+  /// Apps whose maintenance fired and was dropped because the user was idle.
+  private var suspendedMaintenance: Set<pid_t> = []
 
   init(debounceMs: Int, minimumIntervalMs: Int, freshnessMs: Int, maintenanceLeadMs: Int) {
     debounceNs = UInt64(debounceMs) * 1_000_000
@@ -128,6 +132,26 @@ struct PreparedModelScheduler {
     entries[Key(pid: pid, kind: .refresh)]?.deadline
   }
 
+  /// What is armed to rebuild `pid`'s model and how far away it is, the wake
+  /// that walks soonest first: a refresh, then a readiness ladder, then
+  /// maintenance. A readiness probe in flight has no time of its own.
+  func pending(pid: pid_t, now: UInt64) -> (state: PreparedModelMissContext.Pending, inMs: Int?) {
+    func remainingMs(_ entry: Entry) -> Int? {
+      guard entry.deadline != .max else { return nil }
+      return entry.deadline > now ? Int((entry.deadline - now + 999_999) / 1_000_000) : 0
+    }
+    if let refresh = entries[Key(pid: pid, kind: .refresh)] {
+      return (refresh.throttled ? .throttled : .debounce, remainingMs(refresh))
+    }
+    if let readiness = entries[Key(pid: pid, kind: .readiness)] {
+      return (.readiness, remainingMs(readiness))
+    }
+    if let maintenance = entries[Key(pid: pid, kind: .maintenance)] {
+      return (.maintenance, remainingMs(maintenance))
+    }
+    return (suspendedMaintenance.contains(pid) ? .suspended : .none, nil)
+  }
+
   /// `minimumIntervalNs` is the app's own spacing for throttled reasons —
   /// its maintenance interval, grown by slow walks — and never shortens the
   /// fixed minimum.
@@ -135,10 +159,12 @@ struct PreparedModelScheduler {
     pid: pid_t, reason: ModelRefreshReason, now: UInt64, minimumIntervalNs: UInt64? = nil
   ) -> Arm? {
     let key = Key(pid: pid, kind: .refresh)
-    var deadline = now + debounceNs
+    let debounced = now + debounceNs
+    var deadline = debounced
     if reason.isThrottled, let last = lastStartedAt[pid] {
       deadline = max(deadline, last + max(minimumIntervalNs ?? 0, self.minimumIntervalNs))
     }
+    let throttled = deadline > debounced
     if var existing = entries[key], case .refresh(let previousReason) = existing.request {
       // AX events may invalidate the model while a focus/config refresh is
       // pending, but must not demote that refresh into a throttled AX request.
@@ -148,13 +174,14 @@ struct PreparedModelScheduler {
       if deadline >= existing.deadline {
         existing.deadline = deadline
         existing.request = .refresh(reason)
+        existing.throttled = throttled
         entries[key] = existing
         return nil
       }
       // An earlier deadline needs a new wake now. Its identity makes the
       // already-enqueued later callback harmless when it eventually arrives.
     }
-    return replace(key: key, deadline: deadline, request: .refresh(reason))
+    return replace(key: key, deadline: deadline, request: .refresh(reason), throttled: throttled)
   }
 
   /// Maintenance wakes `maintenanceLeadMs` before the model's own freshness
@@ -165,6 +192,7 @@ struct PreparedModelScheduler {
   ) -> Arm {
     let freshness = freshnessNs ?? defaultFreshnessNs
     let delay = freshness > maintenanceLeadNs ? freshness - maintenanceLeadNs : 0
+    suspendedMaintenance.remove(pid)
     return replace(
       key: Key(pid: pid, kind: .maintenance),
       deadline: computedAt + delay,
@@ -233,6 +261,14 @@ struct PreparedModelScheduler {
 
   mutating func cancelMaintenance(pid: pid_t) {
     entries.removeValue(forKey: Key(pid: pid, kind: .maintenance))
+    suspendedMaintenance.remove(pid)
+  }
+
+  /// `pid`'s maintenance fired with nobody at the desk and armed nothing: its
+  /// model expires. Remembered until maintenance is armed or cancelled again,
+  /// so the activation that then misses can say why.
+  mutating func noteMaintenanceSuspended(pid: pid_t) {
+    suspendedMaintenance.insert(pid)
   }
 
   mutating func suppressSpeculativeRefresh(pid: pid_t) {
@@ -253,12 +289,16 @@ struct PreparedModelScheduler {
   mutating func reset() {
     entries.removeAll()
     lastStartedAt.removeAll()
+    suspendedMaintenance.removeAll()
   }
 
-  private mutating func replace(key: Key, deadline: UInt64, request: Request) -> Arm {
+  private mutating func replace(
+    key: Key, deadline: UInt64, request: Request, throttled: Bool = false
+  ) -> Arm {
     generation &+= 1
     let ticket = Ticket(pid: key.pid, generation: generation)
-    entries[key] = Entry(ticket: ticket, deadline: deadline, request: request)
+    entries[key] = Entry(
+      ticket: ticket, deadline: deadline, request: request, throttled: throttled)
     return Arm(ticket: ticket, kind: key.kind, deadline: deadline)
   }
 }

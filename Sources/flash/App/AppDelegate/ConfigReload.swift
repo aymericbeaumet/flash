@@ -2,6 +2,12 @@ import AppKit
 import Carbon.HIToolbox
 import FlashCore
 
+/// What asked for a configuration load: the resident's launch, a change to
+/// the watched file, or `config reload`.
+enum ConfigReloadReason: String {
+  case launch, watch, command
+}
+
 /// Hot-reload pipeline for `flash.toml`. The file watcher fires
 /// `reloadConfig()`, which (re)parses, validates, applies the new
 /// config to every subsystem, and shows an alert if parsing failed.
@@ -63,7 +69,7 @@ extension AppDelegate {
     lastAppliedConfigFileContents = contents
     // Launch already started the one environment refresh it needs; a reload
     // the user caused re-reads the rc files they may just have edited.
-    reloadConfig(refreshesEnvironment: !launching)
+    reloadConfig(reason: launching ? .launch : .watch, refreshesEnvironment: !launching)
   }
 
   private func teardownConfigWatchers() {
@@ -98,7 +104,7 @@ extension AppDelegate {
   func forceConfigReload() {
     lastAppliedConfigFileContents = try? Data(
       contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
-    reloadConfig(refreshesEnvironment: true)
+    reloadConfig(reason: .command, refreshesEnvironment: true)
   }
 
   private func scheduleConfigReload() {
@@ -124,8 +130,12 @@ extension AppDelegate {
   /// Re-read the config from disk, layer env + CLI overrides on top,
   /// then publish to overlay + monitor under their internal locks. Every
   /// future activation snapshots the new config at the start of its walk.
-  private func reloadConfig(refreshesEnvironment: Bool) {
+  /// Logged as `[latency] config_reload`: the parse and the apply, both on
+  /// main. A watched save's 150 ms settle comes before it and is not counted.
+  private func reloadConfig(reason: ConfigReloadReason, refreshesEnvironment: Bool) {
     MainThreadActivity.note("config_reload")
+    let probe = LatencyProbe.arm(.configReload)
+    var stages = LatencyStages()
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
@@ -135,7 +145,8 @@ extension AppDelegate {
         DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
       }
     }
-    let cfg = ConfigLoader.load()
+    let cfg = stages.measure("parse") { ConfigLoader.load() }
+    let applyStartedAt = LatencyProbe.now
     if hintSession.isActive || activationInFlight { cancelOverlay() }
     let previousAutostart = config.app.autostart
     // Rebuild the frecency store only when its tuning actually changed —
@@ -256,6 +267,10 @@ extension AppDelegate {
     refreshEffectiveMappings(
       for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
     reloadTerminalPopupConfiguration()
+    stages.add("apply", since: applyStartedAt)
+    probe.finish(
+      fields: [("reason", reason.rawValue)] + stages.fields,
+      attributes: ["reason": reason.rawValue])
   }
 
   /// Plugins emit a state notification on every log line, lifecycle

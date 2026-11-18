@@ -17,8 +17,10 @@ mise run bench:log-summary -- path/to/flash.log.1 path/to/flash.log
 It prints, with nearest-rank percentiles, every distribution a performance
 audit otherwise computes by hand: the `[latency]` lines by kind; the
 `hints_visible` target activations by app, with the prepared-model hit rate,
-hit and miss latencies and the misses by `miss_reason`; the `hints_empty`
-activations by app and path; `[plugin] slow catalog publish` by plugin;
+hit and miss latencies and the misses by `miss_reason`; those misses by
+`miss_reason` and `pending`, with what Flash was doing about the model; the
+[other flows](#other-flows) by variant, with each stage's p50; the
+`hints_empty` activations by app and path; `[plugin] slow catalog publish` by plugin;
 `[apple] refresh` by catalog; `[plugin] initialized` startup by plugin; the
 `[mode] active_border_frame` window-list reads on main by reason;
 `[poll] overrun` by registration; `[watchdog] main_busy` stalls and
@@ -26,7 +28,7 @@ activations by app and path; `[plugin] slow catalog publish` by plugin;
 and the
 warnings and errors by kind, per hour. Everything but the `[latency]`,
 startup and warning lines needs `[debug] log_level = "debug"` (the border
-reads `"trace"`). Attach the before and after reports to the change; the
+reads and `flashlight_key` need `"trace"`). Attach the before and after reports to the change; the
 tables below are the fixtures' numbers, the report is the user's.
 
 ## What is measured
@@ -34,7 +36,7 @@ tables below are the fixtures' numbers, the report is the user's.
 Every hint activation logs one line when its hints reach the screen:
 
 ```text
-[latency] hints_visible ms=12.4 origin=key prepared=hit targets=42 class=native surface=targets bundle=com.apple.Notes outcome=hit miss_reason=-
+[latency] hints_visible ms=12.4 origin=key prepared=hit targets=42 class=native surface=targets bundle=com.apple.Notes outcome=hit miss_reason=- cause=- model_age_ms=- no_model_ms=- interval_ms=- pending=- refresh_in_ms=-
 ```
 
 - **Start:** the timestamp of the input that asked for hints. For a key the
@@ -76,6 +78,27 @@ Every hint activation logs one line when its hints reach the screen:
   declaration) or `provider` (a volatile provider such as tmux owned the
   hints). `mise run bench:hints-summary -- --by-bundle` and
   `bench:log-summary` break the misses down by it.
+- The six fields after it say what Flash was doing about that app's model
+  when the activation missed, all `-` on a hit and on a surface that never
+  consults the model:
+  - `cause` names what last discarded the model: the Accessibility
+    notification (`AXValueChanged`), the Flash action or the environment
+    change. `-` when nothing discarded it (it expired, or was never built).
+  - `model_age_ms` is the age of a model the lookup rejected (`expired`,
+    `degenerate`); `no_model_ms` is how long the app had been without one.
+    Only one of the two is set.
+  - `interval_ms` is the app's interval between speculative walks: 1.5 s,
+    doubled by each slow or unchanged walk up to 30 s
+    ([prepared models](prepared-model.md)).
+  - `pending` is what was armed to rebuild the model: `walking` (a walk was
+    already running), `debounce` (a refresh inside its debounce), `throttled`
+    (a refresh held back by `interval_ms`), `readiness` (a readiness ladder
+    waiting for the app's tree), `maintenance` (armed ahead of the freshness
+    ceiling), `suspended` (maintenance fired while the user was idle and let
+    the model expire), `suppressed` (Flash was not warming the app) or `none`
+    (no walk was coming).
+  - `refresh_in_ms` is how far away that pending wake was, `-` when nothing
+    was timed.
 
 An activation that ends with nothing to draw logs instead, with no UI:
 
@@ -99,6 +122,36 @@ count, empty count and nearest-rank p50/p95 over the activations that showed
 hints (`hints`; see [commands](commands.md)), and `flash resident doctor` warns
 (`hint_activations`) about an app with at least 5 recent activations of which
 a fifth or more were empty, or whose p95 exceeds 500 ms.
+
+## Other flows
+
+Five flows besides hints log one `[latency]` line each time they run. `ms`
+starts at the input that asked for the flow when the line is logged in that
+input's interaction (`origin` names it: `key`, `hotkey`, `pointer`, `cli` or
+`command_line`), and where the flow began otherwise (`origin=-`). Each
+`<stage>_ms` is one stage of the flow.
+
+```text
+[latency] launch_ready ms=412.0 origin=- config_ms=30.5 plugins_ms=8.0 statusbar_ms=40.0 reload_ms=45.0 main_ms=300.0
+[latency] config_reload ms=50.0 origin=- reason=watch parse_ms=32.0 apply_ms=18.0
+[latency] flashlight_open ms=35.0 origin=key reason=all_sources_settled count=900 settled=7/7 prompt_ms=4.0
+[latency] flashlight_key ms=2.0 origin=key path=ranked pool=900 matches=30 eval_ms=1.5 filter_ms=0.2 scored=900 inc=false score_ms=1.0 sort_ms=0.2 render_ms=0.1
+[latency] popup_show ms=180.0 origin=key state=cold kind=terminal popup_id=4d290749288b71c1
+```
+
+| Flow | Start | End | Fields |
+| --- | --- | --- | --- |
+| `launch_ready` | The process start, as the kernel recorded it | The end of `applicationDidFinishLaunching` | `main_ms` is that method alone; `config_ms` the first configuration load, `plugins_ms` the plugin manager's start, `statusbar_ms` the status bar's construction, `reload_ms` arming the file watcher with the load it runs |
+| `config_reload` | The load starting (after a watched save's 150 ms settle) | Every subsystem has the new configuration | `reason` is `launch`, `watch` or `command`; `parse_ms` reads and validates the file, `apply_ms` publishes it. Both run on the main thread |
+| `flashlight_open` | The input that opened the flashlight | The commit that draws its first candidates | `reason` is why the first snapshot was published, `count` its candidates, `settled` the sources that had answered; `prompt_ms` is when the empty prompt was laid out |
+| `flashlight_key` | The key, when the list was evaluated in its turn; else the evaluation | The candidate list is applied | `path` is the list built: `ranked`, `completion` (a `@` source or bang completion pool), `bangs`, `empty` (no query yet) or `evaluator` (a leading `=`). `eval_ms` is the evaluation alone, `filter_ms` the pool's construction, then `score_ms`, `sort_ms` and `render_ms` |
+| `popup_show` | The input that asked for the popup | `warm`: the showing, with the screen its running process already had. `cold`: the first frame its program draws | `state`, `kind` (`terminal` or `text`) and a `popup_id` that is a hash of the popup's name |
+
+All log at `info` except `flashlight_key`, which runs per key and logs at
+`trace`. A landing catalog or a re-render also evaluates the list, as
+`origin=-`. A popup already showing, a hover preview and a `menu choose`
+list are not measured. The same values are the `flash.flow.latency`
+histogram ([telemetry](telemetry.md)).
 
 ## Running the benchmark
 
@@ -159,7 +212,19 @@ background-walk cost threshold is a fraction of the model's freshness window,
 never an absolute number of milliseconds: the apps hints matter for
 (Electron, Gecko, Catalyst) walk in 50–100 ms. Measure the rule against this
 baseline with the same command after a day of use; `miss_reason` says what
-the remaining misses are.
+the remaining misses are, and the misses table of `bench:log-summary` says
+which a scheduling change would remove. Read it by `pending`:
+
+- `throttled` with a `refresh in` in seconds: a refresh was asked for and
+  the grown interval held it back. The walk's cost is spacing its
+  event-driven refreshes as well as its maintenance.
+- `none` after `invalidated`, with a long `no model`: something discarded
+  the model and nothing was armed to rebuild it. `causes` names what.
+- `suspended` after `expired`: the model aged out at an idle desk, and the
+  first activation back paid for the walk.
+- `walking`, `debounce` and `readiness`: the rebuild was under way and the
+  activation arrived first.
+- `suppressed`: Flash chose not to warm the app.
 
 ## Results
 

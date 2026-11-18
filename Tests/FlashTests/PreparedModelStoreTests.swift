@@ -174,6 +174,52 @@ final class PreparedModelStoreTests: XCTestCase {
     XCTAssertEqual(miss(), .absent)
   }
 
+  /// An absence dates from the discard that took the model and names the
+  /// latest thing that asked, so a miss can say how long the app went
+  /// without a model and what kept invalidating it.
+  func testAnAbsenceDatesFromTheDiscardThatTookTheModel() {
+    let at = { (ms: UInt64) in DispatchTime(uptimeNanoseconds: ms * 1_000_000) }
+    var store = PreparedModelStore()
+    XCTAssertNil(store.absence(pid: 42), "never walked")
+    store.store(
+      model(pid: 42, token: 7, revision: 3, computedAt: at(1_000), targets: [target(id: "a")]))
+    XCTAssertNil(store.absence(pid: 42))
+
+    store.discardModel(pid: 42, because: .invalidated, cause: "AXValueChanged", now: at(2_000))
+    XCTAssertEqual(
+      store.absence(pid: 42),
+      PreparedModelStore.Absence(miss: .invalidated, since: at(2_000), cause: "AXValueChanged"))
+    store.discardModel(pid: 42, because: .invalidated, cause: "AXTitleChanged", now: at(5_000))
+    XCTAssertEqual(
+      store.absence(pid: 42),
+      PreparedModelStore.Absence(miss: .invalidated, since: at(2_000), cause: "AXTitleChanged"),
+      "the latest cause, the first time")
+    store.discardModel(pid: 42, because: .focus, now: at(6_000))
+    XCTAssertEqual(
+      store.absence(pid: 42), PreparedModelStore.Absence(miss: .focus, since: at(2_000)))
+
+    // A stored model ends the absence; the next discard starts a new one.
+    store.store(
+      model(pid: 42, token: 7, revision: 3, computedAt: at(7_000), targets: [target(id: "a")]))
+    XCTAssertNil(store.absence(pid: 42))
+    store.discardModel(pid: 42, because: .config, now: at(9_000))
+    XCTAssertEqual(store.absence(pid: 42)?.since, at(9_000))
+
+    // An occluded walk evicts the model as of the walk, and keeps an
+    // absence that had already begun.
+    store.store(
+      model(pid: 42, token: 7, revision: 3, computedAt: at(9_500), targets: [], occluded: true))
+    XCTAssertEqual(
+      store.absence(pid: 42), PreparedModelStore.Absence(miss: .occluded, since: at(9_000)))
+    store.store(
+      model(pid: 42, token: 7, revision: 3, computedAt: at(10_000), targets: [target(id: "a")]))
+    store.store(
+      model(pid: 42, token: 7, revision: 3, computedAt: at(11_000), targets: [], occluded: true))
+    XCTAssertEqual(store.absence(pid: 42)?.since, at(11_000))
+    store.remove(pid: 42)
+    XCTAssertNil(store.absence(pid: 42))
+  }
+
   func testEmptyReadyModelIsDistinctFromMissingModel() {
     let now = DispatchTime(uptimeNanoseconds: 1_000)
     var store = PreparedModelStore()

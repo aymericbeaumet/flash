@@ -67,16 +67,34 @@ final class HintLatencyProbeTests: XCTestCase {
     XCTAssertEqual(
       line,
       "[latency] hints_visible ms=12.3 origin=key prepared=hit targets=42 class=native "
-        + "surface=targets bundle=com.apple.Safari outcome=hit miss_reason=-")
-    // A miss says why the prepared model could not serve it.
-    let missed = try XCTUnwrap(probe).line(
+        + "surface=targets bundle=com.apple.Safari outcome=hit miss_reason=- cause=- "
+        + "model_age_ms=- no_model_ms=- interval_ms=- pending=- refresh_in_ms=-")
+    // A miss says why the prepared model could not serve it, and what Flash
+    // was doing about that model.
+    let expired = try XCTUnwrap(probe).line(
       visibleAt: 10.1, prepared: .miss, outcome: .miss, targets: 42, appClass: .electron,
-      bundleIdentifier: "com.tinyspeck.slackmacgap", surface: "targets", missReason: .expired)
-    XCTAssertTrue(missed.hasSuffix("outcome=miss miss_reason=expired"), missed)
+      bundleIdentifier: "com.tinyspeck.slackmacgap", surface: "targets", missReason: .expired,
+      missContext: PreparedModelMissContext(
+        modelAgeMs: 9_200, noModelMs: nil, intervalMs: 6_000, pending: .suspended,
+        refreshInMs: nil, cause: nil))
+    XCTAssertTrue(
+      expired.hasSuffix(
+        "outcome=miss miss_reason=expired cause=- model_age_ms=9200 no_model_ms=- "
+          + "interval_ms=6000 pending=suspended refresh_in_ms=-"), expired)
+    let invalidated = try XCTUnwrap(probe).line(
+      visibleAt: 10.1, prepared: .miss, outcome: .miss, targets: 42, appClass: .electron,
+      bundleIdentifier: "com.tinyspeck.slackmacgap", surface: "targets", missReason: .invalidated,
+      missContext: PreparedModelMissContext(
+        modelAgeMs: nil, noModelMs: 730, intervalMs: 24_000, pending: .throttled,
+        refreshInMs: 18_400, cause: "AXValueChanged"))
+    XCTAssertTrue(
+      invalidated.hasSuffix(
+        "miss_reason=invalidated cause=AXValueChanged model_age_ms=- no_model_ms=730 "
+          + "interval_ms=24000 pending=throttled refresh_in_ms=18400"), invalidated)
     let unknown = try XCTUnwrap(probe).line(
       visibleAt: 10.5, prepared: .none, outcome: .none, targets: 9, appClass: .other,
       bundleIdentifier: nil, surface: "grid", missReason: nil)
-    XCTAssertTrue(unknown.hasSuffix("surface=grid bundle=- outcome=none miss_reason=-"), unknown)
+    XCTAssertTrue(unknown.contains("surface=grid bundle=- outcome=none miss_reason=- "), unknown)
   }
 
   /// An activation that ends with no hints is logged too, and parsed by the

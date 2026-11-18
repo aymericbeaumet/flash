@@ -34,6 +34,7 @@ extension AppMonitor {
       hints: [AssignedHint],
       retried: Bool = false,
       miss: PreparedModelMiss? = nil,
+      missContext: PreparedModelMissContext? = nil,
       extra: [String: String] = [:]
     ) {
       if FlashLog.wouldEmit(.debug) {
@@ -52,7 +53,9 @@ extension AppMonitor {
         }
         FlashLog.debug("[discover] complete", fields: fields)
       }
-      completion(hints, DiscoveryOutcome(path: path, retried: retried, miss: miss))
+      completion(
+        hints,
+        DiscoveryOutcome(path: path, retried: retried, miss: miss, missContext: missContext))
     }
 
     let plan = registry.hintProviderPlan(for: context)
@@ -114,6 +117,9 @@ extension AppMonitor {
         }
         miss = .degenerate
       }
+      // Before the activation's walk cancels the pending work it describes.
+      let missContext = preparedModelMissContext(
+        for: pid, bundleIdentifier: context.bundleIdentifier)
 
       func serve(_ model: PreparedModel) {
         noteHealthyTargets(model.targets.count, pid: pid)
@@ -152,6 +158,7 @@ extension AppMonitor {
               hints: self.assignTargets(targets, cfg: cfg, region: context.frontWindowFrame),
               retried: retried,
               miss: miss,
+              missContext: missContext,
               extra: [
                 "model_targets": "\(model.targets.count)",
                 "targets": "\(targets.count)",
@@ -162,6 +169,7 @@ extension AppMonitor {
               hints: model.hints,
               retried: retried,
               miss: miss,
+              missContext: missContext,
               extra: ["targets": "\(model.targets.count)"])
           }
         } else {
@@ -170,7 +178,8 @@ extension AppMonitor {
           // activation's own, so it ends here instead.
           guard isCurrent() else {
             return complete(
-              path: "activation_superseded", hints: [], retried: retried, miss: miss)
+              path: "activation_superseded", hints: [], retried: retried, miss: miss,
+              missContext: missContext)
           }
           self.walkForActivation(
             context: context, providers: plan.preparedProviders, targetFilter: targetFilter,
@@ -181,7 +190,8 @@ extension AppMonitor {
                 pid: pid, bundleIdentifier: context.bundleIdentifier)
             }
             complete(
-              path: "activation_refresh_miss", hints: result.hints, retried: retried, miss: miss)
+              path: "activation_refresh_miss", hints: result.hints, retried: retried, miss: miss,
+              missContext: missContext)
           }
         }
       }

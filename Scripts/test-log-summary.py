@@ -30,13 +30,20 @@ def record(time_ms, message, level="info", source="core:X.swift", pid=100, field
 
 
 def visible(time_ms, ms, bundle, prepared="hit", outcome="hit", surface="targets",
-            miss_reason=None):
+            miss_reason=None, context=None):
     message = (
         f"[latency] hints_visible ms={ms} origin=key prepared={prepared} targets=10 "
         f"class=native surface={surface} bundle={bundle} outcome={outcome}")
     if miss_reason is not None:
         message += f" miss_reason={miss_reason}"
+    if context is not None:
+        message += f" {context}"
     return record(time_ms, message)
+
+
+def throttled(refresh_in_ms, cause="AXLayoutChanged"):
+    return (f"cause={cause} model_age_ms=- no_model_ms=4000 interval_ms=24000 "
+            f"pending=throttled refresh_in_ms={refresh_in_ms}")
 
 
 LINES = [
@@ -52,6 +59,37 @@ LINES = [
     visible(8_000, 5.0, "org.firefox", prepared="none", outcome="none", surface="grid"),
     record(9_000, "[latency] hints_empty ms=1502.3 bundle=org.alacritty "
                   "path=prepared_model_refresh origin=key surface=targets"),
+    visible(9_100, 80.0, "com.figma", prepared="miss", outcome="miss",
+            miss_reason="invalidated", context=throttled(18000)),
+    visible(9_200, 120.0, "com.figma", prepared="miss", outcome="miss",
+            miss_reason="invalidated", context=throttled(20000)),
+    visible(9_300, 60.0, "com.zed", prepared="miss", outcome="miss",
+            miss_reason="invalidated", context=throttled(2000, cause="AXValueChanged")),
+    visible(9_400, 40.0, "com.figma", prepared="miss", outcome="miss", miss_reason="expired",
+            context="cause=- model_age_ms=9200 no_model_ms=- interval_ms=6000 "
+                    "pending=suspended refresh_in_ms=-"),
+    visible(9_450, 0.2, "com.figma", prepared="hit",
+            context="miss_reason=- cause=- model_age_ms=- no_model_ms=- interval_ms=- "
+                    "pending=- refresh_in_ms=-"),
+    record(9_460, "[latency] launch_ready ms=412.0 origin=- config_ms=30.5 plugins_ms=8.0 "
+                  "statusbar_ms=40.0 reload_ms=45.0 main_ms=300.0"),
+    record(9_461, "[latency] config_reload ms=44.0 origin=- reason=launch parse_ms=30.0 "
+                  "apply_ms=14.0"),
+    record(9_462, "[latency] config_reload ms=50.0 origin=- reason=watch parse_ms=32.0 "
+                  "apply_ms=18.0"),
+    record(9_463, "[latency] config_reload ms=60.0 origin=cli reason=watch parse_ms=34.0 "
+                  "apply_ms=26.0"),
+    record(9_464, "[latency] flashlight_open ms=35.0 origin=key reason=all_sources_settled "
+                  "count=900 settled=7/7 prompt_ms=4.0"),
+    record(9_465, "[latency] flashlight_key ms=2.0 origin=key path=ranked pool=900 matches=30 "
+                  "eval_ms=1.5 filter_ms=0.2 scored=900 inc=false score_ms=1.0 sort_ms=0.2 "
+                  "render_ms=0.1", level="trace"),
+    record(9_466, "[latency] flashlight_key ms=6.0 origin=- path=bangs pool=400 matches=30 "
+                  "eval_ms=6.0 final=true", level="trace"),
+    record(9_467, "[latency] popup_show ms=180.0 origin=key state=cold kind=terminal "
+                  "popup_id=4d290749288b71c1"),
+    record(9_468, "[latency] popup_show ms=4.0 origin=key state=warm kind=terminal "
+                  "popup_id=4d290749288b71c1"),
     record(9_500, "[latency] tap_to_route ms=0.3", level="debug"),
     record(9_600, "[latency] tap_to_route ms=30.0", level="debug"),
     record(9_700, "[latency] normal_dispatch action=scroll sync_ms=2.5", level="debug"),
@@ -147,7 +185,9 @@ class SummaryTests(unittest.TestCase):
         kinds = self.summary.latency
         self.assertEqual(kinds["tap_to_route"].maximum, 30.0)
         self.assertEqual(kinds["normal_dispatch"].p50, 2.5, "sync_ms counts as the latency")
-        self.assertEqual(kinds["hints_visible"].count, 8)
+        self.assertEqual(kinds["hints_visible"].count, 13)
+        self.assertEqual(kinds["config_reload"].p50, 50.0, "the total, not a stage")
+        self.assertEqual(kinds["flashlight_key"].maximum, 6.0)
         self.assertEqual(kinds["hints_empty"].p50, 1502.3)
 
     def test_hints_visible_hits_misses_and_reasons_by_app(self):
@@ -163,6 +203,44 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual((alacritty.shown, alacritty.empty), (0, 1))
         self.assertEqual(
             self.summary.empties["org.alacritty"]["prepared_model_refresh"].count, 1)
+
+    def test_misses_by_reason_and_pending_refresh(self):
+        misses = self.summary.misses
+        waiting = misses[("invalidated", "throttled")]
+        self.assertEqual(waiting.latency.values, [80.0, 120.0, 60.0])
+        self.assertEqual(waiting.measures["refresh_in_ms"].p50, 18000)
+        self.assertEqual(waiting.measures["interval_ms"].p50, 24000)
+        self.assertEqual(waiting.measures["no_model_ms"].count, 3)
+        self.assertNotIn("model_age_ms", waiting.measures, "`-` is no measure")
+        self.assertEqual(waiting.causes, {"AXLayoutChanged": 2, "AXValueChanged": 1})
+        self.assertEqual(waiting.apps, {"com.figma": 2, "com.zed": 1})
+        idle = misses[("expired", "suspended")]
+        self.assertEqual(idle.measures["model_age_ms"].values, [9200.0])
+        self.assertEqual(idle.causes, {})
+        # A line from before the context was logged still counts, unattributed.
+        self.assertEqual(misses[("expired", "?")].latency.count, 2)
+        self.assertEqual(misses[("?", "?")].latency.count, 1)
+        self.assertEqual(sum(group.latency.count for group in misses.values()), 8)
+
+    def test_flows_by_variant_and_stage(self):
+        flows = self.summary.flows
+        launch = flows[("launch_ready", "-")]
+        self.assertEqual(launch.total.values, [412.0])
+        self.assertEqual(
+            list(launch.stages), ["config", "plugins", "statusbar", "reload", "main"])
+        self.assertEqual(launch.stages["reload"].p50, 45.0)
+        watch = flows[("config_reload", "watch")]
+        self.assertEqual(watch.total.values, [50.0, 60.0])
+        self.assertEqual(watch.stages["parse"].p50, 32.0)
+        self.assertEqual(flows[("config_reload", "launch")].total.count, 1)
+        self.assertEqual(
+            flows[("flashlight_open", "all_sources_settled")].stages["prompt"].p50, 4.0)
+        ranked = flows[("flashlight_key", "ranked")]
+        self.assertEqual(list(ranked.stages), ["eval", "filter", "score", "sort", "render"])
+        self.assertEqual(flows[("flashlight_key", "bangs")].stages["eval"].p50, 6.0)
+        self.assertEqual(flows[("popup_show", "cold")].total.p50, 180.0)
+        self.assertEqual(flows[("popup_show", "warm")].total.p50, 4.0)
+        self.assertNotIn(("tap_to_route", "-"), flows, "only the staged flows")
 
     def test_plugin_publishes_apple_catalogs_and_startups(self):
         history = self.summary.publishes["history"]
@@ -198,6 +276,8 @@ class SummaryTests(unittest.TestCase):
         text = summary.render(self.summary)
         for heading in [
             "[latency] by kind", "hints_visible target activations by app",
+            "hints_visible misses by reason and pending refresh",
+            "[latency] flows by variant",
             "[latency] hints_empty by app", "[plugin] slow catalog publish by plugin",
             "[apple] refresh by catalog", "[plugin] initialized by plugin",
             "[mode] active_border_frame", "[poll] overrun by registration",
@@ -207,6 +287,10 @@ class SummaryTests(unittest.TestCase):
         ]:
             self.assertIn(heading, text)
         self.assertIn("expired=2 invalidated=1 ?=1", text)
+        self.assertIn("AXLayoutChanged=2 AXValueChanged=1", text)
+        self.assertIn("com.figma=2 com.zed=1", text)
+        self.assertIn("config=30.5 plugins=8.0 statusbar=40.0 reload=45.0 main=300.0", text)
+        self.assertIn("parse=32.0 apply=18.0", text)
         self.assertIn("20%", text)
         self.assertIn("2 launch(es)", text)
         self.assertIn("per hour", text)

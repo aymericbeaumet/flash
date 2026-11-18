@@ -269,7 +269,8 @@ extension AppDelegate {
     self.presentHints(
       displayHints, prepared: discovery.prepared,
       outcome: HintLatencyProbe.outcome(discovery, appHints: hints.count),
-      bundleIdentifier: context.bundleIdentifier, surface: "targets", missReason: discovery.miss)
+      bundleIdentifier: context.bundleIdentifier, surface: "targets", missReason: discovery.miss,
+      missContext: discovery.missContext)
     if command.isSearch {
       // Seek & click: the panel routes subsequent keys to the search
       // interpreter instead of hint-prefix typing.

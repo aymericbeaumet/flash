@@ -117,7 +117,7 @@ extension AppDelegate {
   func presentHints(
     _ hints: [AssignedHint], prepared: HintLatencyProbe.Prepared,
     outcome: HintLatencyProbe.Outcome, bundleIdentifier: String?, surface: String,
-    missReason: PreparedModelMiss? = nil
+    missReason: PreparedModelMiss? = nil, missContext: PreparedModelMissContext? = nil
   ) {
     announceHintSession(surface: surface, targets: hints.count)
     guard let probe = hintSession.latencyProbe else {
@@ -133,7 +133,7 @@ extension AppDelegate {
       let line = probe.line(
         visibleAt: visibleAt, prepared: prepared, outcome: outcome, targets: targets,
         appClass: appClass, bundleIdentifier: bundleIdentifier, surface: surface,
-        missReason: missReason)
+        missReason: missReason, missContext: missContext)
       Trace.run(in: probe.trace) { FlashLog.info(line) }
       probe.recordTelemetry(
         endedAt: visibleAt, surface: surface, outcome: outcome.rawValue,

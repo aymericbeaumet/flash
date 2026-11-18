@@ -287,6 +287,7 @@ refuses anything Flash's exporter sends.
 | `flash.plugin.restarts` | counter | `plugin` |
 | `flash.plugin.errors` | counter | `plugin` |
 | `flash.hints.latency` | histogram, ms | `origin` (`key`, `hotkey`, `cli`), `surface`, `outcome`, `app_class` (`native`, `browser`, `electron`, `other`) |
+| `flash.flow.latency` | histogram, ms | `flow` (`launch_ready`, `config_reload`, `flashlight_open`, `flashlight_key`, `popup_show`), `origin` when an input started it, and the flow's variant: `reason`, `path` or `state` ([performance](performance.md#other-flows)) |
 | `flash.monitor.value` | gauge | `monitor` |
 | `flash.monitor.level` | gauge: -1 unknown, 0 ok, 1 warning, 2 error | `monitor` |
 | `flash.telemetry.dropped` | counter | `signal`, `reason` (`queue_full`, `export_failed`, `rejected`, `encoding`) |
@@ -298,7 +299,9 @@ trace: a root `flash.interaction` span (attributes `flash.trace`, the id the
 log file uses, and `flash.origin`) with child spans for each plugin request
 (`plugin <method>`, a client span, failed when the request was) and for the
 hints appearing (`hints visible` or `hints empty`, from the input's own
-timestamp to the frame). The root covers its children and is sent once its
+timestamp to the frame). The flashlight opening, a popup showing and a
+reload asked for by a command add `flashlight open`, `popup show` and
+`config reload` spans to their interaction. The root covers its children and is sent once its
 interaction has been idle for a second. Trace ids are random per launch in
 their high half, the interaction id in the low half.
 

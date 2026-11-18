@@ -56,7 +56,54 @@ enum PreparedModelMiss: String, Equatable {
   case provider
 }
 
+/// What Flash was doing about an app's model when an activation missed it:
+/// the evidence that says which misses a scheduling change would remove.
+/// Logged on `[latency] hints_visible` (see docs/prepared-model.md).
+struct PreparedModelMissContext: Equatable {
+  /// What was armed to rebuild the model, the most imminent first.
+  enum Pending: String, Equatable {
+    /// Nothing: no walk was coming.
+    case none
+    /// A walk was already running.
+    case walking
+    /// A refresh was inside its debounce.
+    case debounce
+    /// A refresh was held back by the app's interval between walks.
+    case throttled
+    /// A readiness ladder was waiting for the app's tree.
+    case readiness
+    /// Maintenance was armed ahead of the model's freshness ceiling.
+    case maintenance
+    /// Maintenance fired while the user was idle and let the model expire.
+    case suspended
+    /// Flash was not warming the app: a storm, the empty-walk gate or an
+    /// on-demand declaration.
+    case suppressed
+  }
+
+  /// The age of the model the lookup rejected; nil when the app had none.
+  var modelAgeMs: Int?
+  /// How long the app had been without a model; nil when it had one, or
+  /// never had one to lose.
+  var noModelMs: Int?
+  /// The app's interval between speculative walks (`modelIntervalMs`).
+  var intervalMs: Int
+  var pending: Pending
+  /// How far away the pending wake was; nil when nothing was timed.
+  var refreshInMs: Int?
+  /// What last discarded the model: an Accessibility notification, a Flash
+  /// action or an environment change, by name.
+  var cause: String?
+}
+
 struct PreparedModelStore {
+  /// Why an app has no model, since when, and what discarded it.
+  struct Absence: Equatable {
+    var miss: PreparedModelMiss
+    var since: DispatchTime
+    var cause: String?
+  }
+
   struct RebuildTicket: Equatable {
     let pid: pid_t
     fileprivate let generation: UInt64
@@ -81,7 +128,7 @@ struct PreparedModelStore {
   private var models: [pid_t: PreparedModel] = [:]
   /// Why an app has no model, from the discard that removed it, so a later
   /// lookup can say so; a stored model clears it.
-  private var absences: [pid_t: PreparedModelMiss] = [:]
+  private var absences: [pid_t: Absence] = [:]
   private var rebuilding: [pid_t: RebuildTicket] = [:]
   private var queuedAfterRebuild: Set<pid_t> = []
   private var rebuildGeneration: UInt64 = 0
@@ -94,8 +141,8 @@ struct PreparedModelStore {
   @discardableResult
   mutating func store(_ model: PreparedModel) -> Bool {
     guard !model.occluded else {
+      noteAbsence(pid: model.pid, because: .occluded, cause: nil, now: model.computedAt)
       models.removeValue(forKey: model.pid)
-      absences[model.pid] = .occluded
       return false
     }
     models[model.pid] = model
@@ -103,10 +150,26 @@ struct PreparedModelStore {
     return true
   }
 
-  /// Drop `pid`'s model, remembering why for the next lookup.
-  mutating func discardModel(pid: pid_t, because miss: PreparedModelMiss) {
+  /// Drop `pid`'s model, remembering why for the next lookup. `cause` names
+  /// what asked (`PreparedModelMissContext.cause`).
+  mutating func discardModel(
+    pid: pid_t, because miss: PreparedModelMiss, cause: String? = nil, now: DispatchTime = .now()
+  ) {
+    noteAbsence(pid: pid, because: miss, cause: cause, now: now)
     models.removeValue(forKey: pid)
-    absences[pid] = miss
+  }
+
+  /// The latest discard says why; the absence dates from the one that took
+  /// the model, so repeated discards of an app with none keep its start.
+  private mutating func noteAbsence(
+    pid: pid_t, because miss: PreparedModelMiss, cause: String?, now: DispatchTime
+  ) {
+    let since = models[pid] == nil ? absences[pid]?.since ?? now : now
+    absences[pid] = Absence(miss: miss, since: since, cause: cause)
+  }
+
+  func absence(pid: pid_t) -> Absence? {
+    absences[pid]
   }
 
   mutating func remove(pid: pid_t) {
@@ -153,7 +216,7 @@ struct PreparedModelStore {
     now: DispatchTime,
     occlusion: WindowSnapshot.OcclusionSignature?
   ) -> Resolution {
-    guard let model = models[pid] else { return .miss(absences[pid] ?? .absent) }
+    guard let model = models[pid] else { return .miss(absences[pid]?.miss ?? .absent) }
     guard model.dirtyToken == dirtyToken else { return .miss(.invalidated) }
     guard model.configRevision == configRevision else { return .miss(.config) }
     guard let walked = model.occlusion, walked == occlusion else { return .miss(.occluded) }

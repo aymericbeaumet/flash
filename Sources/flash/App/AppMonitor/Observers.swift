@@ -111,7 +111,7 @@ extension AppMonitor {
   ) {
     let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
-    invalidatePreparedModel(for: pid, because: .invalidated)
+    invalidatePreparedModel(for: pid, because: .invalidated, cause: notification)
     if Self.notificationShouldSchedulePreparedModelRefresh(notification), !eventStorming {
       scheduleModelRefresh(for: pid, reason: .axEvent(notification))
       uiDidChange?(pid)
@@ -138,7 +138,7 @@ extension AppMonitor {
     MainThreadHopper.runOrAsync { [weak self] in
       guard let self, pid > 0 else { return }
       self.dirtyTokens[pid, default: 0] &+= 1
-      self.invalidatePreparedModel(for: pid, because: .invalidated)
+      self.invalidatePreparedModel(for: pid, because: .invalidated, cause: reason)
       self.scheduleModelRefresh(for: pid, reason: .userAction(reason))
       FlashLog.debug("[ax] model_invalidated pid=\(pid) reason=\(reason)")
     }
@@ -197,7 +197,7 @@ extension AppMonitor {
     let pid = app.processIdentifier
     guard pid > 0 else { return }
     dirtyTokens[pid, default: 0] &+= 1
-    invalidatePreparedModel(for: pid, because: .invalidated)
+    invalidatePreparedModel(for: pid, because: .invalidated, cause: reason.logValue)
     scheduleModelRefresh(for: pid, reason: reason)
   }
 

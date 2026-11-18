@@ -1663,6 +1663,7 @@ extension AppDelegate {
       }
     }
     refreshCommandLine(text: command, cursorIndex: command.count)
+    if candidateFinderScope != nil { finder.openPromptAt = LatencyProbe.now }
   }
 
   /// Open the help homepage, or `/docs/<topic>` when a topic is supplied: a

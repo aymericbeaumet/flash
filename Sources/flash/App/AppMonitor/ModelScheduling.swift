@@ -10,10 +10,38 @@ extension AppMonitor {
   // MARK: Prepared model scheduling
 
   /// Drop `pid`'s model and its maintenance; `miss` is what a lookup before
-  /// the next walk will report.
-  func invalidatePreparedModel(for pid: pid_t, because miss: PreparedModelMiss) {
-    preparedModels.discardModel(pid: pid, because: miss)
+  /// the next walk will report, and `cause` names what asked.
+  func invalidatePreparedModel(
+    for pid: pid_t, because miss: PreparedModelMiss, cause: String? = nil
+  ) {
+    preparedModels.discardModel(pid: pid, because: miss, cause: cause)
     cancelMaintenance(pid: pid)
+  }
+
+  /// What Flash was doing about `pid`'s model when an activation missed it.
+  /// Read before the activation's own walk, which cancels the pending work
+  /// this describes.
+  func preparedModelMissContext(
+    for pid: pid_t, bundleIdentifier: String, now: DispatchTime = .now()
+  ) -> PreparedModelMissContext {
+    let nowNs = now.uptimeNanoseconds
+    func elapsedMs(since start: DispatchTime) -> Int {
+      nowNs > start.uptimeNanoseconds ? Int((nowNs - start.uptimeNanoseconds) / 1_000_000) : 0
+    }
+    var pending = modelScheduler.pending(pid: pid, now: nowNs)
+    if preparedModels.isRebuilding(pid: pid) {
+      pending = (.walking, nil)
+    } else if pending.state == .none,
+      automaticWarmingIsSuppressed(pid: pid, bundleIdentifier: bundleIdentifier)
+    {
+      pending = (.suppressed, nil)
+    }
+    let absence = preparedModels.absence(pid: pid)
+    return PreparedModelMissContext(
+      modelAgeMs: preparedModels.current(pid: pid).map { elapsedMs(since: $0.computedAt) },
+      noModelMs: absence.map { elapsedMs(since: $0.since) },
+      intervalMs: modelIntervalMs(pid: pid),
+      pending: pending.state, refreshInMs: pending.inMs, cause: absence?.cause)
   }
 
   /// Revoke `pid`'s maintenance ticket and release its wake on the shared
@@ -304,6 +332,7 @@ extension AppMonitor {
       // Idle desk, locked screen, or sleeping display: nothing is looking
       // at the hints, so let the model expire; the next activation walks.
       guard Self.userInputIsRecent(withinSeconds: Self.maintenanceIdleSuspendSeconds) else {
+        modelScheduler.noteMaintenanceSuspended(pid: pid)
         FlashLog.debug("[ax] maintenance_suspended pid=\(pid) reason=user_idle")
         return
       }

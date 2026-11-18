@@ -7,6 +7,11 @@ the whole span or only the last `--hours`:
 - `[latency]` lines by kind: count, p50, p95 and max milliseconds;
 - `[latency] hints_visible` target activations by app: prepared-model hits
   and misses, their latencies, and the misses by `miss_reason`;
+- those misses by `miss_reason` and `pending` (what Flash was doing about the
+  model): the model's age, the time without one, the refresh interval, the
+  time to the pending walk, and the invalidating causes;
+- `launch_ready`, `config_reload`, `flashlight_open`, `flashlight_key` and
+  `popup_show` by variant, with each stage's p50;
 - `[latency] hints_empty` activations by app and path;
 - `[plugin] slow catalog publish` by plugin: count, elapsed, bytes and rows;
 - `[apple] refresh` by catalog: count, elapsed, and how many were slow;
@@ -34,11 +39,21 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 FIELD = re.compile(r"([a-z_]+)=(\S+)")
 DEFAULT_LOGS = os.path.expanduser("~/Library/Logs/Flash/flash.log*")
 TARGET_SURFACES = ("", "targets")
+# The flows `LatencyProbe` logs with stages, and the field that tells one
+# variant of a flow from another.
+FLOW_VARIANTS = {
+    "launch_ready": None,
+    "config_reload": "reason",
+    "flashlight_open": "reason",
+    "flashlight_key": "path",
+    "popup_show": "state",
+}
+MISS_MEASURES = ("model_age_ms", "no_model_ms", "interval_ms", "refresh_in_ms")
 
 
 @dataclass
@@ -172,6 +187,24 @@ class Activations:
 
 
 @dataclass
+class Misses:
+    """The `hints_visible` misses sharing a `miss_reason` and a `pending`."""
+
+    latency: Stats = field(default_factory=Stats)
+    measures: Dict[str, Stats] = field(default_factory=dict)
+    causes: Dict[str, int] = field(default_factory=dict)
+    apps: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class Flow:
+    """One variant of a staged flow: its total and each `<stage>_ms`."""
+
+    total: Stats = field(default_factory=Stats)
+    stages: Dict[str, Stats] = field(default_factory=dict)
+
+
+@dataclass
 class WindowMoves:
     """One app's `[window] placed` lines."""
 
@@ -190,6 +223,8 @@ class Summary:
     launches: int
     latency: Dict[str, Stats]
     activations: Dict[str, Activations]
+    misses: Dict[Tuple[str, str], Misses]
+    flows: Dict[Tuple[str, str], Flow]
     empties: Dict[str, Dict[str, Stats]]
     publishes: Dict[str, Dict[str, Stats]]
     apple: Dict[str, Stats]
@@ -210,6 +245,8 @@ class Summary:
 def summarize(records: List[Record], files: int = 0, lines: int = 0) -> Summary:
     latency: Dict[str, Stats] = {}
     activations: Dict[str, Activations] = {}
+    misses: Dict[Tuple[str, str], Misses] = {}
+    flows: Dict[Tuple[str, str], Flow] = {}
     empties: Dict[str, Dict[str, Stats]] = {}
     publishes: Dict[str, Dict[str, Stats]] = {}
     apple: Dict[str, Stats] = {}
@@ -237,7 +274,9 @@ def summarize(records: List[Record], files: int = 0, lines: int = 0) -> Summary:
             if ms is not None:
                 latency.setdefault(kind, Stats()).values.append(ms)
             if kind == "hints_visible":
-                note_activation(activations, record, ms)
+                note_activation(activations, misses, record, ms)
+            elif kind in FLOW_VARIANTS and ms is not None:
+                note_flow(flows, kind, record, ms)
             elif kind == "hints_empty" and ms is not None:
                 bundle = record.fields.get("bundle", "-")
                 by_path = empties.setdefault(bundle, {})
@@ -295,6 +334,8 @@ def summarize(records: List[Record], files: int = 0, lines: int = 0) -> Summary:
         launches=len(launches),
         latency=latency,
         activations=activations,
+        misses=misses,
+        flows=flows,
         empties=empties,
         publishes=publishes,
         apple=apple,
@@ -309,7 +350,12 @@ def summarize(records: List[Record], files: int = 0, lines: int = 0) -> Summary:
     )
 
 
-def note_activation(activations: Dict[str, Activations], record: Record, ms: Optional[float]):
+def note_activation(
+    activations: Dict[str, Activations],
+    misses: Dict[Tuple[str, str], Misses],
+    record: Record,
+    ms: Optional[float],
+):
     """A `hints_visible` line: only the app's own target hints count, as
     `bench:hints-summary` counts them. An app that yielded nothing while the
     status bar still drew is `outcome=empty`."""
@@ -327,6 +373,32 @@ def note_activation(activations: Dict[str, Activations], record: Record, ms: Opt
         app.misses.values.append(ms)
         reason = record.fields.get("miss_reason", "") or "?"
         app.miss_reasons[reason] = app.miss_reasons.get(reason, 0) + 1
+        # A log from before the context was added has no `pending`.
+        group = misses.setdefault((reason, record.fields.get("pending", "") or "?"), Misses())
+        group.latency.values.append(ms)
+        group.apps[bundle] = group.apps.get(bundle, 0) + 1
+        for key in MISS_MEASURES:
+            value = record.number(key)
+            if value is not None:
+                group.measures.setdefault(key, Stats()).values.append(value)
+        cause = record.fields.get("cause", "-")
+        if cause != "-":
+            group.causes[cause] = group.causes.get(cause, 0) + 1
+
+
+def note_flow(flows: Dict[Tuple[str, str], Flow], kind: str, record: Record, ms: float):
+    """A staged flow's line: `ms` is its total, every `<stage>_ms` a stage,
+    in the order the line gives them."""
+    variant = FLOW_VARIANTS[kind]
+    flow = flows.setdefault((kind, record.fields.get(variant, "-") if variant else "-"), Flow())
+    flow.total.values.append(ms)
+    for key, value in FIELD.findall(record.message):
+        if not key.endswith("_ms"):
+            continue
+        try:
+            flow.stages.setdefault(key[: -len("_ms")], Stats()).values.append(float(value))
+        except ValueError:
+            continue
 
 
 # Rendering.
@@ -340,10 +412,11 @@ def pct(value: float) -> str:
     return "-" if math.isnan(value) else f"{value * 100:.0f}%"
 
 
-def counts(by_key: Dict[str, int]) -> str:
-    """`expired=20 absent=3`, largest first; the unknown bucket `?` last."""
+def counts(by_key: Dict[str, int], limit: Optional[int] = None) -> str:
+    """`expired=20 absent=3`, largest first; the unknown bucket `?` last.
+    With a `limit`, only that many."""
     ordered = sorted(by_key.items(), key=lambda item: (-item[1], item[0] == "?", item[0]))
-    return " ".join(f"{key}={count}" for key, count in ordered)
+    return " ".join(f"{key}={count}" for key, count in ordered[:limit])
 
 
 def table(title: str, columns: List[str], rows: List[List[str]], left: Sequence[int] = (0,)) -> str:
@@ -411,6 +484,43 @@ def render(summary: Summary) -> str:
             ],
             rows,
             left=(0, 10),
+        )
+    )
+
+    rows = []
+    for (reason, pending), group in sorted(
+        summary.misses.items(), key=lambda item: (-item[1].latency.count, item[0])
+    ):
+        rows.append(
+            [reason, pending, str(group.latency.count), ms(group.latency.p50),
+             ms(group.latency.p95)]
+            + [ms(group.measures.get(key, Stats()).p50) for key in MISS_MEASURES]
+            + [counts(group.causes, limit=3) or "-", counts(group.apps, limit=3)]
+        )
+    sections.append(
+        table(
+            "[latency] hints_visible misses by reason and pending refresh (ms; the model's age, "
+            "the time without one, the refresh interval and the time to the pending walk are p50)",
+            [
+                "reason", "pending", "n", "miss p50", "miss p95", "model age", "no model",
+                "interval", "refresh in", "causes", "apps",
+            ],
+            rows,
+            left=(0, 1, 9, 10),
+        )
+    )
+
+    rows = [
+        [kind, variant] + stats_cells(flow.total)
+        + [" ".join(f"{stage}={ms(stats.p50)}" for stage, stats in flow.stages.items())]
+        for (kind, variant), flow in sorted(summary.flows.items())
+    ]
+    sections.append(
+        table(
+            "[latency] flows by variant (ms; stages are p50)",
+            ["flow", "variant", "n", "p50", "p95", "max", "stages"],
+            rows,
+            left=(0, 1, 6),
         )
     )
 

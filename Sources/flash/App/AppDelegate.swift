@@ -536,6 +536,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var awaitingAccessibilityGrant = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    let launchStartedAt = LatencyProbe.now
+    var launchStages = LatencyStages()
     // First, so the cached primary-screen height refreshes before any other
     // screen-parameter observer reads it.
     ScreenSpace.startObserving()
@@ -569,7 +571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // First run: give the user a working shortcut before the first load.
     StarterConfig.seedIfNeeded(environment: ProcessInfo.processInfo.environment)
     manualTopicNames = HelpDocs.manualNames(root: DebugServer.bundledDocs)
-    config = ConfigLoader.load()
+    config = launchStages.measure("config") { ConfigLoader.load() }
     FlashTunables.apply(config)
     frecencyStore = FrecencyStore(
       configuration: FrecencyStore.Configuration(
@@ -708,7 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     let launchApplications = Self.runningApplicationsSnapshot()
     pluginManager.cacheRunningApplicationsSnapshot(launchApplications)
-    pluginManager.start(config: config)
+    launchStages.measure("plugins") { pluginManager.start(config: config) }
     appleCatalogs.onChange = { [weak self] catalog in
       self?.refreshLiveCandidates(sourceID: catalog.sourceID)
     }
@@ -755,6 +757,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     let processSampler = processStatusSampler
     let calendar = calendarEvents
     calendar.configure(config.calendar)
+    let statusBarStartedAt = LatencyProbe.now
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
@@ -777,6 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       monitorTriggerSink: { [weak self] name, level in self?.emitMonitorTriggered(name, level) },
       telemetry: telemetryStore,
       calendarObserver: { [weak calendar] observed in calendar?.observe(observed) })
+    launchStages.add("statusbar", since: statusBarStartedAt)
     wireTelemetryStore()
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
     if let front = NSWorkspace.shared.frontmostApplication,
@@ -835,7 +839,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       appNavigation = AppNavigationHistory(current: app.processIdentifier)
       observedFocusedAppPID = app.processIdentifier
     }
-    watchConfigFile()
+    launchStages.measure("reload") { watchConfigFile() }
     // After the first configuration load, once per launch; a reload never
     // runs the list again.
     runStartupCommandsAtLaunch()
@@ -853,6 +857,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.emitHostEvent(event)
     }
     emitRunningApplicationsChanged()
+    // From the process's own start, so the time before this method (dyld,
+    // AppKit) counts; `main_ms` is this method alone.
+    launchStages.add("main", since: launchStartedAt)
+    LatencyProbe.arm(.launchReady, at: LatencyProbe.processStartUptime() ?? launchStartedAt)
+      .finish(fields: launchStages.fields)
   }
 
   /// Dispatch `cmd`. With a `completion`, it runs once with how the command

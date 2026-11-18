@@ -82,8 +82,13 @@ before requesting a refresh. An activation the model could not serve logs
 why (`miss_reason` in `[latency] hints_visible`; see
 [performance](performance.md#what-is-measured)): the store remembers what
 discarded a model — a focus change, an AX event or a Flash action, a
-configuration change, an occluded walk — and a lookup tells a model that
-expired from one whose identities moved.
+configuration change, an occluded walk — since when and by which
+notification or action, and a lookup tells a model that expired from one
+whose identities moved. The same line says what was armed to rebuild the
+model at that moment (`pending`, `refresh_in_ms`, `interval_ms`): the
+scheduler reports its soonest wake for the app, whether a refresh was
+debounced or held back by the interval, and whether idle maintenance had
+been dropped.
 
 ## Windows that are covered
 

@@ -16,6 +16,10 @@ enum FlashInstrument: String, CaseIterable {
   /// From the input that asked for hints to the frame that shows them;
   /// `origin`, `surface`, `outcome`, `app_class`.
   case hintsLatency = "flash.hints.latency"
+  /// Every other measured flow, from its input (or its start) to its end:
+  /// launch, a configuration reload, the flashlight, a popup; `flow`,
+  /// `origin`, and `state` or `reason` where the flow has one.
+  case flowLatency = "flash.flow.latency"
   /// Each monitor's latest value; `monitor`.
   case monitorValue = "flash.monitor.value"
   /// Each monitor's state: -1 unknown, 0 ok, 1 warning, 2 error; `monitor`.
@@ -25,7 +29,8 @@ enum FlashInstrument: String, CaseIterable {
 
   var kind: MetricKind {
     switch self {
-    case .pluginRequestDuration, .pluginSpawnDuration, .hintsLatency: return .histogram
+    case .pluginRequestDuration, .pluginSpawnDuration, .hintsLatency, .flowLatency:
+      return .histogram
     case .pluginRestarts, .pluginErrors, .telemetryDropped: return .counter
     case .monitorValue, .monitorLevel: return .gauge
     }
@@ -33,7 +38,7 @@ enum FlashInstrument: String, CaseIterable {
 
   var unit: String {
     switch self {
-    case .pluginRequestDuration, .pluginSpawnDuration, .hintsLatency: return "ms"
+    case .pluginRequestDuration, .pluginSpawnDuration, .hintsLatency, .flowLatency: return "ms"
     case .pluginRestarts: return "{restart}"
     case .pluginErrors: return "{error}"
     case .telemetryDropped: return "{item}"
@@ -48,6 +53,7 @@ enum FlashInstrument: String, CaseIterable {
     case .pluginRestarts: return "Plugin restarts"
     case .pluginErrors: return "Plugin lifecycle errors"
     case .hintsLatency: return "Input to visible hints"
+    case .flowLatency: return "Launch, reload, flashlight and popup latency"
     case .monitorValue: return "Monitor value"
     case .monitorLevel: return "Monitor state: -1 unknown, 0 ok, 1 warning, 2 error"
     case .telemetryDropped: return "Telemetry dropped by the exporter"

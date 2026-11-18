@@ -56,6 +56,9 @@ final class StatusPopupSurface {
   /// A hover preview whose panel waits for its first frame.
   private(set) var isAwaitingFirstFrame = false
   private var firstFrameFallback: DispatchWorkItem?
+  /// A standalone showing whose session had no frame yet: measured to its
+  /// first one as `[latency] popup_show state=cold`.
+  private var showProbe: LatencyProbe?
   /// `resignKey` can re-enter while dismissal orders the panel out.
   private var resigningFocus = false
   var onFocusRequested: (() -> Void)?
@@ -108,6 +111,7 @@ final class StatusPopupSurface {
     terminalView.onFrameReceived = { [weak self] in
       self?.showAwaitedPreview()
       self?.applySurfaceBackground()
+      self?.finishColdShowProbe()
     }
     terminalView.inputInterceptor = { [weak self] event in self?.inputInterceptor?(event) ?? false }
   }
@@ -212,6 +216,15 @@ final class StatusPopupSurface {
     guard isTerminal ? terminals.session(named: name) != nil : document != nil else { return }
     let alreadyFocused = presentation == .standalone(name: name)
     if isVisible && presentation.name != name { dismiss(reason: "terminal_replaced") }
+    // After the dismissal above, which ends any showing still being measured.
+    if !alreadyFocused { showProbe = LatencyProbe.arm(.popupShow) }
+    // Read before the layout that starts a text popup's pager.
+    let wasRunning: Bool
+    if case .running? = terminals.session(named: name)?.state {
+      wasRunning = true
+    } else {
+      wasRunning = false
+    }
     let standaloneRegion =
       alreadyFocused
       ? region ?? StatusBarPopupRegion(rect: .zero, name: name, content: "")
@@ -225,11 +238,47 @@ final class StatusPopupSurface {
     self.font = font
     transition(.standalone(name: name))
     layout(region: standaloneRegion)
-    guard isVisible else { return }
+    guard isVisible else {
+      showProbe = nil
+      return
+    }
     terminalView.isRenderingEnabled = true
     if !alreadyFocused { willFocus?() }
     activateTerminalInput()
     logLifecycle(reason: "terminal_opened")
+    // A process that was already running draws its screen with this showing.
+    if wasRunning || Self.hasContent(terminalView.terminalFrame) {
+      finishShowProbe(state: "warm")
+    }
+  }
+
+  /// A started session has a frame before its program wrote anything, so a
+  /// cold showing ends at the first frame that draws something.
+  private func finishColdShowProbe() {
+    guard showProbe != nil, Self.hasContent(terminalView.terminalFrame) else { return }
+    finishShowProbe(state: "cold")
+  }
+
+  private static func hasContent(_ frame: TerminalFrame?) -> Bool {
+    StatusPopupController.rowTexts(of: frame)?.contains { row in
+      row.contains { !$0.isWhitespace }
+    } ?? false
+  }
+
+  /// `[latency] popup_show`: from the input that asked for a standalone popup
+  /// to its content being ready to draw. `warm` attached to a process that
+  /// was already running (persistent, started ahead, or previewed) and ends
+  /// with the showing; `cold` started its process and ends at the first
+  /// frame that program draws.
+  private func finishShowProbe(state: String) {
+    guard let probe = showProbe, let name = presentation.name else { return }
+    showProbe = nil
+    probe.finish(
+      fields: [
+        ("state", state), ("kind", terminals.definitions[name] != nil ? "terminal" : "text"),
+        ("popup_id", StatusFormatDocument.stableID(name)),
+      ],
+      attributes: ["state": state])
   }
 
   /// A standalone popup follows its screen's visible frame: recentred, and a
@@ -335,6 +384,7 @@ final class StatusPopupSurface {
     if wasFocused { willDismissFocus?() }
     transition(.dismiss)
     endFirstFrameWait()
+    showProbe = nil
     terminalView.isRenderingEnabled = false
     terminalView.bind(session: nil)
     if windowActionsEnabled { panel.orderOut(nil) }

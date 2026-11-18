@@ -22,6 +22,8 @@ extension AppDelegate {
 
   func openCandidateFinderSession(scope: CandidateScope) {
     let startedNs = DispatchTime.now().uptimeNanoseconds
+    finder.openProbe = LatencyProbe.arm(.flashlightOpen)
+    finder.openPromptAt = nil
     // Advisory: the flashlight opened. Eager plugins may refresh their
     // catalogs; nothing is required and first paint never waits for them.
     if pluginManager.hasListener(for: .sessionOpened) {
@@ -232,7 +234,24 @@ extension AppDelegate {
             + "count=\(self.finder.candidates.count) "
             + "settled=\(settledSourceCount)/\(expectedSourceCount) "
             + "ms=\(elapsedMs) source_ms=\(latencies)")
+        guard let probe = self.finder.openProbe else {
+          return self.rerenderActiveCandidateFinderSurface()
+        }
+        // The open ends when its first candidates are committed for display.
+        self.finder.openProbe = nil
+        var fields = [
+          ("reason", reason.rawValue), ("count", "\(self.finder.candidates.count)"),
+          ("settled", "\(settledSourceCount)/\(expectedSourceCount)"),
+        ]
+        if let promptAt = self.finder.openPromptAt {
+          fields.append(("prompt_ms", LatencyProbe.format(probe.elapsedMs(at: promptAt))))
+        }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock {
+          probe.finish(fields: fields, attributes: ["reason": reason.rawValue])
+        }
         self.rerenderActiveCandidateFinderSurface()
+        CATransaction.commit()
       }
     }
   }
@@ -763,7 +782,8 @@ extension AppDelegate {
 
   private func updateCandidateMatches(query: String) {
     if finder.menu != nil { return applyMenuMatches(query: query) }
-    let t0 = CFAbsoluteTimeGetCurrent()
+    let probe = LatencyProbe.arm(.flashlightKey)
+    let t0 = LatencyProbe.now
     // `@<type>` narrows the pool to one resource type; the residual text after
     // the `@type ` token is the actual fuzzy query.
     let sourceCompletion = CandidateFinder.sourceCompletionState(query: query)
@@ -787,6 +807,7 @@ extension AppDelegate {
       // A leading `=` is an exclusive evaluator marker. Do not score or show
       // the ordinary catalog while its owning calculator answers settle.
       applyCandidateMatches([])
+      finishFlashlightKey(probe, path: "evaluator", pool: 0, matches: 0, startedAt: t0)
       return
     }
     let parsedBang = boundBang == nil ? CandidateFinder.parseBang(trimmed) : nil
@@ -805,14 +826,14 @@ extension AppDelegate {
       invalidateCandidateQueryEvaluation()
       finder.incrementalCache = nil
       finder.indexGenerationCounter &+= 1
-      showBangList(token: token, startedAt: t0)
+      showBangList(token: token, probe: probe, startedAt: t0)
       return
     }
 
     let (pool, scoringText) =
       boundBang.map { (filteredCandidatePool(scope: $0.scope), $0.remainder) }
       ?? buildCandidateFinderPool(trimmed: trimmed, rawQuery: query, scope: scope)
-    let tFiltered = CFAbsoluteTimeGetCurrent()
+    let tFiltered = LatencyProbe.now
 
     // Bump the generation so any scoring job that completes AFTER
     // this keystroke is dropped silently when its callback fires.
@@ -834,6 +855,9 @@ extension AppDelegate {
       // not survive into the next plain-query keystroke.
       finder.incrementalCache = nil
       applyCandidateMatches(sorted)
+      finishFlashlightKey(
+        probe, path: "completion", pool: pool.count, matches: sorted.count, startedAt: t0,
+        filteredAt: tFiltered)
       return
     }
 
@@ -852,6 +876,9 @@ extension AppDelegate {
       // full pool.
       finder.incrementalCache = nil
       applyCandidateMatches(sorted)
+      finishFlashlightKey(
+        probe, path: "empty", pool: pool.count, matches: sorted.count, startedAt: t0,
+        filteredAt: tFiltered)
       return
     }
 
@@ -877,7 +904,7 @@ extension AppDelegate {
     // perceptible delay even when the work itself was sub-millisecond.
     // The heaviest pools (full installed-app + plugin candidate
     // counts) stay below ~5k so the synchronous path stays cheap.
-    let tScoringStart = CFAbsoluteTimeGetCurrent()
+    let tScoringStart = LatencyProbe.now
     // Rewrite standalone emoticons (`:)`, `:-(`, `;)`, …) to the emoji
     // shortcodes the `emojis` plugin indexes before normalization strips
     // their punctuation — otherwise `@emojis :)` collapses to an empty query
@@ -912,7 +939,7 @@ extension AppDelegate {
       normalizedQuery: normalizedQuery,
       fuzzyScore: fuzzy,
       allowParallel: true)
-    let tScored = CFAbsoluteTimeGetCurrent()
+    let tScored = LatencyProbe.now
     // Apply frecency boost before the sort so the comparator sees the
     // final score. Skip the loop entirely when the store has no
     // entries — the boost is always 0 in that case and
@@ -943,7 +970,7 @@ extension AppDelegate {
     let ranked = CandidateFinder.displayAndIncrementalMatches(
       scored, precedence: precedenceTable(), limit: sortLimit)
     let sorted = ranked.display
-    let tSorted = CFAbsoluteTimeGetCurrent()
+    let tSorted = LatencyProbe.now
     // Re-check the generation — a re-entrant call (e.g. caches landing
     // mid-update) could have already superseded us.
     guard generation == self.finder.indexGenerationCounter else { return }
@@ -954,19 +981,39 @@ extension AppDelegate {
       signature: signature
     )
     applyCandidateMatches(sorted)
-    if !trimmed.isEmpty {
-      let tRendered = CFAbsoluteTimeGetCurrent()
-      let dFilter = Int((tFiltered - t0) * 1000)
-      let dScore = Int((tScored - tScoringStart) * 1000)
-      let dSort = Int((tSorted - tScored) * 1000)
-      let dRender = Int((tRendered - tSorted) * 1000)
-      let dTotal = Int((tRendered - t0) * 1000)
-      FlashLog.trace(
-        "[flashlight] pool=\(pool.count) scored=\(scoringPool.count) inc=\(isIncremental) "
-          + "matches=\(sorted.count) "
-          + "total_ms=\(dTotal) filter_ms=\(dFilter) score_ms=\(dScore) "
-          + "sort_ms=\(dSort) render_ms=\(dRender)")
-    }
+    let tRendered = LatencyProbe.now
+    var stages = LatencyStages()
+    stages.add("score", since: tScoringStart, until: tScored)
+    stages.add("sort", since: tScored, until: tSorted)
+    stages.add("render", since: tSorted, until: tRendered)
+    finishFlashlightKey(
+      probe, path: "ranked", pool: pool.count, matches: sorted.count, startedAt: t0,
+      filteredAt: tFiltered, endedAt: tRendered,
+      fields: [("scored", "\(scoringPool.count)"), ("inc", "\(isIncremental)")] + stages.fields)
+  }
+
+  /// One evaluation of the candidate list, as `[latency] flashlight_key` at
+  /// `trace`. `ms` runs from the key when the evaluation ran in its turn
+  /// (`origin` says so), else it is `eval_ms`: this evaluation alone, which a
+  /// landing snapshot or a re-render also runs. `path` is the list it built:
+  /// `ranked` (the fuzzy ranker), `completion` (a `@` source or bang
+  /// completion pool), `bangs` (the bang index), `empty` (no query yet) or
+  /// `evaluator` (a leading `=`, answered off this path). `filter_ms` is the
+  /// pool's construction. A `menu choose` list is not the flashlight's and
+  /// is not measured.
+  private func finishFlashlightKey(
+    _ probe: LatencyProbe, path: String, pool: Int, matches: Int, startedAt: TimeInterval,
+    filteredAt: TimeInterval? = nil, endedAt: TimeInterval = LatencyProbe.now,
+    fields: [(String, String)] = []
+  ) {
+    var stages = LatencyStages()
+    stages.add("eval", since: startedAt, until: endedAt)
+    if let filteredAt { stages.add("filter", since: startedAt, until: filteredAt) }
+    probe.finish(
+      endedAt: endedAt,
+      fields: [("path", path), ("pool", "\(pool)"), ("matches", "\(matches)")] + stages.fields
+        + fields,
+      attributes: ["path": path])
   }
 
   /// Build a `PrecedenceTable` from the live source descriptors and config
@@ -1171,11 +1218,16 @@ extension AppDelegate {
   /// The bang list for `token` without scoring every bang on the main
   /// thread: the index's prefix tier at once, completed by the full scorer
   /// off the main thread when that tier does not fill the display.
-  private func showBangList(token: String, startedAt t0: CFAbsoluteTime) {
+  private func showBangList(token: String, probe: LatencyProbe, startedAt t0: TimeInterval) {
     let epoch = finder.candidatesEpoch
+    let finish = { [self] (pool: Int, matches: Int, final: Bool) in
+      finishFlashlightKey(
+        probe, path: "bangs", pool: pool, matches: matches, startedAt: t0,
+        fields: [("final", "\(final)")])
+    }
     guard let index = bangCompletionIndex(epoch: epoch) else {
       applyCandidateMatches([])
-      return
+      return finish(0, 0, true)
     }
     let normalized = NormalModeDispatcher.normalizedSearchText(token)
     let limit = max(commandBarSuggestionCount * 3, 30)
@@ -1183,14 +1235,12 @@ extension AppDelegate {
       complete.token == normalized
     {
       applyCandidateMatches(complete.matches)
-      return
+      return finish(index.rows.count, complete.matches.count, true)
     }
     let listed = index.matches(
       normalizedToken: normalized, precedence: precedenceTable(), limit: limit)
     applyCandidateMatches(listed.matches)
-    FlashLog.trace(
-      "[flashlight] bangs=\(index.rows.count) matches=\(listed.matches.count) "
-        + "final=\(listed.final) total_ms=\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))")
+    finish(index.rows.count, listed.matches.count, listed.final)
     guard !listed.final else { return }
     let generation = finder.indexGenerationCounter
     let precedence = precedenceTable()
