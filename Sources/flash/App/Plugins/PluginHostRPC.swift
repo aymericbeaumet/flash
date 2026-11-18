@@ -72,7 +72,7 @@ final class PluginHostRPC {
     switch method {
     case "host.ping":
       // Round-trip validation of the bidirectional channel.
-      reply(["ok": true, "echo": params])
+      reply(["ok": true])
     case "host.normal_mode_target":
       guard capabilities.contains(.appControl) else {
         reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("app_control")])

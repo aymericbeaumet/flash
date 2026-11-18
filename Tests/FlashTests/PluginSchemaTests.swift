@@ -380,11 +380,13 @@ final class PluginSchemaTests: XCTestCase {
     PluginHostRPC.appOpener = { _, done in done(nil) }
     let rpc = fixtureDispatcher()
     let replies = Dictionary(uniqueKeysWithValues: hostFrames.map { ($0.name, $0) })
+    var answered: Set<String> = []
     for line in pluginFrames where line.method?.hasPrefix("host.") == true {
       guard let name = line.reply else {
         XCTAssertTrue(line.accepted, "\(line.name): a refused request names its reply")
         continue
       }
+      answered.insert(line.method ?? "")
       let expected = try XCTUnwrap(replies[name]?.result, name)
       let reply = hostReply(rpc, line)
       XCTAssertTrue(
@@ -393,6 +395,9 @@ final class PluginSchemaTests: XCTestCase {
         XCTAssertEqual(PluginJSON.boolean(reply["ok"]), false, line.name)
       }
     }
+    // Every host RPC is answered here at least once, and so is a method the
+    // host does not have.
+    XCTAssertEqual(answered, Set(try Self.methods().hostRPCs + ["host.teleport"]))
   }
 
   // MARK: - What the host writes

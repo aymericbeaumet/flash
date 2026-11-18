@@ -93,11 +93,9 @@ final class PluginHostRPCArmTests: XCTestCase {
 
   // MARK: - host.ping
 
-  func testHostPingEchoesParams() {
-    let params: [String: Any] = ["a": 1, "nested": ["b": "c"]]
-    let reply = hostReply(PluginHostRPC(), "host.ping", params)
-    XCTAssertEqual(reply["ok"] as? Bool, true)
-    XCTAssertEqual(reply["echo"] as? NSDictionary, params as NSDictionary)
+  func testHostPingAnswersOkAndNothingElse() {
+    let reply = hostReply(PluginHostRPC(), "host.ping", [:])
+    XCTAssertEqual(reply as NSDictionary, ["ok": true] as NSDictionary)
   }
 
   // MARK: - host.wifi_info (host-owned Location/CoreWLAN seam)

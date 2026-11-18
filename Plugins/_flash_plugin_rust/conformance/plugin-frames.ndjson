@@ -120,7 +120,7 @@
 {"name": "log", "expect": "accept", "frame": {"method":"log","params":{"level":"info","message":"[plugin] refreshed","fields":{"rows":"12"}}}}
 {"name": "log.without-fields", "expect": "accept", "frame": {"method":"log","params":{"level":"warn","message":"[plugin] refresh failed","fields":{}}}}
 {"name": "log.trace", "expect": "accept", "frame": {"method":"log","params":{"level":"debug","message":"[plugin] hints served","fields":{"targets":"2"},"trace":"k3f9"}}}
-{"name": "host.ping", "expect": "accept", "frame": {"id":1,"method":"host.ping","params":{}}}
+{"name": "host.ping", "expect": "accept", "reply": "host.ping.reply", "frame": {"id":1,"method":"host.ping","params":{}}}
 {"name": "host.fetch", "expect": "accept", "frame": {"id":1,"method":"host.fetch","params":{"url":"https://api.example.com/v1/items"}}}
 {"name": "host.fetch.outside-the-allowlist", "expect": "accept", "reply": "host.fetch.reply.outside-the-allowlist", "frame": {"id":1,"method":"host.fetch","params":{"url":"https://elsewhere.example.net/"}}}
 {"name": "host.fetch.http-url", "expect": "reject", "reply": "host.fetch.reply.invalid-url", "frame": {"id":1,"method":"host.fetch","params":{"url":"http://api.example.com/v1/items"}}}

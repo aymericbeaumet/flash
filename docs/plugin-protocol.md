@@ -606,7 +606,9 @@ can name a window without asking the user to pick one) +
 `host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`), `host.post_keys` + `host.ax_snapshot` /
 `host.ax_perform` / `host.ax_set` / `host.ax_select_child`
 (`accessibility`). A denied call answers `{"ok": false, "error": "missing
-<capability> capability"}`.
+<capability> capability"}`. `host.ping` needs no capability and answers
+`{"ok": true}`, nothing else: it proves the plugin's requests reach the host
+and the replies come back.
 
 `host.applescript` accepts a named `operation`, data fields and optional
 `timeout_ms`; it returns `{ok: true, result}` or `{ok: false, error, status?}`.
