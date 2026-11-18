@@ -104,6 +104,7 @@
 {"name": "poll.floor", "expect": "accept", "frame": {"method":"poll","params":{"registrations":{"tick":{"every":0.05,"priority":"high"},"now":{"after":0,"priority":"normal"}}}}}
 {"name": "poll.ceiling", "expect": "accept", "frame": {"method":"poll","params":{"registrations":{"daily":{"every":86400,"priority":"low"}}}}}
 {"name": "poll.every-below-the-floor", "expect": "reject", "frame": {"method":"poll","params":{"registrations":{"tick":{"every":0.01,"priority":"high"}}}}}
+{"name": "poll.every-a-hair-below-the-floor", "expect": "reject", "frame": {"method":"poll","params":{"registrations":{"tick":{"every":0.0496,"priority":"high"}}}}}
 {"name": "poll.over-the-ceiling", "expect": "reject", "frame": {"method":"poll","params":{"registrations":{"daily":{"every":86401,"priority":"low"}}}}}
 {"name": "poll.negative-deadline", "expect": "reject", "frame": {"method":"poll","params":{"registrations":{"retry":{"after":-1,"priority":"low"}}}}}
 {"name": "poll.every-and-after", "expect": "reject", "frame": {"method":"poll","params":{"registrations":{"refresh":{"every":30.0,"after":1.0,"priority":"normal"}}}}}

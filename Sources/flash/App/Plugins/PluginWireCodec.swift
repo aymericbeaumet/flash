@@ -523,9 +523,13 @@ enum PluginWireCodec {
         let seconds = PluginJSON.number(entry[kind.rawValue]),
         seconds >= 0, seconds <= Double(PluginProtocol.pollMaxSeconds)
       else { return nil }
-      let ms = Int((seconds * 1000).rounded())
       // Below the floor a cadence is a busy loop; a deadline may be due now.
-      guard kind == .after || ms >= PollScheduler.minimumIntervalMs else { return nil }
+      // The floor holds the seconds as sent: rounding to milliseconds first
+      // would let a cadence a hair under it through.
+      guard kind == .after || seconds >= Double(PollScheduler.minimumIntervalMs) / 1000 else {
+        return nil
+      }
+      let ms = Int((seconds * 1000).rounded())
       decoded[name] = PluginProcess.PollRegistration(kind: kind, ms: ms, priority: priority)
     }
     return decoded
