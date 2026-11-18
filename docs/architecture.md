@@ -166,6 +166,15 @@ receive window-tab hints when their expanded format exposes numeric
 bound to live window IDs before publication. Scrolling lists, other alignments,
 overflow and multi-row status layouts omit tab hints; pane and link hints remain
 available. Tab selection uses the same host mouse-click path as pane selection.
+An activation asks a plugin for its hints without holding the AX queue: the
+request leaves, the queue serves other walks, and the reply returns to it to
+be finalized and labelled, on the window frame read before the request. The
+exclusive chain decides as before: the first provider with targets owns the
+context, and only an explicit empty result asks the next. A plugin that is
+slow to answer delays its own hints, up to the 500 ms deadline, and no
+other app's. A screen-scope walk and a commit revalidating its target still
+wait on their queue for the reply.
+
 Letter search in a terminal with no accessibility text asks the same hint
 providers for a `text_grid`: tmux answers with this same client grid,
 including the status line and each pane-border title, from the same layout

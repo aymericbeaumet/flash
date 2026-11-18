@@ -8,7 +8,7 @@ import Foundation
 /// plugin); evaluate/hints/text_grid/perform pass straight through to the
 /// process. No pre-flight, no availability bookkeeping — a stopped plugin's
 /// requests settle empty inside `PluginProcess`.
-final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
+final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintProvider {
   private let plugin: PluginProcess
   private let store: PluginCatalogStore
   private let selector: PluginSelectorStack
@@ -101,6 +101,14 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     plugin.discoverTargets(
       context: context,
       timeout: Double(FlashTunables.hintProviderTimeoutMs) / 1_000)
+  }
+
+  /// `DeferredHintProvider`: the same pull without a queue waiting on it.
+  func discover(in context: AppContext, completion: @escaping ([JumpTarget]) -> Void) {
+    plugin.discoverTargets(
+      context: context,
+      timeout: Double(FlashTunables.hintProviderTimeoutMs) / 1_000,
+      completion: completion)
   }
 
   /// The plugin's text grid of `context` for a letter search; see

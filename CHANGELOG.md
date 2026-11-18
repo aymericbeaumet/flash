@@ -9,6 +9,9 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Fixes
 
+- A plugin that is slow to answer `f` (tmux under load) no longer holds up
+  hint walks for other apps: an activation asks it without blocking the
+  Accessibility queue, for up to the same 500 ms.
 - Keep the active-window border visible behind the possible-mappings palette.
 - Place a larger, centered analog clock above the calendar, with progress and
   date facts in two columns below. Animate its second hand while hovered,

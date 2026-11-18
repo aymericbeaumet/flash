@@ -965,60 +965,79 @@ final class PluginProcess {
 
   // MARK: - Host → plugin requests
 
-  /// Live hint pull (`hints`). Always a fresh request — there is no cached
-  /// discovery. Blocks the caller up to `timeout` and returns `[]` for a
-  /// missing/rejected/mismatched reply.
+  /// Live hint pull (`hints`), never waiting. Always a fresh request — there
+  /// is no cached discovery. `completion` runs once, on the plugin queue with
+  /// the targets or `[]` for a missing/rejected/mismatched reply, or at once
+  /// with `[]` when the plugin is not running.
   func discoverTargets(
-    context: AppContext, timeout: TimeInterval, resolveAtCommit: Bool = true
-  ) -> [JumpTarget] {
-    guard runtimeStateSnapshot() == .running else { return [] }
+    context: AppContext, timeout: TimeInterval, resolveAtCommit: Bool = true,
+    completion: @escaping ([JumpTarget]) -> Void
+  ) {
+    guard runtimeStateSnapshot() == .running else {
+      completion([])
+      return
+    }
     let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
     let window =
       resolveAtCommit
       ? HintWindowSnapshot.current(pid: context.processID, primaryHeight: primaryHeight) : nil
     let startedAt = DispatchTime.now()
-    let semaphore = DispatchSemaphore(value: 0)
-    var targets: [JumpTarget] = []
-    let resultLock = NSLock()
-    let params = PluginWireCodec.spatialContextJSON(context)
     sendRequest(
       method: "hints",
-      params: params,
+      params: PluginWireCodec.spatialContextJSON(context),
       timeout: .milliseconds(Int((timeout * 1_000).rounded()))
     ) { [weak self] response in
-      defer { semaphore.signal() }
-      guard let self, let payload = PluginWireCodec.okPayload(response) else { return }
-      guard
-        let wire = PluginWireCodec.hintTargets(
-          from: payload, sourceID: "plugin:\(self.manifest.id)", contextPID: context.processID)
-      else { return }
-      let decoded = wire.map {
+      guard let self else {
+        completion([])
+        return
+      }
+      let wire = PluginWireCodec.okPayload(response).flatMap {
+        PluginWireCodec.hintTargets(
+          from: $0, sourceID: "plugin:\(self.manifest.id)", contextPID: context.processID)
+      }
+      let targets = (wire ?? []).map {
         self.hostJumpTarget(
           from: $0, context: context, window: window, primaryHeight: primaryHeight,
           timeout: timeout, resolveAtCommit: resolveAtCommit)
       }
+      if FlashLog.wouldEmit(.debug) {
+        FlashLog.debug(
+          "[plugin] hints",
+          fields: [
+            "plugin": self.manifest.id,
+            "pid": "\(context.processID)",
+            "bundle": context.bundleIdentifier,
+            "targets": "\(targets.count)",
+            "timed_out": "\(response == nil)",
+            "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
+          ],
+          source: "plugin:\(self.manifest.id)")
+      }
+      completion(targets)
+    }
+  }
+
+  /// The same pull for a caller that has to wait for it: a commit
+  /// revalidating its target, a screen-scope walk. Blocks up to `timeout`
+  /// and returns `[]` when no reply came in time. Never call it on the
+  /// plugin queue.
+  func discoverTargets(
+    context: AppContext, timeout: TimeInterval, resolveAtCommit: Bool = true
+  ) -> [JumpTarget] {
+    let semaphore = DispatchSemaphore(value: 0)
+    let resultLock = NSLock()
+    var targets: [JumpTarget] = []
+    discoverTargets(context: context, timeout: timeout, resolveAtCommit: resolveAtCommit) {
+      result in
       resultLock.lock()
-      targets = decoded
+      targets = result
       resultLock.unlock()
+      semaphore.signal()
     }
-    let waitResult = semaphore.wait(timeout: .now() + timeout)
+    guard semaphore.wait(timeout: .now() + timeout) == .success else { return [] }
     resultLock.lock()
-    let completedTargets = waitResult == .success ? targets : []
-    resultLock.unlock()
-    if FlashLog.wouldEmit(.debug) {
-      FlashLog.debug(
-        "[plugin] hints",
-        fields: [
-          "plugin": manifest.id,
-          "pid": "\(context.processID)",
-          "bundle": context.bundleIdentifier,
-          "targets": "\(completedTargets.count)",
-          "timed_out": "\(waitResult == .timedOut)",
-          "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
-        ],
-        source: "plugin:\(manifest.id)")
-    }
-    return completedTargets
+    defer { resultLock.unlock() }
+    return targets
   }
 
   /// Materialise a wire-format target as host-owned geometry and semantics.

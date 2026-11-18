@@ -1212,7 +1212,7 @@ all share:
 | --- | --- | --- |
 | `startup` | 5 s (config `[plugins] startup_timeout`) | `initialize` |
 | `query` | 50 ms | `evaluate` |
-| `hints` | 500 ms (fixed; blocks the AX queue ahead of the prepared model) | `hints` |
+| `hints` | 500 ms (fixed; the activation waits on it ahead of the prepared model) | `hints` |
 | `text_grid` | 500 ms (fixed; asked asynchronously, but the letter search waits on it) | `text_grid` |
 | `perform` | 10 s | `perform` |
 | `ping` | 10 s | `ping` reply |

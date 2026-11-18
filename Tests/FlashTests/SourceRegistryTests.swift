@@ -450,6 +450,151 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertFalse(collection.allowsFallback)
   }
 
+  /// An activation asks a provider that answers later without holding the
+  /// queue: other work runs while the answer is out, and the chain goes on,
+  /// on the queue, once it is in.
+  func testADeferredProviderIsAskedWithoutHoldingTheQueue() throws {
+    let context = try chainContext()
+    let queue = DispatchQueue(label: "flash.tests.hint-chain")
+    let tmux = DeferredStubSource(
+      identifier: "plugin:tmux", priority: 20, capabilities: [.jumpTargets],
+      readinessPolicy: .volatile, fallsBackOnEmptyDiscovery: true,
+      supportsHandler: { _ in true },
+      discoverHandler: { _ in
+        XCTFail("a deferred provider is never asked to block")
+        return []
+      })
+    let accessibility = StubSource(
+      identifier: "accessibility", priority: 10, capabilities: [.jumpTargets],
+      readinessPolicy: .continuous, supportsHandler: { _ in true },
+      discoverHandler: { context in
+        dispatchPrecondition(condition: .onQueue(queue))
+        return [Self.button(pid: context.processID)]
+      })
+
+    let collected = expectation(description: "the chain completes")
+    var collection: AppMonitor.FocusedTargetCollection?
+    queue.async {
+      AppMonitor.collectFocusedTargets(
+        context: context, providers: [tmux, accessibility], on: queue
+      ) { result in
+        dispatchPrecondition(condition: .onQueue(queue))
+        collection = result
+        collected.fulfill()
+      }
+    }
+    // The queue is free while the plugin's answer is out.
+    let ranMeanwhile = expectation(description: "other work runs on the queue")
+    queue.async {
+      XCTAssertTrue(tmux.isPending)
+      XCTAssertNil(collection)
+      ranMeanwhile.fulfill()
+    }
+    wait(for: [ranMeanwhile], timeout: 2)
+
+    // The answer arrives on another queue: an explicit empty falls through.
+    DispatchQueue.global().async { tmux.answer([]) }
+    wait(for: [collected], timeout: 2)
+    let result = try XCTUnwrap(queue.sync { collection })
+    XCTAssertEqual(tmux.asked, 1)
+    XCTAssertEqual(result.attemptedProviders.map(\.identifier), ["plugin:tmux", "accessibility"])
+    XCTAssertEqual(result.targets.map(\.target.id), ["button"])
+    XCTAssertEqual(result.targets.map(\.providerOrder), [1])
+    XCTAssertFalse(result.allowsFallback)
+  }
+
+  /// The deferred chain decides what the waiting one decides: the first
+  /// provider with targets owns the context, an authoritative empty ends
+  /// it, and a chain that only declined allows the fallback.
+  func testTheDeferredChainDecidesWhatTheWaitingChainDecides() throws {
+    let context = try chainContext()
+    let queue = DispatchQueue(label: "flash.tests.hint-chain")
+    func deferred(fallsBack: Bool) -> DeferredStubSource {
+      DeferredStubSource(
+        identifier: "plugin:tmux", priority: 20, capabilities: [.jumpTargets],
+        readinessPolicy: .volatile, fallsBackOnEmptyDiscovery: fallsBack,
+        supportsHandler: { _ in true })
+    }
+    var accessibilityCalls = 0
+    let accessibility = StubSource(
+      identifier: "accessibility", priority: 10, capabilities: [.jumpTargets],
+      readinessPolicy: .continuous, supportsHandler: { _ in true },
+      discoverHandler: { context in
+        accessibilityCalls += 1
+        return [Self.button(pid: context.processID)]
+      })
+    func collect(
+      _ providers: [FlashSource], answering tmux: DeferredStubSource, _ targets: [JumpTarget]
+    )
+      -> AppMonitor.FocusedTargetCollection?
+    {
+      let collected = expectation(description: "the chain completes")
+      var collection: AppMonitor.FocusedTargetCollection?
+      queue.async {
+        AppMonitor.collectFocusedTargets(context: context, providers: providers, on: queue) {
+          collection = $0
+          collected.fulfill()
+        }
+      }
+      queue.sync {}
+      tmux.answer(targets)
+      wait(for: [collected], timeout: 2)
+      return queue.sync { collection }
+    }
+
+    // Targets: the plugin owns the context and nothing else is asked.
+    var tmux = deferred(fallsBack: true)
+    let pane = JumpTarget(
+      id: "pane", frame: CGRect(x: 0, y: 0, width: 10, height: 10), pid: context.processID,
+      providerID: "plugin:tmux")
+    var result = try XCTUnwrap(collect([tmux, accessibility], answering: tmux, [pane]))
+    XCTAssertEqual(result.targets.map(\.target.id), ["pane"])
+    XCTAssertEqual(result.attemptedProviders.map(\.identifier), ["plugin:tmux"])
+    XCTAssertFalse(result.allowsFallback)
+    XCTAssertEqual(accessibilityCalls, 0)
+
+    // An authoritative empty ends the chain.
+    tmux = deferred(fallsBack: false)
+    result = try XCTUnwrap(collect([tmux, accessibility], answering: tmux, []))
+    XCTAssertTrue(result.targets.isEmpty)
+    XCTAssertEqual(result.attemptedProviders.map(\.identifier), ["plugin:tmux"])
+    XCTAssertFalse(result.allowsFallback)
+    XCTAssertEqual(accessibilityCalls, 0)
+
+    // Alone and declining, it leaves the fallback to the caller.
+    tmux = deferred(fallsBack: true)
+    result = try XCTUnwrap(collect([tmux], answering: tmux, []))
+    XCTAssertTrue(result.targets.isEmpty)
+    XCTAssertTrue(result.allowsFallback)
+
+    // Without a deferred provider the chain completes before it returns.
+    var immediate: AppMonitor.FocusedTargetCollection?
+    queue.sync {
+      AppMonitor.collectFocusedTargets(context: context, providers: [accessibility], on: queue) {
+        immediate = $0
+      }
+    }
+    XCTAssertEqual(immediate?.targets.map(\.target.id), ["button"])
+    XCTAssertEqual(accessibilityCalls, 1)
+  }
+
+  private func chainContext() throws -> AppContext {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    return AppContext(
+      bundleIdentifier: try XCTUnwrap(app.bundleIdentifier),
+      processID: app.processIdentifier,
+      runningApp: app,
+      frontWindowFrame: .zero,
+      allScreensFrame: .zero)
+  }
+
+  private static func button(pid: pid_t) -> JumpTarget {
+    JumpTarget(
+      id: "button", frame: CGRect(x: 10, y: 10, width: 20, height: 20), pid: pid,
+      providerID: "accessibility")
+  }
+
   func testCurrentLocationPrefersCurrentLocationCandidateForFocusedPID() throws {
     let resolved = expectation(description: "current plugin location")
     let app = try XCTUnwrap(
@@ -1299,7 +1444,36 @@ final class SourceRegistryTests: XCTestCase {
   }
 }
 
-private final class StubSource: FlashSource, FlashQueryEvaluator {
+/// A provider that answers when the test says so, on the queue the test
+/// picks, the way a plugin's reply arrives.
+private final class DeferredStubSource: StubSource, DeferredHintProvider {
+  private let lock = NSLock()
+  private var pending: [([JumpTarget]) -> Void] = []
+  private(set) var asked = 0
+
+  func discover(in context: AppContext, completion: @escaping ([JumpTarget]) -> Void) {
+    lock.lock()
+    asked += 1
+    pending.append(completion)
+    lock.unlock()
+  }
+
+  /// Whether a pull is waiting for its answer.
+  var isPending: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return !pending.isEmpty
+  }
+
+  func answer(_ targets: [JumpTarget]) {
+    lock.lock()
+    let completion = pending.removeFirst()
+    lock.unlock()
+    completion(targets)
+  }
+}
+
+private class StubSource: FlashSource, FlashQueryEvaluator {
   let identifier: String
   let priority: Int
   let capabilities: FlashSourceCapabilities

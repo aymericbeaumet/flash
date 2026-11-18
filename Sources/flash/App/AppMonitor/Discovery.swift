@@ -3,6 +3,14 @@ import ApplicationServices
 import FlashCore
 import FlashProviders
 
+/// A hint provider whose discovery answers later, off the queue that asked:
+/// a plugin, whose `hints` reply crosses a pipe. An activation asks it
+/// without holding `axQueue`, so a plugin that is slow to answer delays its
+/// own hints and no other walk. `completion` runs once, on any queue.
+protocol DeferredHintProvider: FlashSource {
+  func discover(in context: AppContext, completion: @escaping ([JumpTarget]) -> Void)
+}
+
 /// Activation discovery pipeline. Activation-time providers run first; when a
 /// dynamically scoped provider explicitly declines with an empty result, Flash
 /// falls through to the prepared continuous-provider model.
@@ -697,21 +705,34 @@ extension AppMonitor {
     let primaryH = ScreenSpace.primaryHeight
     axQueue.async { [weak self] in
       guard let self else { return }
-      let result = self.runAndAssign(
+      self.runAndAssign(
         reason: "activation",
         context: context,
         cfg: cfg,
         primaryH: primaryH,
         providers: providers,
-        targetFilter: targetFilter)
-      DispatchQueue.main.async {
-        completion(result)
+        targetFilter: targetFilter
+      ) { result in
+        DispatchQueue.main.async {
+          completion(result)
+        }
       }
     }
   }
 
+  /// What a discovery knows before it asks its providers: when it started
+  /// and the frame they are asked about.
+  private struct DiscoveryStart {
+    let startedAt: DispatchTime
+    let frameStartedAt: DispatchTime
+    let frameEndedAt: DispatchTime
+    let frame: DiscoveryFrame
+  }
+
   /// Runs on `axQueue`; `primaryH` is read on main beforehand because
-  /// `NSScreen` is main-affine.
+  /// `NSScreen` is main-affine. Every provider is asked in turn on this
+  /// queue, a plugin included: the form for a walk that has to return its
+  /// result (a prepared model).
   private func runAndAssign(
     reason: String,
     context: AppContext,
@@ -720,38 +741,105 @@ extension AppMonitor {
     providers: [FlashSource],
     targetFilter: ((JumpTarget) -> Bool)? = nil
   ) -> DiscoveryResult {
+    let start = beginDiscovery(context: context, cfg: cfg, primaryH: primaryH)
+    guard !start.frame.visibleRegions.isEmpty else {
+      return occludedDiscovery(
+        reason: reason, context: context, providers: providers,
+        targetFilterApplied: targetFilter != nil, start: start)
+    }
+    let collectStartedAt = DispatchTime.now()
+    let collection = Self.collectFocusedTargets(
+      context: start.frame.providerContext,
+      providers: providers)
+    return finishDiscovery(
+      reason: reason, context: context, cfg: cfg, targetFilter: targetFilter, start: start,
+      collectStartedAt: collectStartedAt, collection: collection)
+  }
+
+  /// The same discovery for an activation, started on `axQueue` and
+  /// completed there. A provider that answers later (`DeferredHintProvider`)
+  /// is asked without holding the queue, so other walks run while it
+  /// answers; the frame is the one read before it was asked, as when the
+  /// queue waited.
+  private func runAndAssign(
+    reason: String,
+    context: AppContext,
+    cfg: Config,
+    primaryH: CGFloat,
+    providers: [FlashSource],
+    targetFilter: ((JumpTarget) -> Bool)? = nil,
+    completion: @escaping (DiscoveryResult) -> Void
+  ) {
+    let start = beginDiscovery(context: context, cfg: cfg, primaryH: primaryH)
+    guard !start.frame.visibleRegions.isEmpty else {
+      completion(
+        occludedDiscovery(
+          reason: reason, context: context, providers: providers,
+          targetFilterApplied: targetFilter != nil, start: start))
+      return
+    }
+    let collectStartedAt = DispatchTime.now()
+    Self.collectFocusedTargets(
+      context: start.frame.providerContext, providers: providers, on: axQueue
+    ) { [weak self] collection in
+      guard let self else { return }
+      // Another walk may have run on the queue since the providers were asked.
+      self.configureRuntime(for: cfg)
+      completion(
+        self.finishDiscovery(
+          reason: reason, context: context, cfg: cfg, targetFilter: targetFilter, start: start,
+          collectStartedAt: collectStartedAt, collection: collection))
+    }
+  }
+
+  private func beginDiscovery(context: AppContext, cfg: Config, primaryH: CGFloat)
+    -> DiscoveryStart
+  {
     let startedAt = DispatchTime.now()
     configureRuntime(for: cfg)
     let frameStartedAt = DispatchTime.now()
     let frame = resolveDiscoveryFrame(for: context, primaryH: primaryH)
-    let frameEndedAt = DispatchTime.now()
-    guard !frame.visibleRegions.isEmpty else {
-      logDiscoveryPipeline(
-        reason: reason,
-        context: context,
-        providers: providers,
-        visibleRegionCount: 0,
-        targetFilterApplied: targetFilter != nil,
-        rawCount: 0,
-        visibleCount: 0,
-        dedupedCount: 0,
-        targetCount: 0,
-        hintCount: 0,
-        startedAt: startedAt,
-        frameStartedAt: frameStartedAt,
-        frameEndedAt: frameEndedAt,
-        collectStartedAt: frameEndedAt,
-        collectEndedAt: frameEndedAt,
-        finalizeStartedAt: frameEndedAt,
-        finalizeEndedAt: frameEndedAt,
-        assignStartedAt: frameEndedAt,
-        assignEndedAt: frameEndedAt)
-      return DiscoveryResult(targets: [], hints: [], allowsFallback: false, occluded: true)
-    }
-    let collectStartedAt = DispatchTime.now()
-    let collection = Self.collectFocusedTargets(
-      context: frame.providerContext,
-      providers: providers)
+    return DiscoveryStart(
+      startedAt: startedAt, frameStartedAt: frameStartedAt, frameEndedAt: DispatchTime.now(),
+      frame: frame)
+  }
+
+  /// The result of a discovery whose window shows nothing: no provider is
+  /// asked.
+  private func occludedDiscovery(
+    reason: String, context: AppContext, providers: [FlashSource], targetFilterApplied: Bool,
+    start: DiscoveryStart
+  ) -> DiscoveryResult {
+    logDiscoveryPipeline(
+      reason: reason,
+      context: context,
+      providers: providers,
+      visibleRegionCount: 0,
+      targetFilterApplied: targetFilterApplied,
+      rawCount: 0,
+      visibleCount: 0,
+      dedupedCount: 0,
+      targetCount: 0,
+      hintCount: 0,
+      startedAt: start.startedAt,
+      frameStartedAt: start.frameStartedAt,
+      frameEndedAt: start.frameEndedAt,
+      collectStartedAt: start.frameEndedAt,
+      collectEndedAt: start.frameEndedAt,
+      finalizeStartedAt: start.frameEndedAt,
+      finalizeEndedAt: start.frameEndedAt,
+      assignStartedAt: start.frameEndedAt,
+      assignEndedAt: start.frameEndedAt)
+    return DiscoveryResult(targets: [], hints: [], allowsFallback: false, occluded: true)
+  }
+
+  /// Finalize, filter and label what the providers answered; on `axQueue`.
+  private func finishDiscovery(
+    reason: String, context: AppContext, cfg: Config,
+    targetFilter: ((JumpTarget) -> Bool)?, start: DiscoveryStart,
+    collectStartedAt: DispatchTime, collection: FocusedTargetCollection
+  ) -> DiscoveryResult {
+    let frame = start.frame
     let collectEndedAt = DispatchTime.now()
     let finalizeStartedAt = DispatchTime.now()
     let finalized = TargetFinalizer.finalizeWithStats(
@@ -774,9 +862,9 @@ extension AppMonitor {
       dedupedCount: finalized.dedupedCount,
       targetCount: targets.count,
       hintCount: hints.count,
-      startedAt: startedAt,
-      frameStartedAt: frameStartedAt,
-      frameEndedAt: frameEndedAt,
+      startedAt: start.startedAt,
+      frameStartedAt: start.frameStartedAt,
+      frameEndedAt: start.frameEndedAt,
       collectStartedAt: collectStartedAt,
       collectEndedAt: collectEndedAt,
       finalizeStartedAt: finalizeStartedAt,
@@ -937,51 +1025,124 @@ extension AppMonitor {
 
   /// Run an exclusive provider chain. Results never merge: the first provider
   /// returning any targets owns the context. Only an explicit empty-result
-  /// fallback advances to the next provider.
+  /// fallback advances to the next provider. Every provider is asked on the
+  /// calling queue, which waits for each answer.
   static func collectFocusedTargets(
     context focused: AppContext,
     providers: [FlashSource]
   ) -> FocusedTargetCollection {
-    var attemptedProviders: [FlashSource] = []
-    for (providerOrder, provider) in providers.enumerated() {
-      attemptedProviders.append(provider)
-      let results: [JumpTarget]
-      do {
-        results = try provider.discover(in: focused)
-      } catch {
-        // Rule 8 keeps the UI silent on no-targets, but a throwing provider
-        // is the one breadcrumb that explains "pressed f, nothing happened"
-        // — log it instead of swallowing.
-        FlashLog.warn(
-          "[discover] provider=\(provider.identifier) failed: \(error)",
-          fields: ["provider": provider.identifier, "error": String(describing: error)])
-        results = []
-      }
-      if !results.isEmpty {
-        let priority = provider.priority(in: focused)
-        let targets = results.enumerated().map { ordinal, target in
-          TargetCandidate(
-            target: target,
-            priority: priority,
-            providerOrder: providerOrder,
-            ordinal: ordinal)
-        }
-        return FocusedTargetCollection(
-          targets: targets,
-          attemptedProviders: attemptedProviders,
-          allowsFallback: false)
-      }
-      if !provider.fallsBackOnEmptyDiscovery {
-        return FocusedTargetCollection(
-          targets: [],
-          attemptedProviders: attemptedProviders,
-          allowsFallback: false)
+    var attempted: [FlashSource] = []
+    for (order, provider) in providers.enumerated() {
+      attempted.append(provider)
+      if let collection = chainResult(
+        of: discoverLogged(provider, in: focused), from: provider, order: order,
+        attempted: attempted, context: focused)
+      {
+        return collection
       }
     }
-    return FocusedTargetCollection(
+    return exhaustedChain(attempted)
+  }
+
+  /// The same chain, with the same result, for a caller that does not wait:
+  /// a `DeferredHintProvider` is asked and `queue` released until it
+  /// answers; every other provider is asked on `queue`. Call it on `queue`;
+  /// `completion` runs once, on `queue`.
+  static func collectFocusedTargets(
+    context focused: AppContext,
+    providers: [FlashSource],
+    on queue: DispatchQueue,
+    completion: @escaping (FocusedTargetCollection) -> Void
+  ) {
+    collectFocusedTargets(
+      context: focused, providers: providers, from: 0, attempted: [], on: queue,
+      completion: completion)
+  }
+
+  private static func collectFocusedTargets(
+    context focused: AppContext,
+    providers: [FlashSource],
+    from order: Int,
+    attempted: [FlashSource],
+    on queue: DispatchQueue,
+    completion: @escaping (FocusedTargetCollection) -> Void
+  ) {
+    dispatchPrecondition(condition: .onQueue(queue))
+    guard order < providers.count else {
+      completion(exhaustedChain(attempted))
+      return
+    }
+    let provider = providers[order]
+    let attempted = attempted + [provider]
+    let settle: ([JumpTarget]) -> Void = { results in
+      if let collection = chainResult(
+        of: results, from: provider, order: order, attempted: attempted, context: focused)
+      {
+        completion(collection)
+      } else {
+        collectFocusedTargets(
+          context: focused, providers: providers, from: order + 1, attempted: attempted,
+          on: queue, completion: completion)
+      }
+    }
+    if let deferred = provider as? DeferredHintProvider {
+      deferred.discover(in: focused) { results in queue.async { settle(results) } }
+    } else {
+      settle(discoverLogged(provider, in: focused))
+    }
+  }
+
+  private static func discoverLogged(_ provider: FlashSource, in focused: AppContext)
+    -> [JumpTarget]
+  {
+    do {
+      return try provider.discover(in: focused)
+    } catch {
+      // Rule 8 keeps the UI silent on no-targets, but a throwing provider
+      // is the one breadcrumb that explains "pressed f, nothing happened"
+      // — log it instead of swallowing.
+      FlashLog.warn(
+        "[discover] provider=\(provider.identifier) failed: \(error)",
+        fields: ["provider": provider.identifier, "error": String(describing: error)])
+      return []
+    }
+  }
+
+  /// What one provider's answer decides: the collection when it ends the
+  /// chain, nil when the next provider is asked.
+  private static func chainResult(
+    of results: [JumpTarget], from provider: FlashSource, order: Int,
+    attempted: [FlashSource], context focused: AppContext
+  ) -> FocusedTargetCollection? {
+    if !results.isEmpty {
+      let priority = provider.priority(in: focused)
+      let targets = results.enumerated().map { ordinal, target in
+        TargetCandidate(
+          target: target,
+          priority: priority,
+          providerOrder: order,
+          ordinal: ordinal)
+      }
+      return FocusedTargetCollection(
+        targets: targets,
+        attemptedProviders: attempted,
+        allowsFallback: false)
+    }
+    if !provider.fallsBackOnEmptyDiscovery {
+      return FocusedTargetCollection(
+        targets: [],
+        attemptedProviders: attempted,
+        allowsFallback: false)
+    }
+    return nil
+  }
+
+  /// Every provider declined with an explicit empty result.
+  private static func exhaustedChain(_ attempted: [FlashSource]) -> FocusedTargetCollection {
+    FocusedTargetCollection(
       targets: [],
-      attemptedProviders: attemptedProviders,
-      allowsFallback: attemptedProviders.last?.fallsBackOnEmptyDiscovery == true)
+      attemptedProviders: attempted,
+      allowsFallback: attempted.last?.fallsBackOnEmptyDiscovery == true)
   }
 
   private static func elapsedMilliseconds(since start: DispatchTime) -> String {

@@ -385,6 +385,75 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertEqual(stopped, [nil])
   }
 
+  /// A hint pull that does not wait settles once, off the caller, with the
+  /// decoded targets; a rejected reply and a stopped plugin settle empty. The
+  /// waiting form answers the same.
+  func testAHintPullSettlesOnceWithoutTheCallerWaiting() throws {
+    let script = #"""
+      #!/bin/sh
+      D="$FLASH_PLUGIN_DATA_DIR"
+      printf 'spawn\n' >> "$D/spawns"
+      while IFS= read -r line; do
+        id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+        case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"id":%s,"result":{"ok":true,"protocol_version":1}}\n' "$id"
+          ;;
+        *'"method":"hints"'*)
+          if [ -f "$D/malformed" ]; then
+            printf '{"id":%s,"result":{"ok":true,"targets":[{"id":"pane"}]}}\n' "$id"
+          else
+            printf '{"id":%s,"result":{"ok":true,"targets":[{"id":"pane","frame":{"x":10,"y":20,"width":30,"height":40}}]}}\n' "$id"
+          fi
+          ;;
+        esac
+      done
+      exit 0
+      """#
+    let fixture = try PluginFixtureKit.make(
+      id: "hintpull", manifest: PluginFixtureKit.manifest(id: "hintpull"), script: script)
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    process.start()
+    waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+    let context = AppContext(
+      bundleIdentifier: "com.example.term", processID: 4242,
+      runningApp: NSRunningApplication.current,
+      frontWindowFrame: CGRect(x: 0, y: 0, width: 800, height: 400), allScreensFrame: .null)
+
+    func pull() -> [[String]] {
+      let settled = expectation(description: "hints settle")
+      let lock = NSLock()
+      var replies: [[String]] = []
+      process.discoverTargets(context: context, timeout: 2, resolveAtCommit: false) { targets in
+        XCTAssertFalse(Thread.isMainThread, "the reply settles on the plugin queue")
+        lock.lock()
+        replies.append(targets.map(\.id))
+        lock.unlock()
+        settled.fulfill()
+      }
+      wait(for: [settled], timeout: 8)
+      lock.lock()
+      defer { lock.unlock() }
+      return replies
+    }
+    XCTAssertEqual(pull(), [["pane"]])
+    XCTAssertEqual(
+      process.discoverTargets(context: context, timeout: 2, resolveAtCommit: false).map(\.id),
+      ["pane"], "the waiting form answers the same")
+
+    FileManager.default.createFile(
+      atPath: fixture.dataDir.appendingPathComponent("malformed").path, contents: nil)
+    XCTAssertEqual(pull(), [[]], "a target without a frame rejects the reply")
+
+    process.stopAndWait(reason: "test")
+    var stopped: [[String]] = []
+    process.discoverTargets(context: context, timeout: 2, resolveAtCommit: false) {
+      stopped.append($0.map(\.id))
+    }
+    XCTAssertEqual(stopped, [[]], "a stopped plugin settles at once")
+  }
+
   // MARK: 1c. Wire fields
 
   /// Records the child's environment, every event it receives and every
