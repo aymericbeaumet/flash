@@ -109,6 +109,14 @@ Every row is labelled with its type, the word `@` filters by: `[tabs]`,
 `[terminals]`, `[apps]`. When several sources feed a type, the one a row
 comes from (`firefox`, `chrome`, `pinned`) is dimmed after it.
 
+A location a plugin lists shows its URL after its title, or its subtitle when
+it has no URL: `Gmail · https://mail.google.com/` for a tab,
+`flash · scratch:2 · zsh · ~/workspace/flash` for a tmux window. A location
+with a web address is also found by its title words under that address's
+top-level domain, so `gmail.com` finds the tab titled Gmail at
+`mail.google.com`. Both follow from the row's fields, whichever plugin sent
+it.
+
 Typing an incomplete type such as `@ta` shows the types that match, each with
 what feeds it (`[type] @tabs  chrome, firefox, safari`); `<tab>` or `<cr>`
 inserts the selected one. Typing `!`

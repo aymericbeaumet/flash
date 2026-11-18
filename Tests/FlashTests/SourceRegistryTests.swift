@@ -255,7 +255,7 @@ final class SourceRegistryTests: XCTestCase {
             candidatesHandler: { _ in
               [
                 Candidate(
-                  kind: CandidateFinder.browserTabKind,
+                  kind: .plugin("browser_tab"),
                   sourceID: "native.tabs",
                   source: "tabs",
                   pid: nil, title: "Native Tab", subtitle: "tab",

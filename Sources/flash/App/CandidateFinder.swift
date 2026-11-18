@@ -83,8 +83,6 @@ enum CandidateFinder {
     "[\(source)] \(name)"
   }
 
-  static let browserTabKind = CandidateKind.plugin("browser_tab")
-  static let tmuxWindowKind = CandidateKind.plugin("tmux_window")
   static let emojiKind = CandidateKind.plugin("emoji")
   /// Synthetic flashlight rows for registered plugin bangs (`!<token>`);
   /// selecting one dispatches the bang instead of resolving a candidate.
@@ -187,11 +185,8 @@ enum CandidateFinder {
     if candidate.kind == sourceKind {
       return displayTitle(source: candidate.source, name: candidate.title)
     }
-    if candidate.kind == browserTabKind {
-      return browserTabDisplayTitle(candidate)
-    }
-    if candidate.kind == tmuxWindowKind {
-      return tmuxWindowDisplayTitle(candidate)
+    if isPluginLocation(candidate) {
+      return locationDisplayTitle(candidate)
     }
     return displayTitle(source: candidate.source, name: candidate.title)
   }
@@ -1116,44 +1111,30 @@ enum CandidateFinder {
     }
   }
 
-  private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
-    let candidateTitle = candidate.title.trimmed
-    let url = browserTabURLString(candidate) ?? ""
-    let title: String
-    if candidateTitle.isEmpty || candidateTitle == url {
-      title = url.isEmpty ? candidateTitle : url
-    } else if url.isEmpty {
-      title = candidateTitle
-    } else {
-      // `·`-joined trailing metadata matches the tmux candidate
-      // convention (`scratch:2 flash · claude · ~/workspace/...`) so
-      // every flashlight row reads with the same rhythm.
-      title = "\(candidateTitle) · \(url)"
-    }
-    return displayTitle(source: candidate.source, name: title)
+  /// A place a plugin lists (a browser tab, a tmux window). Apps are
+  /// locations too, but Flash feeds them itself and shows only their name.
+  private static func isPluginLocation(_ candidate: Candidate) -> Bool {
+    candidate.entity == .location && candidate.kind != .app
   }
 
-  private static func tmuxWindowDisplayTitle(_ candidate: Candidate) -> String {
+  /// `[source] title · detail`: a plugin location's detail tells it from
+  /// the places named like it, and is its URL, else its subtitle. Every
+  /// such row joins with `·` (`Gmail · https://mail.google.com/`,
+  /// `scratch:2 flash · claude · ~/workspace/...`), so the list reads with
+  /// one rhythm whatever fed it.
+  private static func locationDisplayTitle(_ candidate: Candidate) -> String {
     let title = candidate.title.trimmed
-    let secondary = candidate.subtitle.trimmed
-    let display: String
-    if title.isEmpty {
-      display = secondary
-    } else if secondary.isEmpty {
-      display = title
+    let url = candidate.url?.absoluteString ?? ""
+    let detail = url.isEmpty ? candidate.subtitle.trimmed : url
+    let name: String
+    if title.isEmpty || title == detail {
+      name = detail.isEmpty ? title : detail
+    } else if detail.isEmpty {
+      name = title
     } else {
-      display = "\(title) · \(secondary)"
+      name = "\(title) · \(detail)"
     }
-    return displayTitle(source: candidate.source, name: display)
-  }
-
-  private static func browserTabURLString(_ candidate: Candidate) -> String? {
-    guard candidate.kind == browserTabKind else { return nil }
-    if let url = candidate.url?.absoluteString, !url.isEmpty {
-      return url
-    }
-    let payload = candidate.sourcePayload?.trimmed ?? ""
-    return payload.isEmpty ? nil : payload
+    return displayTitle(source: candidate.source, name: name)
   }
 
   private static func searchText(_ candidate: Candidate) -> String {
@@ -1167,17 +1148,10 @@ enum CandidateFinder {
   }
 
   private static func secondarySearchText(_ candidate: Candidate) -> String {
-    if candidate.kind == browserTabKind {
-      return
-        "\(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate))"
-    }
-    return "\(candidate.subtitle) \(urlSearchText(candidate))"
+    "\(candidate.subtitle) \(urlSearchText(candidate)) \(titleDomainAliases(candidate))"
   }
 
   private static func urlSearchText(_ candidate: Candidate) -> String {
-    if let url = browserTabURLString(candidate), !url.isEmpty {
-      return url
-    }
     guard let url = candidate.url else { return "" }
     if candidate.kind == .app, url.isFileURL {
       let appName = url.deletingPathExtension().lastPathComponent
@@ -1186,9 +1160,12 @@ enum CandidateFinder {
     return url.isFileURL ? url.path : url.absoluteString
   }
 
-  private static func browserTabTitleDomainAliases(_ candidate: Candidate) -> String {
+  /// A plugin location with a web address is also found by its title words
+  /// under that address's top-level domain: `gmail.com` finds the tab
+  /// titled Gmail at `mail.google.com`.
+  private static func titleDomainAliases(_ candidate: Candidate) -> String {
     guard
-      candidate.kind == browserTabKind,
+      isPluginLocation(candidate),
       let url = candidate.url,
       let host = url.host
     else { return "" }

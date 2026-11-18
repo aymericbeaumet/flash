@@ -735,7 +735,8 @@ final class SourceCandidateTests: XCTestCase {
         subtitle: "browser tab",
         bundleIdentifier: "org.mozilla.firefox",
         pid: 123,
-        url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
+        url: URL(string: "https://mail.google.com/mail/u/0/#inbox"),
+        isLocation: true))
 
     XCTAssertNotNil(CandidateFinder.score(query: "gmail.com", candidate: tab))
   }
@@ -871,7 +872,8 @@ final class SourceCandidateTests: XCTestCase {
       title: "Inbox",
       subtitle: "browser tab",
       bundleIdentifier: DummyRunningApplication.app.bundleIdentifier ?? "",
-      url: URL(string: "https://mail.example.test/inbox"))
+      url: URL(string: "https://mail.example.test/inbox"),
+      isLocation: true)
     let prepared = CandidateFinder.prepare(candidate)
 
     XCTAssertEqual(prepared.displayTitle, "[safari] Inbox · https://mail.example.test/inbox")
@@ -1229,7 +1231,7 @@ final class SourceCandidateTests: XCTestCase {
       candidate(
         kind: .plugin("browser_tab"), source: "firefox", name: "Gmail",
         subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/")))
+        url: URL(string: "https://mail.google.com/"), isLocation: true))
     XCTAssertEqual(titled.displayTitle, "[firefox] Gmail · https://mail.google.com/")
 
     // When the title is missing we fall through to URL-only display —
@@ -1238,8 +1240,51 @@ final class SourceCandidateTests: XCTestCase {
       candidate(
         kind: .plugin("browser_tab"), source: "firefox", name: "",
         subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/")))
+        url: URL(string: "https://mail.google.com/"), isLocation: true))
     XCTAssertEqual(urlOnly.displayTitle, "[firefox] https://mail.google.com/")
+  }
+
+  /// What a location row shows and is found by comes from its fields, never
+  /// from the kind its plugin chose.
+  func testALocationRowShowsItsURLElseItsSubtitleWhateverItsKind() {
+    let page = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("page"), source: "reader.pages", name: " Gmail ",
+        subtitle: "", bundleIdentifier: "",
+        url: URL(string: "https://mail.google.com/"), isLocation: true))
+    XCTAssertEqual(page.displayTitle, "[reader.pages] Gmail · https://mail.google.com/")
+    XCTAssertEqual(
+      page.normalizedScoringFields.secondary, "https mail google com gmail com",
+      "its title words are searchable under its URL's top-level domain")
+
+    let session = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("session"), source: "zellij.sessions", name: "flash",
+        subtitle: "main · zsh · ~/work", bundleIdentifier: "", isLocation: true))
+    XCTAssertEqual(session.displayTitle, "[zellij.sessions] flash · main · zsh · ~/work")
+
+    let bare = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("session"), source: "zellij.sessions", name: "flash",
+        subtitle: "", bundleIdentifier: "", isLocation: true))
+    XCTAssertEqual(bare.displayTitle, "[zellij.sessions] flash")
+
+    // A row that is no location keeps its title: a bookmark's URL and a
+    // note's subtitle are searched, not shown.
+    let bookmark = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("bookmark"), source: "firefox.bookmarks", name: "Gmail",
+        subtitle: "bookmark", bundleIdentifier: "",
+        url: URL(string: "https://mail.google.com/")))
+    XCTAssertEqual(bookmark.displayTitle, "[firefox.bookmarks] Gmail")
+    XCTAssertEqual(bookmark.normalizedScoringFields.secondary, "bookmark https mail google com")
+    // An app is a location Flash feeds itself; its bundle path is not shown.
+    let app = CandidateFinder.prepare(
+      candidate(
+        kind: .app, source: "core.apps", name: "Mail", subtitle: "app",
+        bundleIdentifier: "com.apple.mail",
+        url: URL(fileURLWithPath: "/System/Applications/Mail.app"), isLocation: true))
+    XCTAssertEqual(app.displayTitle, "[core.apps] Mail")
   }
 
   func testPrecedenceTableDefaultsUseCandidateKinds() {
@@ -1435,7 +1480,8 @@ final class SourceCandidateTests: XCTestCase {
         kind: .plugin("browser_tab"), source: "firefox", name: "Inbox",
         subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox",
         pid: 4242,
-        url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
+        url: URL(string: "https://mail.google.com/mail/u/0/#inbox"),
+        isLocation: true))
     let titleQuery = try XCTUnwrap(CandidateFinder.score(query: "Inbox", candidate: tab))
     let urlQuery = try XCTUnwrap(CandidateFinder.score(query: "gmail.com", candidate: tab))
     XCTAssertGreaterThan(titleQuery, 0)
@@ -1645,7 +1691,7 @@ final class SourceCandidateTests: XCTestCase {
       bundleIdentifier: "",
       isLocation: true)
     let browserTab = candidate(
-      kind: CandidateFinder.browserTabKind,
+      kind: .plugin("browser_tab"),
       source: "firefox.tabs",
       name: "Gmail",
       subtitle: "browser tab",
@@ -1813,7 +1859,7 @@ final class SourceCandidateTests: XCTestCase {
     let noise = [
       CandidateFinder.prepare(
         candidate(
-          kind: CandidateFinder.browserTabKind,
+          kind: .plugin("browser_tab"),
           source: "safari.tabs",
           name: "Numbers | CallRail",
           subtitle: "browser tab",
@@ -1897,7 +1943,8 @@ final class SourceCandidateTests: XCTestCase {
         source: "tmux.windows",
         name: "flash",
         subtitle: "scratch:2 · zsh · ~/workspace/flash",
-        bundleIdentifier: ""))
+        bundleIdentifier: "",
+        isLocation: true))
 
     XCTAssertEqual(
       tmux.displayTitle,

@@ -2368,7 +2368,8 @@ final class NormalModeTests: XCTestCase {
         title: "Gmail",
         subtitle: "browser tab",
         bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
+        url: URL(string: "https://mail.google.com/mail/u/0/#inbox"),
+        isLocation: true))
 
     XCTAssertEqual(
       prepared.displayTitle, "[firefox] Gmail · https://mail.google.com/mail/u/0/#inbox")
@@ -2390,7 +2391,8 @@ final class NormalModeTests: XCTestCase {
         pid: 123,
         title: "beside-agentic",
         subtitle: "beside:1 · claude · ~/workspace/beside",
-        bundleIdentifier: ""))
+        bundleIdentifier: "",
+        isLocation: true))
 
     XCTAssertEqual(
       prepared.displayTitle,
