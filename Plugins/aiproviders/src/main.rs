@@ -46,7 +46,6 @@ const QUOTA_TICK: Duration = Duration::from_secs(60);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(6);
 const STATE_FILE: &str = "quotas.json";
 const GROK_AUTH_SETTING: &str = "grok_auth_file";
-const GROK_AUTH_DEFAULT: &str = "~/.grok/auth.json";
 
 static CODEX_PATH: LazyLock<OnceCell<Option<PathBuf>>> = LazyLock::new(OnceCell::new);
 
@@ -253,14 +252,11 @@ struct Sources {
     grok_auth_file: Option<PathBuf>,
 }
 
-/// An explicit path setting, `~/` expanded against `home`.
-fn configured_path(
-    value: Option<&Value>,
-    default: &str,
-    home: Option<&Path>,
-) -> Result<PathBuf, &'static str> {
+/// A path setting, `~/` expanded against `home`. The host delivers the
+/// manifest's default when no file sets one.
+fn configured_path(value: Option<&Value>, home: Option<&Path>) -> Result<PathBuf, &'static str> {
     let raw = match value {
-        None => default,
+        None => return Err("missing"),
         Some(Value::String(raw)) => raw.as_str(),
         Some(_) => return Err("not_a_string"),
     };
@@ -279,9 +275,9 @@ fn configured_path(
 /// invalid one once without its value.
 fn configured_sources(ctx: &Context) -> Sources {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let resolve = |setting: &str, default: &str| {
+    let resolve = |setting: &str| {
         let value = ctx.config_json::<Value>(setting);
-        configured_path(value.as_ref(), default, home.as_deref())
+        configured_path(value.as_ref(), home.as_deref())
             .map_err(|reason| {
                 ctx.log_fields(
                     "warn",
@@ -297,7 +293,7 @@ fn configured_sources(ctx: &Context) -> Sources {
     Sources {
         claude: quota::ClaudeCredentials::claude_code(home.as_deref()),
         claude_usage_url: quota::CLAUDE_USAGE_URL.to_string(),
-        grok_auth_file: resolve(GROK_AUTH_SETTING, GROK_AUTH_DEFAULT),
+        grok_auth_file: resolve(GROK_AUTH_SETTING),
     }
 }
 
@@ -929,41 +925,37 @@ mod tests {
     }
 
     #[test]
-    fn the_manifest_declares_the_grok_auth_default() {
+    fn the_manifest_default_grok_auth_file_resolves_under_home() {
         let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        let declared = &manifest["settings"][GROK_AUTH_SETTING]["default"];
+        let home = Path::new("/Users/me");
         assert_eq!(
-            manifest["settings"][GROK_AUTH_SETTING]["default"],
-            GROK_AUTH_DEFAULT
+            configured_path(Some(declared), Some(home)),
+            Ok(PathBuf::from("/Users/me/.grok/auth.json"))
         );
+        assert_eq!(configured_path(Some(declared), None), Err("no_home"));
     }
 
     #[test]
-    fn path_settings_default_expand_home_and_reject_the_rest() {
+    fn path_settings_expand_home_and_reject_the_rest() {
         let home = Path::new("/Users/me");
         assert_eq!(
-            configured_path(None, GROK_AUTH_DEFAULT, Some(home)),
-            Ok(PathBuf::from("/Users/me/.grok/auth.json"))
-        );
-        assert_eq!(
-            configured_path(Some(&json!("~/x/auth.json")), GROK_AUTH_DEFAULT, Some(home)),
+            configured_path(Some(&json!("~/x/auth.json")), Some(home)),
             Ok(PathBuf::from("/Users/me/x/auth.json"))
         );
         assert_eq!(
-            configured_path(Some(&json!("/tmp/a.json")), GROK_AUTH_DEFAULT, None),
+            configured_path(Some(&json!("/tmp/a.json")), None),
             Ok(PathBuf::from("/tmp/a.json"))
         );
         assert_eq!(
-            configured_path(Some(&json!("relative.json")), GROK_AUTH_DEFAULT, Some(home)),
+            configured_path(Some(&json!("relative.json")), Some(home)),
             Err("not_absolute")
         );
         assert_eq!(
-            configured_path(Some(&json!(true)), GROK_AUTH_DEFAULT, Some(home)),
+            configured_path(Some(&json!(true)), Some(home)),
             Err("not_a_string")
         );
-        assert_eq!(
-            configured_path(None, GROK_AUTH_DEFAULT, None),
-            Err("no_home")
-        );
+        assert_eq!(configured_path(None, Some(home)), Err("missing"));
     }
 
     /// An invalid setting disables that quota's source, logged once without

@@ -40,12 +40,12 @@ impl Engine for Calculator {
     }
 }
 
+/// The currencies a conversion answers in. The host delivers the manifest's
+/// default when no file sets them.
 fn normalize_targets(configured: Option<Vec<String>>) -> Vec<String> {
-    let Some(configured) = configured else {
-        return vec!["USD".to_string()];
-    };
     let mut seen = HashSet::new();
     configured
+        .unwrap_or_default()
         .into_iter()
         .map(|currency| currency.trim().to_ascii_uppercase())
         .filter(|currency| {
@@ -208,18 +208,14 @@ mod tests {
     use crate::rates::{RatesStore, parse_ecb_xml};
 
     #[test]
-    fn targets_default_to_usd() {
-        assert_eq!(normalize_targets(None), ["USD"]);
-    }
-
-    #[test]
-    fn the_manifest_declares_the_default_targets() {
+    fn the_manifest_default_targets_are_ones_the_plugin_keeps() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../manifest.json")).unwrap();
         let declared: Vec<String> =
             serde_json::from_value(manifest["settings"]["target_currencies"]["default"].clone())
                 .unwrap();
-        assert_eq!(declared, normalize_targets(None));
+        assert_eq!(normalize_targets(Some(declared.clone())), declared);
+        assert_eq!(normalize_targets(None), Vec::<String>::new());
     }
 
     #[test]

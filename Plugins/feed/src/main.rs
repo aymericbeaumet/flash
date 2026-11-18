@@ -19,10 +19,6 @@ struct Settings {
     cycle_interval: Duration,
 }
 
-/// Seconds, as the manifest's `settings` defaults declare them.
-const REFRESH_INTERVAL_DEFAULT: u64 = 300;
-const CYCLE_INTERVAL_DEFAULT: u64 = 30;
-
 fn settings(ctx: &Context) -> Result<Option<Settings>, &'static str> {
     let Some(value) = ctx.config_json::<Value>("url") else {
         return Ok(None);
@@ -34,23 +30,19 @@ fn settings(ctx: &Context) -> Result<Option<Settings>, &'static str> {
     let url = feed::web_url(value).ok_or("url must be an HTTP(S) URL without credentials")?;
     Ok(Some(Settings {
         url,
-        refresh_interval: interval(
-            ctx.config_json("refresh_interval"),
-            REFRESH_INTERVAL_DEFAULT,
-        )?,
-        cycle_interval: interval(ctx.config_json("cycle_interval"), CYCLE_INTERVAL_DEFAULT)?,
+        refresh_interval: interval(ctx.config_json("refresh_interval"))?,
+        cycle_interval: interval(ctx.config_json("cycle_interval"))?,
     }))
 }
 
-fn interval(value: Option<Value>, default: u64) -> Result<Duration, &'static str> {
-    let seconds = match value {
-        None => default,
-        Some(value) => value
-            .as_u64()
-            .filter(|value| (1..=86400).contains(value))
-            .ok_or("refresh_interval and cycle_interval must be integer seconds in 1..86400")?,
-    };
-    Ok(Duration::from_secs(seconds))
+/// Seconds. The host delivers the manifest's default when no file sets one.
+fn interval(value: Option<Value>) -> Result<Duration, &'static str> {
+    value
+        .as_ref()
+        .and_then(Value::as_u64)
+        .filter(|seconds| (1..=86400).contains(seconds))
+        .map(Duration::from_secs)
+        .ok_or("refresh_interval and cycle_interval must be integer seconds in 1..86400")
 }
 
 struct Feed;
@@ -222,30 +214,30 @@ mod tests {
     }
 
     #[test]
-    fn the_manifest_declares_the_interval_defaults() {
+    fn the_manifest_declares_intervals_the_plugin_accepts() {
         let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
         let settings = &manifest["settings"];
-        assert_eq!(
-            settings["refresh_interval"]["default"],
-            REFRESH_INTERVAL_DEFAULT
-        );
-        assert_eq!(
-            settings["cycle_interval"]["default"],
-            CYCLE_INTERVAL_DEFAULT
-        );
         for name in ["refresh_interval", "cycle_interval"] {
             assert_eq!(settings[name]["min"], 1, "{name}");
             assert_eq!(settings[name]["max"], 86400, "{name}");
+            assert!(
+                interval(Some(settings[name]["default"].clone())).is_ok(),
+                "{name}"
+            );
         }
     }
 
     #[test]
-    fn intervals_have_defaults_and_require_bounded_positive_integer_seconds() {
-        assert_eq!(interval(None, 300).unwrap(), Duration::from_secs(300));
+    fn intervals_are_bounded_positive_integer_seconds() {
         assert_eq!(
-            interval(Some(Value::from(1)), 60).unwrap(),
+            interval(Some(Value::from(1))).unwrap(),
             Duration::from_secs(1)
         );
+        assert_eq!(
+            interval(Some(Value::from(86400))).unwrap(),
+            Duration::from_secs(86400)
+        );
+        assert!(interval(None).is_err(), "the host delivers the default");
         for value in [
             Value::from(0),
             Value::from(-1),
@@ -253,7 +245,7 @@ mod tests {
             Value::from("60"),
             Value::from(0.5),
         ] {
-            assert!(interval(Some(value), 60).is_err());
+            assert!(interval(Some(value)).is_err());
         }
     }
 
@@ -337,7 +329,11 @@ mod tests {
         }
         let harness = Harness::with_config(
             "feed",
-            serde_json::json!({"url": "https://example.com/feed.xml"}),
+            serde_json::json!({
+                "url": "https://example.com/feed.xml",
+                "refresh_interval": 300,
+                "cycle_interval": 30,
+            }),
         );
         let configured = settings(&harness.context()).unwrap().unwrap();
         assert_eq!(configured.refresh_interval, Duration::from_secs(300));
