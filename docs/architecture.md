@@ -132,6 +132,13 @@ names its peer: it holds at most 32 connections, closes one that has not
 said `hello` within 5 seconds, and bounds each connection's line length,
 requests in flight and unread events ([limits](ipc-protocol.md#limits-and-timeouts)).
 
+A sandboxed plugin's HTTPS client verifies against the roots bundled with it
+(reqwest `tls_certs_only` over `webpki-root-certs`). The platform verifier
+needs the trust service and the keychains, and the seatbelt profile denies
+both, so it fails every handshake under the sandbox while passing every unit
+test outside it. A TLS dependency bump is therefore confirmed with a live
+fetch under the sandbox.
+
 ## Hint activation
 
 Discovery captures focused-app context and a generation. Provider ordering is
@@ -251,25 +258,6 @@ its own layer above everything else: it never recycles hint chips or closes the
 command line, and its expiry removes only itself. One resident runs per user; a
 second one finds the resident lock held and exits.
 
-What genuinely cannot be driven by an event goes through `PollScheduler`, the
-one periodic clock in the process — there is no second timer. Core watchers and
-plugins register there instead of arming their own, so twenty pollers cost one
-wake-up rather than twenty; deadlines snap to a multiple of each interval so
-clients sharing a period also share a tick, a client whose previous run has not
-returned is skipped rather than queued, and the timer stops entirely when
-nothing is registered. A registration is either a fixed cadence (`register`) or
-a one-shot deadline (`scheduleOnce`), which is how a client whose wake-ups are
-irregular still rides the shared clock: the status controller re-registers its
-next deadline — the earliest of the user's per-source intervals, cycle
-rotations, each status surface's clock and pending output — each time one
-lands, for the bar, desktop widgets and monitors alike. `PollDeadline` wraps one
-re-armable deadline for a queue-confined owner: a trailing debounce re-arms it
-per event, a backoff per attempt, and a fire already on its way is dropped once
-it is re-armed or cancelled. It releases only the registration it armed, so a
-successor under the same id keeps its wake-up. Plugins register over the wire with `poll` —
-cadences and deadlines, each at its own priority — and are ticked with a
-`core:poll:<name>` event.
-
 Flash listens on three sockets at most. The IPC socket (`IPCServer`) is a
 Unix domain socket in `~/Library/Application Support/Flash/run/`, never a
 TCP port, for the user's own processes only. The other two are bound to the
@@ -289,6 +277,27 @@ nothing is encoded and no OS source runs on a client's account. The hub
 encodes an event once, numbers it, and hands it to the server for every
 subscriber, whose bounded queue coalesces state signals and disconnects a
 reader that still falls behind.
+
+### The one clock
+
+What genuinely cannot be driven by an event goes through `PollScheduler`, the
+one periodic clock in the process — there is no second timer. Core watchers and
+plugins register there instead of arming their own, so twenty pollers cost one
+wake-up rather than twenty; deadlines snap to a multiple of each interval so
+clients sharing a period also share a tick, a client whose previous run has not
+returned is skipped rather than queued, and the timer stops entirely when
+nothing is registered. A registration is either a fixed cadence (`register`) or
+a one-shot deadline (`scheduleOnce`), which is how a client whose wake-ups are
+irregular still rides the shared clock: the status controller re-registers its
+next deadline — the earliest of the user's per-source intervals, cycle
+rotations, each status surface's clock and pending output — each time one
+lands, for the bar, desktop widgets and monitors alike. `PollDeadline` wraps one
+re-armable deadline for a queue-confined owner: a trailing debounce re-arms it
+per event, a backoff per attempt, and a fire already on its way is dropped once
+it is re-armed or cancelled. It releases only the registration it armed, so a
+successor under the same id keeps its wake-up. Plugins register over the wire with `poll` —
+cadences and deadlines, each at its own priority — and are ticked with a
+`core:poll:<name>` event.
 
 Everything that re-arms itself rides the clock: the update check (`core:updates`, `low`: a minute after launch, then daily), prepared-model debounce,
 readiness and maintenance wakes, the activation readiness ladder, Mission
@@ -400,6 +409,8 @@ the telemetry export flush only while something new is queued, and the
 menu-bar reveal probe only while the pointer is in the band. Secure
 input is the exception that stays registered: the tap receives nothing while
 the flag is on, so `core:secure-input` is how a stuck hold is noticed at all.
+A tick that finds the flag off reads the flag alone: nothing else the poll
+gathers decides anything then.
 Main-thread
 stalls and hitches need no poll at all: the run loop reports each busy stretch
 itself, and the HTTP inspector pushes its state on the changes it shows.
@@ -410,6 +421,25 @@ changed: every border-relevant AX notification, activation, quit, Space and
 display change bumps the event epoch of `ActiveWindowBorderState`, each read
 records the epoch it saw, and a mode change repaints the cached frame without
 reading while the two agree.
+
+### Backstop polls
+
+Two registrations exist because the session tap can miss what they watch.
+
+The hyper hold watch (`core:hyper-hold`, priority `system`) is the backstop
+for a key-up the tap dropped. It is armed only while HYPER is latched, and
+HYPER leaves once `CGEventSource.keyState(.hidSystemState)` has reported the
+chord up for two ticks ([HYPER](hyper-mode.md)). Combined session state can
+report a swallowed key as up, so the watch never reads it.
+
+Secure input (`core:secure-input`, priority `low`, every 2 s for the life of
+the resident) stays armed for the same reason: while the flag is on the tap
+gets no keys, so only this poll can see a hold that outlived the password
+field. `SecureInputRelease` makes one release attempt per episode, with no
+dialog and no lock screen, and leaves a focused secure field, and a text
+field in the app holding the flag, alone.
+
+### Visible regions, readiness and commits
 
 Visible regions subtract every higher window from the active one, except fully
 transparent windows. The frontmost app's window can sit under another app's
@@ -618,6 +648,8 @@ All overlay layer mutations disable implicit Core Animation actions. Add new
 animated properties to `OverlayPanel.noActions` as well as using disabled-action
 transactions. An empty discovery result stays silent.
 
+### Status bar window and full screen
+
 The persistent status bar draws in its own click-through `StatusBarWindow`,
 which shares the overlay panel's union-of-screens frame and hosts only the bar
 layers. It is ordered above the native menu bar and its extras, so a reveal
@@ -675,6 +707,8 @@ restores wait for the session: a window counts as restored only once its frame
 was read back in its slot, and one whose frame was unreadable stays pending
 until the session resumes or the window is focused.
 
+### Layer hosting and mode projection
+
 The overlay's AppKit-owned content view contains a layer-hosting drawing view
 and the native command editor as siblings. Flash replaces only the drawing
 view's `contentLayer.sublayers`; replacing the native container's sublayers
@@ -693,6 +727,27 @@ session tap never holds keys: it swallows or passes each one as it comes
 ([clicks keep the mode](input-internals.md#clicks-keep-the-mode)).
 See [input capture](input-internals.md) for the input latency contracts and
 [INSERT](insert-mode.md#enter-insert) for the mode transitions.
+
+## Windows and displays
+
+No window command sends an Accessibility request from the main keyboard loop
+([windows](windows.md)). The commands that change the focused window's state
+run on `WindowLayoutManager`'s serial AX queue and find their window with
+`WindowMover.resolveWindow`: the focused window, then the main window, then
+the app's window list. Directional focus reads a prepared AX window catalog,
+and the walks that build it run on the separate navigation-build queue.
+
+Native full screen is the window's `AXFullScreen` attribute, while
+`window move --position=maximized` remains a resize to the usable frame.
+`window restore` first uses the manager's most recently minimized window,
+because minimizing an app's last window can move focus to a different
+process: the focused app is then no longer the one that owns the window.
+
+Placement rules run once per AX window identity for each changed rule set, so
+a window moved by hand afterwards stays where it was put. A semantic layout
+(`WindowLayoutIntent`) keeps its home display by UUID: display-change
+recovery only changes where the window sits, and returns it home when that
+display reconnects. Only a placement moves home.
 
 ## Tiling
 
@@ -748,6 +803,10 @@ The finder warms catalog snapshots independently of query-specific work. A live
 search result belongs to its session, query generation and source; a timeout or
 late preparation from an older query cannot replace current rows. Rendering a
 new query starts from the catalog plus only the current live result set.
+A pick the finder captured for delivery belongs to the finder session
+generation, not to the pending mapping sequence: focus returning to the app
+refreshes the mappings without cancelling the pick, and closing or replacing
+the session still cancels it.
 
 Waiting for a child process always ends on its kernel exit event
 (`ProcessExit`, a `kqueue` `NOTE_EXIT` or a process dispatch source), never a
@@ -759,7 +818,9 @@ resolution that fails keeps the seeded one. Status jobs retain their running pro
 are unchanged. Replacements invalidate tokens before stopping children in one
 bounded batch. The scheduler arms only evaluated jobs, active cycles, the
 next boundary of the finest time unit a visible surface shows, and pending
-output publication. Inactive shell jobs and their output
+output publication. A popup contributes its clock deadline only while a live
+hover preview shows it: a hidden popup and a focused pager's snapshot keep no
+clock ticking. Inactive shell jobs and their output
 are discarded; inactive named sources retain last-good values without wakeups.
 See [status formats](status-format.md) and [popup ownership](popups.md#internals).
 
@@ -769,3 +830,20 @@ definition. Host RPC replies are tied to the child generation that issued them.
 Transport queues, encoded payloads and request admission are bounded. Details,
 limits and the conformance suite live in the
 [protocol](plugin-protocol.md) and [Rust SDK](plugin-rust-sdk.md) documents.
+
+## Test runs and the live desktop
+
+The suite runs on the maintainer's desktop, beside their work, so two guards
+keep it from touching what they see or type
+([verification](development.md#verification)).
+
+- `TestWindowHygiene` makes every window the suite orders in transparent,
+  refuses `makeKey`, and fails a test that leaves a window drawn or makes one
+  key. A key test window steals typing from the frontmost app, so tests
+  exercise the logic a key window would run, never `becomeKey()` itself.
+- `AppActivation` is the one place Flash activates itself or changes its
+  activation policy, and it does nothing under XCTest: an `xctest` process that
+  activates sends the user's keys to its transparent windows.
+
+Display-change recovery tests use fake displays and inject application
+discovery, so they never enumerate or move a real window.

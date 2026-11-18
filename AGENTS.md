@@ -27,15 +27,11 @@ contracts before changing a subsystem:
   [getting started](docs/getting-started.md), [comparison and FAQ](docs/comparison.md),
   [alternatives](docs/alternatives/README.md) (one page per tool, with a
   migration section), [troubleshooting](docs/troubleshooting.md).
-- `docs/*.md`, ordered by `docs/nav.json`, is the one source of the manual,
-  rendered by the help's own docs view: the resident serves it from the app
-  bundle at `/docs/<page>`, and `mise run build:site` prerenders the same
-  view for <https://aymericbeaumet.github.io/flash/> (`.github/workflows/pages.yml`).
-  Local links stay under `/docs`, published ones under `/flash/`; live help
-  pages (`/mappings`) are links only in the resident. All help prose lives in
-  `docs/` (plugins keep their manifest `help` topics): new pages join
-  `docs/nav.json`, with `aliases` for `:help` short names, and the build fails
-  on a broken link or anchor. See [building the documentation](docs/help-internals.md#building-the-documentation).
+- `docs/*.md`, ordered by `docs/nav.json`, is the one source of the manual and
+  of all help prose (plugins keep their manifest `help` topics). New pages
+  join `docs/nav.json`, with `aliases` for `:help` short names; the build
+  fails on a broken link or anchor. See
+  [building the documentation](docs/help-internals.md#building-the-documentation).
 
 ## Assemble great tools
 
@@ -148,6 +144,8 @@ Surface requests that would violate these constraints before implementing them.
 
 ## Change discipline
 
+Each bullet is a rule; the linked page states its detail, cases and reasons.
+
 - Prefer explicit value state, pure transitions and one owner for each resource.
   Invalidate asynchronous ownership before teardown; never let an old callback
   mutate a replacement. Add meaningful failing regression tests for nontrivial
@@ -155,9 +153,8 @@ Surface requests that would violate these constraints before implementing them.
 - Mode entry preserves the focused external app. Mode events and base-mode
   effects carry no activation target; clicks and app commands own focus changes.
   A dismissed Flash surface yields activation only while Flash still owns it.
-  A captured picker delivery belongs to the finder session generation, not
-  the pending mapping sequence: returning focus refreshes mappings without
-  cancelling the pick; closing or replacing the session still cancels it.
+  A captured picker delivery belongs to the finder session generation, not the
+  pending mapping sequence ([lifecycles](docs/architecture.md#other-lifecycles)).
   Command dispatch resolves current app identity before a captured PID; CLI
   and Carbon entrypoints cannot depend on key-tap focus reconciliation.
 - Which-key follows the effective interpreter, including built-in selectors and
@@ -167,162 +164,133 @@ Surface requests that would violate these constraints before implementing them.
   configuration changes invalidate revisions. New UI-mutating notifications must
   join `AppMonitor.observedNotifications`. Do not deadline-truncate walks or serve
   partial captures. Keep refresh cancellation and maintenance generation-scoped.
-  A background-walk cost budget is a fraction of the model's freshness window
-  (`slowAutomaticModelRefreshFraction`), never an absolute number of
-  milliseconds: the apps hints matter for (Electron, Gecko, Catalyst) walk in
-  50–100 ms, and a slow walk lengthens the app's interval, never cancels it.
+  A background-walk cost budget is a fraction of the freshness window
+  (`slowAutomaticModelRefreshFraction`), never absolute milliseconds; a slow
+  walk lengthens the app's interval, never cancels it
+  ([prepared models](docs/prepared-model.md)).
 - Cross AX/CGEvent and NSScreen coordinates through FlashCore `ScreenPoint` /
   `ScreenRect` `toAX` / `toNS`, using the primary-screen height. Raw flips stay
-  inside `ScreenSpace.swift`. Screen unions start at `.null`. Layer changes disable implicit animation and new layer
-  properties join `OverlayPanel.noActions`.
-- The status bar draws only in `StatusBarWindow`, ordered above the native menu
-  bar and its extras and below transient overlays; never re-parent its layers
-  into the overlay panel. It lowers for exactly one case, a reveal under the
-  pointer, via the reveal probe. Flash stays out of a frontmost full-screen
-  app (`FullScreenSignals`): the bar and focus border hide and alerts wait
-  until it leaves. Native full screen shows no presentation option to another
-  process; read the focused window's `AXFullScreen` for it.
-  Enabling the bar auto-hides the native menu bar through
-  `NativeMenuBarAutoHide`, which reverses only what Flash set; keep that
-  ownership rule when touching any other global preference.
-- The updater is in-process (`UpdateController`): it checks GitHub's latest
-  stable release, verifies the asset against GitHub's SHA-256 digest and the
-  bundle's code signature, swaps the bundle with one `RENAME_SWAP`, and
-  relaunches into a process that waits for the resident lock. No helper,
-  installer, Sparkle or launch agent. Only a Developer ID build installs on
-  its own (same designated requirement, so TCC grants survive), and only at
-  quit or while away and idle; an ad-hoc build asks; a development build
-  never updates. Tests inject every network, file and signature seam.
+  inside `ScreenSpace.swift`. Screen unions start at `.null`. Layer changes
+  disable implicit animation and new layer properties join
+  `OverlayPanel.noActions` ([coordinates](docs/architecture.md#coordinate-spaces)).
+- The status bar draws only in `StatusBarWindow`, above the native menu bar
+  and its extras and below transient overlays; never re-parent its layers into
+  the overlay panel. It lowers only for a reveal under the pointer, via the
+  reveal probe. Flash stays out of a frontmost full-screen app
+  (`FullScreenSignals`; native full screen is the focused window's
+  `AXFullScreen`). `NativeMenuBarAutoHide` reverses only what Flash set; keep
+  that ownership rule when touching any other global preference
+  ([status bar window](docs/architecture.md#status-bar-window-and-full-screen)).
+- The updater is in-process (`UpdateController`, [updates](docs/updates.md)):
+  no helper, installer, Sparkle or launch agent. Only a Developer ID build
+  installs on its own, and only at quit or while away and idle; an ad-hoc build
+  asks; a development build never updates. Tests inject every network, file
+  and signature seam.
 - Flash writes no macOS preference but the menu bar's auto-hide
-  (guardrail-enforced): setting the Mac up is the user's own commands in
-  `[startup] run` (`defaults write`, `killall Dock`), run by `StartupRunner`
-  once per launch after the first configuration load and on `startup run`,
-  never on a reload. Its commands go through the monitors' executor
-  (`MonitorProcess`, or a Flash command on main) from the runner's own
-  queue, in order, every one even after a failure, one run at a time; no
-  curated settings catalog, ledger or password prompt. Tests inject the
-  executor and never run a user's list. See `docs/startup.md`.
+  (guardrail-enforced). Setting the Mac up is the user's `[startup] run`
+  commands, run by `StartupRunner`, never on a reload: no curated settings
+  catalog, ledger or password prompt. Tests inject the executor and never run
+  a user's list ([startup](docs/startup.md#how-they-run)).
 - Desktop widgets draw only in `WidgetWindow` (one per widget per display,
-  owned by `WidgetController`) and render stacked status lines through the
-  shared `StatusRunRenderer`, not a document renderer. They evaluate inside
-  `FlashStatusBarController` beside the bar, with one source/job registry and
-  one `PollScheduler` deadline; no widget timers. An occluded widget drops out
-  of the required sources, jobs and clock.
-- Monitors (`[monitors.<name>]`) evaluate in that controller beside the bar, on
-  the one clock at `low` priority, and alert only on transitions (a rise into
-  warning or error, `MonitorTracker`) through `StatusAlert`; no monitor timers.
-- A system window in front of the focused app (Notification Center's panel,
-  Control Center, a menu extra's popover, Spotlight, a Dock stack, an agent's
-  dialog) is what `f` walks (`AppMonitor.coveringInteractionWindow`); an
-  authentication prompt (SecurityAgent, LocalAuthentication) refuses hints and
-  is never walked or clicked, nor the window behind it.
+  owned by `WidgetController`) and render through the shared
+  `StatusRunRenderer`, not a document renderer. Widgets and monitors evaluate
+  inside `FlashStatusBarController` beside the bar, on its one `PollScheduler`
+  deadline: no widget or monitor timers, and an occluded widget costs nothing
+  ([refresh and cost](docs/widgets.md#refresh-and-cost)). Monitors run at
+  `low` priority and alert only on transitions (`MonitorTracker`), through
+  `StatusAlert`.
+- A system window in front of the focused app is what `f` walks
+  (`AppMonitor.coveringInteractionWindow`); an authentication prompt
+  (SecurityAgent, LocalAuthentication) refuses hints and is never walked or
+  clicked, nor the window behind it
+  ([which windows](docs/hints.md#beyond-the-focused-window)).
 - Hint commits validate captured target identity off the main thread. A missing,
   changed, or ambiguous target cancels; never fall back to its old coordinates.
-- Hot paths never spawn a process where a persistent channel exists: an exec
-  can stall for seconds while macOS's `syspolicyd` is busy. Local tmux
-  commands go through the control-mode observer (`ControlObservers::run`),
-  process trees through `flash_plugin::sys`, and fixed AppleScript operations
-  through the host's `AppleScriptRunner`; a spawned
-  client is the fallback. Keep OSA work inside the runner's lifetime gate through
-  disposal, component close and autorelease-pool drain; a caller timeout never
-  releases an active runtime.
+- Hot paths never spawn a process where a persistent channel exists: local
+  tmux commands go through the control-mode observer (`ControlObservers::run`),
+  process trees through `flash_plugin::sys`, fixed AppleScript operations
+  through the host's `AppleScriptRunner`; a spawned client is the fallback
+  ([hot-path rules](docs/plugin-performance.md#hot-path-rules)). Keep OSA work
+  inside the runner's lifetime gate; a caller timeout never releases an
+  active runtime.
 - Resolve version-manager shims before caching executables used repeatedly on a
-  hint hot path. Tmux status hints require exact supported format geometry; do
-  not approximate unknown status layouts (see `docs/architecture.md`).
-  Terminal link captures preserve OSC 8 destinations separately from display
-  text; escape bytes never count as cells. Reject unsupported geometry or a
-  layout that changes across capture instead of publishing misplaced hints.
+  hint hot path. Tmux status hints require exact supported format geometry:
+  reject an unknown layout, or one that changes across capture, never
+  approximate it. Terminal link captures keep OSC 8 destinations separate
+  from display text; escape bytes never count as cells
+  ([terminal snapshots](docs/architecture.md#terminal-snapshots)).
 - Every popup uses a real PTY session owned by `StatusTerminalRegistry`, one
   per name. Text popups use the shared terminal pager; do not add a separate
   native document renderer. Keep focused pager input and its snapshot stable
-  until explicit refresh. Popup lifecycles are exactly `persistent` and `fresh`,
-  with one restart backoff; presentation ends a showing once, through
-  `hide`. See the popup guide.
-  A focused terminal and a separate hover preview may coexist, with one
-  presentation per popup name. Preview dismissal never closes or takes
-  keyboard focus from the focused terminal; promotion transfers that ownership.
-  Only a live hover preview contributes its popup's clock deadline; hidden
-  popups and focused pager snapshots must not keep that clock ticking.
+  until explicit refresh. Lifecycles are exactly `persistent` and `fresh`,
+  with one restart backoff; presentation ends a showing once, through `hide`.
+  A hover preview never closes or takes keyboard focus from the focused
+  terminal, and only a live one keeps its popup's clock deadline
+  ([popup ownership](docs/popups.md#ownership)).
 - Prefer events to polling. A window move or resize reads its frame from the AX
   element that fired, never a WindowServer scan, and schedules no settle tick.
 - A source that switches tabs or windows replies with the `navigation_url` it
-  landed on; the host records that stop per press. A catalog refresh settles
-  after a burst and shows only its last state, so it never stands in for it,
-  and the observation in flight still names the location just left: a
-  performed switch leaves its key settling so that one is dropped, never a
-  stop that reorders the run.
+  landed on; the host records that stop per press. Neither a catalog refresh
+  nor the observation in flight stands in for it
+  ([movement history](docs/normal-mode.md#movement-history)).
 - The process-wide AX messaging timeout has one owner: the resident sets it once
   at launch (`AXApp.configureProcessMessagingTimeout`), every system-wide
   element comes from `AXApp.systemWide()`, and nothing else sets a timeout on
   one (guardrail-enforced); per-element bounds go on the element itself.
-- Focused-window state commands use `WindowLayoutManager`'s serial AX queue and
-  `WindowMover.resolveWindow`'s focused/main/window-list fallbacks; keep AX
-  requests off the main keyboard loop. Native full screen uses `AXFullScreen`,
-  while `window move --position=maximized` remains a usable-frame resize.
-  Restore first uses the manager's most-recently minimized window because
-  minimizing an app's last window can move focus to a different process.
-- Directional window focus reads a prepared AX window catalog; catalog walks
-  run on the separate navigation-build queue. Placement rules run once per AX
-  window identity for each changed rule set so manual moves remain respected.
-- Tiling's `TilingEngine` lives on `WindowLayoutManager`'s queue and reads
-  the navigation catalog; it owns the frames of the windows it manages, so
-  layout tracking, recovery and placement rules stand aside for them. Pure
-  `TilingTree`/`TilingSolver`/`TilingWorkspaces` values decide; only changed
-  frames are written. Disabling tiling or quitting brings every parked
-  window back on screen.
-  A semantic layout (`WindowLayoutIntent`) keeps its home display by UUID:
-  display-change recovery only changes where the window sits, and returns it
-  home when that display reconnects; only a placement moves home.
+- Window commands keep AX requests off the main keyboard loop: focused-window
+  state commands use `WindowLayoutManager`'s serial AX queue and
+  `WindowMover.resolveWindow`'s fallbacks; directional focus reads the
+  prepared AX window catalog, walked on the navigation-build queue. Native
+  full screen uses `AXFullScreen`; `window move --position=maximized` stays a
+  usable-frame resize. Placement rules run once per AX window identity for
+  each changed rule set, so manual moves stay respected. `window restore`
+  first uses the most recently minimized window. A `WindowLayoutIntent` keeps
+  its home display by UUID; only a placement moves home
+  ([windows](docs/architecture.md#windows-and-displays)).
+- Tiling's `TilingEngine` lives on `WindowLayoutManager`'s queue and is the
+  one owner of the frames it manages: layout tracking, recovery and placement
+  rules stand aside. Pure values decide, only changed frames are written, and
+  disabling tiling or quitting brings every parked window back on screen
+  ([tiling](docs/architecture.md#tiling)).
 - App-scoped mappings select by the focused app's exact bundle ID. Refresh the
   effective mapping table on focus changes; defer Carbon registration work off
-  the key event path. CoreAudio, now-playing Apple Events, the
-  `caffeinate` power assertions and the Notes, Reminders, Contacts and
-  Calendar reads run on their owners' serial queues (`MediaController`,
-  `CaffeinateController`, `AppleCatalogs`, `CalendarEvents`), never on main.
-  Those catalogs ask macOS for access only when a scoped query or refresh
-  command uses them; Calendar only when a surface or monitor reads a
-  `#{flash.calendar.next…}` value or a `calendar` command runs.
-- `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
-  main-thread Core Animation commit for SkyLight's 500 ms timeout, freezing
-  main too. Read the window list only through `WindowSnapshot.windowList`
-  (guardrail-enforced), and never make main wait on a queue that calls it.
+  the key event path.
+- CoreAudio, now-playing Apple Events, the `caffeinate` power assertions and
+  the Notes, Reminders, Contacts and Calendar reads run on their owners' serial
+  queues (`MediaController`, `CaffeinateController`, `AppleCatalogs`,
+  `CalendarEvents`), never on main, and ask macOS for access only when a
+  query, command, surface or monitor uses them
+  ([boundaries](docs/architecture.md#boundaries)).
+- Read the window list only through `WindowSnapshot.windowList`
+  (guardrail-enforced), and never make main wait on a queue that calls it
+  ([the deadlock](docs/input-internals.md#input-capture-and-latency)).
 - Polling is a last resort and goes through `PollScheduler`, the one clock in
-  the process; never arm a `DispatchSourceTimer`, a `tokio` sleep loop, or a
-  `Timer` for a recurring job in core or plugin code. Use `register` for a fixed
-  cadence and `scheduleOnce` (or `PollDeadline`) when the next wake-up is an
-  irregular or re-arming deadline — debounces, retries and backoffs included.
-  Plugins register over the wire with `poll` (the Rust SDK's `ctx.interval`,
-  `ctx.after`, `ctx.wait` and `Settle`) and are ticked with `core:poll:<name>`;
-  they never sleep to schedule work. Every registration names its priority —
-  `system` (core input-adjacent probes only), `high`, `normal`, `low` — matching
-  how visible lateness is: slack is what lets wake-ups coalesce. Scope every
-  registration to when it can observe anything (a subscriber present, the
-  pointer in the band, a browser listening, the hyper key while HYPER is
-  latched), saying so where it is armed. The hyper hold watch
-  (`core:hyper-hold`, priority `system`) is the backstop for a key-up the
-  session tap dropped: two ticks of `CGEventSource.keyState(.hidSystemState)`
-  reporting the chord up, and only while HYPER is latched. Combined session
-  state can report a swallowed key as up; do not read it for this.
-  Secure input (`core:secure-input`, priority `low`, every 2 s for the life of
-  the resident) stays armed for the same reason: while the flag is on the
-  session tap gets no keys, so only this poll can see a hold that outlived the
-  password field. An off tick reads the flag alone: nothing else it
-  gathers decides anything then. `SecureInputRelease` leaves a focused secure field, and a
-  text field in the holding app, alone. One release attempt per episode; no
-  dialog and no lock screen.
-  Polls pause while displays sleep or the session is locked; the scheduler
-  owns that gate and resumes with one catch-up tick, so clients never check it.
-  Use `CLOCK_MONOTONIC_RAW` for sleep-inclusive deadlines; compare readings
-  of the same clock in tests, as macOS clock epochs may differ.
-  The guardrail script enforces both sides; see `docs/architecture.md` for the
-  one-shots that may stay plain `asyncAfter`.
-- A queue's QoS follows who waits on it, and a registration's priority and
-  its handler queue's QoS must match: work a keypress, a plugin reply or a
-  `system`/`high` wake-up waits on runs `.userInitiated` (the clock, the
-  plugin lifecycle/read/write/deadline queues, the AX broker, the reveal
-  probe); `.utility` is only for work nobody waits on (catalog decode, logs,
-  persistence, telemetry); a serial queue never mixes the two. `PollScheduler`
-  asserts the pairing at every registration.
+  the process ([the one clock](docs/architecture.md#the-one-clock)); never arm
+  a `DispatchSourceTimer`, a `tokio` sleep loop, or a `Timer` for a recurring
+  job in core or plugin code (guardrail-enforced on both sides). Use `register`
+  for a fixed cadence and `scheduleOnce` (or `PollDeadline`) for an irregular
+  or re-arming deadline, debounces, retries and backoffs included; only the
+  one-shots that section lists stay plain `asyncAfter`. Plugins register over
+  the wire with `poll` (the Rust SDK's `ctx.interval`, `ctx.after`, `ctx.wait`
+  and `Settle`), are ticked with `core:poll:<name>` and never sleep to
+  schedule work.
+- Every poll registration names its priority — `system` (core input-adjacent
+  probes only), `high`, `normal`, `low` — matching how visible lateness is,
+  and runs only while it can observe anything, saying so where it is armed.
+  The scheduler owns the display-sleep and session-lock gate; clients never
+  check it. Use `CLOCK_MONOTONIC_RAW` for sleep-inclusive deadlines; compare
+  readings of the same clock in tests, as macOS clock epochs may differ.
+- Keep the two polls that back up the session tap
+  ([backstop polls](docs/architecture.md#backstop-polls)): `core:hyper-hold`
+  (`system`, only while HYPER is latched, reading HID state, never combined
+  session state) and `core:secure-input` (`low`, every 2 s, always armed).
+  `SecureInputRelease` makes one attempt per episode, with no dialog and no
+  lock screen, and leaves a focused secure field, and a text field in the
+  holding app, alone.
+- A queue's QoS follows who waits on it, and a registration's priority and its
+  handler queue's QoS must match: `.userInitiated` for work a keypress, a
+  plugin reply or a `system`/`high` wake-up waits on, `.utility` only for work
+  nobody waits on, never both on one serial queue (`PollScheduler` asserts it).
 - Keep native controls outside the custom layer-hosting drawing view. AppKit owns
   their backing layers; transient recycling may replace only Flash's subtree.
 - Keep the main-loop keypress/recapture path free of AX/WindowServer IPC, sleeps,
@@ -338,25 +306,23 @@ Surface requests that would violate these constraints before implementing them.
 - Every command is `flash <topic> <action> [--name=value ...]`: exactly two
   words of `[a-z][a-z0-9_]*`, the topic (what is acted on) first. An action
   keeps `_` only when it is a compound (`scroll half_page_down`); `_` never
-  joins topic and action. The CLI, mappings (`["flash", "tab", "next"]`), the
-  command line (`:tab next`, completed topic then action), the queries
-  (`resident status`, `config check`) and plugin commands share the shape and
-  one topic namespace. `flash <words>` and `:<words>` are one grammar: one
-  resolver (`resolveCommandWords`) and one runner (`runInvocation`), so
-  prefixes, ex names and built-ins work in both; only mappings and config
-  files require exact words. A plugin command is `flash <command> <subcommand>` with
-  both words required (`flash screenshot window`); `*` is the wildcard
-  subcommand. Manifest `commands[]` rejects an empty or malformed word,
-  manifest `verbs` (one word) is an unknown key, and a name another plugin's
-  own command uses fails the load. An own command never takes a topic word: a
-  `commands[]` entry under one of Flash's topics declares a core command the
-  plugin performs in its context and must name one Flash asks of the focused
-  app (`URLEventHandler.sourceCommandNames`); it never registers for dispatch
-  or completion. A new command adds its `"<topic> <action>"` entry to
-  `URLEventHandler`'s table, `docs/commands.md` and the inspector's
-  `topicCategories`; one that asks the focused app for something marks
-  `URLCommand.sourceCommand`, whose words are its argv tail. `CommandGrammarTests`
-  and the guardrail enforce this.
+  joins topic and action. The CLI, mappings, the command line, the queries and
+  plugin commands share the shape and one topic namespace. `flash <words>` and
+  `:<words>` are one grammar, with one resolver (`resolveCommandWords`) and one
+  runner (`runInvocation`); only mappings and config files require exact words
+  ([commands](docs/commands.md)).
+- A plugin command is `flash <command> <subcommand>`, both words required and
+  well-formed, `*` the wildcard subcommand; manifest `verbs` is an unknown key,
+  and a name another plugin's own command uses fails the load. An own command
+  never takes a topic word: a `commands[]` entry under one of Flash's topics
+  declares a core command the plugin performs in its context, must name one
+  Flash asks of the focused app (`URLEventHandler.sourceCommandNames`) and
+  never registers for dispatch or completion.
+- A new command adds its `"<topic> <action>"` entry to `URLEventHandler`'s
+  table, `docs/commands.md` and the inspector's `topicCategories`; one that
+  asks the focused app for something marks `URLCommand.sourceCommand`, whose
+  words are its argv tail. `CommandGrammarTests` and the guardrail enforce
+  the grammar.
 - Plugin Apple Events use typed `host.applescript` operations with fixed host
   templates and escaped literal data. Never accept plugin script source or
   treat lexical source inspection as a sandbox boundary. Check each operation's
@@ -369,16 +335,16 @@ Surface requests that would violate these constraints before implementing them.
   bug gets a failing test or corpus line there before its fix; domain
   behaviour gets a unit test in `Plugins/<id>`.
 - Keep plugin stdout protocol-only and bound encoded bytes, queue admission,
-  requests and shutdown. A publish is proportional to the change: volatile
-  and static rows are separate sources, each published alone
-  (`publish_source`); the host counts catalog bytes from the frame it holds
-  and decodes catalogs on a per-plugin queue carrying no replies. Third-party
-  GitHub refs require a full pinned commit.
-  Capabilities default-deny sensitive surfaces; explicit plugin settings carry
-  credentials, never inherited ambient secrets or inspector-visible values.
-  Packaged official plugins come only from the app bundle, never the working
-  directory. Required sandboxes fail closed. Host fetches validate every
-  redirect and bound bytes while receiving, not after buffering the response.
+  requests and shutdown. A publish is proportional to the change: volatile and
+  static rows are separate sources, each published alone (`publish_source`);
+  the host counts catalog bytes from the frame it holds and decodes catalogs on
+  a per-plugin queue carrying no replies. Third-party GitHub refs require a
+  full pinned commit. Capabilities default-deny sensitive surfaces; explicit
+  plugin settings carry credentials, never inherited ambient secrets or
+  inspector-visible values. Packaged official plugins come only from the app
+  bundle, never the working directory. Required sandboxes fail closed. Host
+  fetches validate every redirect and bound bytes while receiving, not after
+  buffering the response.
 - Clipboard history belongs to core `ClipboardHistoryStore`; text registers
   belong to `RegisterStore`; app marks belong to `MarkStore`. Keep their
   command, help and privacy surfaces in sync, and migrate stored data when
@@ -388,115 +354,102 @@ Surface requests that would violate these constraints before implementing them.
   Local socket connections require network capability. Do not widen the sandbox
   to host credentialed network CLIs that require the subprocess shape.
   Sandboxed HTTPS clients verify against bundled roots (reqwest
-  `tls_certs_only` over `webpki-root-certs`): the platform verifier needs the
-  trust service and keychains the sandbox denies. After a TLS dependency bump,
-  confirm a live fetch under the sandbox, not only unit tests.
-- Standards (docs/standards.md): what Flash defines uses exactly one modern
-  standard (TOML, Flash's key syntax, CSS hex colors, OTLP); what it consumes
-  from other tools is accepted as they write it (SwiftBar/i3blocks/waybar
-  output, tmux formats). Never add a parallel format or second spelling of a
-  Flash setting; record a new decision there. Config keys feed
-  `ConfigSchema`: run `mise run build:schema` after changing keys or defaults.
+  `tls_certs_only` over `webpki-root-certs`), never the platform verifier.
+  After a TLS dependency bump, confirm a live fetch under the sandbox, not
+  only unit tests ([trust boundaries](docs/architecture.md#trust-boundaries)).
+- Standards ([docs/standards.md](docs/standards.md)): what Flash defines uses
+  exactly one modern standard; what it consumes from other tools is accepted
+  as they write it. Never add a parallel format or second spelling of a Flash
+  setting; record a new decision there. Config keys feed `ConfigSchema`: run
+  `mise run build:schema` after changing keys or defaults.
 - Config validation is shared by all layers; preserve authored values and derive
   only after overrides. Only executable/working-directory fields receive path
   resolution; argv tails stay opaque. Update whole-section default parity tests.
-- `[app] keyboard_layout` is the input source that reads a keypress (`auto` or
-  `com.apple.keylayout.*`). `[keyboard] layout` is the logical layout (default
-  `qwerty`; `colemak`, `dvorak`, `bepo`) for hint positions, the mouse grid,
-  bisect, pointer movement and derived HYPER arrows. With `hints.keys` still
-  the bundled default, a non-QWERTY layout's hint alphabet is that layout's
-  letters (`<colemak>`), so the file does not also set `hints.keys`. HYPER arrows are the
-  physical QWERTY ESDF positions (up, left, down, right). F is the home-row
-  index-finger mark. They are spelled as the letters that layout types
-  (Colemak `f` `r` `s` `t`). A shifted letter arrow is `shift+` that letter.
-  A non-letter uses the character Shift types (Dvorak's period on E is `>`).
-  Do not merge the two layouts.
+- `[app] keyboard_layout` is the input source that reads a keypress;
+  `[keyboard] layout` is the logical layout for hint positions, the mouse
+  grid, bisect, pointer movement and derived HYPER arrows. Do not merge the
+  two. With `hints.keys` still the bundled default, a non-QWERTY layout's hint
+  alphabet is that layout's letters, so the file does not also set
+  `hints.keys`. HYPER arrows are the physical QWERTY ESDF positions, spelled
+  as that layout types them
+  ([logical layout](docs/configuration.md#logical-layout)).
 - NORMAL defaults and bundled plugin mappings bind keys to commands, never to
   raw chords: none uses `key send`, which stays a user escape hatch (a test
   enforces it). A command that asks the focused app for something resolves in
-  its context: a source that performs it (a plugin's core `commands[]`
-  entries, the AX tab strip), else the winning plugin `bindings` entry, keyed
-  by the command line (`"tab new"`, `"app reload --force"`: chord, sequence,
-  menu item or `false`), else nothing; terminals never receive a chord they
-  would type. App knowledge — conventions included — is plugin `bindings`
-  data (`defaults` carries the macOS ones), never host chords or
-  conditionals; a guardrail rejects `kVK_` chord synthesis outside the
-  binding dispatcher and the retired action vocabulary anywhere. `move`
-  (NORMAL's `h` `j` `k` `l`, half pages, pages, `gg` `G`) resolves by the
-  cached `FocusRegion` (`FocusRegionTracker`, re-read off the main loop on
-  each focus change, never AX on the keypress): the `input` arrows in
-  the engaged field, its own binding (the arrows) in a collection and for
-  `h` `j` `k` `l` in a page or a field not engaged, `scroll` for the page
-  keys and edges there, and `scroll` for every `move` in a terminal. Editable focus alone never makes text:
-  `TextScope` (`isActive(for:pid:element:)`, the one text-or-page
-  predicate) is an engaged element identity, set only by leaving INSERT in
-  a field, `gi`, a primary click or an `f` on a text input whose focus
-  settles on editable text, and `v` / `V`; it ends when the focus settles
-  on another element or app, on Escape (the text table's `mode leave`) and
-  on any mode change but the INSERT, VISUAL, command-line and HYPER round
-  trips. NORMAL's table
-  follows the engagement only, never a focus reading, so focus noise never
-  drops a pending sequence. While engaged,
-  `[mode.text.mappings]` is read before NORMAL's: Vim's `cursor` motions,
-  computed from the AX text off the main loop and set through
-  `AXSelectedTextRange`, the app's binding only where it gives no text.
-  Flash never writes text through AX (`AXSelectedText`, `AXValue`): it
-  sets the caret or the selection, reads it back, then uses the app's own
-  keys. VISUAL (`v`, `V`, `VisualSession`) sets the selection the same way,
-  from an anchor the motions never move, and its operators are the app's
-  Copy and paste (and `o`, swap ends); a named register is written by
-  Flash from the text it read. It ends in NORMAL, and whenever the focused
-  field or app changes or a click lands. Vertical scrolls send configurable
-  line-based wheel events system-wide, without AX fallback. Keep guides in
-  sync.
+  its context: a source that performs it (a plugin's core `commands[]` entries,
+  the AX tab strip), else the winning plugin `bindings` entry, keyed by the
+  command line (chord, sequence, menu item or `false`), else nothing;
+  terminals never receive a chord they would type. App knowledge — conventions
+  included — is plugin `bindings` data (`defaults` carries the macOS ones),
+  never host chords or conditionals; a guardrail rejects `kVK_` chord
+  synthesis outside the binding dispatcher and the retired action vocabulary
+  anywhere.
+- `move` resolves by the cached `FocusRegion` (`FocusRegionTracker`, re-read
+  off the main loop on each focus change, never AX on the keypress;
+  [the table](docs/normal-mode.md#arrows-or-scrolling)); every `move` in a
+  terminal is a `scroll`. Vertical scrolls send configurable line-based wheel
+  events system-wide, without AX fallback.
+- Editable focus alone never makes text: `TextScope`
+  (`isActive(for:pid:element:)`, the one text-or-page predicate) is an engaged
+  element identity, set and ended only by the transitions
+  [the focus region](docs/input-internals.md#the-focus-region) lists. NORMAL's
+  table follows the engagement, never a focus reading. While engaged,
+  `[mode.text.mappings]` is read before NORMAL's; its `cursor` motions are
+  computed off the main loop and set through `AXSelectedTextRange`, the app's
+  binding only where it gives no text.
+- Flash never writes text through AX (`AXSelectedText`, `AXValue`): it sets
+  the caret or the selection, reads it back, then uses the app's own keys.
+  VISUAL (`VisualSession`) selects the same way and its operators are the
+  app's Copy and paste; Flash writes a named register from the text it read.
+  VISUAL ends in NORMAL, and whenever the focused field or app changes or a
+  click lands ([VISUAL](docs/visual-mode.md#how-flash-does-it)). Keep guides
+  in sync.
 - Every centred alert is one `StatusAlert` drawn by `displayAlert`: a message,
   a title over a value, or a confirmation. A destructive command asks through
   it — `alert confirm` wraps a command line, and a core command a plugin
   performs destructively declares `confirm` on its `commands[]` entry — as a
-  hint-session phase that owns the keyboard in every mode. Plugins never post their own
-  prompt: NORMAL capture would swallow the answer.
-- Telemetry: the receiver decodes off main into the bounded, memory-only
-  `TelemetryStore`; `#{flash.otel…}` values wake only the surfaces reading that
-  metric. Instrument through `FlashTelemetry` (a lock and an append, content-free
-  attributes: never keys, bundle ids, titles or typed text); exports ride
-  `PollScheduler`, carry explicit-only headers and never target the receiver.
+  hint-session phase that owns the keyboard in every mode. Plugins never post
+  their own prompt: NORMAL capture would swallow the answer.
+- Telemetry ([telemetry](docs/telemetry.md)): the receiver decodes off main
+  into the bounded, memory-only `TelemetryStore`; `#{flash.otel…}` values wake
+  only the surfaces reading that metric. Instrument through `FlashTelemetry`
+  (a lock and an append, content-free attributes: never keys, bundle ids,
+  titles or typed text); exports ride `PollScheduler`, carry explicit-only
+  headers and never target the receiver.
 - Every host event goes out once through `AppDelegate.emitHostEvent`, to the
-  plugins whose `listen` admits it, the `[monitors]` whose `event` does and
-  the socket clients subscribed to it (`IPCEventHub`): one catalog
-  (`PluginProtocol.hostEvents`, `protocol.json`, the Rust SDK's
-  `host_events`, `docs/schema/ipc/event.schema.json`) and one fan-out. A new
-  event joins all four (`HostEvent.isStreamed` says whether clients get it);
-  an OS source runs only while `hostEventHasSubscriber` says something
-  listens. IPC wire changes update `IPCProtocol`, the schemas and
-  `docs/ipc-protocol.md` together, with `IPCSchemaTests` validating real
-  encoded messages; a breaking one bumps `IPCProtocol.version`, no shims.
+  plugins whose `listen` admits it, the `[monitors]` whose `event` does and the
+  socket clients subscribed to it (`IPCEventHub`): one catalog
+  (`PluginProtocol.hostEvents`, `protocol.json`, the Rust SDK's `host_events`,
+  `docs/schema/ipc/event.schema.json`) and one fan-out. A new event joins all
+  four (`HostEvent.isStreamed` says whether clients get it); an OS source runs
+  only while `hostEventHasSubscriber` says something listens. IPC wire changes
+  update `IPCProtocol`, the schemas and `docs/ipc-protocol.md` together, with
+  `IPCSchemaTests` validating real encoded messages; a breaking one bumps
+  `IPCProtocol.version`, no shims.
 - NORMAL's `.` and macros (`MacroState`) record dispatched commands, a
-  natively fired chord included, and submitted command lines, never keys. `:!` and `:normal` are grammar resolutions, so the CLI runs them too.
+  natively fired chord included, and submitted command lines, never keys.
+  `:!` and `:normal` are grammar resolutions, so the CLI runs them too.
 - Log events as `[area] event` with values in `fields`, at the level
-  `docs/observability.md` defines: `error` for failures that are not the
-  user's input, `warn` for handled degradation, `info` for rare state changes
-  and rejected input, `debug` per user command, `trace` per key, frame or
-  plugin request. No warn or error storms from a persisting condition.
-- Log diagnostics through the serial log writer. XCTest disk logging uses only
-  temporary destinations. Never capture a handle that rotation can invalidate.
-- Test windows never cover the user's screen or take their keyboard:
+  [observability](docs/observability.md#levels-and-names) defines; no warn or
+  error storms from a persisting condition. Log diagnostics through the serial
+  log writer. XCTest disk logging uses only temporary destinations. Never
+  capture a handle that rotation can invalidate.
+- Test runs never cover the user's screen or take their keyboard
+  ([test runs](docs/architecture.md#test-runs-and-the-live-desktop)):
   `TestWindowHygiene` makes every window the suite orders in transparent,
-  refuses `makeKey`, and fails a test that leaves one drawn or makes one key
-  (a key test window steals typing from the user's frontmost app). Test the
-  logic a key window would run, never `becomeKey()` itself.
-- A test run never takes the keyboard: Flash activates itself and changes its
-  activation policy only through `AppActivation`, inert under XCTest
-  (guardrail-enforced). An `xctest` that activates sends the user's keys to
-  its transparent windows.
-  Fake-display recovery tests inject application discovery; they must never
-  enumerate or move the user's real windows.
+  refuses `makeKey`, and fails a test that leaves one drawn or makes one key.
+  Test the logic a key window would run, never `becomeKey()` itself. Flash
+  activates itself and changes its activation policy only through
+  `AppActivation`, inert under XCTest (guardrail-enforced). Fake-display
+  recovery tests inject application discovery; they must never enumerate or
+  move the user's real windows.
 - Keep this guide actionable and concise; explanations belong in `docs/`.
-  Browser help routes, runtime data, and the single-file UI build are documented
-  in `docs/help-internals.md`; rebuild the committed inspector resource after frontend
-  edits (`mise run build:inspector`).
-  Resumption notes belong in transient `.handouts/`, never external memory.
-  Static unused-code reports need caller/protocol/dynamic-dispatch review before
-  deletion; app-layer declarations can still have runtime consumers.
+  Browser help routes, runtime data, and the single-file UI build are
+  documented in `docs/help-internals.md`; rebuild the committed inspector
+  resource after frontend edits (`mise run build:inspector`). Resumption notes
+  belong in transient `.handouts/`, never external memory. Static unused-code
+  reports need caller/protocol/dynamic-dispatch review before deletion;
+  app-layer declarations can still have runtime consumers.
 - `docs/privacy.md` is the public inventory of permission prompts, network
   destinations, stored data, and unsandboxed plugins. Update it in the same
   change that alters any of them, and keep README privacy claims true.
@@ -531,20 +484,17 @@ installation belongs in `mise.toml`; application builds must retain frozen
 lockfile flags. Xcode and browser GUI fixtures are the system prerequisites.
 
 Run inside the current bonsai worktree. Prefix shell commands with `rtk`.
-mise is the single developer environment: `mise.toml` pins the tools, sets the
-shared environment and defines every entry point as a described task, and
-`mise run <task>` runs it with the pinned tools first on PATH. Call tasks, not
-the `Scripts/` implementations or the toolchain commands they wrap. No
-Makefile, justfile, Taskfile or wrapper script: a new entry point is a task in
-`mise.toml` (the guardrails enforce this).
-`mise tasks ls` lists the tasks; [development](docs/development.md#tasks)
-describes each one.
+mise is the single developer environment: call `mise run <task>`, never the
+`Scripts/` implementations or the toolchain commands they wrap. No Makefile,
+justfile, Taskfile or wrapper script: a new entry point is a described task in
+`mise.toml` (guardrail-enforced). `mise tasks ls` lists the tasks;
+[development](docs/development.md#tasks) describes each one.
 Release plugins stage under `build/plugin-release`; never replace binaries in
 the live dev plugin tree while building a release. Release assembly copies
 declared outputs and validates the complete bundle, including dependency
 notices. See [release validation](docs/release.md).
-A fresh checkout runs `mise run setup` (the pinned tools, then libghostty-vt);
-the build, install, test and integration tasks bootstrap Ghostty themselves.
+A fresh checkout runs `mise run setup`; the build, install, test and
+integration tasks bootstrap Ghostty themselves.
 
 Required checks for relevant changes:
 
@@ -552,11 +502,10 @@ Required checks for relevant changes:
 rtk proxy mise run check
 ```
 
-It runs, in order, `fmt` (swift format in place), `lint` (strict swift-format
-lint), `guardrails`, `test:plugins` (every plugin lane) and `test` (the Swift
-suite against real plugin binaries). Changes to `docs/` or `Inspector/` also
-run `rtk proxy mise run build:site` (the published manual and its link check)
-and `rtk proxy mise run test:inspector` (lint, type check, unit tests);
+It runs `fmt`, `lint`, `guardrails`, `test:plugins` and `test`, in order.
+Changes to `docs/` or `Inspector/` also run `rtk proxy mise run build:site`
+(the published manual and its link check) and
+`rtk proxy mise run test:inspector` (lint, type check, unit tests);
 `rtk proxy mise run fmt:inspector` formats `Inspector/` first.
 
 The plugin gate (`mise run test:plugins`) has three lanes over the SDK
