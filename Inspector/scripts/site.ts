@@ -13,7 +13,7 @@
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { searchSections, siteLinks, type DocsBundle, type Problem, type SiteMode } from "../src/lib/docsite.ts";
+import { livePageNames, searchSections, siteLinks, type DocsBundle, type Problem, type SiteMode } from "../src/lib/docsite.ts";
 import { docsDirectory, loadDocs } from "./docs-source.ts";
 
 const inspector = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,6 +108,9 @@ function checkPublished(pages: Map<string, string>, assets: Set<string>, root: s
   return problems;
 }
 
+/** A page of the help besides the manual, with its detail. */
+const livePage = new RegExp(`^/(${livePageNames.join("|")})?(/|$)`);
+
 /** Every link of a page the resident serves leads to its own routes. */
 function checkLocal(file: string, html: string, bundle: DocsBundle): string[] {
   const problems: string[] = [];
@@ -124,7 +127,7 @@ function checkLocal(file: string, html: string, bundle: DocsBundle): string[] {
       if (!pages.has(path) && !bundle.files.includes(path)) problems.push(`${where} names no page`);
       continue;
     }
-    if (!/^\/(guides|mappings|commands|plugins|state|monitors|telemetry|logs|clipboard|search)?(\/|$|\?)/.test(url.pathname)) problems.push(`${where} is not a page of the help`);
+    if (!livePage.test(url.pathname)) problems.push(`${where} is not a page of the help`);
   }
   return problems;
 }

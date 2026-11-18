@@ -91,8 +91,11 @@ letter jumps to a page, `?` opens the shortcut sheet. Escape blurs a focused
 field so these page shortcuts work again. The server answers
 a direct load or reload of any page with the app, an unknown path with the
 app's not-found page and a 404 status, and an unknown `/api/` path with a
-plain 404. `DebugServer.Page` and `Inspector/src/lib/routes.ts` hold the same
-page table; change them together.
+plain 404. `DebugServer.Page.Name` is the one page table: `mise run
+build:schema` writes it to `Inspector/src/lib/help-routes.json`, which the
+app's router, the manual's live-link check and the site build read, and
+`HelpRoutesTests` fails while the committed copy is stale. A new page is a
+case there, its `Page` case, and its `PageName` and panel in the app.
 
 Fragments are in-page anchors. Headings take the slugs the published documentation
 has always used (Python-Markdown's: accents folded to ASCII, punctuation

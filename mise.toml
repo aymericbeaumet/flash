@@ -147,9 +147,9 @@ description = "Cold-bootstrap libghostty-vt inside a temporary tagged repository
 run = "bash Scripts/test-build-ghostty.sh"
 
 [tasks."build:schema"]
-description = "Regenerate docs/schema/flash.schema.json, flash.toml's JSON Schema"
+description = "Regenerate docs/schema/flash.schema.json, flash.toml's JSON Schema, and the help's page table"
 depends = ["build:ghostty"]
-run = "FLASH_WRITE_SCHEMA=1 swift test --force-resolved-versions --filter ConfigSchemaTests"
+run = "FLASH_WRITE_SCHEMA=1 swift test --force-resolved-versions --filter 'ConfigSchemaTests|HelpRoutesTests'"
 
 [tasks."test:app-bundle"]
 description = "Test the release bundle validator against signed universal fixtures"

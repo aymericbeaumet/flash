@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { loadDocs } from "./scripts/docs-source.ts";
-import { bundleDocs, checkLinks, Manual, pathOf, searchSections, siteLinks, type DocsBundle, type SiteLinks } from "./src/lib/docsite.ts";
+import { bundleDocs, checkLinks, isLivePath, livePageNames, Manual, pathOf, searchSections, siteLinks, type DocsBundle, type SiteLinks } from "./src/lib/docsite.ts";
 import { commandDocs, modeDoc, topicDocs } from "./src/lib/command-docs.ts";
 import { highlight } from "./src/lib/highlight.ts";
 import { renderUncached, routeOf, slugify, textOf, type MdElement, type MdNode, type RenderContext } from "./src/lib/markdown.ts";
+import table from "./src/lib/help-routes.json" with { type: "json" };
 import { hashBody } from "./src/lib/reading.ts";
 import { parseRoute } from "./src/lib/routes.ts";
 
 const site = { url: "https://example.github.io/flash/" };
 const local = siteLinks("local");
 const published = siteLinks("public", site);
+/** An address of the resident's help, which the published site never links. */
+const helpAddress = new RegExp(`localhost|127\\.0\\.0\\.1|^/(${table.pages.join("|")})(/|$)`);
 
 /** A small manual: nav.json and its files. */
 function fixture(pages: Record<string, string>, files: string[] = [], nav?: unknown, unlisted: string[] = []) {
@@ -63,6 +66,22 @@ test("the resident and the published site spell the same page and file", () => {
   assert.equal(published.file("examples/statusbar/flash.toml"), "/flash/examples/statusbar/flash.toml");
   assert.equal(pathOf(published, "/flash/alternatives/neru/"), "alternatives/neru");
   assert.equal(pathOf(published, "/elsewhere/"), null);
+});
+
+/**
+ * One page table, the server's (`help-routes.json`): the router answers every
+ * page of it, and the manual may link each one but its own as a live page.
+ */
+test("the router and the manual's live links read the server's page table", () => {
+  assert.ok(table.pages.includes("telemetry") && table.pages.includes("docs"));
+  for (const name of table.pages) {
+    assert.equal(parseRoute({ pathname: `/${name}`, search: "" }, local).page, name);
+    assert.equal(parseRoute({ pathname: `/${name}/tmux`, search: "" }, local).page, name === "docs" || table.detailPages.includes(name) ? name : "not-found");
+    assert.equal(isLivePath(`/${name}`), name !== "docs", name);
+  }
+  assert.equal(isLivePath("/"), true);
+  const { problems } = fixture({ "README.md": `# Home\n\n${livePageNames.map((name) => `[${name}](/${name})`).join(" ")}\n` });
+  assert.deepEqual(problems, []);
 });
 
 test("each site parses its own page addresses; files load as they are", () => {
@@ -292,7 +311,7 @@ test("the manual's links stay on their own site", async () => {
   const { bundle, problems } = await loadDocs();
   assert.deepEqual(problems, [], problems.map((problem) => `docs/${problem.file}: ${problem.message}`).join("\n"));
   assert.ok(bundle.pages.length > 50);
-  for (const [links, own, foreign] of [[local, /^\/(docs(\/|$|#)|(mappings|commands|plugins|state|monitors|logs|clipboard|search)?([?#]|$))/, /aymericbeaumet\.github\.io\/flash|^\/flash\//], [published, /^\/flash\//, /localhost|127\.0\.0\.1|^\/docs(\/|$)|^\/(guides|mappings|commands|plugins|state|monitors|logs|clipboard)(\/|$)/]] as const) {
+  for (const [links, own, foreign] of [[local, new RegExp(`^/(docs(/|$|#)|(${livePageNames.join("|")})?([?#]|$))`), /aymericbeaumet\.github\.io\/flash|^\/flash\//], [published, /^\/flash\//, helpAddress]] as const) {
     const manual = new Manual(bundle, links);
     for (const page of bundle.pages) {
       for (const href of hrefsOf(renderUncached(page.markdown, manual.context(page.file)).nodes)) {
@@ -358,7 +377,7 @@ test("the published site builds, and its pages link only within it", async () =>
     for (const page of pages) {
       const html = await readFile(page, "utf8");
       for (const [, href] of html.matchAll(/<a\b[^>]*?\shref="([^"]*)"/g)) {
-        assert.doesNotMatch(href, /localhost|127\.0\.0\.1|^\/docs(\/|$)|^\/(guides|mappings|state|logs)(\/|$)/, `${page} links ${href}`);
+        assert.doesNotMatch(href, helpAddress, `${page} links ${href}`);
         if (!/^[a-z][a-z\d+.-]*:/i.test(href) && !href.startsWith("#")) assert.match(href, /^\/flash\//, `${page} links ${href}`);
       }
     }

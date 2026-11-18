@@ -1,6 +1,8 @@
-// The browser help's page table. `DebugServer.Page` mirrors it so the server
-// hands the app to a direct load or reload of any page, and a 404 to the rest.
-// Data endpoints live under `/api/`; fragments are in-page heading anchors.
+// The browser help's router. Its page table is `help-routes.json`, written
+// from the server's own (`DebugServer.Page.Name`) by `mise run build:schema`,
+// so the server hands the app to a direct load or reload of any page, and a
+// 404 to the rest. Data endpoints live under `/api/`; fragments are in-page
+// heading anchors.
 //
 // The published site serves the same docs view from its own path: there the
 // manual is the whole site (`/flash/`, `/flash/<page>/`, `/flash/search/`)
@@ -8,6 +10,7 @@
 // the app renders; every link the app writes goes through `paths`.
 
 import { pathOf, siteLinks, type SiteLinks } from "./docsite.ts";
+import table from "./help-routes.json" with { type: "json" };
 
 export type PageName = "home" | "docs" | "mappings" | "commands" | "plugins" | "state" | "monitors" | "telemetry" | "logs" | "clipboard" | "search";
 
@@ -30,9 +33,9 @@ export const site = {
   get public(): boolean { return current.mode === "public"; },
 };
 
-const pages = new Set(["mappings", "commands", "plugins", "state", "monitors", "telemetry", "logs", "clipboard", "search"]);
+const pages = new Set(table.pages);
 /** Pages that accept one detail segment. */
-const detailPages = new Set(["plugins"]);
+const detailPages = new Set(table.detailPages);
 /** Pages whose list starts filtered by `?q=`. */
 const filterPages = new Set(["mappings", "commands", "search"]);
 const notFound: Route = { page: "not-found", param: "" };

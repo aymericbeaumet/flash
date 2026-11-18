@@ -1289,11 +1289,21 @@ final class DebugServer {
 extension DebugServer {
   /// A page of the browser help app. The app routes itself with the History
   /// API; the server recognizes the same paths so a direct load or reload of
-  /// any page receives the app. `Inspector/src/lib/routes.ts` mirrors this
-  /// table: `/`, `/docs[/<page>]`, `/mappings`, `/commands`,
-  /// `/plugins[/<id>]`, `/monitors`, `/telemetry`, `/state`, `/logs`,
-  /// `/clipboard` and `/search`. Fragments stay free for in-page anchors.
+  /// any page receives the app: `/`, then one path per `Name`, with
+  /// `/docs[/<page>]` and `/plugins[/<id>]` taking a detail. Fragments stay
+  /// free for in-page anchors.
   enum Page: Equatable {
+    /// The first path segment of every page but home. This is the one page
+    /// table: `mise run build:schema` writes it to
+    /// `Inspector/src/lib/help-routes.json`, which the app's router, the
+    /// manual's link checks and the site build read.
+    enum Name: String, CaseIterable {
+      case docs, mappings, commands, plugins, monitors, telemetry, state, logs, clipboard, search
+
+      /// Pages that accept one detail segment, such as a plugin id.
+      static let detailed: [Name] = [.plugins]
+    }
+
     case home
     /// A page of the manual (`docs/`) by its path or alias, such as
     /// `normal-mode`, `config` or `alternatives/neru`, or a plugin's guide;
@@ -1316,12 +1326,6 @@ extension DebugServer {
     /// query travels in `?q=` so a search can be reloaded and shared.
     case search
 
-    /// Pages that accept one detail segment, such as a topic or plugin id.
-    private static let detailPages: Set<String> = ["plugins"]
-    private static let pages: Set<String> = [
-      "docs", "mappings", "commands", "plugins", "monitors", "telemetry", "state", "logs",
-      "clipboard", "search",
-    ]
     /// RFC 3986 unreserved characters: everything else in a detail segment,
     /// including `/`, `?` and `#`, is percent-encoded.
     private static let segmentCharacters = CharacterSet(
@@ -1335,16 +1339,16 @@ extension DebugServer {
         let segments = (page ?? "").split(separator: "/").compactMap {
           String($0).addingPercentEncoding(withAllowedCharacters: Self.segmentCharacters)
         }
-        return (["/docs"] + segments).joined(separator: "/")
-      case .mappings: return "/mappings"
-      case .commands: return "/commands"
-      case .plugins(let id): return Self.path("plugins", detail: id)
-      case .monitors: return "/monitors"
-      case .telemetry: return "/telemetry"
-      case .state: return "/state"
-      case .logs: return "/logs"
-      case .clipboard: return "/clipboard"
-      case .search: return "/search"
+        return ([Self.path(.docs)] + segments).joined(separator: "/")
+      case .mappings: return Self.path(.mappings)
+      case .commands: return Self.path(.commands)
+      case .plugins(let id): return Self.path(.plugins, detail: id)
+      case .monitors: return Self.path(.monitors)
+      case .telemetry: return Self.path(.telemetry)
+      case .state: return Self.path(.state)
+      case .logs: return Self.path(.logs)
+      case .clipboard: return Self.path(.clipboard)
+      case .search: return Self.path(.search)
       }
     }
 
@@ -1356,42 +1360,37 @@ extension DebugServer {
         self = .home
         return
       }
-      guard Self.pages.contains(head) else { return nil }
-      if head == "docs" {
+      guard let name = Name(rawValue: head) else { return nil }
+      var detail: [String] = []
+      for segment in segments.dropFirst() {
+        guard let value = segment.removingPercentEncoding else { return nil }
+        detail.append(value)
+      }
+      guard name == .docs || detail.count <= (Name.detailed.contains(name) ? 1 : 0) else {
+        return nil
+      }
+      switch name {
+      case .docs:
         // Any depth; a last segment with a dot is a linked file, not a page.
-        var decoded: [String] = []
-        for segment in segments.dropFirst() {
-          guard let value = segment.removingPercentEncoding, !value.isEmpty else { return nil }
-          decoded.append(value)
-        }
-        guard decoded.last?.contains(".") != true else { return nil }
-        self = .docs(page: decoded.isEmpty ? nil : decoded.joined(separator: "/"))
-        return
-      }
-      guard segments.count <= (Self.detailPages.contains(head) ? 2 : 1) else { return nil }
-      var detail: String?
-      if segments.count == 2 {
-        guard let decoded = segments[1].removingPercentEncoding else { return nil }
-        detail = decoded
-      }
-      switch head {
-      case "mappings": self = .mappings
-      case "commands": self = .commands
-      case "plugins": self = .plugins(id: detail)
-      case "monitors": self = .monitors
-      case "telemetry": self = .telemetry
-      case "state": self = .state
-      case "logs": self = .logs
-      case "search": self = .search
-      default: self = .clipboard
+        guard detail.last?.contains(".") != true else { return nil }
+        self = .docs(page: detail.isEmpty ? nil : detail.joined(separator: "/"))
+      case .mappings: self = .mappings
+      case .commands: self = .commands
+      case .plugins: self = .plugins(id: detail.first)
+      case .monitors: self = .monitors
+      case .telemetry: self = .telemetry
+      case .state: self = .state
+      case .logs: self = .logs
+      case .clipboard: self = .clipboard
+      case .search: self = .search
       }
     }
 
-    private static func path(_ name: String, detail: String?) -> String {
+    private static func path(_ name: Name, detail: String? = nil) -> String {
       guard let detail = detail?.trimmed, !detail.isEmpty,
         let encoded = detail.addingPercentEncoding(withAllowedCharacters: segmentCharacters)
-      else { return "/\(name)" }
-      return "/\(name)/\(encoded)"
+      else { return "/\(name.rawValue)" }
+      return "/\(name.rawValue)/\(encoded)"
     }
   }
 }

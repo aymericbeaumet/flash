@@ -1,4 +1,5 @@
 import { renderUncached, routeOf, sectionsOf, type RenderContext, type Target } from "./markdown.ts";
+import table from "./help-routes.json" with { type: "json" };
 import { hashBody } from "./reading.ts";
 
 /**
@@ -251,7 +252,8 @@ export function pathOf(links: SiteLinks, pathname: string): string | null {
 }
 
 /** The help's own pages, which only the resident has: a manual page links them as live companions. */
-const livePages = /^\/(mappings|commands|plugins|state|monitors|logs|clipboard|search)?(?:[?#]|$)/;
+export const livePageNames: readonly string[] = table.pages.filter((name) => name !== "docs");
+const livePages = new RegExp(`^/(${livePageNames.join("|")})?(?:[?#]|$)`);
 
 export function isLivePath(path: string): boolean {
   return livePages.test(path);
