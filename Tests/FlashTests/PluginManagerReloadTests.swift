@@ -537,7 +537,10 @@ final class PluginManagerReloadTests: XCTestCase {
       manifest: PluginFixtureKit.manifest(
         id: "reloadrouting",
         extra: Self.residentSurfaces
-          + #","commands":[{"command":"routed","subcommand":"ping","description":"test"}]"#),
+          + #","commands":[{"command":"routed","subcommand":"ping","description":"test"}]"#
+          // A setting reaches the plugin, and so changes its definition, only
+          // when its manifest declares it.
+          + #","settings":{"generation":{"type":"string","description":"test"}}"#),
       script: script)
     defer { fixture.cleanup() }
     let manager = PluginManager(baseDataDir: fixture.baseDataDir)
