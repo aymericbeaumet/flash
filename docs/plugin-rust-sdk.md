@@ -16,6 +16,12 @@ The proc-macro crate and the bounded-subprocess layer are internal details of
 manifest, a hermetic standalone crate (path dep on the SDK, per-crate build
 profiles, the canonical `clippy.toml` copy, a committed `Cargo.lock`), and a
 working `:<id> ping` command, requiring zero manual edits to reach green.
+No Cargo workspace keeps those crates aligned, so the plugin gate does: its
+`lint` lane rejects build profiles, shared dependency requirements or locked
+versions that differ between crates, and
+`mise run update:plugin-dependency -- <dependency> <requirement>` changes one
+dependency in every crate that declares it
+([dependency updates](development.md#dependency-updates)).
 
 ## Authoring shape
 

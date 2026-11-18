@@ -93,6 +93,10 @@ run = "./Scripts/update-bangs.sh"
 description = "Refresh the emojis plugin's vendored CLDR keyword table (-- <ref>: pin a release tag or commit)"
 run = "./Scripts/update-emoji-keywords.sh"
 
+[tasks."update:plugin-dependency"]
+description = "Set one Rust dependency's version requirement in every plugin crate that declares it and refresh their locks: -- <dependency> <requirement>"
+run = "python3 -I Scripts/update-plugin-dependency.py"
+
 [tasks."new:plugin"]
 description = "Scaffold a bundled Rust plugin: -- <id> \"<Display Name>\" \"<description>\""
 run = "./Scripts/new-plugin.sh"

@@ -11,9 +11,13 @@ set -euo pipefail
 # Usage: test-plugins.sh [--lane lint|units|build|all]…
 #
 # Lanes (all = every lane, the CI plugin-gate job's body):
-#   lint    cargo fmt --check + clippy for the SDK workspace and every
+#   lint    the crate agreement check (Scripts/check-plugin-crates.py: the
+#           hermetic crates share one set of build profiles and one
+#           requirement and locked version per common dependency), then
+#           cargo fmt --check + clippy for the SDK workspace and every
 #           plugin crate
-#   units   the plugin publication test (Scripts/test-build-plugins.py) and
+#   units   the plugin publication test (Scripts/test-build-plugins.py), the
+#           crate agreement tests (Scripts/test-plugin-crates.py) and
 #           per-crate `cargo test --locked` for the SDK workspace + all
 #           plugin crates
 #   build   dev build of every executable plugin (Scripts/build-plugins.sh dev)
@@ -62,6 +66,8 @@ crate_dirs() {
 }
 
 if want lint; then
+  echo "==> lint: crate agreement"
+  python3 -I Scripts/check-plugin-crates.py
   echo "==> lint: Rust"
   while IFS= read -r dir; do
     (cd "$dir" &&
@@ -73,6 +79,8 @@ fi
 if want units; then
   echo "==> units: plugin publication"
   python3 Scripts/test-build-plugins.py
+  echo "==> units: crate agreement"
+  python3 -I Scripts/test-plugin-crates.py
   echo "==> units: per-crate cargo test"
   while IFS= read -r dir; do
     (cd "$dir" && cargo test --workspace --locked --quiet)

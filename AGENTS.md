@@ -563,6 +563,8 @@ workspace — including its `probe` member — and every plugin crate: `lint`
 test plus per-crate `cargo test --locked`) and `build` (a dev build of every
 executable plugin). Use targeted lanes during development
 (`mise run test:plugins -- --lane units`); run every lane before finishing.
+`lint` also rejects plugin crates whose build profiles or shared dependency
+versions differ: bump one with `mise run update:plugin-dependency`.
 Status-language changes also run `mise run test:status-format` against the
 pinned tmux baseline.
 

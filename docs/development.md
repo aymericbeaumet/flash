@@ -133,6 +133,7 @@ else.
 | `generate:otlp` | `Scripts/generate-otlp.sh`, with the pinned `protoc` | Regenerate `Sources/FlashOTLP` after an OTLP pin change |
 | `update:bangs` | `Scripts/update-bangs.sh` | Refresh the vendored Kagi bang list |
 | `update:emoji-keywords` | `Scripts/update-emoji-keywords.sh` | Refresh the vendored CLDR emoji keywords |
+| `update:plugin-dependency` | `Scripts/update-plugin-dependency.py` | One Rust dependency in every plugin crate that declares it: `-- tokio 1.55.0` sets the requirement and refreshes the locks ([dependency updates](#dependency-updates)) |
 | `new:plugin` | `Scripts/new-plugin.sh` | Scaffold a bundled Rust plugin |
 | `release:publish` | `Scripts/publish-github-release.sh` | CI only: publish the release and its archive |
 | `release:cask` | `Scripts/update-homebrew-cask.sh` | CI only: update the Homebrew cask |
@@ -156,6 +157,37 @@ and event libraries use pinned revisions or releases and verified SHA-256
 archives. Ghostty upgrades also require reviewing the linked-license inventory.
 The OTLP generator verifies both its protocol revision and the SwiftProtobuf
 revision from `Package.resolved`.
+
+The plugin crates are hermetic: each has its own manifest and `Cargo.lock`
+and no Cargo workspace above it, so what the crates have in common is a copy
+in each. The plugin gate's `lint` lane fails when the copies disagree, naming
+the crates and the differing values:
+
+- every plugin crate declares the same `[profile.*]` tables (the SDK
+  workspace declares none: a plugin build takes its profiles from the plugin
+  crate);
+- a dependency two crates declare has one version requirement in both, the
+  SDK workspace's crates included, and resolves to one version in both
+  `Cargo.lock` files;
+- every crate declares the SDK path dependency the same way, features
+  included.
+
+The features of a registry dependency may differ: each plugin compiles only
+what it uses, such as tokio's `net` in the plugins that open sockets. Change a
+requirement in every crate at once:
+
+```bash
+mise run update:plugin-dependency -- tokio 1.55.0
+```
+
+It rewrites the requirement in each manifest that declares the dependency,
+runs `cargo update -p` for it in every crate that changed or that builds a
+changed crate by path, and prints each manifest and lock change. A full
+version is also the version the locks resolve to; a range such as `1.55`
+resolves to the newest match. It refuses a dependency no crate declares or
+one declared by path, restores every file when Cargo rejects the requirement,
+and commits nothing: run the plugin gate on the result. A build profile
+changes by hand, in every plugin crate and in the `new:plugin` scaffold.
 
 The inspector currently uses TypeScript 6.0.3. TypeScript 7 uses a native
 compiler and does not expose the JavaScript API required by svelte-check
