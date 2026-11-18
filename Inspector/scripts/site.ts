@@ -13,14 +13,8 @@
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  livePageNames,
-  searchSections,
-  siteLinks,
-  type DocsBundle,
-  type Problem,
-  type SiteMode,
-} from "../src/lib/docsite.ts";
+import { livePageNames, siteLinks, type DocsBundle, type SiteMode } from "../src/lib/docsite.ts";
+import { searchSections, type Problem } from "./docs-bundle.ts";
 import { docsDirectory, loadDocs } from "./docs-source.ts";
 
 const inspector = join(dirname(fileURLToPath(import.meta.url)), "..");

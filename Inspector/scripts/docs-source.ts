@@ -4,14 +4,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  bundleDocs,
-  checkLinks,
-  siteLinks,
-  type DocsBundle,
-  type Problem,
-  type SiteMode,
-} from "../src/lib/docsite.ts";
+import { siteLinks, type DocsBundle, type SiteMode } from "../src/lib/docsite.ts";
+import { bundleDocs, checkLinks, type Problem } from "./docs-bundle.ts";
 
 export const docsDirectory = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "docs");
 

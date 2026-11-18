@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { MdNode } from "./markdown";
+  import type { MdNode } from "./markdown-tree";
   import { site } from "./routes";
   import { copyText } from "./toasts.svelte";
 

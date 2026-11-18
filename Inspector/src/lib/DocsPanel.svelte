@@ -5,7 +5,8 @@
   import FreshMark from "./FreshMark.svelte";
   import Icon from "./Icon.svelte";
   import Markdown from "./Markdown.svelte";
-  import { renderMarkdown, type RenderContext, type Rendered } from "./markdown";
+  import { renderMarkdown } from "./markdown";
+  import type { RenderContext, Rendered } from "./markdown-tree";
   import { markGuideRead } from "./onboarding";
   import PageHeader from "./PageHeader.svelte";
   import {

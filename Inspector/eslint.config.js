@@ -3,6 +3,25 @@ import ts from "typescript-eslint";
 
 // Prettier owns the layout; svelte-check owns the types and the compiler's warnings. ESLint
 // holds what neither can state: what the page may execute and which module may import which.
+
+// Import boundaries. A file takes the last `boundary` that names it.
+const marked = {
+  name: "marked",
+  message: "Only src/lib/markdown.ts lexes Markdown; read its tree through markdown-tree.ts.",
+};
+const buildScripts = {
+  regex: "(^|/)scripts/",
+  message: "The build scripts stay out of the page.",
+};
+const lexer = {
+  regex: "(^|/)markdown(\\.ts)?$",
+  message: "This module stays free of the Markdown lexer; markdown-tree.ts has the tree.",
+};
+const boundary = (files, paths, patterns) => ({
+  files,
+  rules: { "no-restricted-imports": ["error", { paths, patterns }] },
+});
+
 export default [
   { ignores: ["dist/", "dist-site/"] },
   ...svelte.configs.base,
@@ -46,4 +65,8 @@ export default [
     files: ["src/**"],
     rules: { "no-console": "error" },
   },
+  boundary(["src/**"], [marked], [buildScripts]),
+  boundary(["src/lib/markdown.ts"], [], [buildScripts]),
+  // What the page needs of the manual without rendering Markdown.
+  boundary(["src/lib/markdown-tree.ts", "src/lib/docsite.ts"], [marked], [buildScripts, lexer]),
 ];

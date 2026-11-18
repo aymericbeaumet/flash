@@ -1,5 +1,6 @@
 import type { SearchSection } from "./docsite.ts";
-import { renderUncached, sectionsOf } from "./markdown.ts";
+import { renderUncached } from "./markdown.ts";
+import { sectionsOf } from "./markdown-tree.ts";
 import { paths } from "./routes.ts";
 import type { CommandInfo, DocTopic, MappingRow, PluginInfo } from "./types.ts";
 

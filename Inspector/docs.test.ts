@@ -1,29 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { bundleDocs, checkLinks, searchSections } from "./scripts/docs-bundle.ts";
 import { loadDocs } from "./scripts/docs-source.ts";
 import {
-  bundleDocs,
-  checkLinks,
   isLivePath,
   livePageNames,
   Manual,
   pathOf,
-  searchSections,
   siteLinks,
   type DocsBundle,
   type SiteLinks,
 } from "./src/lib/docsite.ts";
 import { commandDocs, modeDoc, topicDocs } from "./src/lib/command-docs.ts";
 import { highlight } from "./src/lib/highlight.ts";
+import { renderUncached } from "./src/lib/markdown.ts";
 import {
-  renderUncached,
   routeOf,
   slugify,
   textOf,
   type MdElement,
   type MdNode,
   type RenderContext,
-} from "./src/lib/markdown.ts";
+} from "./src/lib/markdown-tree.ts";
 import table from "./src/lib/help-routes.json" with { type: "json" };
 import { hashBody } from "./src/lib/reading.ts";
 import { parseRoute } from "./src/lib/routes.ts";

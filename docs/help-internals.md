@@ -187,7 +187,9 @@ template never adds or removes a text node of the page. The lint also runs
 ESLint with a short list of rules (`Inspector/eslint.config.js`), none about
 style: no string is parsed as HTML or run as code, no debugging leftover
 stays, nothing escapes the type check and the page never writes to the
-console.
+console. It also holds the import boundaries: only `src/lib/markdown.ts`
+imports the Markdown lexer, and nothing under `src/` imports the build
+scripts.
 
 Check browser routes (direct loads, back/forward, heading anchors, aliases),
 search, page links, live/disconnected states, narrow layouts and print preview after
@@ -241,6 +243,13 @@ the inspector's own renderer and components:
   search and 404) and hydrated in the browser, with the documentation, its search
   index and the files under `docs/`. `.github/workflows/pages.yml` deploys
   it; the CI documentation job runs the same build.
+
+The build's half of the manual lives in `Inspector/scripts/docs-bundle.ts`:
+bundling `docs/`, the search sections and the link check. The page reads
+the bundle through `src/lib/docsite.ts` (the pages, their navigation and how
+a site spells a link), which never imports the Markdown lexer:
+`src/lib/markdown.ts` turns Markdown into a tree, and
+`src/lib/markdown-tree.ts` holds the tree's types and what reads one.
 
 Both fail on a broken link or anchor, an absolute link inside the documentation, a
 Markdown file neither in `docs/nav.json` nor listed there as `unlisted`, or a
