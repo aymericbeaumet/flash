@@ -1,15 +1,15 @@
 import { contractError, classify, type RequestError } from "./request.ts";
-import type { ClipboardEntry } from "./types.ts";
+import type { ClipboardHistoryEntry } from "./types.ts";
 
 export interface ClipboardPage {
-  entries: ClipboardEntry[];
+  entries: ClipboardHistoryEntry[];
   next_offset: number | null;
   total: number;
 }
 
 /** How far a history load got: the entries so far and the next page to ask for. */
 export interface HistoryCursor {
-  entries: ClipboardEntry[];
+  entries: ClipboardHistoryEntry[];
   /** The offset of the next page, or null once the history is complete. */
   nextOffset: number | null;
   total: number;
@@ -45,12 +45,12 @@ export function parseClipboardPage(value: unknown): ClipboardPage {
     if (
       typeof entry !== "object" ||
       entry === null ||
-      typeof (entry as ClipboardEntry).id !== "string" ||
-      typeof (entry as ClipboardEntry).kind !== "string"
+      typeof (entry as ClipboardHistoryEntry).id !== "string" ||
+      typeof (entry as ClipboardHistoryEntry).kind !== "string"
     ) {
       throw contractError("clipboard entry without an id and kind");
     }
-    if ("pinned" in entry && (entry as ClipboardEntry).pinned !== true)
+    if ("pinned" in entry && (entry as ClipboardHistoryEntry).pinned !== true)
       throw contractError("clipboard entry pinned is not true");
   }
   return page as unknown as ClipboardPage;
@@ -58,7 +58,7 @@ export function parseClipboardPage(value: unknown): ClipboardPage {
 
 export async function fetchHistory(
   fetchPage: (offset: number) => Promise<ClipboardPage>,
-  onPage: (entries: ClipboardEntry[], nextOffset: number | null, total: number) => void,
+  onPage: (entries: ClipboardHistoryEntry[], nextOffset: number | null, total: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   let first: ClipboardPage;
@@ -75,10 +75,10 @@ export async function fetchHistory(
 /** Loads the pages from `nextOffset` on after `first`. A failed page rejects
  * with a `HistoryLoadError` whose cursor keeps every entry loaded so far. */
 export async function collectHistory(
-  first: ClipboardEntry[],
+  first: ClipboardHistoryEntry[],
   nextOffset: number | null,
   fetchPage: (offset: number) => Promise<ClipboardPage>,
-  onPage: (entries: ClipboardEntry[], nextOffset: number | null, total: number) => void,
+  onPage: (entries: ClipboardHistoryEntry[], nextOffset: number | null, total: number) => void,
   signal?: AbortSignal,
   total = first.length,
 ): Promise<void> {
@@ -117,10 +117,10 @@ export async function collectHistory(
 /** While a reload is still under way, or after it stopped early, the older
  * entries it has not reached stay listed after the ones it reloaded. */
 export function withUnreached(
-  loaded: ClipboardEntry[],
-  previous: ClipboardEntry[],
+  loaded: ClipboardHistoryEntry[],
+  previous: ClipboardHistoryEntry[],
   complete: boolean,
-): ClipboardEntry[] {
+): ClipboardHistoryEntry[] {
   if (complete) return loaded;
   const ids = new Set(loaded.map((entry) => entry.id));
   return [...loaded, ...previous.filter((entry) => !ids.has(entry.id))];

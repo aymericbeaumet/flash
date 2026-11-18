@@ -6,3 +6,6 @@ pnpm-lock.yaml
 src/lib/help-routes.json
 # The page shells: the site's markers sit where whitespace would reach the page.
 *.html
+# Written by `mise run build:schema` from the snapshot schema and the command topics.
+src/lib/state.generated.ts
+src/lib/topic-categories.json

@@ -21,7 +21,7 @@
   import { store } from "./store.svelte";
   import { copiedToast, copyFailedToast, failedToast } from "./toast";
   import { toasts } from "./toasts.svelte";
-  import type { ClipboardEntry, ClipboardRegister } from "./types";
+  import type { ClipboardHistoryEntry, ClipboardRegister } from "./types";
 
   let {
     entries,
@@ -29,13 +29,13 @@
     nextOffset,
     total,
   }: {
-    entries: ClipboardEntry[];
+    entries: ClipboardHistoryEntry[];
     registers: ClipboardRegister[];
     nextOffset: number | null;
     total: number;
   } = $props();
   // Replaced whole by each load, never changed in place: no deep proxy over thousands of entries.
-  let history = $state.raw<ClipboardEntry[]>([]);
+  let history = $state.raw<ClipboardHistoryEntry[]>([]);
   let retained = $state(0);
   let loading = $state(false);
   /** A transient failure being retried, described. */
@@ -159,7 +159,7 @@
     loading = true;
     failure = "";
     retrying = "";
-    const apply = (loaded: ClipboardEntry[], next: number | null, count: number) => {
+    const apply = (loaded: ClipboardHistoryEntry[], next: number | null, count: number) => {
       if (generation !== historyGeneration) return;
       retrying = "";
       history = withUnreached(loaded, previous, next === null);
@@ -226,7 +226,7 @@
   ];
   const visible = $derived(history.filter((entry) => entry.id && !removed.includes(entry.id)));
   /** An entry as listed, with its number in the history. */
-  type Listed = ClipboardEntry & { index: number };
+  type Listed = ClipboardHistoryEntry & { index: number };
   const kindCounts = $derived(
     visible.reduce<Record<string, number>>(
       (counts, entry) => ({ ...counts, [kindOf(entry)]: (counts[kindOf(entry)] ?? 0) + 1 }),
@@ -265,13 +265,13 @@
     return () => observer.disconnect();
   });
 
-  function kindOf(entry: ClipboardEntry): string {
+  function kindOf(entry: ClipboardHistoryEntry): string {
     return ["image", "html", "files"].includes(entry.kind) ? entry.kind : "text";
   }
 
   /** What a search matches, built once per entry: a keystroke filters the whole history. */
-  const haystacks = new WeakMap<ClipboardEntry, string>();
-  function haystack(entry: ClipboardEntry): string {
+  const haystacks = new WeakMap<ClipboardHistoryEntry, string>();
+  function haystack(entry: ClipboardHistoryEntry): string {
     let text = haystacks.get(entry);
     if (text === undefined) {
       text = [
@@ -288,12 +288,12 @@
     return text;
   }
 
-  function imageURL(entry: ClipboardEntry): string | null {
+  function imageURL(entry: ClipboardHistoryEntry): string | null {
     if (!entry.mime || !/^[0-9a-f]{32}$/.test(entry.id)) return null;
     return withToken(`/api/clipboard/${entry.id}`);
   }
 
-  function kindLabel(entry: ClipboardEntry): string {
+  function kindLabel(entry: ClipboardHistoryEntry): string {
     switch (kindOf(entry)) {
       case "image":
         return "Image";
@@ -309,7 +309,7 @@
   const count = new Intl.NumberFormat();
   /** An entry's text size by id, counted once: a long entry is not split on every render. */
   const textSizes = new Map<string, string>();
-  function textSize(entry: ClipboardEntry, value: string): string {
+  function textSize(entry: ClipboardHistoryEntry, value: string): string {
     let text = textSizes.get(entry.id);
     if (text === undefined) {
       let lines = 1;
@@ -321,7 +321,7 @@
   }
 
   /** What the entry weighs: characters and lines, pixels, or files. */
-  function size(entry: ClipboardEntry): string {
+  function size(entry: ClipboardHistoryEntry): string {
     const parts: string[] = [];
     if (dimensions[entry.id]) parts.push(dimensions[entry.id]);
     if (entry.mime) parts.push(entry.mime.replace(/^image\//, "").toUpperCase());
@@ -331,7 +331,7 @@
     return parts.join(" · ") || "—";
   }
 
-  function measure(entry: ClipboardEntry, event: Event) {
+  function measure(entry: ClipboardHistoryEntry, event: Event) {
     const image = event.currentTarget as HTMLImageElement;
     if (image.naturalWidth && !dimensions[entry.id])
       dimensions = { ...dimensions, [entry.id]: `${image.naturalWidth}×${image.naturalHeight}` };

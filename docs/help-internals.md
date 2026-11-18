@@ -121,6 +121,23 @@ app's router, the manual's live-link check and the site build read, and
 `HelpRoutesTests` fails while the committed copy is stale. A new page is a
 case there, its `Page` case, and its `PageName` and panel in the app.
 
+Two more files of the page are written by `mise run build:schema`, never by
+hand, and a test fails while a committed copy is stale:
+
+- `Inspector/src/lib/state.generated.ts`: the snapshot's TypeScript types,
+  from `docs/schema/inspector/state.schema.json`
+  (`Inspector/scripts/state-types.ts`, a generator without dependencies that
+  refuses a schema keyword it does not read). `InspectorStateSchemaTests`
+  validates what the resident really builds against that schema, so the
+  page's types follow the snapshot rather than a second description of it;
+  `types.ts` re-exports them and keeps what no snapshot carries.
+  `Inspector/state-types.test.ts` is the staleness check.
+- `Inspector/src/lib/topic-categories.json`: each of Flash's topics with the
+  category the mapping pages group and colour it by, from
+  `URLEventHandler.topicsByCategory`.
+  `CommandGrammarTests.testInspectorTopicTableMatchesTheTopics` fails when a
+  topic has no category or the file is stale.
+
 Fragments are in-page anchors. Headings take the slugs the published documentation
 has always used (Python-Markdown's: accents folded to ASCII, punctuation
 dropped, a repeated heading suffixed `_1`), so

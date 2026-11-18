@@ -321,21 +321,35 @@ final class CommandGrammarTests: XCTestCase {
     }
   }
 
+  /// The help groups a binding by its topic's category
+  /// (`URLEventHandler.topicsByCategory`), which the frontend reads from
+  /// Inspector/src/lib/topic-categories.json.
+  /// `FLASH_WRITE_SCHEMA=1 swift test --filter CommandGrammarTests` (or
+  /// `mise run build:schema`) rewrites the committed copy.
   func testInspectorTopicTableMatchesTheTopics() throws {
-    let source = try String(
-      contentsOf: Self.root.appendingPathComponent("Inspector/src/lib/keyboard.ts"),
-      encoding: .utf8)
-    let start = try XCTUnwrap(source.range(of: "export const topicCategories"))
-    let end = try XCTUnwrap(source.range(of: "};", range: start.upperBound..<source.endIndex))
-    let table = source[start.upperBound..<end.lowerBound]
-    let regex = try NSRegularExpression(
-      pattern: #"^\s*([a-z][a-z0-9_]*):"#, options: .anchorsMatchLines)
-    let text = String(table)
-    let topics = regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
-      Range($0.range(at: 1), in: text).map { String(text[$0]) }
+    let listed = URLEventHandler.topicsByCategory.flatMap(\.topics)
+    XCTAssertEqual(
+      Dictionary(grouping: listed, by: { $0 }).filter { $0.value.count > 1 }.keys.sorted(), [],
+      "a topic has one category")
+    XCTAssertEqual(
+      URLEventHandler.topics.subtracting(listed).sorted(), [],
+      "every topic has a category in URLEventHandler.topicsByCategory")
+    XCTAssertEqual(
+      Set(listed).subtracting(URLEventHandler.topics).sorted(), [],
+      "only Flash's topics have one")
+    XCTAssertEqual(Set(URLEventHandler.topicCategories.keys), URLEventHandler.topics)
+
+    let url = Self.root.appendingPathComponent("Inspector/src/lib/topic-categories.json")
+    let rows = URLEventHandler.topicCategories.sorted { $0.key < $1.key }.map {
+      "  \"\($0.key)\": \"\($0.value.rawValue)\""
     }
-    XCTAssertEqual(Set(topics), URLEventHandler.topics)
-    XCTAssertEqual(topics.count, Set(topics).count)
+    let generated = "{\n" + rows.joined(separator: ",\n") + "\n}\n"
+    if ProcessInfo.processInfo.environment["FLASH_WRITE_SCHEMA"] == "1" {
+      try generated.write(to: url, atomically: true, encoding: .utf8)
+    }
+    XCTAssertEqual(
+      try? String(contentsOf: url, encoding: .utf8), generated,
+      "Inspector/src/lib/topic-categories.json is stale: run mise run build:schema")
   }
 
   /// `docs/commands.md` carries the full command table: one row per

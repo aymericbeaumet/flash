@@ -88,6 +88,7 @@ test("a plugin description is the hover text and counts in the ranking", () => {
   const commands: CommandInfo[] = [
     {
       name: ":screenshot window",
+      syntax: ":screenshot window",
       command: "screenshot",
       subcommand: "window",
       description: "Copy a capture of the focused window to the clipboard",

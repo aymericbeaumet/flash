@@ -5,10 +5,12 @@ import {
   alphabetHeat,
   bindingsByCap,
   capsAt,
+  categories,
   categoryOf,
   keycapLabel,
   keySteps,
   stepsToKey,
+  topicCategories,
   layerModes,
   mappingModes,
   mappingSnippet,
@@ -21,6 +23,14 @@ import {
 } from "./src/lib/keyboard.ts";
 import type { KeyboardState, MappingRow } from "./src/lib/types.ts";
 
+const row = (scope: string, key: string, action: string): MappingRow => ({
+  scope,
+  key,
+  action,
+  origin: "default",
+  explanation: "",
+});
+
 const keyboard: KeyboardState = {
   layout: "qwerty",
   rows: ["1234567890", "qwertyuiop", "asdfghjkl;", "zxcvbnm,./"],
@@ -31,6 +41,7 @@ const keyboard: KeyboardState = {
   zone_rows: ["qwertyuiop", "asdfghjkl"],
   navigation: { left: "h", down: "j", up: "k", right: "l", quadrants: ["yu", "bn"] },
   adjust_digits: "width",
+  held_button: null,
 };
 
 test("a chord is one key with its modifiers", () => {
@@ -85,11 +96,11 @@ test("the live mode reads its own scope and all", () => {
 
 test("each layer is a mode button of its own, reading its keys and all", () => {
   const rows: MappingRow[] = [
-    { scope: "layers.resize", key: "h", action: "flash window move --position=lefthalf" },
-    { scope: "layers.resize", key: "<escape>", action: "flash mode leave" },
-    { scope: "layers.media", key: "p", action: "flash key system --key=media_play" },
-    { scope: "all", key: "cmd+space", action: "flash app switch" },
-    { scope: "normal", key: "f", action: "flash mouse target" },
+    row("layers.resize", "h", "flash window move --position=lefthalf"),
+    row("layers.resize", "<escape>", "flash mode leave"),
+    row("layers.media", "p", "flash key system --key=media_play"),
+    row("all", "cmd+space", "flash app switch"),
+    row("normal", "f", "flash mouse target"),
   ];
   assert.deepEqual(
     layerModes(rows).map((mode) => [mode.id, mode.label]),
@@ -114,11 +125,11 @@ test("the mode buttons pick what the keyboard lights and the list shows", () => 
     ["all", "normal", "text", "visual", "hold", "hyper", "insert", "command", "terminal"],
   );
   const rows: MappingRow[] = [
-    { scope: "normal", key: "f", action: "flash mouse target" },
-    { scope: "hold", key: "j", action: "flash mouse nudge --direction=down --distance=16" },
-    { scope: "all", key: "cmd+space", action: "flash app switch" },
-    { scope: "insert", key: "ctrl+[", action: "flash mode normal" },
-    { scope: "hyper", key: "1", action: "flash key system --key=brightness_down" },
+    row("normal", "f", "flash mouse target"),
+    row("hold", "j", "flash mouse nudge --direction=down --distance=16"),
+    row("all", "cmd+space", "flash app switch"),
+    row("insert", "ctrl+[", "flash mode normal"),
+    row("hyper", "1", "flash key system --key=brightness_down"),
   ];
   assert.deepEqual(rowsForMode(rows, "all").length, 5);
   assert.deepEqual(
@@ -151,13 +162,13 @@ test("a key is the steps you press, a capital being its shift layer", () => {
 });
 
 const drillRows: MappingRow[] = [
-  { scope: "normal", key: "f", action: "flash mouse target" },
-  { scope: "normal", key: "F", action: "flash mouse target --insert" },
-  { scope: "normal", key: "c", action: "flash noop" },
-  { scope: "normal", key: "cf", action: "flash mouse target --secondary" },
-  { scope: "normal", key: "ctrl+d", action: "flash scroll half_page_down" },
-  { scope: "normal", key: "g1", action: "flash tab select --index=1" },
-  { scope: "normal", key: "gg", action: "flash scroll top" },
+  row("normal", "f", "flash mouse target"),
+  row("normal", "F", "flash mouse target --insert"),
+  row("normal", "c", "flash noop"),
+  row("normal", "cf", "flash mouse target --secondary"),
+  row("normal", "ctrl+d", "flash scroll half_page_down"),
+  row("normal", "g1", "flash tab select --index=1"),
+  row("normal", "gg", "flash scroll top"),
 ];
 
 test("the keyboard shows what each key does at a prefix, in one modifier layer", () => {
@@ -206,6 +217,13 @@ test("an action falls in a category by what it does", () => {
   assert.equal(categoryOf("flash screenshot window"), "plugins");
   assert.equal(categoryOf("flash tmux session main"), "plugins");
   assert.equal(categoryOf("open -a Safari"), "programs");
+  // The table is the resident's; every category it names is one the page draws.
+  for (const [topic, category] of Object.entries(topicCategories))
+    assert.ok(
+      categories.some((known) => known.id === category),
+      `${topic}: ${category}`,
+    );
+  assert.ok(Object.keys(topicCategories).length > 50);
 });
 
 test("a keycap names its action briefly", () => {
@@ -231,25 +249,21 @@ test("steps read back as flash.toml key syntax", () => {
 
 test("a binding's snippet remaps or removes it in its own table", () => {
   assert.equal(
-    mappingSnippet({ scope: "normal", key: "f", action: "flash mouse target" }),
+    mappingSnippet(row("normal", "f", "flash mouse target")),
     '[mode.normal.mappings]\n"f" = ["flash", "mouse", "target"]  # change the command\n# "f" = false  # or remove the key',
   );
   assert.equal(
-    mappingSnippet({
-      scope: "hold",
-      key: "j",
-      action: "flash mouse nudge --direction=down --distance=16",
-    }),
+    mappingSnippet(row("hold", "j", "flash mouse nudge --direction=down --distance=16")),
     '[mode.hold.mappings]\n"j" = ["flash", "mouse", "nudge", "--direction=down", "--distance=16"]  # change the command\n# "j" = false  # or remove the key',
   );
 });
 
 test("bindings group by the key cap they start on, sorted", () => {
   const rows: MappingRow[] = [
-    { scope: "normal", key: "cf", action: "flash mouse target --secondary" },
-    { scope: "normal", key: "c", action: "flash noop" },
-    { scope: "all", key: "cmd+shift+space", action: "flash mouse target" },
-    { scope: "insert", key: "x", action: "flash tab close" },
+    row("normal", "cf", "flash mouse target --secondary"),
+    row("normal", "c", "flash noop"),
+    row("all", "cmd+shift+space", "flash mouse target"),
+    row("insert", "x", "flash tab close"),
   ];
   const byCap = bindingsByCap(rows, ["normal", "all"], "space");
   assert.deepEqual([...byCap.keys()].sort(), ["c", "space"]);

@@ -27,6 +27,7 @@
   import { buildIndex } from "./lib/help-search";
   import { sharedCrumbs, type Crumb, type Section } from "./lib/shell";
   import { store } from "./lib/store.svelte";
+  import type { MappingsState } from "./lib/types";
   import Shell from "./Shell.svelte";
 
   /**
@@ -56,7 +57,16 @@
   const docs = $derived(store.state.docs ?? []);
   const plugins = $derived(store.state.plugins ?? []);
   const commands = $derived(store.state.commands ?? []);
-  const mappings = $derived(store.state.mappings ?? { normal_leader: "", rows: [] });
+  /** The mappings before a snapshot is here: none. */
+  const noMappings: MappingsState = {
+    normal_leader: "",
+    rows: [],
+    effective_rows: [],
+    commands: [],
+    bundle_id: null,
+    localized_name: null,
+  };
+  const mappings = $derived(store.state.mappings ?? noMappings);
   const loaded = $derived(store.state.snapshot_at_unix_ms != null);
   const monitorAlarm = $derived.by(() => {
     const counts = monitorCounts(store.state.monitors ?? []);
@@ -113,13 +123,7 @@
     };
   });
   const index = $derived(
-    buildIndex(
-      docs,
-      commands,
-      mappings.effective_rows ?? mappings.rows,
-      plugins,
-      docsStore.sections ?? [],
-    ),
+    buildIndex(docs, commands, mappings.effective_rows, plugins, docsStore.sections ?? []),
   );
 
   // Runs once: nothing it reads may restart the stream.
@@ -253,7 +257,7 @@
     />
   {:else if route.page === "commands"}<CommandsPanel
       {commands}
-      rows={mappings.effective_rows ?? mappings.rows}
+      rows={mappings.effective_rows}
       filter={route.param}
     />
   {:else if route.page === "plugins"}<PluginsPanel

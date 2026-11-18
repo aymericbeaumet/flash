@@ -73,13 +73,9 @@
   // The instrument strip: what is true on this Mac now, each a way into its page.
   const runtime = $derived(snapshot.runtime);
   const pluginList = $derived(snapshot.plugins ?? []);
-  const pluginsRunning = $derived(
-    pluginList.filter((plugin) => plugin.state === "running" || plugin.state === "ready").length,
-  );
+  const pluginsRunning = $derived(pluginList.filter((plugin) => plugin.state === "running").length);
   const pluginsFailing = $derived(
-    pluginList.filter(
-      (plugin) => !!plugin.last_error || ["failed", "crashed", "error"].includes(plugin.state),
-    ).length,
+    pluginList.filter((plugin) => !!plugin.last_error || plugin.state === "failed").length,
   );
   const monitors = $derived(monitorCounts(snapshot.monitors ?? []));
   const known = $derived(snapshot.snapshot_at_unix_ms != null);

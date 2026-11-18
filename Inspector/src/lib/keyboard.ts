@@ -1,3 +1,4 @@
+import table from "./topic-categories.json" with { type: "json" };
 import type { KeyboardState, MappingRow } from "./types";
 
 /** The modifier names a chord may carry, as `flash.toml` spells them. */
@@ -408,76 +409,10 @@ export const categories: { id: string; label: string }[] = [
 /**
  * Every Flash topic (`flash <topic> <action>`), with the category its
  * commands fall in. Any other topic is a plugin command: a plugin cannot take
- * one of these names. `CommandGrammarTests` keeps this table equal to the
- * resident's topics.
+ * one of these names. The table is the resident's
+ * (`URLEventHandler.topicsByCategory`), written by `mise run build:schema`.
  */
-export const topicCategories: Record<string, string> = {
-  mouse: "pointer",
-  hints: "pointer",
-  selection: "pointer",
-  scroll: "scroll",
-  move: "scroll",
-  cursor: "scroll",
-  tab: "tabs",
-  app: "tabs",
-  mark: "tabs",
-  history: "tabs",
-  movement: "tabs",
-  pane: "tabs",
-  resource: "tabs",
-  document: "tabs",
-  url: "tabs",
-  window: "windows",
-  tile: "windows",
-  workspace: "windows",
-  desktop: "windows",
-  missioncontrol: "windows",
-  appwindows: "windows",
-  mode: "modes",
-  macro: "modes",
-  popup: "modes",
-  help: "modes",
-  mappings: "modes",
-  plugins: "modes",
-  monitors: "modes",
-  telemetry: "modes",
-  logs: "modes",
-  commands: "modes",
-  input: "modes",
-  key: "system",
-  volume: "system",
-  audio: "system",
-  media: "system",
-  system: "system",
-  display: "system",
-  screen: "system",
-  screensaver: "system",
-  appearance: "system",
-  caffeinate: "system",
-  launchpad: "system",
-  notificationcenter: "system",
-  controlcenter: "system",
-  updates: "other",
-  status: "other",
-  menu: "other",
-  trash: "system",
-  process: "system",
-  about: "other",
-  alert: "other",
-  notify: "other",
-  metrics: "other",
-  clipboard: "other",
-  register: "other",
-  notes: "other",
-  reminders: "other",
-  contacts: "other",
-  calendar: "other",
-  resident: "other",
-  config: "other",
-  startup: "other",
-  cli: "other",
-  events: "other",
-};
+export const topicCategories: Record<string, string> = table;
 
 export function categoryOf(action: string): string {
   const words = action.trim().split(/\s+/);

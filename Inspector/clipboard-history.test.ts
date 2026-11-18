@@ -11,9 +11,9 @@ import {
   type ClipboardPage,
 } from "./src/lib/clipboard-history.ts";
 import { RequestError, withRetry } from "./src/lib/request.ts";
-import type { ClipboardEntry } from "./src/lib/types.ts";
+import type { ClipboardHistoryEntry } from "./src/lib/types.ts";
 
-const entry = (id: string): ClipboardEntry => ({ id, kind: "text", preview: id, value: id });
+const entry = (id: string): ClipboardHistoryEntry => ({ id, kind: "text", preview: id, value: id });
 
 test("history pages fill the configured retention without duplicate entries", async () => {
   const pages = new Map<number, ClipboardPage>([

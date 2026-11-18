@@ -607,10 +607,8 @@ function pluginsStep(known: boolean, plugins: NonNullable<InspectorState["plugin
       "Plugins",
     );
   }
-  const failed = plugins.filter((plugin) => ["failed", "crashed", "error"].includes(plugin.state));
-  const running = plugins.filter(
-    (plugin) => plugin.state === "running" || plugin.state === "ready",
-  );
+  const failed = plugins.filter((plugin) => plugin.state === "failed");
+  const running = plugins.filter((plugin) => plugin.state === "running");
   if (failed.length > 0) {
     const names = failed
       .slice(0, 3)

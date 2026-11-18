@@ -53,7 +53,12 @@ export function buildIndex(
   for (const command of commands) {
     entries.push({
       title: command.name,
-      text: [command.name, command.syntax, command.description, ...(command.aliases ?? [])]
+      text: [
+        command.name,
+        command.syntax,
+        command.description,
+        ...("aliases" in command ? command.aliases : []),
+      ]
         .join(" ")
         .toLowerCase(),
       summary: command.description ?? command.source,

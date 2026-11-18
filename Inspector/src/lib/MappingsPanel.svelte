@@ -85,9 +85,7 @@
   });
 
   const leader = $derived(mappings.normal_leader);
-  const rows = $derived(
-    view === "effective" ? (mappings.effective_rows ?? mappings.rows) : mappings.rows,
-  );
+  const rows = $derived(view === "effective" ? mappings.effective_rows : mappings.rows);
   const modeRows = $derived(rowsForMode(rows, mode));
   const caps = $derived(capsAt(modeRows, path, layer, leader));
   const modes = $derived([...mappingModes, ...layerModes(rows)]);

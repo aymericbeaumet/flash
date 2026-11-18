@@ -33,10 +33,10 @@
   });
 
   function isRunning(plugin: PluginInfo) {
-    return plugin.state === "running" || plugin.state === "ready";
+    return plugin.state === "running";
   }
   function hasError(plugin: PluginInfo) {
-    return !!plugin.last_error || ["failed", "crashed", "error"].includes(plugin.state);
+    return !!plugin.last_error || plugin.state === "failed";
   }
   function label(value: string) {
     return value.replaceAll("_", " ");

@@ -52,7 +52,7 @@
           command.syntax,
           command.source,
           command.description,
-          ...(command.aliases ?? []),
+          ...("aliases" in command ? command.aliases : []),
         ]
           .join(" ")
           .toLowerCase(),
@@ -125,7 +125,7 @@
                     title="Documentation for {command.name}"><Icon name="docs" size={13} /></a
                   >{#if command.syntax && command.syntax !== command.name}<code class="syntax"
                       >{command.syntax}</code
-                    >{/if}{#if command.aliases?.length}<span class="aliases"
+                    >{/if}{#if "aliases" in command && command.aliases.length}<span class="aliases"
                       >Also {command.aliases.join(", ")}</span
                     >{/if}</td
                 >
