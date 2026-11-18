@@ -67,8 +67,6 @@ final class FlashStatusBarController {
     var pluginSegments: Set<String> = []
     /// The process values it read: only those are sampled.
     var processValues: Set<ProcessStatusValue> = []
-    /// The kernel values it read: only those are read, on its cadence.
-    var hostValues: Set<HostStatusValue> = []
     /// The received-metric values it read (`#{flash.otel…}`): only their
     /// metrics wake it.
     var telemetryKeys: Set<String> = []
@@ -104,7 +102,6 @@ final class FlashStatusBarController {
         dependencies.values.lazy.filter { $0.hasPrefix(Self.pluginValuePrefix) }
           .map { String($0.dropFirst(Self.pluginValuePrefix.count)) })
       processValues = Set(dependencies.values.compactMap(ProcessStatusValue.init(rawValue:)))
-      hostValues = Set(dependencies.values.compactMap(HostStatusValue.init(rawValue:)))
       telemetryKeys = dependencies.values.filter(TelemetryQuery.isTelemetryKey)
       readsCalendar = dependencies.values.contains(where: CalendarStatusValue.isCalendarValue)
     }
@@ -161,14 +158,6 @@ final class FlashStatusBarController {
     var foreground: Bool
   }
 
-  /// How a required kernel value is read: at the fastest cadence of the
-  /// surfaces reading it (0: once), at `.normal` while a foreground surface
-  /// shows it and `.low` for monitors alone.
-  private struct HostRequirement: Equatable {
-    var cadence: TimeInterval
-    var priority: PollScheduler.Priority
-  }
-
   private enum Lifecycle {
     case stopped
     case running(Schedule)
@@ -203,12 +192,6 @@ final class FlashStatusBarController {
   /// monitor's alone and re-run at `.low`.
   private var foregroundJobs: Set<String> = []
   private var foregroundSources: Set<String> = []
-  /// Kernel values an active surface of the running controller reads.
-  private var requiredHostValues: [HostStatusValue: HostRequirement] = [:]
-  /// The last reading of each required kernel value and its uptime; nil text
-  /// when the kernel did not answer.
-  private var hostSamples: [HostStatusValue: (text: String?, at: TimeInterval)] = [:]
-  private let readHostValue: (HostStatusValue) -> String?
   /// The OTLP receiver's metrics, read for `#{flash.otel…}` values.
   private let telemetry: TelemetryStore?
   /// The `#{flash.otel…}` keys an active surface of the running controller
@@ -320,7 +303,6 @@ final class FlashStatusBarController {
     monitorFireSink: ((MonitorFire) -> Void)? = nil,
     monitorNotifySink: ((String, StatusAlert) -> Void)? = nil,
     monitorTriggerSink: ((String, MonitorLevel) -> Void)? = nil,
-    readHostValue: @escaping (HostStatusValue) -> String? = { $0.read() },
     telemetry: TelemetryStore? = nil,
     calendarObserver: @escaping (Bool) -> Void = { _ in }
   ) {
@@ -332,7 +314,6 @@ final class FlashStatusBarController {
     self.monitorFireSink = monitorFireSink
     self.monitorNotifySink = monitorNotifySink
     self.monitorTriggerSink = monitorTriggerSink
-    self.readHostValue = readHostValue
     self.processValuesObserver = processValuesObserver
     self.environment = environment
     self.scheduler = scheduler
@@ -426,7 +407,6 @@ final class FlashStatusBarController {
     shellRecords.removeAll()
     pluginCycles.removeAll()
     requirementsChanged = true
-    hostSamples.removeAll()
     processValues.removeAll()
     if !requiredTelemetryKeys.isEmpty { telemetry?.observe(keys: []) }
     requiredTelemetryKeys = []
@@ -777,7 +757,6 @@ final class FlashStatusBarController {
 
   private func publishCurrentModel() {
     let now = clock()
-    sampleHostValues(now: now)
     let calendar = localCalendar
     var context = FlashStatusBarContext(
       focusedAppName: focusedAppName, focusedAppBundleID: focusedAppBundleID,
@@ -788,9 +767,6 @@ final class FlashStatusBarController {
     context.workspaces = workspaces
     var values = sourceRecords.compactMapValues(\.value)
     for (value, text) in processValues { values[value.rawValue] = text }
-    for (value, sample) in hostSamples {
-      if let text = sample.text { values[value.rawValue] = text }
-    }
     if let telemetry, telemetryDirty || telemetryReadKeys != requiredTelemetryKeys {
       telemetryValues = telemetry.values(for: requiredTelemetryKeys)
       telemetryReadKeys = requiredTelemetryKeys
@@ -830,15 +806,8 @@ final class FlashStatusBarController {
     publishMonitors()
     if requirementsChanged { reconcileRequirements(now: now) }
     guard schedule != nil else { return }
-    // A surface just started reading a kernel value: read it and evaluate
-    // again now rather than show it unknown until the next wake-up. Every
-    // required value then has a reading, so this recurses at most once per
-    // newly read value.
-    if requiredHostValues.keys.contains(where: { hostSamples[$0] == nil }) {
-      publishCurrentModel()
-      return
-    }
-    // Likewise for a received metric a surface just started reading.
+    // A surface just started reading a received metric: read it and
+    // evaluate again now rather than show it unknown until the next wake-up.
     if telemetry != nil, telemetryReadKeys != requiredTelemetryKeys {
       publishCurrentModel()
       return
@@ -986,20 +955,6 @@ final class FlashStatusBarController {
     if let monitorSink { DispatchQueue.main.async { monitorSink(snapshots) } }
   }
 
-  /// Read each required kernel value that is due: never read, or older than
-  /// its cadence. Only a running controller reads.
-  private func sampleHostValues(now: TimeInterval) {
-    guard schedule != nil else { return }
-    for (value, requirement) in requiredHostValues {
-      if let sample = hostSamples[value],
-        requirement.cadence == 0 || now < sample.at + requirement.cadence
-      {
-        continue
-      }
-      hostSamples[value] = (readHostValue(value), now)
-    }
-  }
-
   /// The surfaces that require anything right now, with the refresh interval
   /// each one's `#()` jobs run at. Occluded widgets and disabled monitors
   /// are absent.
@@ -1044,7 +999,6 @@ final class FlashStatusBarController {
     var processValues = Set<ProcessStatusValue>()
     var telemetryKeys = Set<String>()
     var calendar: PollScheduler.Priority?
-    var hostValues: [HostStatusValue: HostRequirement] = [:]
     var jobs: [String: StatusFormatJobRequest] = [:]
     var cadences: [String: TimeInterval] = [:]
     var foregroundJobs = Set<String>()
@@ -1060,12 +1014,6 @@ final class FlashStatusBarController {
       }
       let cadence = Self.cadence(active.interval)
       if active.foreground { foregroundSources.formUnion(surface.sources) }
-      for value in surface.hostValues {
-        let current = hostValues[value]
-        hostValues[value] = HostRequirement(
-          cadence: Self.fastest(current?.cadence, cadence),
-          priority: active.foreground || current?.priority == .normal ? .normal : .low)
-      }
       for job in surface.jobs {
         let key = Self.shellKey(job)
         if jobs[key] == nil { jobs[key] = job }
@@ -1077,9 +1025,6 @@ final class FlashStatusBarController {
     self.foregroundSources = foregroundSources
     self.foregroundJobs = foregroundJobs
     requiredPluginSegments = pluginSegments
-    // Reading the kernel is a running controller's, like sampling.
-    requiredHostValues = schedule == nil ? [:] : hostValues
-    hostSamples = hostSamples.filter { requiredHostValues[$0.key] != nil }
     // The store follows the metrics a running controller's surfaces read,
     // so only those wake it.
     if schedule == nil { telemetryKeys = [] }
@@ -1316,10 +1261,10 @@ final class FlashStatusBarController {
 
   /// These wake-ups are not a fixed cadence but the earliest of the user's
   /// declared per-source intervals, cycle rotations, the next boundary of the
-  /// finest time unit shown, kernel-value reads and pending output — so the
-  /// controller re-registers its next deadline on the shared clock each time
-  /// one lands, rather than owning a timer. It is armed only while a visible
-  /// surface or an enabled monitor requires something.
+  /// finest time unit shown and pending output — so the controller
+  /// re-registers its next deadline on the shared clock each time one lands,
+  /// rather than owning a timer. It is armed only while a visible surface or
+  /// an enabled monitor requires something.
   ///
   /// Each deadline carries the slack its kind tolerates. A clock boundary, a
   /// carousel rotation and the next change of a calendar value are the
@@ -1329,8 +1274,7 @@ final class FlashStatusBarController {
   /// output that already arrived are `.normal`: their output lands whenever
   /// the command finishes, so a tenth of a second is invisible, and the looser
   /// slack lets them coalesce with the rest of the app's wake-ups. What only
-  /// monitors require — their jobs, sources, kernel reads and calendar
-  /// values — is `.low`:
+  /// monitors require — their jobs, sources and calendar values — is `.low`:
   /// background upkeep nobody watches.
   private func armTimer() {
     scheduler.unregister(Self.pollClientID)
@@ -1354,13 +1298,6 @@ final class FlashStatusBarController {
       add([shellRecords[key]?.schedule.dueAt].compactMap { $0 }, priority)
       if shellRecords[key]?.value == nil, let started = shellRecords[key]?.schedule.startedAt {
         add([started + 2], priority)
-      }
-    }
-    // A kernel value is read again once its cadence has passed; 0 reads it
-    // once.
-    for (value, requirement) in requiredHostValues where requirement.cadence > 0 {
-      if let sample = hostSamples[value] {
-        add([sample.at + requirement.cadence], requirement.priority)
       }
     }
     add(

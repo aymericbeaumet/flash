@@ -62,7 +62,7 @@ settings. For live charts and per-process tables, run `btop` in a
 | Domain | Nominal fast path | Slower path | Command |
 | --- | --- | --- | --- |
 | `cpu` | CPU ticks every second (`host_processor_info`, in-process) | GPU utilization every 15 seconds (IOKit registry, in-process) | `:sysinfo cpu` |
-| `memory` | Memory composition every second (`host_statistics64` + `sysctl`, in-process) | — | `:sysinfo memory` |
+| `memory` | Memory composition and the kernel's available-memory level every second (`host_statistics64` + `sysctl`, in-process) | — | `:sysinfo memory` |
 | `disks` | I/O counters every three seconds (IOKit registry, in-process) | Mounted volumes re-read on `core:volumes.changed`; free space every 30 seconds (`getfsstat` + `statfs`, in-process) | `:sysinfo disks` |
 | `network` | Default-interface traffic every second while a traffic segment is shown (`NET_RT_IFLIST2` sysctl, in-process) | Interface, route (`NET_RT_DUMP2` sysctl, in-process), address, and SSID discovery at start and on `core:network.changed`; no poll | `:sysinfo network`; the `network.addresses` catalog |
 | `power` | Battery/power snapshot on `core:power.changed` (IOKit power-source notification; IOPowerSources, in-process); no poll | Health from the battery's IOKit registry entry during refreshes, with a 30-second TTL; an explicit refresh forces it | `:sysinfo power` |
@@ -102,8 +102,8 @@ collection:
 - CPU shows recent average/peak usage and load per logical CPU, with the
   1/5/15-minute load windows identified.
 - Memory shows free, wired and compressed bytes as shares of physical memory,
-  plus unused swap. Its used count includes cached and reclaimable pages; it
-  is not a memory-pressure measurement.
+  plus unused swap. Its used count includes cached and reclaimable pages; the
+  memory-pressure measurement is the `memory_pressure` segment.
 - Disks show read/write totals since device reset and each visible volume's
   used, total and free space. Volume names and mount paths occupy separate rows.
 - Network shows receive/send totals for the current default-route interface,
@@ -178,6 +178,7 @@ frame as the styled segments, so an unchanged frame stays off the wire.
 | `#{flash.plugin.sysinfo.cpu_uptime}` | Time since boot, sleep included, two units | `3d 4h` |
 | `#{flash.plugin.sysinfo.memory_percent}` | Used memory, integer 0–100 | `68` |
 | `#{flash.plugin.sysinfo.memory_history}` | Retained memory percentages, oldest first | `67 68 68` |
+| `#{flash.plugin.sysinfo.memory_pressure}` | Memory pressure, integer 0–100 | `34` |
 | `#{flash.plugin.sysinfo.disks_percent}` | Startup-volume usage, integer 0–100 | `57` |
 | `#{flash.plugin.sysinfo.disks_read_bps}`, `write_bps` | Aggregate disk rates, whole bytes/s | `1572864` |
 | `#{flash.plugin.sysinfo.disks_read}`, `write` | The same rates in binary units | `1.5 MiB/s` |
@@ -194,7 +195,12 @@ not zero: a desktop without a battery clears `power_percent`, and a rate
 before its second sample or after its stale window clears with its history,
 while an idle disk or link publishes `0`. `power_state` prefers the battery's
 own reading; `ac` covers a desktop and a battery held on the adapter without
-charging. `network_address` follows discovery (at start and on each
+charging. `memory_pressure` is the share of memory the kernel does not count
+as available, `100 − kern.memorystatus_level`: one `sysctl` read with each
+memory sample, cleared when the kernel reports no level within 0–100. It is
+what the built-in `memory` [monitor](monitors.md#built-in-monitors) watches;
+`memory_percent` counts file cache as used and sits near 100 on a healthy
+Mac. `network_address` follows discovery (at start and on each
 `core:network.changed`) and stays empty for an IPv6-only default route.
 `cpu_uptime` is one `CLOCK_MONOTONIC` read per CPU sample through the `nix`
 crate, which the network domain already uses for `getifaddrs`; Darwin derives

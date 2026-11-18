@@ -399,6 +399,9 @@ monitors read that no plugin publishes any more, with its replacement.
   Launchpad, Notification Center and Control Center.
 - `[monitors]` run commands and react to host events; `flash status set`
   pushes status values from scripts.
+- `#{flash.plugin.sysinfo.memory_pressure}` is memory pressure 0–100, the
+  share of memory the kernel does not count as available; the built-in
+  `memory` monitor watches it ([monitors](docs/monitors.md#built-in-monitors)).
 - A versioned IPC socket with JSON Schemas for every message: `flash
   events watch` streams host events as NDJSON (mode changes, focus, config
   reloads, hint sessions, monitor triggers, workspaces), `flash --json`

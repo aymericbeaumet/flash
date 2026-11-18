@@ -198,11 +198,42 @@ final class MonitorTests: XCTestCase {
     let config = ConfigLoader.parse(
       """
       [monitors.mine]
-      value = "#{flash.memory_pressure} #{flash.plugin.spawn_ms}"
+      value = "#{flash.plugin.error_count} #{flash.plugin.spawn_ms}"
       detail = "#{flash.plugin.errors} #{flash.plugin.spawn_id}"
       warning = 1
       """)
     XCTAssertEqual(messages(config), [])
+  }
+
+  /// Memory pressure is the `sysinfo` plugin's segment; core has no value
+  /// of that name.
+  func testMemoryPressureIsAPluginValueNotACoreOne() {
+    let config = ConfigLoader.parse(
+      """
+      [monitors.mine]
+      value = "#{flash.memory_pressure}"
+      warning = 1
+      """)
+    XCTAssertEqual(
+      messages(config), ["monitors.mine.value has unknown Flash value flash.memory_pressure"])
+    XCTAssertEqual(
+      Config.defaultMonitors["memory"]?.value, "#{flash.plugin.sysinfo.memory_pressure}%%")
+  }
+
+  /// A built-in monitor that read a segment its plugin does not declare
+  /// would stay unknown and never alert.
+  func testTheBuiltInMonitorsReadOnlySegmentsTheBundledPluginsDeclare() throws {
+    let declared = Dictionary(
+      uniqueKeysWithValues: try SourceCommandFallbackTests.officialManifests().map {
+        ($0.id, Set($0.status))
+      })
+    let read = ConfigLoader.parse("").observedStatusSegments()
+    XCTAssertEqual(
+      read, ["sysinfo": ["disks_percent", "memory_pressure", "power_percent", "power_state"]])
+    for (plugin, names) in read {
+      let missing = names.subtracting(declared[plugin] ?? [])
+      XCTAssertEqual(missing, [], "\(plugin) declares what the built-in monitors read")
+    }
   }
 
   func testTheBuiltInPluginMonitorsNameThePluginsTheyCount() {
@@ -231,12 +262,16 @@ final class MonitorTests: XCTestCase {
     let observed = config.observedStatusSegments()
     XCTAssertEqual(Set(observed.keys), ["sysinfo"])
     XCTAssertEqual(
-      observed["sysinfo"], ["cpu_percent", "cpu_label", "cpu_top", "disks_percent"],
-      "the custom monitor's cpu segments beside the built-in disk monitor's")
+      observed["sysinfo"],
+      ["cpu_percent", "cpu_label", "cpu_top", "disks_percent", "memory_pressure"],
+      "the custom monitor's cpu segments beside the built-in disk and memory monitors'")
     XCTAssertFalse(
       observed["sysinfo"]?.contains("power_percent") ?? false,
       "a disabled monitor observes nothing")
     config.monitors["mine"]?.enabled = false
+    XCTAssertEqual(
+      config.observedStatusSegments()["sysinfo"], ["disks_percent", "memory_pressure"])
+    config.monitors["memory"]?.enabled = false
     XCTAssertEqual(config.observedStatusSegments()["sysinfo"], ["disks_percent"])
   }
 
@@ -260,8 +295,6 @@ final class MonitorTests: XCTestCase {
     var now: TimeInterval = 100
     var wall = Date(timeIntervalSince1970: 1_800_000_020)
     var plugins: [PluginStatusBarInfo] = []
-    var memoryPressure: String? = "40"
-    var hostReads = 0
     var tasks: [Task] = []
     var controller: FlashStatusBarController!
     /// What the sinks handed to main, in order.
@@ -286,12 +319,7 @@ final class MonitorTests: XCTestCase {
         // A hop can land after the test that queued it ended.
         monitorAlertSink: { [weak self] in self?.alerts.append($0) },
         monitorFireSink: { [weak self] in self?.fires.append($0) },
-        monitorNotifySink: { [weak self] name, alert in self?.notified.append((name, alert)) },
-        readHostValue: { [unowned self] value in
-          XCTAssertEqual(value, .memoryPressure)
-          hostReads += 1
-          return memoryPressure
-        })
+        monitorNotifySink: { [weak self] name, alert in self?.notified.append((name, alert)) })
       if bar == nil { controller.setBar(enabled: false) }
       controller.updateMonitors(monitors)
       controller.start()
@@ -631,31 +659,28 @@ final class MonitorTests: XCTestCase {
     XCTAssertNil(harness.nextWakeup)
   }
 
-  func testAKernelValueIsReadAtTheMonitorIntervalAndNeverTicksTheClock() {
-    let spec = StatusMonitorSpec(
-      value: .init(template: "#{flash.memory_pressure}%%"),
-      message: .init(template: "Memory %H:%M"), warning: 85, error: 95, intervalSeconds: 60)
+  /// The built-in memory monitor reads the `sysinfo` plugin's pressure: the
+  /// plugin's publish is its only wake-up, and a cleared segment (a level
+  /// the kernel did not give) is unknown, never zero.
+  func testTheBuiltInMemoryMonitorFollowsThePluginsPressureAndNeverTicksTheClock() throws {
+    var spec = try XCTUnwrap(Config.defaultMonitors["memory"]).spec(name: "memory")
+    XCTAssertEqual(spec.value.template, "#{flash.plugin.sysinfo.memory_pressure}%%")
+    spec.message = .init(template: "Memory %H:%M")
     let harness = Harness(monitors: ["memory": spec])
     defer { harness.controller.stop() }
-    XCTAssertEqual(harness.hostReads, 1, "read as soon as a monitor reads it")
+    XCTAssertEqual(harness.snapshot("memory")?.level, .unknown, "nothing published yet")
+    XCTAssertNil(harness.nextWakeup, "neither the interval nor the message's minute")
+    harness.publish(["memory_pressure": "40"])
     XCTAssertEqual(harness.snapshot("memory")?.value, 40)
-    XCTAssertEqual(harness.nextWakeup, 160, "the interval, not the message's minute")
-    harness.queue.sync {
-      harness.now = 130
-      harness.memoryPressure = "90"
-    }
-    harness.publish([:])
-    XCTAssertEqual(harness.hostReads, 1, "a publish before the interval reads nothing")
-    harness.queue.sync { harness.now = 160 }
-    harness.tick()
-    XCTAssertEqual(harness.hostReads, 2)
+    XCTAssertEqual(harness.snapshot("memory")?.level, .ok)
+    harness.publish(["memory_pressure": "90"])
     XCTAssertEqual(harness.snapshot("memory")?.level, .warning)
-    XCTAssertEqual(harness.nextWakeup, 220)
-    // Removing the monitor stops the reads.
-    harness.controller.updateMonitors([:])
-    harness.drain()
+    harness.publish(["memory_pressure": "96"])
+    XCTAssertEqual(harness.snapshot("memory")?.level, .error)
+    harness.publish(["memory_pressure": ""])
+    XCTAssertEqual(harness.snapshot("memory")?.level, .unknown)
+    XCTAssertNil(harness.snapshot("memory")?.value)
     XCTAssertNil(harness.nextWakeup)
-    XCTAssertEqual(harness.snapshots, [])
   }
 
   func testAMonitorRunsTheSourcesAndJobsItReads() {

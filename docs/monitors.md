@@ -76,7 +76,7 @@ metric without one.
 | `direction` | `"above"` | `"above"` when a high value is bad (usage), `"below"` when a low one is (charge). |
 | `message` | `""` | The alert's title, a status format. Empty derives one from the name and the threshold crossed: `Battery below 20`. |
 | `detail` | `""` | What is failing, a status format the alert shows under the title in place of the value: the plugins a count counts. Empty, or empty once expanded, shows the value. |
-| `interval` | `60` | Seconds between reads of the `#()` jobs and kernel values the monitor shows, 1–86400. |
+| `interval` | `60` | Seconds between reads of the `#()` jobs the monitor shows, 1–86400. |
 | `enabled` | `true` | `false` turns the monitor off; it stays listed on the page. |
 | `run` | — | What to call when the monitor fires: one command, `["flash", "<topic>", "<action>", …]` or an executable with its arguments, as a [mapping](mappings.md) takes, or a list of them run in order, `[["bonsai", "clean", "--all", "--force"], ["mo", "clean"]]`. `false` removes one an earlier layer set. See [running commands](#running-commands). |
 | `timeout` | `600` | Seconds the whole run may take, every step included, 1–86400. |
@@ -335,14 +335,15 @@ Two tools need their unattended flags:
 | --- | --- | --- | --- |
 | `battery` | `#{?#{==:#{flash.plugin.sysinfo.power_state},discharging},#{flash.plugin.sysinfo.power_percent}%%,}` | below 20, 10 | The `sysinfo` plugin's battery charge while the Mac runs on its battery; unknown while it charges, is full or sits on the adapter, and on a Mac without a battery, so a low charge never warns once plugged in |
 | `disk` | `#{flash.plugin.sysinfo.disks_percent}%%` | above 90, 97 | The `sysinfo` plugin's startup-volume usage |
-| `memory` | `#{flash.memory_pressure}%%` | above 85, 95 | Memory pressure, read from the kernel once per interval |
+| `memory` | `#{flash.plugin.sysinfo.memory_pressure}%%` | above 85, 95 | The `sysinfo` plugin's memory pressure |
 | `plugin_errors` | `#{flash.plugin.error_count}` | warning at 1 | Plugins whose last launch, exit or handshake failed, crash loops included; the alert names them (`flash.plugin.errors`) |
 | `plugin_spawn` | `#{flash.plugin.spawn_ms} ms` | above 1000, 5000 | How long the latest plugin launch took to spawn its process; the alert names the plugin (`flash.plugin.spawn_id`) |
 
-`flash.memory_pressure` is the share of memory the kernel does not count as
-available, 0–100: `100 − kern.memorystatus_level`, the free percentage
-`memory_pressure` prints. It is not the `sysinfo` plugin's `memory_percent`,
-which counts file cache as used and sits near 100 on a healthy Mac.
+`flash.plugin.sysinfo.memory_pressure` is the share of memory the kernel does
+not count as available, 0–100: `100 − kern.memorystatus_level`, the free
+percentage `memory_pressure` prints. The `sysinfo` plugin reads it on its
+memory sample. It is not the plugin's `memory_percent`, which counts file
+cache as used and sits near 100 on a healthy Mac.
 
 `flash.plugin.errors` lists the plugins `flash.plugin.error_count` counts,
 sorted and comma-separated (`media, tmux`), and is empty when none fails.
@@ -422,10 +423,10 @@ shown by the bar and read by a monitor runs once.
 - The plugin segments an enabled monitor reads count as observed, so their
   plugins run and publish them (`core:status.observed`) as they would for a
   visible bar. The built-ins keep the `sysinfo` plugin's battery figures
-  (event-driven) and disk figures (a three-second I/O sample) sampled.
+  (event-driven), disk figures (a three-second I/O sample) and memory figures
+  (a one-second sample) sampled.
 - Its `#()` jobs re-run every `interval`; a named source keeps its own
-  interval. Kernel values such as `flash.memory_pressure` are read once per
-  `interval`, one `sysctl` each.
+  interval.
 - What only monitors require wakes at `low` priority, the slack of background
   upkeep; nothing a monitor reads ticks the clock, so `%H:%M` in a message is
   read when the monitor is evaluated, not every minute.

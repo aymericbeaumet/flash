@@ -388,27 +388,3 @@ enum MonitorText {
     return StatusFormatGauge.numbers(in: text, limit: 1).first
   }
 }
-
-/// Core values read from the kernel by the status controller on the
-/// cadence of the surfaces showing them, never on a timer of their own.
-enum HostStatusValue: String, CaseIterable, Hashable, Comparable {
-  /// Memory pressure 0–100: the share of memory the kernel does not count
-  /// as available (`100 - kern.memorystatus_level`, as `memory_pressure`
-  /// prints its free percentage).
-  case memoryPressure = "flash.memory_pressure"
-
-  static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
-
-  /// The value now; nil when the kernel does not answer. One sysctl.
-  func read() -> String? {
-    switch self {
-    case .memoryPressure:
-      var level: Int32 = 0
-      var size = MemoryLayout<Int32>.size
-      guard sysctlbyname("kern.memorystatus_level", &level, &size, nil, 0) == 0,
-        (0...100).contains(level)
-      else { return nil }
-      return String(100 - level)
-    }
-  }
-}

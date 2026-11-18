@@ -121,8 +121,8 @@ Flash supplies `flash.mode`, `flash.date`, `flash.focused_app_name`,
 the [tiling](tiling.md#the-bar-and-plugins) `flash.workspace` and
 `flash.workspaces`, the
 [process values](#process-values) `flash.top_cpu`, `flash.top_mem` and
-`flash.focused_app_details`, `flash.memory_pressure`, the three-month
-`flash.calendar` and the [next meeting](calendar.md#next-meeting)
+`flash.focused_app_details`, the three-month `flash.calendar` and the
+[next meeting](calendar.md#next-meeting)
 `flash.calendar.next` with its parts `next_title`, `next_in`, `next_minutes`,
 `next_start`, `next_end`, `next_ongoing` and `next_link`
 (`flash.calendar.next_minutes`, …),
@@ -145,15 +145,11 @@ keyboard tap reads it for a key, when a hint session starts, and by the
 secure-input poll. A stuck hold is released automatically; the value stays
 `1` until macOS clears the flag.
 
-`flash.memory_pressure` is the share of memory the kernel does not count as
-available, an integer 0–100 (`100 − kern.memorystatus_level`). It is read
-with one `sysctl` only while a surface or a [monitor](monitors.md) shows it,
-on that surface's interval (`[statusbar] interval`, a widget's or a
-monitor's `interval`). `flash.plugin.spawn_ms` is how long the most recent
-plugin launch took to spawn its process, in whole milliseconds, and
-`flash.plugin.spawn_id` the plugin it started; both are empty until a plugin
-has started. `flash.plugin.errors` names the plugins `flash.plugin.error_count`
-counts, sorted and comma-separated.
+`flash.plugin.spawn_ms` is how long the most recent plugin launch took to
+spawn its process, in whole milliseconds, and `flash.plugin.spawn_id` the
+plugin it started; both are empty until a plugin has started.
+`flash.plugin.errors` names the plugins `flash.plugin.error_count` counts,
+sorted and comma-separated.
 
 `flash.caffeinate` is `on` while `caffeinate on` (or `caffeinate toggle`)
 keeps the Mac awake and empty otherwise:

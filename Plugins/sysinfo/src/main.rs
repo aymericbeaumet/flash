@@ -141,7 +141,7 @@ mod tests {
             .collect();
         let published = published_segments();
         assert_eq!(declared, published);
-        assert_eq!(published.len(), 33);
+        assert_eq!(published.len(), 34);
         for (prefix, names) in [
             (cpu::PREFIX, &cpu::SEGMENTS[..]),
             (memory::PREFIX, &memory::SEGMENTS[..]),
@@ -284,6 +284,14 @@ mod tests {
 
         plugin
             .on_event(ctx.clone(), observed(&["memory_history"]))
+            .await;
+        assert_eq!(cadences(&mut harness), [(1.0, "high".to_string())]);
+
+        // A monitor reading the pressure alone keeps the memory sample.
+        plugin.on_event(ctx.clone(), observed(&[])).await;
+        harness.drain();
+        plugin
+            .on_event(ctx.clone(), observed(&["memory_pressure"]))
             .await;
         assert_eq!(cadences(&mut harness), [(1.0, "high".to_string())]);
 

@@ -70,7 +70,7 @@ it measures far more than Flash does.
 | --- | --- |
 | CPU item with a graph | `#{p-3:flash.plugin.sysinfo.cpu_label}` and `#[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]` |
 | Memory item | `#{flash.plugin.sysinfo.memory_percent}`; it counts cached pages and is not pressure |
-| Memory pressure | `#{flash.memory_pressure}`, watched by the built-in `memory` monitor |
+| Memory pressure | `#{flash.plugin.sysinfo.memory_pressure}`, watched by the built-in `memory` monitor |
 | Disk space, activity | `#{flash.plugin.sysinfo.disks_percent}`, `#{flash.plugin.sysinfo.disks_read}` and `write` |
 | Network item | `#{flash.plugin.sysinfo.network_label}`, `down_bps`, `up_bps` |
 | Per-app bandwidth | Apple's `nettop` in a terminal popup |

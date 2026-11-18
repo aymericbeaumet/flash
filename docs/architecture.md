@@ -48,7 +48,7 @@ The rest starts with the process, whatever the configuration says:
 | Clipboard, network, volume and power monitors | A bundled manifest listens for them | A 500 ms pasteboard poll, one SCDynamicStore session, notification observers |
 | `ApplicationSource`, frecency and command history | Flashlight catalogs and ranking | An installed-apps scan with kqueue watchers, two files read on main |
 | `AppleCatalogs` (Notes, Reminders, Contacts) | A scoped query reads the last good rows from memory, never the app | One listing per running app Flash may already read, at launch and on that app's launch, its loss of focus and a flashlight open once a minute; nothing before access is granted |
-| Built-in monitors (`battery`, `disk`, `memory`, `plugin_errors`, `plugin_spawn`) | A full disk, a low battery or a crash-looping plugin should alert without configuration | The status controller; the `sysinfo` plugin's power domain (event-driven) and disks domain (a 3 s I/O sample) the battery and disk monitors observe; one `sysctl` a minute for memory pressure. `enabled = false` drops each |
+| Built-in monitors (`battery`, `disk`, `memory`, `plugin_errors`, `plugin_spawn`) | A full disk, a low battery or a crash-looping plugin should alert without configuration | The status controller; the `sysinfo` plugin's power domain (event-driven), disks domain (a 3 s I/O sample) and memory domain (a 1 s sample) the battery, disk and memory monitors observe. `enabled = false` drops each |
 
 Making the resident plugins and the window catalog configuration-driven (spawn
 a catalog plugin on the first flashlight open from its persisted catalog, a
@@ -355,7 +355,7 @@ release build.
 | --- | --- | --- | --- |
 | Status controller · `core:status_bar` | Next clock boundary or carousel rotation | high | The change on screen is the deadline |
 | Status controller · `core:status_bar` | Job or source re-run, placeholder, throttled publish | normal | Output lands when the command ends; tightened to high when a clock deadline falls inside its slack |
-| Status controller · `core:status_bar` | A job or source only monitors read; a kernel value (`flash.memory_pressure`) on the reading surfaces' interval | low (normal when the bar or a widget reads it) | Nobody watches a monitor's value land; a monitor never ticks the clock |
+| Status controller · `core:status_bar` | A job or source only monitors read | low | Nobody watches a monitor's value land; a monitor never ticks the clock |
 | Status controller · `core:status_bar` | The next change of a `#{flash.calendar.next…}` value: the countdown's next minute, an event starting, ending or leaving its first ten minutes | high (low when only monitors read one) | The change on screen is the deadline; a monitor's alert tolerates a second |
 | Calendar · `core:calendar_changed` | 500 ms after `EKEventStoreChanged`, while a value is read | normal | A sync posts bursts of changes; one read follows |
 | Calendar · `core:calendar_horizon` | One look-ahead after a read (5 min after a failed one), while a value is read | low | The look-ahead moving on brings in events hours away |
@@ -394,8 +394,8 @@ release build.
 Registrations are also scoped to when they can observe anything at all: the
 process samplers only while the bar, one of its text popups, a visible
 widget or a monitor reads a [process value](status-format.md#process-values),
-kernel values only while a surface or a monitor reads them, a received
-metric's quiet deadline only while a surface or a monitor reads that metric,
+a received metric's quiet deadline only while a surface or a monitor reads
+that metric,
 the telemetry export flush only while something new is queued, and the
 menu-bar reveal probe only while the pointer is in the band. Secure
 input is the exception that stays registered: the tap receives nothing while

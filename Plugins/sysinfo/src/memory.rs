@@ -18,12 +18,13 @@ use crate::sys;
 /// The `core:status.observed` prefix of this domain's segments.
 pub(crate) const PREFIX: &str = "memory_";
 /// The published segments, in manifest order.
-pub(crate) const SEGMENTS: [&str; 5] = [
+pub(crate) const SEGMENTS: [&str; 6] = [
     "memory_summary",
     "memory_label",
     "memory_details",
     "memory_percent",
     "memory_history",
+    "memory_pressure",
 ];
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -38,6 +39,9 @@ struct MemorySnapshot {
     swap_total: u64,
     swap_used: u64,
     page_size: u64,
+    /// Memory pressure 0–100; `None` when the kernel's level is unread or
+    /// out of range.
+    pressure: Option<u8>,
 }
 
 impl MemorySnapshot {
@@ -49,7 +53,8 @@ impl MemorySnapshot {
 /// The published segments: `label` is the bare bar text, `summary` names the
 /// figure, and the preview backs both `summary` and `details`. `percent` and
 /// `history` carry the same figures as plain integers for templates and
-/// widgets that scale or chart them themselves.
+/// widgets that scale or chart them themselves; `pressure` is the kernel's
+/// own figure, for a monitor's threshold.
 #[derive(Debug, PartialEq, Eq)]
 struct Status {
     label: Markup,
@@ -60,11 +65,14 @@ struct Status {
     /// The retained samples as space-separated integers, oldest first; empty
     /// clears the segment.
     history: String,
+    /// Memory pressure as an integer 0–100; empty, which clears the segment,
+    /// when the kernel gave no usable level.
+    pressure: String,
 }
 
 impl Status {
-    fn segments(&self) -> [(&'static str, StatusValue); 5] {
-        let [summary, label, details, percent, history] = SEGMENTS;
+    fn segments(&self) -> [(&'static str, StatusValue); 6] {
+        let [summary, label, details, percent, history, pressure] = SEGMENTS;
         [
             (
                 summary,
@@ -74,6 +82,7 @@ impl Status {
             (details, StatusValue::text(self.preview.render())),
             (percent, plain(&self.percent)),
             (history, plain(&self.history)),
+            (pressure, plain(&self.pressure)),
         ]
     }
 }
@@ -239,7 +248,18 @@ fn snapshot_from(stats: sys::MemoryStats) -> Option<MemorySnapshot> {
         swap_total,
         swap_used,
         page_size,
+        pressure: stats.pressure_level.and_then(pressure_from),
     })
+}
+
+/// Memory pressure 0–100: the share of memory the kernel does not count as
+/// available (`100 - kern.memorystatus_level`, as `memory_pressure` prints
+/// its free percentage). A level outside 0–100 is refused.
+fn pressure_from(level: i32) -> Option<u8> {
+    u8::try_from(level)
+        .ok()
+        .filter(|level| *level <= 100)
+        .map(|level| 100 - level)
 }
 
 fn render_status(snapshot: &MemorySnapshot, history: &History<HISTORY_SAMPLES>) -> Status {
@@ -283,6 +303,10 @@ fn render_status(snapshot: &MemorySnapshot, history: &History<HISTORY_SAMPLES>) 
         preview,
         percent: whole_percent(percent).to_string(),
         history: percent_series(history),
+        pressure: snapshot
+            .pressure
+            .map(|pressure| pressure.to_string())
+            .unwrap_or_default(),
     }
 }
 
@@ -310,6 +334,7 @@ mod tests {
             swap_total: 0,
             swap_used: 0,
             page_size: 4096,
+            pressure: None,
         }
     }
 
@@ -331,6 +356,7 @@ mod tests {
             swap_total: 4 * GIB,
             swap_used: GIB,
             page_size: 16_384,
+            pressure: None,
         };
         let details = render_status(&snapshot, &history(&[]))
             .preview
@@ -387,6 +413,7 @@ mod tests {
             compressor_pages: compressor,
             swap_total_bytes: 2_147_483_648,
             swap_used_bytes: 537_395_200,
+            pressure_level: Some(60),
         }
     }
 
@@ -401,6 +428,33 @@ mod tests {
         assert_eq!(snapshot.swap_total, 2_147_483_648);
         assert_eq!(snapshot.swap_used, 537_395_200);
         assert_eq!(snapshot.occupied, snapshot.total - snapshot.free);
+        assert_eq!(snapshot.pressure, Some(40));
+    }
+
+    #[test]
+    fn pressure_is_the_share_the_kernel_does_not_count_as_available() {
+        for (level, expected) in [(100, 0), (60, 40), (15, 85), (0, 100)] {
+            assert_eq!(pressure_from(level), Some(expected), "{level}");
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_or_unread_level_publishes_no_pressure() {
+        for level in [-1, 101, i32::MIN, i32::MAX] {
+            assert_eq!(pressure_from(level), None, "{level}");
+        }
+        for level in [None, Some(-1), Some(101)] {
+            let mut unreadable = stats(100, 20, 300, 50);
+            unreadable.pressure_level = level;
+            let snapshot = snapshot_from(unreadable).expect("the counters still render");
+            assert_eq!(snapshot.pressure, None, "{level:?}");
+            let segments = wire(&render_status(&snapshot, &History::new()));
+            assert_eq!(
+                segments["memory_pressure"], "",
+                "an unread pressure clears its segment"
+            );
+            assert_ne!(segments["memory_percent"], "");
+        }
     }
 
     #[test]
@@ -435,6 +489,7 @@ mod tests {
             swap_total: 4 * GIB,
             swap_used: GIB,
             page_size: 16_384,
+            pressure: None,
         };
         let history = history(&[50.0, 75.0]);
         let rendered = render_status(&snapshot, &history);
@@ -491,6 +546,14 @@ History       ··················▅▆"
         assert!(published.update(same).is_none());
         let changed = render_status(&snapshot(100, 51), &history);
         assert!(published.update(changed).is_some());
+        let mut pressed = snapshot(100, 51);
+        pressed.pressure = Some(90);
+        assert!(
+            published
+                .update(render_status(&pressed, &history))
+                .is_some(),
+            "a pressure change alone is published"
+        );
     }
 
     fn wire(status: &Status) -> std::collections::BTreeMap<&'static str, String> {
@@ -509,6 +572,19 @@ History       ··················▅▆"
         assert_eq!(segments["memory_history"], "50 63 75");
         assert!(!segments["memory_percent"].contains("#["));
         assert!(!segments["memory_history"].contains("#["));
+        assert_eq!(
+            segments["memory_pressure"], "",
+            "no pressure without a kernel level"
+        );
+
+        let mut pressed = snapshot(16 * GIB, 12 * GIB);
+        pressed.pressure = Some(87);
+        let segments = wire(&render_status(&pressed, &History::new()));
+        assert_eq!(segments["memory_pressure"], "87");
+        assert_eq!(
+            segments["memory_percent"], "75",
+            "used memory is not pressure"
+        );
 
         let empty = wire(&render_status(&snapshot(100, 0), &History::new()));
         assert_eq!(empty["memory_percent"], "0");
@@ -549,6 +625,8 @@ History       ··················▅▆"
         let frames = harness.drain_status();
         assert_eq!(frames.len(), 1, "{frames:?}");
         assert!(frames[0]["memory_label"].ends_with('%'), "{frames:?}");
+        let pressure: u8 = frames[0]["memory_pressure"].parse().expect("an integer");
+        assert!(pressure <= 100, "{frames:?}");
         assert!(memory.summary().is_some());
     }
 }

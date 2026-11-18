@@ -432,10 +432,10 @@ link_schemes = []
 # empty.
 # Flash supplies flash.mode, flash.date, flash.caffeinate,
 # flash.focused_app_name, flash.focused_app_bundle_id, flash.top_cpu,
-# flash.top_mem, flash.focused_app_details, flash.memory_pressure,
-# flash.calendar (a three-month calendar), flash.calendar.next ("Standup in
-# 12m", see [calendar]) and its next_title/next_in/next_minutes/next_start/
-# next_end/next_ongoing/next_link parts,
+# flash.top_mem, flash.focused_app_details, flash.calendar (a three-month
+# calendar), flash.calendar.next ("Standup in 12m", see [calendar]) and its
+# next_title/next_in/next_minutes/next_start/next_end/next_ongoing/next_link
+# parts,
 # flash.plugin.<id>.<segment>, flash.plugin.loaded_count/ready_count/error_count,
 # flash.plugin.spawn_ms, flash.source.<name>, and flash.history.<name> for a
 # source that keeps a history.
@@ -641,8 +641,8 @@ cwd = "~"
 #   direction  "above" (default: usage) or "below" (charge): which side is bad.
 #   message    the alert's title, a status format; "" derives "<Name> above
 #              <threshold>".
-#   interval   seconds between reads of the #(...) jobs and kernel values it
-#              shows (default 60). Plugin values arrive as they change.
+#   interval   seconds between reads of the #(...) jobs it shows (default
+#              60). Plugin values arrive as they change.
 #   enabled    false turns a monitor off; it stays listed on the page.
 #   run        a command called when it fires — ["flash", "<topic>",
 #              "<action>", ...] or an executable — on a rise, or, without
@@ -718,11 +718,11 @@ error = 97
 message = "Startup disk almost full"
 interval = 60
 
-# Memory pressure: the share of memory the kernel does not count as
-# available, read once per interval.
+# Memory pressure, from the sysinfo plugin: the share of memory the kernel
+# does not count as available.
 [monitors.memory]
 enabled = true
-value = "#{flash.memory_pressure}%%"
+value = "#{flash.plugin.sysinfo.memory_pressure}%%"
 direction = "above"
 warning = 85
 error = 95

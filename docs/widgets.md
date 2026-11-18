@@ -148,6 +148,7 @@ Everything the bar can show is available. These values suit widgets:
 | `#{flash.plugin.sysinfo.cpu_load}` | One-minute load average, `3.47`. |
 | `#{flash.plugin.sysinfo.cpu_uptime}` | Time since boot, sleep included, `3d 4h`. |
 | `#{flash.plugin.sysinfo.memory_percent}`, `history` | Used memory 0–100, and its last 20 samples. |
+| `#{flash.plugin.sysinfo.memory_pressure}` | Memory pressure 0–100: the share of memory the kernel does not count as available. |
 | `#{flash.plugin.sysinfo.disks_percent}` | Startup-volume usage 0–100. |
 | `#{flash.plugin.sysinfo.disks_read_bps}`, `write_bps` | Disk rates in whole bytes per second. |
 | `#{flash.plugin.sysinfo.disks_read}`, `write` | The same rates in binary units, `1.5 MiB/s`. |
@@ -155,7 +156,6 @@ Everything the bar can show is available. These values suit widgets:
 | `#{flash.plugin.sysinfo.network_down_history}`, `up_history` | Their last 20 samples. |
 | `#{flash.plugin.sysinfo.network_address}` | First IPv4 address of the default-route interface. |
 | `#{flash.plugin.sysinfo.power_percent}` | Battery charge 0–100; empty without a battery. |
-| `#{flash.memory_pressure}` | Memory pressure 0–100, read from the kernel on the widget's `interval`. |
 | `#{flash.plugin.sysinfo.power_state}` | `charging`, `discharging`, `charged` or `ac`. |
 | `#{flash.plugin.terminals.session}`, `window`, `pane` | The attached local tmux client's session, window and pane; empty without one. |
 | `#{flash.calendar}` | The 75-column [calendar](calendar.md): three months, the day's progress, time zone, DST and moon. |

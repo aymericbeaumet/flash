@@ -1,6 +1,6 @@
 //! Memory composition: the page counts `vm_stat` prints
-//! (`host_statistics64`), with the installed memory and swap usage `sysctl`
-//! reports.
+//! (`host_statistics64`), with the installed memory, swap usage and
+//! available-memory level `sysctl` reports.
 
 use std::mem;
 
@@ -8,7 +8,8 @@ use super::SysError;
 use super::sysctl::sysctl_value;
 
 /// Physical memory composition in pages plus swap in bytes
-/// (`host_statistics64` + `hw.memsize` + `vm.swapusage`).
+/// (`host_statistics64` + `hw.memsize` + `vm.swapusage`), with the kernel's
+/// available-memory level (`kern.memorystatus_level`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MemoryStats {
     pub(crate) total_bytes: u64,
@@ -19,6 +20,10 @@ pub(crate) struct MemoryStats {
     pub(crate) compressor_pages: u64,
     pub(crate) swap_total_bytes: u64,
     pub(crate) swap_used_bytes: u64,
+    /// The percentage of memory the kernel counts as available, as read;
+    /// `None` when the sysctl does not answer. The composition stands
+    /// without it.
+    pub(crate) pressure_level: Option<i32>,
 }
 
 /// Current memory statistics.
@@ -48,6 +53,7 @@ pub(crate) fn memory_stats() -> Result<MemoryStats, SysError> {
     }
     let total_bytes: u64 = sysctl_value("hw.memsize")?;
     let swap: libc::xsw_usage = sysctl_value("vm.swapusage")?;
+    let pressure_level = sysctl_value::<i32>("kern.memorystatus_level").ok();
     Ok(MemoryStats {
         total_bytes,
         page_size: page_size as u64,
@@ -57,6 +63,7 @@ pub(crate) fn memory_stats() -> Result<MemoryStats, SysError> {
         compressor_pages: u64::from(stats.compressor_page_count),
         swap_total_bytes: swap.xsu_total,
         swap_used_bytes: swap.xsu_used,
+        pressure_level,
     })
 }
 
@@ -71,5 +78,7 @@ mod tests {
         assert!(stats.page_size >= 4096);
         assert!(stats.wired_pages * stats.page_size <= stats.total_bytes);
         assert!(stats.swap_used_bytes <= stats.swap_total_bytes);
+        let level = stats.pressure_level.expect("kern.memorystatus_level");
+        assert!((0..=100).contains(&level), "{level}");
     }
 }

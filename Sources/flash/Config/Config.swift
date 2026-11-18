@@ -1029,8 +1029,8 @@ struct Config {
   }
 
   /// The built-in monitors, mirrored by `config.default.toml`. Each reads a
-  /// value Flash already has: an event-driven plugin segment or a core value
-  /// sampled only at the monitor's interval.
+  /// value Flash already has: a `sysinfo` plugin segment or a core
+  /// plugin-health value.
   static let defaultMonitors: [String: Monitor] = [
     // The charge only while the Mac runs on its battery: charging, full or on
     // the adapter, the value is empty and nothing alerts.
@@ -1043,8 +1043,8 @@ struct Config {
       value: "#{flash.plugin.sysinfo.disks_percent}%%", message: "Startup disk almost full",
       warning: 90, error: 97),
     "memory": Monitor(
-      value: "#{flash.memory_pressure}%%", message: "Memory pressure high", warning: 85,
-      error: 95),
+      value: "#{flash.plugin.sysinfo.memory_pressure}%%", message: "Memory pressure high",
+      warning: 85, error: 95),
     "plugin_errors": Monitor(
       value: "#{flash.plugin.error_count}", message: "Failing plugins",
       detail: "#{flash.plugin.errors}", warning: 1),

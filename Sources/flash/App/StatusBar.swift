@@ -139,9 +139,6 @@ enum FlashStatusBarSDKValue: Equatable {
   /// `flash.top_cpu`, `flash.top_mem`, `flash.focused_app_details`: sampled
   /// by `ProcessStatusSampler` only while a surface shows them.
   case process(ProcessStatusValue)
-  /// `flash.memory_pressure`: read from the kernel by the status controller
-  /// on the cadence of the surfaces showing it.
-  case hostValue(HostStatusValue)
   case host
   case hostShort
   case user
@@ -754,7 +751,6 @@ enum FlashStatusBarTemplateEngine {
 
   static func sdkValue(for token: String) -> FlashStatusBarSDKValue? {
     if let value = ProcessStatusValue(rawValue: token) { return .process(value) }
-    if let value = HostStatusValue(rawValue: token) { return .hostValue(value) }
     switch token {
     case "flash.mode": return .modeLabel
     case "flash.secure_input": return .secureInput

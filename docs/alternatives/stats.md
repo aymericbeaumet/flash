@@ -65,7 +65,7 @@ most-starred open-source answer to iStat Menus.
 | --- | --- |
 | CPU module, line chart | `#{p-3:flash.plugin.sysinfo.cpu_label}`, `#[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]` |
 | RAM module | `#{flash.plugin.sysinfo.memory_percent}`; used memory, not pressure |
-| Memory pressure notification | The built-in `memory` monitor, over `#{flash.memory_pressure}` |
+| Memory pressure notification | The built-in `memory` monitor, over `#{flash.plugin.sysinfo.memory_pressure}` |
 | Disk module | `#{flash.plugin.sysinfo.disks_percent}`, `#{flash.plugin.sysinfo.disks_read}` and `write` |
 | Network module | `#{flash.plugin.sysinfo.network_label}`, `down_bps`, `up_bps` |
 | Per-process traffic | `nettop` in a terminal popup |
