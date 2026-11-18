@@ -11,7 +11,7 @@ import { viteSingleFile } from "vite-plugin-singlefile";
 // `--mode site` builds the published manual's browser side instead: the same
 // App hydrating prerendered pages, with shared scripts and styles under the
 // site's path (`docs/nav.json` names it). `scripts/site.ts` drives that build
-// and its server render.
+// and its server render, each run in a directory of its own under `dist-site/`.
 export default defineConfig(({ mode }) => {
   if (mode === "site") {
     const site = JSON.parse(readFileSync(new URL("../docs/nav.json", import.meta.url), "utf8")) as { site: { url: string } };

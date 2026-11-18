@@ -323,22 +323,37 @@ test("search sections land on the rendered heading ids", async () => {
  */
 test("the published site builds, and its pages link only within it", async () => {
   const { execFile } = await import("node:child_process");
-  const { mkdtemp, readdir, readFile, rm } = await import("node:fs/promises");
-  const { join } = await import("node:path");
+  const { mkdir, mkdtemp, readdir, readFile, rm, writeFile } = await import("node:fs/promises");
+  const { join, relative } = await import("node:path");
   const { tmpdir } = await import("node:os");
   const out = await mkdtemp(join(tmpdir(), "flash-site-"));
-  try {
-    await new Promise<void>((resolve, reject) => {
-      execFile(process.execPath, ["scripts/site.ts", "site", out], { cwd: import.meta.dirname }, (error, _stdout, stderr) => (error ? reject(new Error(stderr || error.message)) : resolve()));
+  const other = await mkdtemp(join(tmpdir(), "flash-site-"));
+  const build = (directory: string) =>
+    new Promise<void>((resolve, reject) => {
+      execFile(process.execPath, ["scripts/site.ts", "site", directory], { cwd: import.meta.dirname }, (error, _stdout, stderr) => (error ? reject(new Error(stderr || error.message)) : resolve()));
     });
-    const pages: string[] = [];
-    const walk = async (directory: string) => {
-      for (const entry of await readdir(directory, { withFileTypes: true })) {
-        if (entry.isDirectory()) await walk(join(directory, entry.name));
-        else if (entry.name.endsWith(".html")) pages.push(join(directory, entry.name));
-      }
-    };
-    await walk(out);
+  const files = async (root: string, directory = root): Promise<string[]> => {
+    const found: string[] = [];
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) found.push(...(await files(root, join(directory, entry.name))));
+      else found.push(relative(root, join(directory, entry.name)));
+    }
+    return found.sort();
+  };
+  // Another build of this checkout, as `build:site` beside these tests: its
+  // intermediate files are its own.
+  const work = join(import.meta.dirname, "dist-site");
+  await mkdir(work, { recursive: true });
+  const foreign = await mkdtemp(join(work, "build-"));
+  await writeFile(join(foreign, "site.html"), "another build");
+  try {
+    await Promise.all([build(out), build(other)]);
+    const built = await files(out);
+    assert.deepEqual(await files(other), built);
+    assert.equal(await readFile(join(foreign, "site.html"), "utf8"), "another build");
+    const left = (await readdir(work)).filter((name) => name.startsWith("build-")).map((name) => join(work, name));
+    assert.deepEqual(left, [foreign], "a build removes its own intermediate files");
+    const pages = built.filter((name) => name.endsWith(".html")).map((name) => join(out, name));
     assert.ok(pages.length > 50);
     for (const page of pages) {
       const html = await readFile(page, "utf8");
@@ -348,7 +363,7 @@ test("the published site builds, and its pages link only within it", async () =>
       }
     }
   } finally {
-    await rm(out, { recursive: true, force: true });
+    for (const directory of [out, other, foreign]) await rm(directory, { recursive: true, force: true });
   }
 });
 

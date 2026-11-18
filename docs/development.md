@@ -233,9 +233,9 @@ without it.
 
 `swift build` alone does not update the resident app in `/Applications`. CI publishes releases; [release.md](release.md) explains versioning, signing and notarization. The documentation is `docs/`, ordered by `docs/nav.json`: the browser help serves it from the app bundle at `/docs/<page>`, and `mise run build:site` builds the published copy into `build/site` (serve that directory under `/flash/` to preview it). The build fails on a broken link or anchor and on a page missing from the navigation; [browser help internals](help-internals.md#building-the-documentation) covers both copies. See [AGENTS.md](https://github.com/aymericbeaumet/flash/blob/main/AGENTS.md) for the architecture, source contracts, and repository guardrails.
 
-Run `mise run test:inspector` and `mise run build:site` serially within a
-worktree: the inspector tests also build the site, and both tasks replace
-`Inspector/dist-site`.
+`mise run test:inspector` also builds the site, and may run beside
+`mise run build:site`: every site build works in its own directory under
+`Inspector/dist-site/` and removes it when it ends.
 
 `DocsExampleConfigTests` loads every TOML snippet of `README.md`, the install,
 getting-started, tiling and calendar guides and the alternatives pages over

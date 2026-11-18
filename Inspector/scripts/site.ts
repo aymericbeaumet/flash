@@ -10,7 +10,7 @@
 // strict documentation build this replaces. `site` also renders every page
 // for both sites and checks each link the HTML carries.
 
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { searchSections, siteLinks, type DocsBundle, type Problem, type SiteMode } from "../src/lib/docsite.ts";
@@ -134,12 +134,34 @@ function favicon() {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-/** The published site: one prerendered page per manual page, readable without JavaScript. */
+/**
+ * The published site: one prerendered page per manual page, readable without JavaScript.
+ *
+ * Each run builds in its own directory under `dist-site/` (inside the package,
+ * so the server render resolves its dependencies) and removes it afterwards:
+ * two builds of one checkout, such as the unit tests and `build:site`, never
+ * share intermediate files.
+ */
 async function writeSite(bundle: DocsBundle, out: string) {
+  await mkdir(join(inspector, "dist-site"), { recursive: true });
+  const work = await mkdtemp(join(inspector, "dist-site", "build-"));
+  let built: { pages: number; aliases: number; problems: string[] };
+  try {
+    built = await renderSite(bundle, out, work);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+  if (built.problems.length) {
+    console.error(`The published site has ${built.problems.length} broken ${built.problems.length === 1 ? "link" : "links"}:`);
+    for (const problem of built.problems) console.error(`  ${problem}`);
+    process.exit(1);
+  }
+  console.log(`Built ${built.pages} pages and ${built.aliases} aliases into ${out}`);
+}
+
+async function renderSite(bundle: DocsBundle, out: string, work: string) {
   const { build } = await import("vite");
-  const work = join(inspector, "dist-site");
-  await rm(work, { recursive: true, force: true });
-  await build({ root: inspector, mode: "site", logLevel: "warn" });
+  await build({ root: inspector, mode: "site", logLevel: "warn", build: { outDir: join(work, "client"), emptyOutDir: true } });
   await build({ root: inspector, mode: "site", logLevel: "warn", build: { ssr: "src/site/server.ts", outDir: join(work, "server"), emptyOutDir: true } });
   const { renderPage } = (await import(pathToFileURL(join(work, "server", "server.js")).href)) as { renderPage: Renderer };
   const template = await readFile(join(work, "client", "site.html"), "utf8");
@@ -211,12 +233,7 @@ async function writeSite(bundle: DocsBundle, out: string) {
   for (const [file, text] of html) {
     if (file !== "search/index.html" && file !== "404.html" && !text.includes("<article")) problems.push(`${file}: the page rendered no article`);
   }
-  if (problems.length) {
-    console.error(`The published site has ${problems.length} broken ${problems.length === 1 ? "link" : "links"}:`);
-    for (const problem of problems) console.error(`  ${problem}`);
-    process.exit(1);
-  }
-  console.log(`Built ${html.size} pages and ${stubs.size} aliases into ${out}`);
+  return { pages: html.size, aliases: stubs.size, problems };
 }
 
 const [command, target, ...options] = process.argv.slice(2);
