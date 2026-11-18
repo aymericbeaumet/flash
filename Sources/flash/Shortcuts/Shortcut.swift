@@ -95,7 +95,7 @@ struct ModeMapping: Equatable {
 /// resident command table (``URLEventHandler/parse(words:)``) and dispatched
 /// in-process. Otherwise the array is executed as argv (no shell wrap, just
 /// env / `~` expansion on each element).
-enum MappingCommand: Hashable {
+enum MappingCommand: Hashable, Sendable {
   case flashCommand(URLCommand)
   case shellCommand([String])
 }

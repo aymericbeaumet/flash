@@ -1,7 +1,7 @@
 import AppKit
 import FlashCore
 
-indirect enum URLCommand: Hashable {
+indirect enum URLCommand: Hashable, Sendable {
   case mouseTarget(MouseCommand)
   /// One letter of visible text in the focused window and on its status bar,
   /// then a hint bigram, then a click (`s`). Only `.click` and `.move`.

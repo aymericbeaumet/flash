@@ -6,7 +6,7 @@ import CoreGraphics
 /// the held button drags, so the step extends the selection. All coordinates
 /// are Accessibility's: global, top-left origin.
 public enum TextStep {
-  public enum Direction: String, CaseIterable, Hashable {
+  public enum Direction: String, CaseIterable, Hashable, Sendable {
     case up, down, left, right
   }
 
@@ -94,7 +94,7 @@ public enum TextStep {
   // MARK: Jumps
 
   /// Vim's word and line jumps: `w`, `b`, `e`, `0`, `$`.
-  public enum Jump: String, CaseIterable, Hashable {
+  public enum Jump: String, CaseIterable, Hashable, Sendable {
     case nextWord = "next_word"
     case previousWord = "previous_word"
     case wordEnd = "word_end"

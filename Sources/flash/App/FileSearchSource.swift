@@ -48,6 +48,7 @@ final class FileSearchSource: FlashSource {
       return
     }
     let startedNs = DispatchTime.now().uptimeNanoseconds
+    let completion = MainQueueCompletion(completion)
     spotlight.search(
       query: query,
       limit: Self.maxResults,
@@ -58,7 +59,7 @@ final class FileSearchSource: FlashSource {
       FlashLog.trace(
         "[files] spotlight outcome=\(result.outcome.rawValue) "
           + "candidates=\(candidates.count) ms=\(elapsedMs)")
-      DispatchQueue.main.async { completion(candidates) }
+      completion.deliver { candidates }
     }
   }
 

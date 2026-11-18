@@ -35,10 +35,10 @@ extension AppDelegate {
       Self.normalModeAXActionQueue.async {
         let read = NormalModeDispatcher.focusedTextElement(pid: pid, detail: .contents)
         let element = read.element?.elementID
-        var session: VisualSession?
+        let session: VisualSession?
         switch VisualPlan.entry(kind, in: read.text) {
         case .none:
-          break
+          session = nil
         case .measured(let anchor, let range) where read.element?.select(range, pid: pid) == true:
           session = VisualSession(
             pid: pid, kind: kind, anchor: anchor, cursor: anchor, desiredColumn: nil,

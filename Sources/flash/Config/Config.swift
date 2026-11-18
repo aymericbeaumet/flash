@@ -865,7 +865,7 @@ struct Config {
   /// `[startup]`: the commands Flash runs once each time it launches, after
   /// the configuration loads, and again on `startup run`. Editing them never
   /// runs them; see `StartupRunner`.
-  struct Startup: Equatable {
+  struct Startup: Equatable, Sendable {
     /// In order, each a Flash command or an executable, as a monitor's
     /// `run` takes them. Empty runs nothing.
     var run: [MappingCommand] = []

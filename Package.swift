@@ -33,8 +33,14 @@ let optimizedInDebug: [SwiftSetting] = [
 ]
 
 // Complete data-race checking, one module at a time from the leaves up. With
-// `-warnings-as-errors` a module that carries it stays clean.
+// `-warnings-as-errors` a module that carries it stays clean. `flash` is clean
+// under targeted checking, which covers the code that names a `@Sendable`
+// closure, an actor or `async`; its count under complete checking is held to a
+// falling baseline (`mise run check:concurrency`).
 let checkedConcurrency: [SwiftSetting] = [.enableExperimentalFeature("StrictConcurrency")]
+let targetedConcurrency: [SwiftSetting] = [
+  .enableExperimentalFeature("StrictConcurrency=targeted")
+]
 
 let package = Package(
   name: "Flash",
@@ -76,7 +82,7 @@ let package = Package(
       ],
       path: "Sources/flash",
       resources: [.copy("Resources/inspector.html")],
-      swiftSettings: strictSwiftSettings + optimizedInDebug,
+      swiftSettings: strictSwiftSettings + optimizedInDebug + targetedConcurrency,
       linkerSettings: [.linkedFramework("IOKit")]
     ),
     .executableTarget(
