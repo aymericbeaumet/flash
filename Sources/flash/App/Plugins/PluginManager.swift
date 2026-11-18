@@ -36,7 +36,7 @@ final class PluginManager {
   /// entry. A bang is typed in the flashlight, whatever app is focused, so
   /// its selector is always the empty stack: an owner scoped to its apps
   /// (browsers' `!fh`) still resolves from Terminal.
-  private struct ShebangTarget {
+  private struct BangTarget {
     let plugin: PluginProcess
     let description: String
     let selector: PluginSelectorStack
@@ -52,7 +52,7 @@ final class PluginManager {
 
   /// Static bang candidate prepared from manifest bangs. Dynamic bang
   /// candidates come from published catalogs.
-  private struct ShebangCandidateTarget {
+  private struct BangCandidateTarget {
     let selector: PluginSelectorStack
     let candidate: Candidate
   }
@@ -82,9 +82,9 @@ final class PluginManager {
     var commandIndex: [CommandKey: [CommandTarget]] = [:]
     var wildcardCommandIndex: [String: [CommandTarget]] = [:]
     var commandRegistrationIndex: [CommandRegistrationTarget] = []
-    var shebangIndex: [String: [ShebangTarget]] = [:]
-    var shebangCandidateIndex: [ShebangCandidateTarget] = []
-    var wildcardShebangTargets: [ShebangTarget] = []
+    var bangIndex: [String: [BangTarget]] = [:]
+    var bangCandidateIndex: [BangCandidateTarget] = []
+    var wildcardBangTargets: [BangTarget] = []
     var commandBindings = CommandBindingIndex()
     var commandConfirmations = CommandConfirmationIndex()
     var helpTopics: [HelpTopic] = []
@@ -279,9 +279,9 @@ final class PluginManager {
     var commandIndex: [CommandKey: [CommandTarget]] = [:]
     var wildcardCommandIndex: [String: [CommandTarget]] = [:]
     var registrationRows: [CommandRegistrationTarget] = []
-    var shebangIndex: [String: [ShebangTarget]] = [:]
-    var shebangCandidates: [ShebangCandidateTarget] = []
-    var wildcardShebangs: [ShebangTarget] = []
+    var bangIndex: [String: [BangTarget]] = [:]
+    var bangCandidates: [BangCandidateTarget] = []
+    var wildcardBangs: [BangTarget] = []
     var commandBindings = CommandBindingIndex()
     var commandConfirmations = CommandConfirmationIndex()
     var terminalEmulators: Set<String> = []
@@ -317,17 +317,17 @@ final class PluginManager {
       for registration in manifest.bangs {
         let token = registration.token.lowercased()
         guard !token.isEmpty else { continue }
-        let target = ShebangTarget(
+        let target = BangTarget(
           plugin: plugin,
           description: registration.description,
           selector: Self.flashlightSelector,
           candidateSource: registration.source)
         if token == "*" {
-          wildcardShebangs.append(target)
+          wildcardBangs.append(target)
           continue
         }
-        shebangCandidates.append(
-          ShebangCandidateTarget(
+        bangCandidates.append(
+          BangCandidateTarget(
             selector: Self.flashlightSelector,
             candidate: Candidate(
               kind: CandidateFinder.bangKind,
@@ -336,7 +336,7 @@ final class PluginManager {
               title: "!\(registration.token)",
               subtitle: registration.description,
               sourcePayload: registration.token)))
-        shebangIndex[token, default: []].append(target)
+        bangIndex[token, default: []].append(target)
       }
 
       terminalEmulators.formUnion(manifest.terminalEmulators)
@@ -393,9 +393,9 @@ final class PluginManager {
       commandIndex: commandIndex,
       wildcardCommandIndex: wildcardCommandIndex,
       commandRegistrationIndex: registrationRows,
-      shebangIndex: shebangIndex,
-      shebangCandidateIndex: shebangCandidates,
-      wildcardShebangTargets: wildcardShebangs,
+      bangIndex: bangIndex,
+      bangCandidateIndex: bangCandidates,
+      wildcardBangTargets: wildcardBangs,
       commandBindings: commandBindings,
       commandConfirmations: commandConfirmations,
       helpTopics: helpTopics)
@@ -696,7 +696,7 @@ final class PluginManager {
   /// subcommand. The plugin runs asynchronously;
   /// `onResult` mirrors ``invoke(command:…)``.
   @discardableResult
-  func invokeShebang(
+  func invokeBang(
     token: String,
     query: String,
     in context: PluginSelectorContext = PluginSelectorContext(),
@@ -706,11 +706,11 @@ final class PluginManager {
     let lcToken = token.lowercased()
     let target =
       Self.bestTarget(
-        snapshot.shebangIndex[lcToken] ?? [],
+        snapshot.bangIndex[lcToken] ?? [],
         in: context,
         specificity: { $0.specificity(in: $1) })
       ?? Self.bestTarget(
-        snapshot.wildcardShebangTargets,
+        snapshot.wildcardBangTargets,
         in: context,
         specificity: { $0.specificity(in: $1) })
     guard let target else { return false }
@@ -726,11 +726,11 @@ final class PluginManager {
 
   /// True when a loaded plugin declares `token` by name for this context,
   /// the `*` catch-all aside: such a bang keeps its owner over a user's.
-  func declaresShebang(
+  func declaresBang(
     token: String, in context: PluginSelectorContext = PluginSelectorContext()
   ) -> Bool {
     Self.bestTarget(
-      readHotSnapshot().shebangIndex[token.lowercased()] ?? [], in: context,
+      readHotSnapshot().bangIndex[token.lowercased()] ?? [], in: context,
       specificity: { $0.specificity(in: $1) }) != nil
   }
 
@@ -739,7 +739,7 @@ final class PluginManager {
   /// declare it on the bang entry; the host swaps the candidate-finder pool
   /// to that source once the bang is confirmed. `nil` when no registration
   /// declared one.
-  func shebangCandidateSource(
+  func bangCandidateSource(
     token: String,
     in context: PluginSelectorContext = PluginSelectorContext()
   ) -> String? {
@@ -747,7 +747,7 @@ final class PluginManager {
     let lcToken = token.lowercased()
     guard
       let exact = Self.bestTarget(
-        snapshot.shebangIndex[lcToken] ?? [],
+        snapshot.bangIndex[lcToken] ?? [],
         in: context,
         specificity: { $0.specificity(in: $1) }),
       let candidateSource = exact.candidateSource,
@@ -770,9 +770,8 @@ final class PluginManager {
   ///     `NormalModeCoordinator.bangListCandidates`.
   /// Plugins should not duplicate a token across both surfaces; if they
   /// do, both rows will appear.
-  func shebangCandidates(in context: PluginSelectorContext = PluginSelectorContext()) -> [Candidate]
-  {
-    readHotSnapshot().shebangCandidateIndex
+  func bangCandidates(in context: PluginSelectorContext = PluginSelectorContext()) -> [Candidate] {
+    readHotSnapshot().bangCandidateIndex
       .filter { $0.selector.matches(context) }
       .map(\.candidate)
   }

@@ -1085,7 +1085,7 @@ extension AppDelegate {
   /// the first `@type`/`!` keystroke.
   private func bangListCandidates() -> [Candidate] {
     CoreBangs.candidates
-      + pluginManager.shebangCandidates(in: sessionSelectorContext())
+      + pluginManager.bangCandidates(in: sessionSelectorContext())
       + UserBangs.candidates(config.flashlight.bangs)
       + finder.candidates.filter { $0.kind == CandidateFinder.bangKind }
   }
@@ -1095,7 +1095,7 @@ extension AppDelegate {
   /// (`!fh` → `firefox.history`).
   private func bangCandidateScope(token: String) -> SourceScope? {
     CoreBangs.bang(token: token)?.scope
-      ?? pluginManager.shebangCandidateSource(token: token, in: sessionSelectorContext())
+      ?? pluginManager.bangCandidateSource(token: token, in: sessionSelectorContext())
       .map(SourceScope.source)
   }
 
@@ -1123,7 +1123,7 @@ extension AppDelegate {
     }
   }
 
-  /// True when a confirmed `!token` is actually routable: an exact shebang
+  /// True when a confirmed `!token` is actually routable: an exact bang
   /// registration, or a bang its wildcard owner has published to the pool
   /// (the searchproviders bang rows: its best-ranked 10,000, so a rarer trigger
   /// it still resolves underlines as unknown). A wildcard registration alone
@@ -1220,7 +1220,7 @@ extension AppDelegate {
     let candidates = finder.candidates
     let declared =
       CoreBangs.candidates
-      + pluginManager.shebangCandidates(in: sessionSelectorContext())
+      + pluginManager.bangCandidates(in: sessionSelectorContext())
       + UserBangs.candidates(config.flashlight.bangs)
     let precedence = precedenceTable()
     let limit = max(commandBarSuggestionCount * 3, 30)
@@ -1681,12 +1681,12 @@ extension AppDelegate {
   }
 
   /// `<cmd+cr>` in bang mode. Dispatches whatever the user typed via
-  /// `PluginManager.invokeShebang`, which checks explicit-token
+  /// `PluginManager.invokeBang`, which checks explicit-token
   /// registrations first then falls back to the catch-all (so
   /// `!google rust` reaches searchproviders even though `google` isn't
   /// declared in any plugin's manifest). If a candidate row is
   /// selected AND its token equals the typed token, we still go
-  /// through `invokeShebang` — its lookup is the same — so this path
+  /// through `invokeBang` — its lookup is the same — so this path
   /// is unified.
   private func submitTypedBang(typed: (token: String, remainder: String)) {
     if let bang = CoreBangs.bang(token: typed.token) {
@@ -1699,7 +1699,7 @@ extension AppDelegate {
     // The user's own bang, unless a plugin declares the token by name: it
     // then keeps its owner, as the loader told a bundled plugin's would.
     let context = pluginSelectorContext()
-    if !pluginManager.declaresShebang(token: typed.token, in: context),
+    if !pluginManager.declaresBang(token: typed.token, in: context),
       let bang = UserBangs.bang(token: typed.token, in: config.flashlight.bangs)
     {
       if let url = UserBangs.url(template: bang.url, query: typed.remainder) {
@@ -1711,7 +1711,7 @@ extension AppDelegate {
       finishCommandLineInteraction(reason: "command_bang_submit")
       return
     }
-    let dispatched = pluginManager.invokeShebang(
+    let dispatched = pluginManager.invokeBang(
       token: typed.token,
       query: typed.remainder,
       in: context

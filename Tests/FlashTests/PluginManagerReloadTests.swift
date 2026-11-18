@@ -204,12 +204,12 @@ final class PluginManagerReloadTests: XCTestCase {
     manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
     let terminal = PluginSelectorContext(bundleID: "com.apple.Terminal")
     waitUntilTrue("bang published") {
-      manager.shebangCandidates(in: terminal).contains { $0.title == "!sb" }
+      manager.bangCandidates(in: terminal).contains { $0.title == "!sb" }
     }
-    XCTAssertEqual(manager.shebangCandidateSource(token: "sb", in: terminal), "scopedbang.rows")
+    XCTAssertEqual(manager.bangCandidateSource(token: "sb", in: terminal), "scopedbang.rows")
     let performed = expectation(description: "bang dispatched to its owner")
     XCTAssertTrue(
-      manager.invokeShebang(token: "sb", query: "hello", in: terminal) { ok, _, _, _ in
+      manager.invokeBang(token: "sb", query: "hello", in: terminal) { ok, _, _, _ in
         XCTAssertTrue(ok)
         performed.fulfill()
       })
@@ -247,7 +247,7 @@ final class PluginManagerReloadTests: XCTestCase {
         performed.fulfill()
       })
     XCTAssertTrue(
-      manager.invokeShebang(token: "wb", query: "hello  world") { ok, _, _, _ in
+      manager.invokeBang(token: "wb", query: "hello  world") { ok, _, _, _ in
         XCTAssertTrue(ok)
         performed.fulfill()
       })
