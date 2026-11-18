@@ -95,7 +95,7 @@ final class ConfigLoaderTests: XCTestCase {
         [mode.apps."not a bundle".normal.mappings]
         "x" = ["flash", "undo"]
         """,
-      defaultLayer: nil)
+      defaultLayer: nil, pluginSettings: nil)
     XCTAssertEqual(result.exitCode, 1)
     XCTAssertEqual(result.lines.count, 1)
     XCTAssertTrue(result.lines[0].contains("/tmp/flash-app-mappings.toml:1:1:"))

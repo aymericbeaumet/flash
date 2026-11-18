@@ -829,7 +829,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(catalog.isStatusBound)
     XCTAssertEqual(catalog.watchSettings, [])
     let watched = try manifest(
-      sources + #", "lifecycle": "publish_then_exit", "watch_settings": [" file ", "file", ""]"#)
+      sources + #", "lifecycle": "publish_then_exit", "watch_settings": [" file ", "file", ""]"#
+        + #", "settings": {"file": {"type": "string", "description": "The file."}}"#)
     XCTAssertEqual(watched.watchSettings, ["file"], "names are trimmed, unique and nonempty")
     XCTAssertNil(try manifest(sources).lifecycle, "absent: the surfaces decide")
     XCTAssertEqual(try manifest(sources).activation, .resident)
@@ -862,7 +863,10 @@ final class PluginSystemTests: XCTestCase {
           && error.contains(message), "\(surface): \(error)")
     }
     XCTAssertTrue(
-      failure(sources + #", "watch_settings": ["file"]"#).contains(
+      failure(
+        sources + #", "watch_settings": ["file"]"#
+          + #", "settings": {"file": {"type": "string", "description": "The file."}}"#
+      ).contains(
         "manifest.json watch_settings needs lifecycle publish_then_exit"))
     // Host-served surfaces stay allowed beside the catalog.
     XCTAssertNoThrow(

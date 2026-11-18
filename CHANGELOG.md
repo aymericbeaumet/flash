@@ -89,6 +89,14 @@ monitors read that no plugin publishes any more, with its replacement.
   ([plugin protocol](docs/plugin-protocol.md#resource-types)).
 - **Plugin settings are `[plugins.<id>]`**, beside `[plugins]`, instead of
   `[plugin.<id>]`. `[plugins] exec_paths` is gone.
+- **`[plugins.<id>]` tables are checked.** Each bundled plugin's manifest
+  declares its settings. A key it does not declare, a value of the wrong
+  type or out of range, and a table naming no bundled plugin (while
+  `third_party` is empty) are `flash config check` diagnostics, and the
+  plugin does not receive them. A third-party plugin receives only the keys
+  its manifest `settings` declares, and its `watch_settings` must name
+  declared string settings
+  ([plugin protocol](docs/plugin-protocol.md#manifest)).
 - **The system plugins are one, `sysinfo`.** cpu, memory, disks, network and
   power merged: `#{flash.plugin.cpu.label}` is
   `#{flash.plugin.sysinfo.cpu_label}`, `#{flash.plugin.power.percent}` is

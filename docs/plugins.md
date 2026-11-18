@@ -8,7 +8,14 @@ this installation's processes, health, errors and capabilities;
 ## Enable and configure
 
 Bundled plugins are enabled unless excluded. Plugin-specific settings live in
-`[plugins.<id>]`; use the plugin's guide for its accepted keys.
+`[plugins.<id>]`. Each plugin's manifest declares the keys it reads, with
+their types, bounds and defaults, and Flash checks the table against them:
+`flash config check` and a reload report a key the plugin does not declare
+(naming the nearest one), a value of the wrong type or out of range, and a
+table that names no bundled plugin while no third-party plugin is listed. A
+reported key is not delivered, so the plugin keeps its default. `sandbox` is
+Flash's own key and is valid in every table
+([plugin isolation](privacy.md#plugin-isolation)).
 
 ```toml
 [plugins]
@@ -62,7 +69,8 @@ Flash starts plugin processes with a scrubbed environment plus:
 - `FLASH_PLUGIN_ID`
 - `FLASH_PLUGIN_VERSION`
 - `FLASH_PLUGIN_DATA_DIR`
-- `FLASH_PLUGIN_CONFIG` (the `[plugins.<id>]` settings as JSON)
+- `FLASH_PLUGIN_CONFIG` (the `[plugins.<id>]` settings its manifest declares,
+  over their defaults, as JSON)
 
 Catalogs are push-based: the plugin sends a `publish` notification whenever
 its rows change and the host serves the flashlight from its own store. Status

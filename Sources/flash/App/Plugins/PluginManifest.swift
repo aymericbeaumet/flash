@@ -535,6 +535,10 @@ struct PluginManifest: Decodable, Equatable {
   /// value is a file path the host watches; a change runs a
   /// `publish_then_exit` plugin again. Needs that lifecycle.
   var watchSettings: [String]
+  /// `settings`: every `[plugins.<id>]` key the plugin reads, by name. A key
+  /// the manifest does not declare, or a value it does not take, is
+  /// diagnosed and never delivered (`PluginSettings`).
+  var settings: [String: PluginSettingDeclaration]
   var hints: PluginHints?
   var query: PluginQuery?
   /// Every `commands[]` entry: the plugin's own commands (``pluginCommands``)
@@ -719,6 +723,7 @@ struct PluginManifest: Decodable, Equatable {
   enum CodingKeys: String, CodingKey, CaseIterable {
     case id, name, version, description, install, exec, sandbox, listen, priority, lifecycle
     case watchSettings = "watch_settings"
+    case settings
     case fetchURLs = "fetch_urls"
     case appleEventsTargets = "apple_events_targets"
     case onlyBundleIDs = "only_bundle_ids"
@@ -742,6 +747,7 @@ struct PluginManifest: Decodable, Equatable {
     listen: [String] = [],
     lifecycle: PluginLifecycleDeclaration? = nil,
     watchSettings: [String] = [],
+    settings: [String: PluginSettingDeclaration] = [:],
     hints: PluginHints? = nil,
     query: PluginQuery? = nil,
     commands: [PluginCommandRegistration] = [],
@@ -772,6 +778,7 @@ struct PluginManifest: Decodable, Equatable {
     self.listen = Self.uniqueTrimmed(listen)
     self.lifecycle = lifecycle
     self.watchSettings = Self.uniqueTrimmed(watchSettings)
+    self.settings = settings
     self.hints = hints
     self.query = query
     self.commands = commands
@@ -811,6 +818,8 @@ struct PluginManifest: Decodable, Equatable {
     self.lifecycle = try c.decodeIfPresent(PluginLifecycleDeclaration.self, forKey: .lifecycle)
     self.watchSettings = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .watchSettings) ?? [])
+    self.settings =
+      try c.decodeIfPresent([String: PluginSettingDeclaration].self, forKey: .settings) ?? [:]
     self.hints = try c.decodeIfPresent(PluginHints.self, forKey: .hints)
     self.query = try c.decodeIfPresent(PluginQuery.self, forKey: .query)
     self.commands =
@@ -913,6 +922,13 @@ struct PluginManifest: Decodable, Equatable {
     try rejectObject(
       dictionary["query"], allowed: keys(PluginQuery.CodingKeys.self),
       path: "manifest.json query")
+    if let settings = dictionary["settings"] as? [String: Any] {
+      for name in settings.keys.sorted() {
+        try rejectObject(
+          settings[name], allowed: keys(PluginSettingDeclaration.CodingKeys.self),
+          path: "manifest.json settings.\(name)")
+      }
+    }
     try rejectArrayObjects(
       dictionary["commands"], allowed: keys(PluginCommandRegistration.CodingKeys.self),
       path: "manifest.json commands")
@@ -993,6 +1009,15 @@ struct PluginManifest: Decodable, Equatable {
         }
       }
     }
+    for name in settings.keys.sorted() {
+      if let error = settings[name]?.validationError(name: name) {
+        throw PluginError.failure("manifest.json settings.\(name) \(error)")
+      }
+    }
+    for name in watchSettings where settings[name]?.type != .string {
+      throw PluginError.failure(
+        "manifest.json watch_settings names \(name), which settings does not declare as a string")
+    }
     if lifecycle == .publishThenExit {
       guard exec != nil else {
         throw PluginError.failure("manifest.json lifecycle publish_then_exit needs exec")
@@ -1032,6 +1057,7 @@ struct PluginManifest: Decodable, Equatable {
         ("sources", !sources.isEmpty),
         ("capabilities", !capabilities.isEmpty),
         ("permissions", !permissions.isEmpty),
+        ("settings", !settings.isEmpty),
         ("sandbox", sandbox != nil),
         ("fetch_urls", !fetchURLs.isEmpty),
         ("apple_events_targets", !appleEventsTargets.isEmpty),

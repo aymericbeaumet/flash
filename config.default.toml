@@ -290,6 +290,11 @@ startup_timeout = 5
 # [plugins.aiproviders]
 # grok_auth_file = "~/.grok/auth.json"
 #
+# A currency amount typed in the flashlight (`10 euros`) is also converted to
+# each of these codes, at the ECB's daily rates.
+# [plugins.answers]
+# target_currencies = ["USD"]
+#
 # The sysinfo plugin publishes the CPU, memory, disks, network and power
 # segments (#{flash.plugin.sysinfo.cpu_label}, …power_percent) and reads no
 # settings. A summary is the name and its primary percentage (NET is the name

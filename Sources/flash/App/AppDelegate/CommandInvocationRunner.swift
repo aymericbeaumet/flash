@@ -191,7 +191,7 @@ extension AppDelegate {
       let check = ConfigCheck.run(
         fileURL: url.resolvingSymlinksInPath(),
         text: (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) },
-        defaultLayer: ConfigLoader.embeddedDefaultLayer(in: .main))
+        defaultLayer: ConfigLoader.embeddedDefaultLayer(in: .main), pluginSettings: .bundled())
       let output = check.lines.isEmpty ? "\(url.path): ok" : check.lines.joined(separator: "\n")
       completion(
         check.exitCode == 0
@@ -200,7 +200,7 @@ extension AppDelegate {
       guard let defaults = ConfigLoader.embeddedDefaultLayer(in: .main)?.text else {
         return completion(.failed("this build has no config.default.toml to describe"))
       }
-      completion(.succeeded(ConfigSchema.json(defaults: defaults)))
+      completion(.succeeded(ConfigSchema.json(defaults: defaults, pluginSettings: .bundled())))
     case .completion:
       guard let shell = arguments["shell"].flatMap(CLIReference.Shell.init(rawValue:)) else {
         return completion(.failed("--shell must be zsh, bash or fish"))

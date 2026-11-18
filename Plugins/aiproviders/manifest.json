@@ -7,6 +7,13 @@
   "exec": [
     "./flash-plugin-aiproviders"
   ],
+  "settings": {
+    "grok_auth_file": {
+      "type": "string",
+      "description": "Grok's auth file, read for the access token its billing request sends: an absolute path, or one under ~/.",
+      "default": "~/.grok/auth.json"
+    }
+  },
   "bangs": [
     {
       "token": "ai",

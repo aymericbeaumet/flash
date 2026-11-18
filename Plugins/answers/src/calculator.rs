@@ -213,6 +213,16 @@ mod tests {
     }
 
     #[test]
+    fn the_manifest_declares_the_default_targets() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        let declared: Vec<String> =
+            serde_json::from_value(manifest["settings"]["target_currencies"]["default"].clone())
+                .unwrap();
+        assert_eq!(declared, normalize_targets(None));
+    }
+
+    #[test]
     fn targets_are_normalized_deduplicated_and_bounded() {
         let configured = vec![
             " eur ".to_string(),

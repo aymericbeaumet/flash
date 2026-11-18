@@ -155,7 +155,9 @@ up to 16 answers per evaluator, and places them in a fixed lane above fuzzy
 catalog matches; `!bang` and `@type` input bypasses that lane. The bundled
 `answers` plugin handles arithmetic (`1+1`), units (`2 km to m`), currencies
 (`10 euros`, `10 euros + 10 euros`), color conversions (`#ff8800`,
-`rgb(255, 136, 0)`), and world clocks (`time in tokyo`). It loads cached
+`rgb(255, 136, 0)`), and world clocks (`time in tokyo`). A currency amount
+is also converted to each code in `[plugins.answers] target_currencies` (up
+to eight three-letter codes, `["USD"]` by default). It loads cached
 rates before becoming ready and refreshes them over the network only in the
 background. Selecting an answer with `<tab>` or `<cr>` copies the exact
 result.

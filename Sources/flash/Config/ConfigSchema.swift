@@ -10,7 +10,8 @@ import TOMLKit
 ///   per-table sets it checks unknown keys against);
 /// - the value types come from the bundled defaults (`config.default.toml`),
 ///   with `declaredTypes` for enumerations and keys that default to nothing;
-/// - the descriptions are the comments above each key in the defaults.
+/// - the descriptions are the comments above each key in the defaults;
+/// - each bundled plugin's `[plugins.<id>]` table is its manifest's `settings`.
 ///
 /// `flash config schema` prints it for the running version; the published
 /// copy is `docs/schema/flash.schema.json`, kept equal by a test.
@@ -21,16 +22,19 @@ enum ConfigSchema {
 
   /// The schema as pretty JSON with sorted keys: stable, so the published
   /// copy diffs cleanly.
-  static func json(defaults text: String) -> String {
+  static func json(defaults text: String, pluginSettings: PluginSettingsCatalog) -> String {
     let data = try? JSONSerialization.data(
-      withJSONObject: document(defaults: text),
+      withJSONObject: document(defaults: text, pluginSettings: pluginSettings),
       options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     return (data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}") + "\n"
   }
 
-  static func document(defaults text: String) -> [String: Any] {
+  static func document(defaults text: String, pluginSettings: PluginSettingsCatalog)
+    -> [String: Any]
+  {
     let defaults = (try? TOMLTable(string: text)).map(plain) as? [String: Any] ?? [:]
-    let builder = Builder(defaults: defaults, comments: comments(in: text))
+    let builder = Builder(
+      defaults: defaults, comments: comments(in: text), pluginSettings: pluginSettings)
     var root = builder.object(
       properties: Dictionary(
         uniqueKeysWithValues: ConfigLoader.topLevelSections.map { ($0, builder.section($0)) }))
@@ -221,9 +225,30 @@ enum ConfigSchema {
     ]
   }
 
+  /// One declared plugin setting as a schema node.
+  static func setting(_ declaration: PluginSettingDeclaration) -> [String: Any] {
+    func bound(_ value: Double) -> Any { Int(exactly: value) ?? value }
+    var node: [String: Any] = ["description": declaration.description]
+    switch declaration.type {
+    case .string: node["type"] = "string"
+    case .integer: node["type"] = "integer"
+    case .number: node["type"] = "number"
+    case .boolean: node["type"] = "boolean"
+    case .stringArray:
+      node["type"] = "array"
+      node["items"] = ["type": "string"]
+    }
+    node["enum"] = declaration.allowed
+    node["minimum"] = declaration.min.map(bound)
+    node["maximum"] = declaration.max.map(bound)
+    node["default"] = declaration.defaultValue?.jsonValue
+    return node
+  }
+
   /// Keys whose value takes any TOML type, left untyped on purpose.
   static let untypedKeys: Set<String> = [
-    // Each `[plugins.<id>]` table is the plugin's own settings.
+    // A third-party plugin's `[plugins.<id>]` table: its manifest is not
+    // part of this build.
     "plugins.*",
     // Plain string, integer, or float, as the monitored value parses.
     "monitors.*.value",
@@ -234,6 +259,7 @@ enum ConfigSchema {
   private struct Builder {
     let defaults: [String: Any]
     let comments: [String: String]
+    let pluginSettings: PluginSettingsCatalog
 
     func object(
       properties: [String: Any], additional: Any = false, description: String? = nil
@@ -360,8 +386,15 @@ enum ConfigSchema {
       switch name {
       case "plugins":
         additional = [
-          "type": "object", "description": "A plugin's settings ([plugins.<id>]).",
+          "type": "object",
+          "description": "A third-party plugin's settings ([plugins.<id>]).",
         ]
+        for (id, declared) in pluginSettings.declared {
+          properties[id] = object(
+            properties: declared.merging(PluginSettings.host) { declared, _ in declared }
+              .mapValues(ConfigSchema.setting),
+            description: "The \(id) plugin's settings.")
+        }
       case "overlay":
         let dark = (value(at: ["overlay", "dark"]) as? [String: Any])?.keys.sorted() ?? []
         properties["dark"] = object(

@@ -34,8 +34,9 @@ plugins.
    tests).** A `sources` plugin reading the snippets file its
    `[plugins.snippets] file` setting names, building its complete row set with
    `insert_text` effects and pushing it with `publish` from `on_start`. It
-   declares `"lifecycle": "publish_then_exit"` with `"watch_settings":
-   ["file"]`: the process exits once the catalog is published, the host keeps
+   declares `file` under `"settings"` and `"lifecycle": "publish_then_exit"`
+   with `"watch_settings": ["file"]`: the process exits once the catalog is
+   published, the host keeps
    the rows, and it runs again when the setting or the file changes, so no
    child stays resident for data that rarely changes. No readiness dance:
    initialize replies immediately and the catalog lands when ready; a broken

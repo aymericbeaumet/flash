@@ -10,6 +10,12 @@
   "watch_settings": [
     "file"
   ],
+  "settings": {
+    "file": {
+      "type": "string",
+      "description": "A TOML or JSON file of name = text entries, typed by @snippets. The host watches it."
+    }
+  },
   "sources": [
     {
       "name": "snippets.items",

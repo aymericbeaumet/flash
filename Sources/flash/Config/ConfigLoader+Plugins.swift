@@ -121,9 +121,13 @@ extension ConfigLoader {
     "vscode": "its VS Code action bindings are now the defaults plugin",
   ]
 
+  /// With a `catalog`, a bundled plugin's table holds only what its manifest
+  /// declares, and a table naming no bundled plugin is diagnosed unless
+  /// `third_party` plugins are configured: theirs are checked when they load.
   static func applyPluginSettings(
     _ table: TOMLTable?,
     locations: ConfigSourceLocationIndex,
+    catalog: PluginSettingsCatalog?,
     into config: inout Config
   ) {
     guard let table else { return }
@@ -147,6 +151,15 @@ extension ConfigLoader {
           location: locations.location(for: ["plugins", pluginID]))
         continue
       }
+      let declared = catalog?.declared[pluginID]
+      if let catalog, declared == nil, config.plugins.thirdParty.isEmpty {
+        let suggestion = closestKnownKey(to: pluginID, in: Set(catalog.declared.keys))
+          .map { " — did you mean '\($0)'?" }
+        config.addDiagnostic(
+          "[plugins.\(pluginID)] names no bundled plugin\(suggestion ?? "")",
+          location: locations.location(for: ["plugins", pluginID]))
+        continue
+      }
       for (key, settingValue) in settings where !key.isEmpty {
         let locationPath = ["plugins", pluginID, key]
         let location = locations.location(for: locationPath)
@@ -154,6 +167,13 @@ extension ConfigLoader {
           config.addDiagnostic(
             "plugins.\(pluginID).\(key) must be a string, number, boolean, or array of strings",
             location: location)
+          continue
+        }
+        if let declared,
+          let problem = PluginSettings.problem(key: key, value: parsed, declared: declared)
+        {
+          config.addDiagnostic(
+            problem.message(path: "plugins.\(pluginID).\(key)"), location: location)
           continue
         }
         config.plugins.settings[pluginID, default: [:]][key] = parsed

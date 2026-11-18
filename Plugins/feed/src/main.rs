@@ -19,6 +19,10 @@ struct Settings {
     cycle_interval: Duration,
 }
 
+/// Seconds, as the manifest's `settings` defaults declare them.
+const REFRESH_INTERVAL_DEFAULT: u64 = 300;
+const CYCLE_INTERVAL_DEFAULT: u64 = 30;
+
 fn settings(ctx: &Context) -> Result<Option<Settings>, &'static str> {
     let Some(value) = ctx.config_json::<Value>("url") else {
         return Ok(None);
@@ -30,8 +34,11 @@ fn settings(ctx: &Context) -> Result<Option<Settings>, &'static str> {
     let url = feed::web_url(value).ok_or("url must be an HTTP(S) URL without credentials")?;
     Ok(Some(Settings {
         url,
-        refresh_interval: interval(ctx.config_json("refresh_interval"), 300)?,
-        cycle_interval: interval(ctx.config_json("cycle_interval"), 30)?,
+        refresh_interval: interval(
+            ctx.config_json("refresh_interval"),
+            REFRESH_INTERVAL_DEFAULT,
+        )?,
+        cycle_interval: interval(ctx.config_json("cycle_interval"), CYCLE_INTERVAL_DEFAULT)?,
     }))
 }
 
@@ -212,6 +219,24 @@ mod tests {
         assert!(parsed > 100);
         assert_eq!(parsed, webpki_root_certs::TLS_SERVER_ROOT_CERTS.len());
         assert!(http_client().is_ok());
+    }
+
+    #[test]
+    fn the_manifest_declares_the_interval_defaults() {
+        let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        let settings = &manifest["settings"];
+        assert_eq!(
+            settings["refresh_interval"]["default"],
+            REFRESH_INTERVAL_DEFAULT
+        );
+        assert_eq!(
+            settings["cycle_interval"]["default"],
+            CYCLE_INTERVAL_DEFAULT
+        );
+        for name in ["refresh_interval", "cycle_interval"] {
+            assert_eq!(settings[name]["min"], 1, "{name}");
+            assert_eq!(settings[name]["max"], 86400, "{name}");
+        }
     }
 
     #[test]

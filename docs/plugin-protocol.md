@@ -114,7 +114,8 @@ third-party executables without adding runtime bridges to the official bundle.
 
 Runtime children receive `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`,
 `FLASH_PLUGIN_DATA_DIR`, and the plugin's
-`[plugins.<id>]` settings as a JSON object in `FLASH_PLUGIN_CONFIG`. Flash
+`[plugins.<id>]` settings as a JSON object in `FLASH_PLUGIN_CONFIG`: the
+values its manifest [`settings`](#manifest) accept, over their defaults. Flash
 builds a scrubbed environment containing only basic locale/path/process keys
 plus those values; ambient tokens, agent sockets, SDK search paths, and
 login-shell secrets are not inherited — put credentials in the plugin's
@@ -181,6 +182,9 @@ A manifest for static data can declare a watched file without live surfaces:
   "description": "Static items from a configured file",
   "exec": ["./flash-plugin-catalog"],
   "lifecycle": "publish_then_exit",
+  "settings": {
+    "file": { "type": "string", "description": "The file of items to publish." }
+  },
   "watch_settings": ["file"],
   "sources": [
     { "name": "catalog.items", "type": "items", "kind": "locations", "priority": "normal" }
@@ -810,10 +814,27 @@ Section semantics:
   `navigation` reject the manifest, naming the keys to remove), publishes,
   exits 0, and is run again only when its data can have changed. Any other
   spelling is rejected; the default has none.
-- **`watch_settings`** — names of `[plugins.<id>]` settings whose string
-  value is a file path the host watches to run a `publish_then_exit` plugin
-  again; needs that lifecycle. `~` expands to the home and a relative path is
-  under the plugin root, as the child's working directory resolves it.
+- **`settings`** — the `[plugins.<id>]` keys the plugin reads, by name
+  (lowercase `[a-z0-9_]`):
+  `{ "type", "description", "default"?, "enum"?, "min"?, "max"? }`. `type` is
+  `string`, `integer`, `number`, `boolean` or `string_array`. `description`
+  is required and is the key's entry in the generated config schema. `enum`
+  lists the values a `string` takes; `min` and `max` are the inclusive bounds
+  of an `integer` or a `number`. `default` is what the plugin receives when
+  no file sets the key, and must be a value the setting takes. Another field,
+  an `enum` or a bound on the wrong type, and a declared `sandbox` (the
+  host's own key, valid in every plugin's table) reject the manifest; so does
+  `settings` without `exec`. `FLASH_PLUGIN_CONFIG` holds only declared keys
+  whose value passes: an undeclared key and a value of the wrong type or out
+  of range are left out. For a bundled plugin, `flash config check` and a
+  reload report each at its file position, along with a `[plugins.<id>]`
+  table that names no bundled plugin while `[plugins] third_party` is empty.
+  For a third-party plugin the host logs the key, never its value, when the
+  plugin loads.
+- **`watch_settings`** — names of declared string `settings` whose value is
+  a file path the host watches to run a `publish_then_exit` plugin again;
+  needs that lifecycle. `~` expands to the home and a relative path is under
+  the plugin root, as the child's working directory resolves it.
 - **`sources`** — the plugin's flashlight sources. `name` is the source's
   internal name: the `source` its rows carry, what a bang's `source` binds,
   and the key ranking reads. `type` (required) is the

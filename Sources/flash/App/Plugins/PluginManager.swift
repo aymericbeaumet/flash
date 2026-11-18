@@ -940,7 +940,16 @@ final class PluginManager {
           throw PluginError.failure(reason)
         }
         nextIDs.insert(manifest.id)
-        let settings = config.plugins.settings[manifest.id] ?? [:]
+        // Every plugin gets its declared defaults. A bundled plugin's table
+        // was checked when the file loaded; a third-party one is checked here.
+        let resolved = PluginSettings.resolve(
+          declared: manifest.settings, authored: config.plugins.settings[manifest.id] ?? [:])
+        for (key, problem) in resolved.problems {
+          FlashLog.warn(
+            "[plugins] setting ignored: \(problem.message(path: "plugins.\(manifest.id).\(key)"))",
+            fields: ["id": manifest.id, "setting": key])
+        }
+        let settings = resolved.values
         let observedSegments = observedStatus[manifest.id]
         let statusObserved = observedSegments != nil
         let existing = pluginsByID[manifest.id]

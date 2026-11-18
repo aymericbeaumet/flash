@@ -115,7 +115,8 @@ extension AppDelegate {
         }
         let url = ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment)
         let rows = ConfigCheck.rows(
-          fileURL: url, text: text, defaultLayer: ConfigLoader.embeddedDefaultLayer())
+          fileURL: url, text: text, defaultLayer: ConfigLoader.embeddedDefaultLayer(),
+          pluginSettings: .bundled())
         completion(
           "200 OK", type,
           Self.configJSON([

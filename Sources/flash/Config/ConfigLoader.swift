@@ -80,7 +80,8 @@ enum ConfigLoader {
   /// **Precedence (high → low): env var > user TOML > embedded
   /// default TOML > built-in Swift default.** Parsing the embedded default
   /// on every load also revalidates it: any diagnostic it produces is a
-  /// Flash bug, and is logged with the file's name.
+  /// Flash bug, and is logged with the file's name. `[plugins.<id>]` tables
+  /// are checked against the bundled manifests.
   static func load(_ file: UserFile, environment: [String: String]) -> Config {
     var layers: [Layer] = []
     if let defaults = embeddedDefaultLayer() { layers.append(defaults) }
@@ -92,7 +93,7 @@ enum ConfigLoader {
         name == "config.default.toml" ? nil : ConfigValueSource(layer: "config", detail: name)
       layers.append(Layer(text: text, sourceURL: resolved, valueSource: source))
     }
-    return parseLayers(layers, environment: environment)
+    return parseLayers(layers, environment: environment, pluginSettings: .bundled())
   }
 
   /// The default config bundled into the app (`Resources/config.default.toml`
@@ -125,10 +126,12 @@ enum ConfigLoader {
   /// are collected across all layers and resolved once at the end (a
   /// `<leader>` may be defined in a different layer than the mapping using
   /// it); the status-bar template is compiled once from whichever layer
-  /// defined it last.
+  /// defined it last. `pluginSettings` is what `[plugins.<id>]` tables are
+  /// checked against; nil leaves every one unchecked.
   static func parseLayers(
     _ layers: [Layer],
-    environment: [String: String] = [:]
+    environment: [String: String] = [:],
+    pluginSettings: PluginSettingsCatalog? = nil
   ) -> Config {
     var config = Config()
     var pendingModeMappings: [PendingModeMapping] = []
@@ -143,6 +146,7 @@ enum ConfigLoader {
           root: root,
           locations: locations,
           sourceURL: layer.sourceURL,
+          pluginSettings: pluginSettings,
           pendingModeMappings: &pendingModeMappings,
           into: &config)
       } catch let error as TOMLParseError {
@@ -180,6 +184,7 @@ enum ConfigLoader {
     root: TOMLTable,
     locations: ConfigSourceLocationIndex,
     sourceURL: URL?,
+    pluginSettings: PluginSettingsCatalog?,
     pendingModeMappings: inout [PendingModeMapping],
     into config: inout Config
   ) {
@@ -197,7 +202,7 @@ enum ConfigLoader {
     applyHints(section("hints"), locations: locations, into: &config)
     let plugins = section("plugins")
     applyPlugins(plugins, locations: locations, sourceURL: sourceURL, into: &config)
-    applyPluginSettings(plugins, locations: locations, into: &config)
+    applyPluginSettings(plugins, locations: locations, catalog: pluginSettings, into: &config)
     applyStatusBar(
       section("statusbar"), locations: locations, sourceURL: sourceURL, into: &config)
     applyPopups(section("popup"), locations: locations, sourceURL: sourceURL, into: &config)

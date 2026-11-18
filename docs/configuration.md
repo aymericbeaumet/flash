@@ -81,7 +81,10 @@ applied ([startup commands](startup.md)).
 Tables named by the user — `[plugins.<id>]`, `[popup.<name>]` (see
 [popups](popups.md)), `[statusbar.sources.<name>]`, `[widgets.<name>]` (see
 [desktop widgets](widgets.md)) and `[monitors.<name>]` (see
-[monitors](monitors.md)) — are validated key by key.
+[monitors](monitors.md)) — are validated key by key. A bundled plugin's
+`[plugins.<id>]` table is checked against the settings its manifest declares
+([plugins](plugins.md#enable-and-configure)); the generated schema types each
+one.
 
 `[monitors.<name>]` tables merge across layers like every section: the bundled
 file declares the built-in monitors, and a user file overriding one key

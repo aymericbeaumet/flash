@@ -59,7 +59,7 @@ final class FlashCLITests: XCTestCase {
         [hints]
         min_length = 0
         """,
-      defaultLayer: nil)
+      defaultLayer: nil, pluginSettings: nil)
     XCTAssertEqual(bad.exitCode, 1)
     XCTAssertEqual(bad.lines.count, 2, bad.lines.joined(separator: "\n"))
     // In line order, whichever section the loader validated first.
@@ -77,10 +77,12 @@ final class FlashCLITests: XCTestCase {
     XCTAssertEqual(rows.map(\.text), ["/tmp/flash-check.toml:2:14: \(rows[0].message)"])
 
     let good = ConfigCheck.run(
-      fileURL: url, text: "[mode.normal.mappings]\n\"t\" = false\n", defaultLayer: nil)
+      fileURL: url, text: "[mode.normal.mappings]\n\"t\" = false\n", defaultLayer: nil,
+      pluginSettings: nil)
     XCTAssertEqual(good, ConfigCheck.Result(exitCode: 0, lines: []))
 
-    let unreadable = ConfigCheck.run(fileURL: url, text: nil, defaultLayer: nil)
+    let unreadable = ConfigCheck.run(
+      fileURL: url, text: nil, defaultLayer: nil, pluginSettings: nil)
     XCTAssertEqual(unreadable.exitCode, 2)
     XCTAssertEqual(unreadable.lines, ["/tmp/flash-check.toml: cannot read the file"])
   }
@@ -112,7 +114,8 @@ final class FlashCLITests: XCTestCase {
       sourceURL: URL(fileURLWithPath: "/Applications/Flash.app/config.default.toml"),
       diagnosticLabel: "config.default.toml")
     let result = ConfigCheck.run(
-      fileURL: URL(fileURLWithPath: "/tmp/user.toml"), text: "", defaultLayer: defaults)
+      fileURL: URL(fileURLWithPath: "/tmp/user.toml"), text: "", defaultLayer: defaults,
+      pluginSettings: nil)
     XCTAssertEqual(result.exitCode, 1)
     XCTAssertTrue(
       result.lines[0].hasPrefix(

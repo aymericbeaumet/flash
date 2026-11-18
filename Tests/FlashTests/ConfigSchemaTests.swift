@@ -18,10 +18,16 @@ final class ConfigSchemaTests: XCTestCase {
       ?? ""
   }()
 
-  private static let schema: [String: Any] = ConfigSchema.document(defaults: defaults)
+  /// What the bundled manifests declare, as `flash config schema` reads it.
+  private static let pluginSettings = PluginSettingsCatalog.bundled(
+    roots: PluginRepository.manifestRoots(in: [root.appendingPathComponent("Plugins")]))
+
+  private static let schema: [String: Any] = ConfigSchema.document(
+    defaults: defaults, pluginSettings: pluginSettings)
 
   func testThePublishedSchemaIsCurrent() throws {
-    let generated = ConfigSchema.json(defaults: Self.defaults)
+    let generated = ConfigSchema.json(
+      defaults: Self.defaults, pluginSettings: Self.pluginSettings)
     if ProcessInfo.processInfo.environment["FLASH_WRITE_SCHEMA"] == "1" {
       try FileManager.default.createDirectory(
         at: Self.published.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -48,8 +54,11 @@ final class ConfigSchemaTests: XCTestCase {
         "insert", "command", "terminal", "hyper", "hold", "apps", "layers", "aliases",
         "precedence",
       ]
+      // `[plugins]` holds one table per bundled plugin.
+      let tables =
+        name == "plugins" ? subtables.union(Self.pluginSettings.declared.keys) : subtables
       XCTAssertTrue(
-        Set(properties.keys).subtracting(keys).isSubset(of: subtables),
+        Set(properties.keys).subtracting(keys).isSubset(of: tables),
         "\(name) has keys the loader rejects: \(Set(properties.keys).subtracting(keys))")
     }
   }

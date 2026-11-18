@@ -7,6 +7,12 @@
   "exec": [
     "./flash-plugin-terminals"
   ],
+  "settings": {
+    "ssh_hosts": {
+      "type": "string_array",
+      "description": "SSH destinations whose tmux sessions are discovered, as typed and without user@. Empty: no remote discovery."
+    }
+  },
   "capabilities": [
     "accessibility",
     "app_control"

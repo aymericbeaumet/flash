@@ -1581,10 +1581,69 @@
     },
     "plugins" : {
       "additionalProperties" : {
-        "description" : "A plugin's settings ([plugins.<id>]).",
+        "description" : "A third-party plugin's settings ([plugins.<id>]).",
         "type" : "object"
       },
       "properties" : {
+        "aiproviders" : {
+          "additionalProperties" : false,
+          "description" : "The aiproviders plugin's settings.",
+          "properties" : {
+            "grok_auth_file" : {
+              "default" : "~/.grok/auth.json",
+              "description" : "Grok's auth file, read for the access token its billing request sends: an absolute path, or one under ~/.",
+              "type" : "string"
+            },
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "answers" : {
+          "additionalProperties" : false,
+          "description" : "The answers plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            },
+            "target_currencies" : {
+              "default" : [
+                "USD"
+              ],
+              "description" : "The currencies a bare amount converts to, as ISO 4217 codes; the first eight count.",
+              "items" : {
+                "type" : "string"
+              },
+              "type" : "array"
+            }
+          },
+          "type" : "object"
+        },
+        "browsers" : {
+          "additionalProperties" : false,
+          "description" : "The browsers plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "defaults" : {
+          "additionalProperties" : false,
+          "description" : "The defaults plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "disabled" : {
           "description" : "Official bundled plugins are enabled unless listed in `disabled`. Disable `defaults` for a raw host-only experience: it carries the macOS conventions apps share for Flash's commands (Cmd-T new tab, Cmd-Z undo, Cmd-S save, Cmd-C copy…), so without it those commands do nothing.",
           "items" : {
@@ -1592,13 +1651,130 @@
           },
           "type" : "array"
         },
+        "emojis" : {
+          "additionalProperties" : false,
+          "description" : "The emojis plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "feed" : {
+          "additionalProperties" : false,
+          "description" : "The feed plugin's settings.",
+          "properties" : {
+            "cycle_interval" : {
+              "default" : 30,
+              "description" : "Seconds each headline stays in the carousel.",
+              "maximum" : 86400,
+              "minimum" : 1,
+              "type" : "integer"
+            },
+            "refresh_interval" : {
+              "default" : 300,
+              "description" : "Seconds between feed requests.",
+              "maximum" : 86400,
+              "minimum" : 1,
+              "type" : "integer"
+            },
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            },
+            "url" : {
+              "description" : "The RSS or Atom feed to read: an http or https URL without credentials. No request runs until it is set.",
+              "type" : "string"
+            }
+          },
+          "type" : "object"
+        },
         "install_timeout" : {
           "description" : "Hard kill for a third-party plugin's install script — a cold cargo build on a slow machine can legitimately take minutes.",
           "type" : "integer"
         },
+        "screenshot" : {
+          "additionalProperties" : false,
+          "description" : "The screenshot plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "searchproviders" : {
+          "additionalProperties" : false,
+          "description" : "The searchproviders plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "shortcuts" : {
+          "additionalProperties" : false,
+          "description" : "The shortcuts plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "snippets" : {
+          "additionalProperties" : false,
+          "description" : "The snippets plugin's settings.",
+          "properties" : {
+            "file" : {
+              "description" : "A TOML or JSON file of name = text entries, typed by @snippets. The host watches it.",
+              "type" : "string"
+            },
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "startup_timeout" : {
           "description" : "initialize reply deadline. The reply is immediate by contract (catalogs publish after it), so this only absorbs interpreter startup.",
           "type" : "integer"
+        },
+        "sysinfo" : {
+          "additionalProperties" : false,
+          "description" : "The sysinfo plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "terminals" : {
+          "additionalProperties" : false,
+          "description" : "The terminals plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            },
+            "ssh_hosts" : {
+              "description" : "SSH destinations whose tmux sessions are discovered, as typed and without user@. Empty: no remote discovery.",
+              "items" : {
+                "type" : "string"
+              },
+              "type" : "array"
+            }
+          },
+          "type" : "object"
         },
         "third_party" : {
           "description" : "Third-party plugins are loaded only when listed here. Supported references: github:user/project@<40-char commit sha> file:<path> GitHub references must pin a full 40-char commit SHA — branches and tags are rejected because third-party install/start scripts run as the user, and a moving ref would let a compromised plugin author land arbitrary code on each config reload.",

@@ -156,7 +156,8 @@ final class StartupTests: XCTestCase {
     ] {
       let check = ConfigCheck.run(
         fileURL: file, text: text,
-        defaultLayer: ConfigLoader.Layer(text: defaults, diagnosticLabel: "config.default.toml"))
+        defaultLayer: ConfigLoader.Layer(text: defaults, diagnosticLabel: "config.default.toml"),
+        pluginSettings: nil)
       XCTAssertEqual(check.exitCode, 1, text)
       XCTAssertEqual(check.lines.count, 1, "\(text): \(check.lines)")
       let output = try XCTUnwrap(check.lines.first)

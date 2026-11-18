@@ -929,6 +929,15 @@ mod tests {
     }
 
     #[test]
+    fn the_manifest_declares_the_grok_auth_default() {
+        let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        assert_eq!(
+            manifest["settings"][GROK_AUTH_SETTING]["default"],
+            GROK_AUTH_DEFAULT
+        );
+    }
+
+    #[test]
     fn path_settings_default_expand_home_and_reject_the_rest() {
         let home = Path::new("/Users/me");
         assert_eq!(

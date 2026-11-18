@@ -1462,7 +1462,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let fixture = try PluginFixtureKit.make(
       id: "catalogwatch",
       manifest: PluginFixtureKit.manifest(
-        id: "catalogwatch", extra: Self.catalogManifestExtra + #", "watch_settings": ["file"]"#),
+        id: "catalogwatch",
+        extra: Self.catalogManifestExtra + #", "watch_settings": ["file"]"#
+          + #", "settings": {"file": {"type": "string", "description": "The file."}}"#),
       script: Self.publishThenExitScript(rows: 3))
     defer { fixture.cleanup() }
     let watched = fixture.baseDataDir.appendingPathComponent("snippets.toml")

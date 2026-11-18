@@ -303,7 +303,8 @@ enum FlashCLI {
       guard let defaults = ConfigLoader.embeddedDefaultLayer(in: appBundle)?.text else {
         return .failed("this build has no config.default.toml to describe")
       }
-      return .succeeded(ConfigSchema.json(defaults: defaults))
+      return .succeeded(
+        ConfigSchema.json(defaults: defaults, pluginSettings: bundledPluginSettings))
     case .configCheck:
       return runConfigCheck(arguments)
     case .completion:
@@ -328,13 +329,21 @@ enum FlashCLI {
     let check = ConfigCheck.run(
       fileURL: url.resolvingSymlinksInPath(),
       text: (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) },
-      defaultLayer: ConfigLoader.embeddedDefaultLayer(in: appBundle))
+      defaultLayer: ConfigLoader.embeddedDefaultLayer(in: appBundle),
+      pluginSettings: bundledPluginSettings)
     let output = check.lines.isEmpty ? nil : check.lines.joined(separator: "\n")
     switch check.exitCode {
     case 0: return .succeeded(output)
     case 1: return CommandInvocationResult(status: .failed, output: output)
     default: return CommandInvocationResult(status: .rejected, output: output)
     }
+  }
+
+  /// What the plugins bundled beside this executable declare as settings.
+  private static var bundledPluginSettings: PluginSettingsCatalog {
+    .bundled(
+      roots: PluginRepository.officialPluginRoots(
+        bundleURL: appBundle.bundleURL, resourceURL: appBundle.resourceURL))
   }
 
   /// The app bundle this executable lives in. Run through the

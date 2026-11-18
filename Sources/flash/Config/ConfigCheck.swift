@@ -1,8 +1,9 @@
 import Foundation
 
 /// `flash config check [--file=<path>]`: validates a config file exactly as
-/// the resident loads it — the bundled defaults, then the file — without
-/// contacting the resident, for editors and dotfile CI. Prints one
+/// the resident loads it — the bundled defaults, then the file, with each
+/// `[plugins.<id>]` table against its bundled manifest — without contacting
+/// the resident, for editors and dotfile CI. Prints one
 /// `path:line:col: message` line per diagnostic and fails on any.
 enum ConfigCheck {
   struct Result: Equatable {
@@ -12,11 +13,16 @@ enum ConfigCheck {
 
   /// `text` nil means the file could not be read. Environment overrides are
   /// left out: they belong to a running resident, not to the file.
-  static func run(fileURL: URL, text: String?, defaultLayer: ConfigLoader.Layer?) -> Result {
+  static func run(
+    fileURL: URL, text: String?, defaultLayer: ConfigLoader.Layer?,
+    pluginSettings: PluginSettingsCatalog?
+  ) -> Result {
     guard let text else {
       return Result(exitCode: 2, lines: ["\(fileURL.path): cannot read the file"])
     }
-    let lines = rows(fileURL: fileURL, text: text, defaultLayer: defaultLayer).map(\.text)
+    let lines = rows(
+      fileURL: fileURL, text: text, defaultLayer: defaultLayer, pluginSettings: pluginSettings
+    ).map(\.text)
     return Result(exitCode: lines.isEmpty ? 0 : 1, lines: lines)
   }
 
@@ -36,10 +42,13 @@ enum ConfigCheck {
 
   /// What `text` raises as the file at `fileURL`, over the bundled defaults.
   /// A pure function of its arguments: any thread.
-  static func rows(fileURL: URL, text: String, defaultLayer: ConfigLoader.Layer?) -> [Row] {
+  static func rows(
+    fileURL: URL, text: String, defaultLayer: ConfigLoader.Layer?,
+    pluginSettings: PluginSettingsCatalog?
+  ) -> [Row] {
     let config = ConfigLoader.parseLayers(
       (defaultLayer.map { [$0] } ?? []) + [ConfigLoader.Layer(text: text, sourceURL: fileURL)],
-      environment: [:])
+      environment: [:], pluginSettings: pluginSettings)
     return rows(config.loadingDiagnostics, file: fileURL.path)
   }
 
