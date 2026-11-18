@@ -346,8 +346,10 @@ table; `.utility` is for work nobody waits on — catalog decode, logs,
 persistence, telemetry, materialization — and a serial queue never mixes the
 two, because under CPU load the kernel starves utility-class threads first:
 a `system` probe planned from one fired at 150–1,800 ms gaps, and the same
-catalog decode took nine times longer. The guardrails reject a `system` or
-`high` registration whose handler queue is `.utility`.
+catalog decode took nine times longer. `PollScheduler` checks the pairing at
+every registration: a `system` or `high` one on a `.utility` or `.background`
+queue stops a debug build there and logs `[poll] starved_registration` in a
+release build.
 
 | Owner · registration | Cadence or deadline | Priority | Why |
 | --- | --- | --- | --- |

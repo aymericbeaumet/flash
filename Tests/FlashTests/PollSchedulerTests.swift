@@ -112,25 +112,51 @@ final class PollSchedulerTests: XCTestCase {
   /// a utility one that the kernel starves under load.
   func testHandlersRunAtTheirRegisteringQueuesQoS() {
     let scheduler = PollScheduler()
-    let queues: [(String, DispatchQueue, qos_class_t)] = [
+    let queues: [(String, DispatchQueue, PollScheduler.Priority, qos_class_t)] = [
       (
-        "core:qos-user", DispatchQueue(label: "poll.qos.user", qos: .userInitiated),
+        "core:qos-user", DispatchQueue(label: "poll.qos.user", qos: .userInitiated), .system,
         QOS_CLASS_USER_INITIATED
       ),
       (
-        "core:qos-utility", DispatchQueue(label: "poll.qos.utility", qos: .utility),
+        "core:qos-utility", DispatchQueue(label: "poll.qos.utility", qos: .utility), .low,
         QOS_CLASS_UTILITY
       ),
-      ("core:qos-inherited", DispatchQueue(label: "poll.qos.inherited"), QOS_CLASS_USER_INITIATED),
+      (
+        "core:qos-inherited", DispatchQueue(label: "poll.qos.inherited"), .system,
+        QOS_CLASS_USER_INITIATED
+      ),
     ]
-    for (id, queue, expected) in queues {
+    for (id, queue, priority, expected) in queues {
       let ran = expectation(description: "\(id) ran")
-      scheduler.scheduleOnce(id, afterMs: 0, priority: .system, on: queue) {
+      scheduler.scheduleOnce(id, afterMs: 0, priority: priority, on: queue) {
         XCTAssertEqual(qos_class_self(), expected, id)
         ran.fulfill()
       }
       wait(for: [ran], timeout: 5)
     }
+  }
+
+  /// The pairing every registration is held to: a wake-up the user waits on
+  /// never rides a queue the kernel starves first. The queue's own class is
+  /// what counts, so one without a class is served by the clock's.
+  func testASystemOrHighRegistrationIsStarvedByAUtilityQueue() {
+    typealias Priority = PollScheduler.Priority
+    for priority in Priority.allCases {
+      let waitedOn = priority == .system || priority == .high
+      XCTAssertEqual(PollScheduler.starves(priority, on: .utility), waitedOn, "\(priority)")
+      XCTAssertEqual(PollScheduler.starves(priority, on: .background), waitedOn, "\(priority)")
+      for served: DispatchQoS.QoSClass in [
+        .userInteractive, .userInitiated, .default, .unspecified,
+      ] {
+        XCTAssertFalse(PollScheduler.starves(priority, on: served), "\(priority) \(served)")
+      }
+    }
+    XCTAssertTrue(
+      PollScheduler.starves(
+        .high, on: DispatchQueue(label: "poll.starved", qos: .utility).qos.qosClass))
+    XCTAssertFalse(
+      PollScheduler.starves(.system, on: DispatchQueue(label: "poll.inherits").qos.qosClass))
+    XCTAssertFalse(PollScheduler.starves(.system, on: DispatchQueue.main.qos.qosClass))
   }
 
   func testADeadlineRegistrationRunsOnceAndIsDropped() {

@@ -175,44 +175,6 @@ check_absent_except \
   "DispatchSource\\.makeTimerSource|DispatchSourceTimer|Timer\\.scheduledTimer|Timer\\.publish|[^[:alnum:]_.]Timer\\(|CFRunLoopTimerCreate|Task\\.sleep|afterDelay:" \
   '^Sources/flash/App/PollScheduler\.swift:' \
   "${RUNTIME_SWIFT[@]}"
-# A registration's priority and its handler queue's QoS must match: a
-# `system` or `high` wake-up planned onto a `.utility` queue is starved under
-# load however tight its slack (AGENTS.md, docs/architecture.md). Pairs each
-# `register`/`scheduleOnce`/`PollDeadline` at those priorities with the
-# `on:` queue it names and fails when that queue is declared `.utility` in
-# the same file.
-if ! python3 -I - "${RUNTIME_SWIFT[@]}" <<'PY'
-import pathlib, re, sys
-
-utility = re.compile(
-    r"(?:let|var)\s+(\w+)(?:\s*:\s*DispatchQueue)?\s*=\s*DispatchQueue\(\s*label:[^)]*?qos:\s*\.utility",
-    re.S)
-default_param = re.compile(
-    r"(\w+)\s*:\s*DispatchQueue\s*=\s*DispatchQueue\(\s*label:[^)]*?qos:\s*\.utility", re.S)
-registration = re.compile(
-    r"(?:register|scheduleOnce|PollDeadline)\((?:(?!\n\s*\n).){0,400}?priority:\s*\.(?:system|high)"
-    r"(?:(?!\n\s*\n).){0,200}?on:\s*([\w.]+)",
-    re.S)
-failed = False
-for root in sys.argv[1:]:
-    for file in sorted(pathlib.Path(root).rglob("*.swift")):
-        text = file.read_text(encoding="utf-8")
-        names = set(utility.findall(text)) | set(default_param.findall(text))
-        if not names:
-            continue
-        for match in registration.finditer(text):
-            queue = match.group(1).split(".")[-1]
-            if queue in names:
-                line = text.count("\n", 0, match.start()) + 1
-                print(f"{file}:{line}: system/high registration on utility queue `{queue}`")
-                failed = True
-sys.exit(1 if failed else 0)
-PY
-then
-  echo "GUARDRAIL FAILED: system/high poll registrations run on user-initiated queues" >&2
-  fail=1
-fi
-
 # Blocking sleeps only inside one bounded operation, never as a loop's clock:
 # - ActionDispatcher.swift: the spacing of one synthesized mouse gesture on
 #   the click queue (down/up hold, drag steps);

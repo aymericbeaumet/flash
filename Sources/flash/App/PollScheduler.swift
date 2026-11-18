@@ -229,6 +229,24 @@ final class PollScheduler {
     }
   }
 
+  /// A `system` or `high` wake-up is one the user waits on, and under CPU load
+  /// the kernel starves utility-class threads first: planned onto such a
+  /// queue it fires late however tight its slack. A queue with no class of
+  /// its own inherits the clock's.
+  static func starves(_ priority: Priority, on qos: DispatchQoS.QoSClass) -> Bool {
+    priority <= .high && (qos == .utility || qos == .background)
+  }
+
+  /// Every registration passes here, so the pairing holds for a queue
+  /// declared in another file and for a priority chosen at run time. A debug
+  /// build stops at the registration; a release build says so and carries on.
+  private static func requireServed(_ id: String, _ priority: Priority, on queue: DispatchQueue) {
+    let qos = queue.qos.qosClass
+    guard starves(priority, on: qos) else { return }
+    FlashLog.error("[poll] starved_registration id=\(id) priority=\(priority) qos=\(qos)")
+    assertionFailure("\(id): a \(priority) registration on a \(qos) queue (\(queue.label))")
+  }
+
   /// Register (or re-register) `id` at `everyMs`. The handler runs on `queue`
   /// and must call nothing back into the scheduler synchronously. There is no
   /// default priority: every registration states how visible its lateness is.
@@ -236,6 +254,7 @@ final class PollScheduler {
     _ id: String, everyMs: Int, priority: Priority, on handlerQueue: DispatchQueue,
     handler: @escaping () -> Void
   ) {
+    Self.requireServed(id, priority, on: handlerQueue)
     let interval = max(Self.minimumIntervalMs, everyMs)
     queue.async { [weak self] in
       guard let self else { return }
@@ -266,6 +285,7 @@ final class PollScheduler {
     _ id: String, afterMs: Int, priority: Priority, on handlerQueue: DispatchQueue,
     owner: UInt64? = nil, handler: @escaping () -> Void
   ) {
+    Self.requireServed(id, priority, on: handlerQueue)
     queue.async { [weak self] in
       guard let self else { return }
       let now = self.clock()

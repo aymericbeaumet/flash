@@ -321,8 +321,8 @@ Surface requests that would violate these constraints before implementing them.
   `system`/`high` wake-up waits on runs `.userInitiated` (the clock, the
   plugin lifecycle/read/write/deadline queues, the AX broker, the reveal
   probe); `.utility` is only for work nobody waits on (catalog decode, logs,
-  persistence, telemetry); a serial queue never mixes the two. The guardrail
-  rejects a `system`/`high` registration on a `.utility` queue.
+  persistence, telemetry); a serial queue never mixes the two. `PollScheduler`
+  asserts the pairing at every registration.
 - Keep native controls outside the custom layer-hosting drawing view. AppKit owns
   their backing layers; transient recycling may replace only Flash's subtree.
 - Keep the main-loop keypress/recapture path free of AX/WindowServer IPC, sleeps,
