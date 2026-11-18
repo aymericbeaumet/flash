@@ -8,10 +8,31 @@ enum ConfigReloadReason: String {
   case launch, watch, command
 }
 
-/// Hot-reload pipeline for `flash.toml`. The file watcher fires
-/// `reloadConfig()`, which (re)parses, validates, applies the new
-/// config to every subsystem, and shows an alert if parsing failed.
+/// Load and hot-reload pipeline for `flash.toml`. Launch reads and parses
+/// the file once (`loadLaunchConfig`) and applies that value once its
+/// subsystems exist (`applyLaunchConfig`). Afterwards the file watcher fires
+/// `reloadConfig`, which parses, validates, applies the new config to every
+/// subsystem, and shows an alert if parsing failed.
 extension AppDelegate {
+  // MARK: Launch
+
+  /// Launch's one read and parse. The subsystems built next read `config`;
+  /// `applyLaunchConfig` hands it to them without parsing the file again.
+  func loadLaunchConfig(environment: [String: String]) {
+    let file = ConfigLoader.userFile(environment: environment)
+    config = ConfigLoader.load(file, environment: environment)
+    loadedConfigFile = file
+  }
+
+  /// Apply the configuration launch loaded. Logged as `[latency]
+  /// config_reload reason=launch`, which has no parse stage: launch's is
+  /// `launch_ready config_ms`.
+  func applyLaunchConfig() {
+    MainThreadActivity.note("config_reload")
+    applyConfig(
+      config, reason: .launch, probe: LatencyProbe.arm(.configReload), stages: LatencyStages())
+  }
+
   // MARK: Config hot reload
 
   /// `DispatchSource` watches a specific file descriptor → a specific
@@ -45,10 +66,11 @@ extension AppDelegate {
   ///
   /// Missing files have their parent directory watched instead, so
   /// creation triggers a re-watch + reload.
-  func watchConfigFile() {
-    teardownConfigWatchers()
-    let candidates = ConfigLoader.candidatePaths(
-      environment: ProcessInfo.processInfo.environment)
+  func watchConfigFile(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) {
+    stopWatchingConfigFile()
+    let candidates = ConfigLoader.candidatePaths(environment: environment)
     var watchedDirs = Set<String>()
     for url in candidates {
       attachWatcher(forPath: url.path)
@@ -58,21 +80,18 @@ extension AppDelegate {
       }
     }
     // Re-arming the watchers above is always needed (the inode may have been
-    // replaced); re-applying the config is not when its bytes are unchanged.
-    let contents = try? Data(
-      contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
-    if let lastAppliedConfigFileContents, contents == lastAppliedConfigFileContents {
+    // replaced); re-applying the config is not when the file is unchanged,
+    // as it is when launch arms them on the file it just loaded. A file that
+    // was missing and still is has not changed either.
+    let file = ConfigLoader.userFile(environment: environment)
+    guard file != loadedConfigFile else {
       FlashLog.trace("[config] reload_skipped reason=unchanged")
       return
     }
-    let launching = lastAppliedConfigFileContents == nil
-    lastAppliedConfigFileContents = contents
-    // Launch already started the one environment refresh it needs; a reload
-    // the user caused re-reads the rc files they may just have edited.
-    reloadConfig(reason: launching ? .launch : .watch, refreshesEnvironment: !launching)
+    reloadConfig(file, reason: .watch, environment: environment)
   }
 
-  private func teardownConfigWatchers() {
+  func stopWatchingConfigFile() {
     for s in configSources { s.cancel() }
     configSources.removeAll()
   }
@@ -102,9 +121,9 @@ extension AppDelegate {
   /// `config reload`: the file read now, whatever its bytes; the watchers
   /// are left as they are.
   func forceConfigReload() {
-    lastAppliedConfigFileContents = try? Data(
-      contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
-    reloadConfig(reason: .command, refreshesEnvironment: true)
+    let environment = ProcessInfo.processInfo.environment
+    reloadConfig(
+      ConfigLoader.userFile(environment: environment), reason: .command, environment: environment)
   }
 
   private func scheduleConfigReload() {
@@ -127,25 +146,36 @@ extension AppDelegate {
     return source
   }
 
-  /// Re-read the config from disk, layer env + CLI overrides on top,
-  /// then publish to overlay + monitor under their internal locks. Every
-  /// future activation snapshots the new config at the start of its walk.
-  /// Logged as `[latency] config_reload`: the parse and the apply, both on
-  /// main. A watched save's 150 ms settle comes before it and is not counted.
-  private func reloadConfig(reason: ConfigReloadReason, refreshesEnvironment: Bool) {
+  /// Parse `file` as just read, layer the env overrides on top, and apply
+  /// the result. Logged as `[latency] config_reload`: the parse and the
+  /// apply, both on main. A watched save's 150 ms settle comes before it and
+  /// is not counted.
+  private func reloadConfig(
+    _ file: ConfigLoader.UserFile, reason: ConfigReloadReason, environment: [String: String]
+  ) {
     MainThreadActivity.note("config_reload")
     let probe = LatencyProbe.arm(.configReload)
     var stages = LatencyStages()
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
-    // Popups whose command could not start retry once it lands.
-    if refreshesEnvironment {
-      FlashProcessEnvironment.shared.refresh { [weak self] _ in
-        DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
-      }
+    // Popups whose command could not start retry once it lands. Launch
+    // started the one refresh it needs and does not come through here.
+    FlashProcessEnvironment.shared.refresh { [weak self] _ in
+      DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
     }
-    let cfg = stages.measure("parse") { ConfigLoader.load() }
+    let cfg = stages.measure("parse") { ConfigLoader.load(file, environment: environment) }
+    loadedConfigFile = file
+    applyConfig(cfg, reason: reason, probe: probe, stages: stages)
+  }
+
+  /// Publish `cfg` to every subsystem, overlay and monitor under their
+  /// internal locks. Every future activation snapshots the new config at the
+  /// start of its walk.
+  private func applyConfig(
+    _ cfg: Config, reason: ConfigReloadReason, probe: LatencyProbe, stages: LatencyStages
+  ) {
+    var stages = stages
     let applyStartedAt = LatencyProbe.now
     if hintSession.isActive || activationInFlight { cancelOverlay() }
     let previousAutostart = config.app.autostart
@@ -165,7 +195,7 @@ extension AppDelegate {
           maxBoost: cfg.flashlight.frecencyMaxBoost))
     }
     // Apply log settings immediately — they need to be live for
-    // any warning the rest of `reloadConfig` might emit (e.g.
+    // any warning the rest of `applyConfig` might emit (e.g.
     // unparsable native mappings logged by `mappings.apply`).
     // `configureProviders` re-applies this on every activation walk
     // so a hot-reload of the config also propagates without needing

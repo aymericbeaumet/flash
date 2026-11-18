@@ -80,7 +80,7 @@ final class StarterConfigTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: explicit.path))
   }
 
-  /// The layers `ConfigLoader.load()` builds on a first run: the bundled
+  /// The layers `ConfigLoader.load` builds on a first run: the bundled
   /// defaults, then the starter as the user's file.
   private func loadAsUserFile(_ text: String) throws -> Config {
     let defaultsURL = URL(fileURLWithPath: #filePath)

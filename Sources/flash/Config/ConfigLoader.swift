@@ -60,29 +60,39 @@ enum ConfigLoader {
     }
   }
 
+  /// The user's configuration file as one read: the path that resolved and
+  /// its bytes, nil when it is missing or unreadable. The resident compares
+  /// two reads to tell a save from a watcher that only re-armed, and parses
+  /// the read it compared.
+  struct UserFile: Equatable {
+    var url: URL
+    var contents: Data?
+  }
+
+  static func userFile(environment: [String: String]) -> UserFile {
+    let url = resolvePath(environment: environment)
+    return UserFile(url: url, contents: try? Data(contentsOf: url))
+  }
+
   /// Production entry point. Layers, in override order (low → high):
   /// the default config embedded in the app bundle, then the user's TOML
   /// file, then environment-variable overrides.
   /// **Precedence (high → low): env var > user TOML > embedded
   /// default TOML > built-in Swift default.** Parsing the embedded default
-  /// on every launch also revalidates it: any diagnostic it produces is a
+  /// on every load also revalidates it: any diagnostic it produces is a
   /// Flash bug, and is logged with the file's name.
-  static func load() -> Config {
-    let env = ProcessInfo.processInfo.environment
+  static func load(_ file: UserFile, environment: [String: String]) -> Config {
     var layers: [Layer] = []
     if let defaults = embeddedDefaultLayer() { layers.append(defaults) }
-    let url = resolvePath(environment: env)
-    if let data = try? Data(contentsOf: url),
-      let text = String(data: data, encoding: .utf8)
-    {
-      let file = url.resolvingSymlinksInPath()
-      let name = file.lastPathComponent
+    if let data = file.contents, let text = String(data: data, encoding: .utf8) {
+      let resolved = file.url.resolvingSymlinksInPath()
+      let name = resolved.lastPathComponent
       // A file that is itself the bundled default stays the base layer.
       let source: ConfigValueSource? =
         name == "config.default.toml" ? nil : ConfigValueSource(layer: "config", detail: name)
-      layers.append(Layer(text: text, sourceURL: file, valueSource: source))
+      layers.append(Layer(text: text, sourceURL: resolved, valueSource: source))
     }
-    return parseLayers(layers, environment: env)
+    return parseLayers(layers, environment: environment)
   }
 
   /// The default config bundled into the app (`Resources/config.default.toml`

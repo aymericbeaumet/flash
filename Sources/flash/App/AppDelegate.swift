@@ -150,9 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var configSources: [DispatchSourceFileSystemObject] = []
   /// Trailing-edge coalescer for config file events (one reload per burst).
   let configReload = PollDeadline("core:config_reload", priority: .normal, on: .main)
-  /// Bytes of the config file at the last applied reload; an event that
-  /// leaves them unchanged (editor temp/rename dance, `touch`) is a no-op.
-  var lastAppliedConfigFileContents: Data?
+  /// The read of the user's file `config` was parsed from; an event that
+  /// leaves its path and bytes unchanged (editor temp/rename dance, `touch`)
+  /// is a no-op. Nil until launch loaded it.
+  var loadedConfigFile: ConfigLoader.UserFile?
   var autoLaunchReconciled = false
   let mappings = MappingsCoordinator()
   let windowLayoutManager = WindowLayoutManager()
@@ -559,8 +560,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // and tooling the user has in their terminal. A GUI launch from Finder/
     // launchd would otherwise hand children a bare environment. Until this
     // lands the seeded cache (process env + PATH fallback) keeps commands
-    // usable, so the spawn need not block startup. The launch reload below
-    // does not ask again: this is the one launch refresh.
+    // usable, so the spawn need not block startup. Applying the launch
+    // configuration below does not ask again: this is the one launch refresh.
     FlashProcessEnvironment.shared.refresh { [weak self] _ in
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
@@ -571,7 +572,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // First run: give the user a working shortcut before the first load.
     StarterConfig.seedIfNeeded(environment: ProcessInfo.processInfo.environment)
     manualTopicNames = HelpDocs.manualNames(root: DebugServer.bundledDocs)
-    config = launchStages.measure("config") { ConfigLoader.load() }
+    launchStages.measure("config") {
+      loadLaunchConfig(environment: ProcessInfo.processInfo.environment)
+    }
     FlashTunables.apply(config)
     frecencyStore = FrecencyStore(
       configuration: FrecencyStore.Configuration(
@@ -839,7 +842,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       appNavigation = AppNavigationHistory(current: app.processIdentifier)
       observedFocusedAppPID = app.processIdentifier
     }
-    launchStages.measure("reload") { watchConfigFile() }
+    launchStages.measure("apply") {
+      applyLaunchConfig()
+      watchConfigFile()
+    }
     // After the first configuration load, once per launch; a reload never
     // runs the list again.
     runStartupCommandsAtLaunch()

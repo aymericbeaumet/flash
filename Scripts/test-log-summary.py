@@ -72,9 +72,8 @@ LINES = [
             context="miss_reason=- cause=- model_age_ms=- no_model_ms=- interval_ms=- "
                     "pending=- refresh_in_ms=-"),
     record(9_460, "[latency] launch_ready ms=412.0 origin=- config_ms=30.5 plugins_ms=8.0 "
-                  "statusbar_ms=40.0 reload_ms=45.0 main_ms=300.0"),
-    record(9_461, "[latency] config_reload ms=44.0 origin=- reason=launch parse_ms=30.0 "
-                  "apply_ms=14.0"),
+                  "statusbar_ms=40.0 apply_ms=45.0 main_ms=300.0"),
+    record(9_461, "[latency] config_reload ms=14.0 origin=- reason=launch apply_ms=14.0"),
     record(9_462, "[latency] config_reload ms=50.0 origin=- reason=watch parse_ms=32.0 "
                   "apply_ms=18.0"),
     record(9_463, "[latency] config_reload ms=60.0 origin=cli reason=watch parse_ms=34.0 "
@@ -227,12 +226,13 @@ class SummaryTests(unittest.TestCase):
         launch = flows[("launch_ready", "-")]
         self.assertEqual(launch.total.values, [412.0])
         self.assertEqual(
-            list(launch.stages), ["config", "plugins", "statusbar", "reload", "main"])
-        self.assertEqual(launch.stages["reload"].p50, 45.0)
+            list(launch.stages), ["config", "plugins", "statusbar", "apply", "main"])
+        self.assertEqual(launch.stages["apply"].p50, 45.0)
         watch = flows[("config_reload", "watch")]
         self.assertEqual(watch.total.values, [50.0, 60.0])
         self.assertEqual(watch.stages["parse"].p50, 32.0)
-        self.assertEqual(flows[("config_reload", "launch")].total.count, 1)
+        # Launch applies the configuration it already parsed.
+        self.assertEqual(list(flows[("config_reload", "launch")].stages), ["apply"])
         self.assertEqual(
             flows[("flashlight_open", "all_sources_settled")].stages["prompt"].p50, 4.0)
         ranked = flows[("flashlight_key", "ranked")]
@@ -289,7 +289,7 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("expired=2 invalidated=1 ?=1", text)
         self.assertIn("AXLayoutChanged=2 AXValueChanged=1", text)
         self.assertIn("com.figma=2 com.zed=1", text)
-        self.assertIn("config=30.5 plugins=8.0 statusbar=40.0 reload=45.0 main=300.0", text)
+        self.assertIn("config=30.5 plugins=8.0 statusbar=40.0 apply=45.0 main=300.0", text)
         self.assertIn("parse=32.0 apply=18.0", text)
         self.assertIn("20%", text)
         self.assertIn("2 launch(es)", text)
