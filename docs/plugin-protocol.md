@@ -875,6 +875,14 @@ Section semantics:
 - **`navigation`** — durable route schemes restorable from movement history,
   dispatched as `perform {kind: "navigate"}`.
 - **`status`** — status-bar segment names fed by the `status` notification.
+- **`permissions`** — the macOS privacy grants the plugin's work depends on,
+  from a closed set: `screen_recording`. `flash resident doctor` reports one
+  row per declared grant (`screen_recording`), naming the loaded plugins
+  that declare it, and warns while the resident does not hold it. A
+  declaration grants and asks for nothing: macOS asks when the plugin first
+  uses the protected service. An unknown name fails the load, and so does
+  `permissions` on a manifest without `exec`. The bundled `screenshot`
+  plugin declares `screen_recording`.
 - **`bindings`** — what each app does for Flash's commands: binding key →
   bundle id → binding. The key is the command line users type, with the bool
   flags that change what the app does (`"tab new"`, `"app reload --force"`);

@@ -42,6 +42,30 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   case appleEvents = "apple_events"
 }
 
+/// A macOS privacy grant a plugin's work depends on, declared in its
+/// manifest `permissions` so `flash doctor` reports whether the resident
+/// holds it. A declaration grants nothing and asks for nothing: macOS asks
+/// when the plugin first uses the protected service. The set is closed; an
+/// unknown name fails the load.
+enum PluginPermission: String, Codable, CaseIterable, Equatable {
+  /// Screen Recording, held by the resident a capturing child runs under.
+  case screenRecording = "screen_recording"
+
+  /// The grant as System Settings > Privacy & Security names it.
+  var title: String {
+    switch self {
+    case .screenRecording: return "Screen Recording"
+    }
+  }
+
+  /// Whether the resident holds the grant, read without prompting.
+  var isGranted: Bool {
+    switch self {
+    case .screenRecording: return CGPreflightScreenCaptureAccess()
+    }
+  }
+}
+
 /// Glob matcher for event-name `listen` patterns; `*` is the only wildcard.
 struct PluginPattern: Hashable, Equatable {
   let raw: String
@@ -553,6 +577,8 @@ struct PluginManifest: Decodable, Equatable {
   var sources: [CandidateSourceDescriptor]
   /// Sensitive host capabilities the plugin requests. Default-deny.
   var capabilities: Set<PluginCapability>
+  /// macOS grants the plugin's work depends on, for the doctor's report.
+  var permissions: Set<PluginPermission>
   /// Help topics this plugin contributes to `:help`.
   var help: PluginHelp
 
@@ -697,7 +723,7 @@ struct PluginManifest: Decodable, Equatable {
     case appleEventsTargets = "apple_events_targets"
     case onlyBundleIDs = "only_bundle_ids"
     case onlyTerminals = "only_terminals"
-    case capabilities, help
+    case capabilities, permissions, help
     case hints, query, commands, mappings, status, bangs
     case sources
     case navigation
@@ -731,6 +757,7 @@ struct PluginManifest: Decodable, Equatable {
     selector: PluginSelector = PluginSelector(),
     sources: [CandidateSourceDescriptor] = [],
     capabilities: Set<PluginCapability> = [],
+    permissions: Set<PluginPermission> = [],
     help: PluginHelp = PluginHelp()
   ) {
     self.id = id
@@ -760,6 +787,7 @@ struct PluginManifest: Decodable, Equatable {
     self.selector = selector
     self.sources = Self.uniqueSourceDescriptors(sources)
     self.capabilities = capabilities
+    self.permissions = permissions
     self.help = help
   }
 
@@ -819,6 +847,8 @@ struct PluginManifest: Decodable, Equatable {
         try c.decodeIfPresent([CandidateSourceDescriptor].self, forKey: .sources) ?? [])
     let caps = try c.decodeIfPresent([PluginCapability].self, forKey: .capabilities) ?? []
     self.capabilities = Set(caps)
+    self.permissions = Set(
+      try c.decodeIfPresent([PluginPermission].self, forKey: .permissions) ?? [])
     self.help = try c.decodeIfPresent(PluginHelp.self, forKey: .help) ?? PluginHelp()
   }
 
@@ -1001,6 +1031,7 @@ struct PluginManifest: Decodable, Equatable {
         ("navigation", !navigation.isEmpty),
         ("sources", !sources.isEmpty),
         ("capabilities", !capabilities.isEmpty),
+        ("permissions", !permissions.isEmpty),
         ("sandbox", sandbox != nil),
         ("fetch_urls", !fetchURLs.isEmpty),
         ("apple_events_targets", !appleEventsTargets.isEmpty),

@@ -33,7 +33,7 @@ final class DoctorTests: XCTestCase {
         "accessibility", "keyboard_tap", "secure_input", "signature", "residents", "config",
         "hotkeys", "plugins", "keyboard_layout",
       ])
-    XCTAssertNil(check(report, "screen_recording"), "checked only with the screenshot plugin")
+    XCTAssertNil(check(report, "screen_recording"), "checked only for a plugin that declares it")
     XCTAssertNil(check(report, "hint_activations"), "reported only once hints were asked for")
   }
 
@@ -212,7 +212,10 @@ final class DoctorTests: XCTestCase {
     inputs.secureInputEnabled = true
     inputs.secureInputHolders = [Doctor.Process(pid: 7, name: "1Password")]
     inputs.signature = .adHoc
-    inputs.screenRecordingGranted = false
+    inputs.pluginPermissions = [
+      Doctor.PluginPermissionState(
+        permission: .screenRecording, granted: false, plugins: ["screenshot"])
+    ]
     let report = Doctor.run(inputs)
     XCTAssertEqual(report.issues, 0)
     XCTAssertEqual(report.warnings, 3)
@@ -225,6 +228,37 @@ final class DoctorTests: XCTestCase {
       } == true)
     XCTAssertTrue(check(report, "signature")?.summary.contains("ad-hoc") == true)
     XCTAssertEqual(check(report, "screen_recording")?.status, .warn)
+    XCTAssertEqual(
+      check(report, "screen_recording")?.summary,
+      "Screen Recording is not granted; the screenshot plugin needs it")
+  }
+
+  /// A permission row comes from what loaded plugins declare: one row per
+  /// permission, naming every plugin that declares it.
+  func testAPermissionRowNamesThePluginsThatDeclareIt() {
+    var inputs = healthy()
+    inputs.pluginPermissions = [
+      Doctor.PluginPermissionState(
+        permission: .screenRecording, granted: true, plugins: ["capture", "screenshot"])
+    ]
+    var report = Doctor.run(inputs)
+    XCTAssertEqual(check(report, "screen_recording")?.status, .ok)
+    XCTAssertEqual(
+      check(report, "screen_recording")?.summary,
+      "Screen Recording granted (capture, screenshot)")
+    XCTAssertEqual(report.warnings, 0)
+
+    inputs.pluginPermissions[0].granted = false
+    report = Doctor.run(inputs)
+    XCTAssertEqual(
+      check(report, "screen_recording")?.summary,
+      "Screen Recording is not granted; the capture and screenshot plugins need it")
+    XCTAssertEqual(
+      check(report, "screen_recording")?.details,
+      [
+        "macOS asks the first time a plugin uses it; "
+          + "allow Flash in System Settings > Privacy & Security > Screen Recording."
+      ])
   }
 
   func testKeysTheReadLayoutCannotTypeAreAnIssue() {

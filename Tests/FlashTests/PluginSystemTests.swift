@@ -2247,6 +2247,44 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
+  /// `permissions` names the macOS grants a plugin's work depends on; the
+  /// doctor's row comes from it, so the host names no plugin.
+  func testManifestPermissionsAreAClosedSetAndNeedAProcess() throws {
+    func load(_ fields: String, exec: Bool = true) throws -> PluginManifest {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "capture",
+            "name": "Capture",
+            "version": "1.0.0",
+            "description": "fixture",
+            \(exec ? #""exec": ["/usr/bin/true"], "sandbox": false, "status": ["state"],"# : "")
+            \(fields)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      return try PluginManifest.load(from: root)
+    }
+    XCTAssertEqual(try load(#""listen": []"#).permissions, [])
+    XCTAssertEqual(
+      try load(#""permissions": ["screen_recording"]"#).permissions, [.screenRecording])
+    XCTAssertThrowsError(try load(#""permissions": ["camera"]"#))
+    XCTAssertThrowsError(try load(#""permissions": "screen_recording""#))
+    XCTAssertThrowsError(try load(#""permissions": ["screen_recording"]"#, exec: false)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("without exec cannot declare permissions"),
+        String(describing: error))
+    }
+
+    let screenshot = try XCTUnwrap(
+      try loadableOfficialManifests().first { $0.manifest.id == "screenshot" })
+    XCTAssertEqual(screenshot.manifest.permissions, [.screenRecording])
+    XCTAssertEqual(
+      PluginManager.declaredPermissions(in: try loadableOfficialManifests().map(\.manifest)),
+      [.screenRecording: ["screenshot"]],
+      "the doctor's Screen Recording row is the screenshot manifest's declaration")
+  }
+
   func testOfficialPluginManifestsFollowBundledConventions() throws {
     let loaded = try loadableOfficialManifests()
     XCTAssertTrue(

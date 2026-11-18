@@ -81,15 +81,21 @@ extension AppDelegate {
         hasToken: !config.telemetry.receiver.token.isEmpty,
         monitorsRunOnReceivedMetrics: config.monitorsRunOnReceivedMetrics()))
     let statuses = pluginManager.pluginStatuses()
-    let screenshotEnabled = pluginManager.statusBarInfos().contains { $0.id == "screenshot" }
+    let declaredPermissions = pluginManager.declaredPermissions()
     let bundleURL = Bundle.main.bundleURL
     DispatchQueue.global(qos: .userInitiated).async {
       var inputs = base
       if secure { inputs.secureInputHolders = DoctorProbe.secureInputHolders() }
       inputs.signature = DoctorProbe.signature(bundleURL: bundleURL)
       inputs.plugins = PluginDoctor.run(statuses: statuses)
-      // Only asks whether the grant exists; Flash itself never captures.
-      if screenshotEnabled { inputs.screenRecordingGranted = CGPreflightScreenCaptureAccess() }
+      // Only asks whether each grant exists; nothing here prompts or uses one.
+      inputs.pluginPermissions = declaredPermissions.keys
+        .sorted { $0.rawValue < $1.rawValue }
+        .map { permission in
+          Doctor.PluginPermissionState(
+            permission: permission, granted: permission.isGranted,
+            plugins: declaredPermissions[permission] ?? [])
+        }
       let report = Doctor.run(inputs)
       DispatchQueue.main.async { completion(report) }
     }

@@ -15,7 +15,7 @@ monitors read that no loaded plugin publishes, the commands your terminal
 popups run, status links refused since launch (a scheme outside `http`,
 `https`, `mailto` and `[statusbar] link_schemes`), the OpenTelemetry receiver
 running without a token while a monitor runs commands from a received
-metric, Screen Recording (only while the screenshot plugin is enabled), recent hint
+metric, Screen Recording (only while a plugin that declares it, such as `screenshot`, is loaded), recent hint
 activations and the keyboard layout. An error exits 1.
 `resident status` describes the running instance. `config check
 --file=/path/to/flash.toml` validates a file without requiring the resident.

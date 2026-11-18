@@ -10,6 +10,9 @@
   "capabilities": [
     "app_control"
   ],
+  "permissions": [
+    "screen_recording"
+  ],
   "commands": [
     {
       "command": "screenshot",

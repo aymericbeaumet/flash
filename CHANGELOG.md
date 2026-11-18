@@ -296,6 +296,10 @@ monitors read that no plugin publishes any more, with its replacement.
 
 ### New
 
+- A plugin manifest declares the macOS grants its work depends on with
+  `permissions` (`screen_recording`). `flash resident doctor` reports one
+  row per declared grant and names the plugins that declare it; the
+  `screen_recording` row now comes from the `screenshot` manifest.
 - `flash resident doctor` warns (`telemetry_receiver`) when
   `[telemetry.receiver]` is on without a `token` while a monitor whose
   `value` reads a `#{flash.otel…}` metric has a `run`, naming those

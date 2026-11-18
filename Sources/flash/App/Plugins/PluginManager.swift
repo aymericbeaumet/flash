@@ -861,6 +861,22 @@ final class PluginManager {
       uniquingKeysWith: { $0.union($1) })
   }
 
+  /// The macOS grants loaded plugins declare (manifest `permissions`), each
+  /// with the sorted ids of the plugins that declare it.
+  func declaredPermissions() -> [PluginPermission: [String]] {
+    Self.declaredPermissions(in: readHotSnapshot().plugins.map(\.manifest))
+  }
+
+  static func declaredPermissions(in manifests: [PluginManifest]) -> [PluginPermission: [String]] {
+    var declared: [PluginPermission: [String]] = [:]
+    for manifest in manifests {
+      for permission in manifest.permissions {
+        declared[permission, default: []].append(manifest.id)
+      }
+    }
+    return declared.mapValues { $0.sorted() }
+  }
+
   func statusBarInfos() -> [PluginStatusBarInfo] {
     let snapshot = readHotSnapshot()
     // statusBarInfo() reads each process's own lock — no manager queue hop.

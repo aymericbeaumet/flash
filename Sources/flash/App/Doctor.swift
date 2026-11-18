@@ -64,6 +64,14 @@ enum Doctor {
     case unknown
   }
 
+  /// A grant a loaded plugin's manifest declares (`permissions`), whether
+  /// the resident holds it, and the plugins that declare it.
+  struct PluginPermissionState: Equatable {
+    var permission: PluginPermission
+    var granted: Bool
+    var plugins: [String]
+  }
+
   struct Process: Equatable {
     var pid: pid_t
     var name: String?
@@ -93,8 +101,9 @@ enum Doctor {
     var readLayout: KeyboardLayout?
     /// An explicit `keyboard_layout` that names no installed source.
     var missingKeyboardLayout: String?
-    /// Screen Recording, checked only while the screenshot plugin runs.
-    var screenRecordingGranted: Bool?
+    /// The macOS grants loaded plugins declare, in report order; empty when
+    /// none declares one.
+    var pluginPermissions: [PluginPermissionState] = []
     /// Recent target activations per app; empty until hints are asked for.
     var hintActivations: [HintActivationStats.Summary] = []
     /// Each terminal popup's executable, as its launch resolves it.
@@ -249,15 +258,33 @@ enum Doctor {
       checks.append(receiver)
     }
 
-    if let granted = inputs.screenRecordingGranted {
-      checks.append(
-        granted
-          ? Check(id: "screen_recording", status: .ok, summary: "Screen Recording granted")
-          : Check(
-            id: "screen_recording", status: .warn,
-            summary: "Screen Recording is not granted; :screenshot asks for it on first use"))
-    }
+    checks.append(contentsOf: inputs.pluginPermissions.map(pluginPermissionCheck))
     return Report(checks: checks)
+  }
+
+  /// One row per grant a loaded plugin declares. A missing grant warns: the
+  /// plugin's commands fail until macOS is told to allow Flash, and nothing
+  /// else does.
+  static func pluginPermissionCheck(_ state: PluginPermissionState) -> Check {
+    let title = state.permission.title
+    let id = state.permission.rawValue
+    if state.granted {
+      return Check(
+        id: id, status: .ok,
+        summary: "\(title) granted (\(state.plugins.joined(separator: ", ")))")
+    }
+    let names =
+      state.plugins.count < 2
+      ? state.plugins.joined()
+      : state.plugins.dropLast().joined(separator: ", ") + " and " + (state.plugins.last ?? "")
+    return Check(
+      id: id, status: .warn,
+      summary: "\(title) is not granted; the \(names) "
+        + (state.plugins.count == 1 ? "plugin needs it" : "plugins need it"),
+      details: [
+        "macOS asks the first time a plugin uses it; "
+          + "allow Flash in System Settings > Privacy & Security > \(title)."
+      ])
   }
 
   /// Status links refused since launch: a `#[link]` whose scheme is neither

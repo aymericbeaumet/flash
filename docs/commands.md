@@ -698,7 +698,8 @@ hold is released automatically, a focused password field is not), the
 app's code signature (an ad-hoc signature can lose the Accessibility grant on
 update), other Flash residents, config diagnostics, hotkeys another app
 registered first, plugin health, hint and grid keys the current keyboard layout
-cannot type, Screen Recording when the `screenshot` plugin runs, and, once
+cannot type, each macOS grant a loaded plugin declares (Screen Recording for
+`screenshot`), and, once
 hints have been asked for, how recent activations went (`hint_activations`: a
 warning names each app with at least 5 recent activations of which a fifth or
 more showed no hints, or whose p95 exceeds 500 ms), and terminal popups whose

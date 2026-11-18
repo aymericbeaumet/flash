@@ -94,7 +94,7 @@ running plugins with `:plugins show`.
 | Automation: Spotify, Music, TV, Podcasts | Flash | The first `media status` while that app runs. Flash never asks an app that is not running. |
 | Automation: System Events | Flash, for `aiproviders` | Sending Return after a chat bang pre-fills a query, while the opened app remains focused. |
 | Notifications | Flash | The first `notify send`, or the first rise of a monitor with `notify = true`. Never at launch; refusing leaves `notify send` failing with a reason. |
-| Screen Recording | `screenshot` | The first `:screenshot screen`; macOS `screencapture` takes the picture. |
+| Screen Recording | `screenshot` | The first `:screenshot screen`; macOS `screencapture` takes the picture. The plugin's manifest declares the grant (`permissions`), which is what makes `flash resident doctor` report it. |
 | Location | `sysinfo` | Only on an explicit `:sysinfo refresh`, to read the Wi-Fi name. |
 | Calendars, Reminders or Contacts before Flash asked | A command you configure yourself, such as `icalBuddy` in a status source | The command's first read. Flash itself asks only as above. |
 
