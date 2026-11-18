@@ -121,7 +121,9 @@
   });
   // A reload of /search?q= restores the query in the box.
   $effect(() => {
-    if (route.page === "search" && search !== route.param) search = route.param;
+    if (route.page !== "search") return;
+    const query = route.param;
+    if (untrack(() => search) !== query) search = query;
   });
   // Pages arrive after the first render; reveal a linked heading once it renders.
   $effect(() => {
