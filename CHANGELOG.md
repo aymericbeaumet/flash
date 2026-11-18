@@ -92,8 +92,10 @@ monitors read that no plugin publishes any more, with its replacement.
 - **The system plugins are one, `sysinfo`.** cpu, memory, disks, network and
   power merged: `#{flash.plugin.cpu.label}` is
   `#{flash.plugin.sysinfo.cpu_label}`, `#{flash.plugin.power.percent}` is
-  `#{flash.plugin.sysinfo.power_percent}` (domain, underscore, segment), and
-  `[plugin.network] summary_mode` is `[plugins.sysinfo] summary_mode`.
+  `#{flash.plugin.sysinfo.power_percent}` (domain, underscore, segment).
+  `summary_mode` is gone and `sysinfo` reads no settings: every summary is the
+  compact one, and btop in a [terminal popup](docs/popups.md) is the
+  dashboard.
 - **Other plugins merged or moved into Flash itself.** tmux is part of
   `terminals` (`#{flash.plugin.terminals.session}`, `[plugins.terminals]
   ssh_hosts`); history is part of `browsers`; reference is `emojis`; search

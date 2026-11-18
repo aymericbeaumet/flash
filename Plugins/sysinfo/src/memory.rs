@@ -11,8 +11,7 @@ use flash_plugin::{
 };
 
 use crate::common::{
-    GatePolicy, HISTORY_SAMPLES, SummaryMode, acquire_collection, configured_summary_mode, lock,
-    percent_series, plain, whole_percent,
+    GatePolicy, HISTORY_SAMPLES, acquire_collection, lock, percent_series, plain, whole_percent,
 };
 use crate::sys;
 
@@ -47,10 +46,10 @@ impl MemorySnapshot {
     }
 }
 
-/// The published segments: `label` is the bare bar text, `summary` adds the
-/// inline history in full mode, and the preview backs both `summary` and
-/// `details`. `percent` and `history` carry the same figures as plain
-/// integers for templates and widgets that scale or chart them themselves.
+/// The published segments: `label` is the bare bar text, `summary` names the
+/// figure, and the preview backs both `summary` and `details`. `percent` and
+/// `history` carry the same figures as plain integers for templates and
+/// widgets that scale or chart them themselves.
 #[derive(Debug, PartialEq, Eq)]
 struct Status {
     label: Markup,
@@ -139,7 +138,7 @@ impl Memory {
         if !self.cadences.observed() {
             self.refresh(ctx).await;
         }
-        details_response(current_status(ctx, &self.state))
+        details_response(current_status(&self.state))
     }
 
     /// A sample that skips a busy collector rather than queueing behind it.
@@ -148,8 +147,8 @@ impl Memory {
     }
 
     /// The visible summary of the last sample.
-    pub(crate) fn summary(&self, ctx: &Context) -> Option<Markup> {
-        current_status(ctx, &self.state).map(|status| status.summary)
+    pub(crate) fn summary(&self) -> Option<Markup> {
+        current_status(&self.state).map(|status| status.summary)
     }
 }
 
@@ -191,7 +190,7 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
         let Some(snapshot) = state.snapshot.as_ref() else {
             return;
         };
-        let rendered = render_status(snapshot, &state.history, configured_summary_mode(ctx));
+        let rendered = render_status(snapshot, &state.history);
         let Some(status) = state.published.update(rendered) else {
             return;
         };
@@ -200,13 +199,9 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
     ctx.status(segments);
 }
 
-fn current_status(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<Status> {
+fn current_status(state: &Arc<Mutex<MonitorState>>) -> Option<Status> {
     let state = lock(state);
-    Some(render_status(
-        state.snapshot.as_ref()?,
-        &state.history,
-        configured_summary_mode(ctx),
-    ))
+    Some(render_status(state.snapshot.as_ref()?, &state.history))
 }
 
 fn details_response(status: Option<Status>) -> PerformResponse {
@@ -247,21 +242,13 @@ fn snapshot_from(stats: sys::MemoryStats) -> Option<MemorySnapshot> {
     })
 }
 
-fn render_status(
-    snapshot: &MemorySnapshot,
-    history: &History<HISTORY_SAMPLES>,
-    summary_mode: SummaryMode,
-) -> Status {
+fn render_status(snapshot: &MemorySnapshot, history: &History<HISTORY_SAMPLES>) -> Status {
     let percent = snapshot.occupied_percent();
     // The template owns the name and the width (`#[label]MEM #[default]#{p-3:…}`).
     let label = Markup::text(percent2(percent).trim());
-    let mut summary = Markup::colored("MEM", Color::TITLE)
+    let summary = Markup::colored("MEM", Color::TITLE)
         + " "
         + Markup::colored(percent2(percent), Color::MUTED);
-    if summary_mode == SummaryMode::Full && !history.is_empty() {
-        summary += " ";
-        summary += sparkline_percent(history);
-    }
     let bytes = |value: u64| format!("{:>10}", bytes_iec(value));
     let composition = |value: u64| {
         format!(
@@ -328,7 +315,7 @@ mod tests {
 
     #[test]
     fn segments_carry_the_domain_prefix_in_manifest_order() {
-        let status = render_status(&snapshot(100, 50), &History::new(), SummaryMode::Compact);
+        let status = render_status(&snapshot(100, 50), &History::new());
         assert_eq!(status.segments().map(|(name, _)| name), SEGMENTS);
         assert!(SEGMENTS.iter().all(|name| name.starts_with(PREFIX)));
     }
@@ -345,7 +332,7 @@ mod tests {
             swap_used: GIB,
             page_size: 16_384,
         };
-        let details = render_status(&snapshot, &history(&[]), SummaryMode::Compact)
+        let details = render_status(&snapshot, &history(&[]))
             .preview
             .render_plain();
         assert!(details.contains("25.0 %"), "{details}");
@@ -364,11 +351,7 @@ mod tests {
             (999, "99%"),
             (1000, "99%"),
         ] {
-            let status = render_status(
-                &snapshot(1000, occupied),
-                &history(&[9.0]),
-                SummaryMode::Full,
-            );
+            let status = render_status(&snapshot(1000, occupied), &history(&[9.0]));
             let [(_, summary), (_, label), ..] = status.segments();
             assert_eq!(label.render().unwrap(), expected);
             assert!(!label.render().unwrap().contains("#["));
@@ -377,25 +360,19 @@ mod tests {
     }
 
     #[test]
-    fn compact_memory_summary_caps_values_that_would_render_as_three_digits() {
-        let compact = |total, occupied| {
-            render_status(
-                &snapshot(total, occupied),
-                &History::new(),
-                SummaryMode::Compact,
-            )
-            .summary
-        };
+    fn memory_summary_caps_values_that_would_render_as_three_digits() {
+        let summary =
+            |total, occupied| render_status(&snapshot(total, occupied), &History::new()).summary;
         assert_eq!(
-            compact(100, 9).as_str(),
+            summary(100, 9).as_str(),
             "#[fg=#EBCB8B]MEM#[default] #[fg=colour245] 9%#[default]"
         );
         assert_eq!(
-            compact(100, 10).as_str(),
+            summary(100, 10).as_str(),
             "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]10%#[default]"
         );
         assert_eq!(
-            compact(1_000, 999).as_str(),
+            summary(1_000, 999).as_str(),
             "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]99%#[default]"
         );
     }
@@ -460,7 +437,7 @@ mod tests {
             page_size: 16_384,
         };
         let history = history(&[50.0, 75.0]);
-        let rendered = render_status(&snapshot, &history, SummaryMode::Compact);
+        let rendered = render_status(&snapshot, &history);
         let [(_, summary), (_, label), (_, details), ..] = rendered.segments();
         let summary = summary.render().unwrap();
         assert!(summary.starts_with("#[popup=inline:"));
@@ -469,12 +446,6 @@ mod tests {
         );
         assert!(!summary.contains("▅▆"));
         assert_eq!(label.render().unwrap(), "75%");
-        assert_eq!(
-            render_status(&snapshot, &history, SummaryMode::Full)
-                .summary
-                .as_str(),
-            "#[fg=#EBCB8B]MEM#[default] #[fg=colour245]75%#[default] ▅▆"
-        );
         assert_eq!(REFRESH_INTERVAL, Duration::from_secs(1));
         assert_eq!(
             details.render().unwrap(),
@@ -514,11 +485,11 @@ History       ··················▅▆"
     fn unchanged_renders_stay_off_the_wire() {
         let mut published = Published::new();
         let history = history(&[50.0]);
-        let first = render_status(&snapshot(100, 50), &history, SummaryMode::Compact);
+        let first = render_status(&snapshot(100, 50), &history);
         assert!(published.update(first).is_some());
-        let same = render_status(&snapshot(100, 50), &history, SummaryMode::Compact);
+        let same = render_status(&snapshot(100, 50), &history);
         assert!(published.update(same).is_none());
-        let changed = render_status(&snapshot(100, 51), &history, SummaryMode::Compact);
+        let changed = render_status(&snapshot(100, 51), &history);
         assert!(published.update(changed).is_some());
     }
 
@@ -532,22 +503,14 @@ History       ··················▅▆"
 
     #[test]
     fn raw_segments_publish_plain_integers_with_history_oldest_first() {
-        let status = render_status(
-            &snapshot(16 * GIB, 12 * GIB),
-            &history(&[50.4, 62.5, 75.0]),
-            SummaryMode::Compact,
-        );
+        let status = render_status(&snapshot(16 * GIB, 12 * GIB), &history(&[50.4, 62.5, 75.0]));
         let segments = wire(&status);
         assert_eq!(segments["memory_percent"], "75");
         assert_eq!(segments["memory_history"], "50 63 75");
         assert!(!segments["memory_percent"].contains("#["));
         assert!(!segments["memory_history"].contains("#["));
 
-        let empty = wire(&render_status(
-            &snapshot(100, 0),
-            &History::new(),
-            SummaryMode::Compact,
-        ));
+        let empty = wire(&render_status(&snapshot(100, 0), &History::new()));
         assert_eq!(empty["memory_percent"], "0");
         assert_eq!(
             empty["memory_history"], "",
@@ -566,15 +529,11 @@ History       ··················▅▆"
             (996, "100"),
             (1_000, "100"),
         ] {
-            let status = render_status(
-                &snapshot(1_000, occupied),
-                &History::new(),
-                SummaryMode::Compact,
-            );
+            let status = render_status(&snapshot(1_000, occupied), &History::new());
             assert_eq!(status.percent, expected, "{occupied}");
         }
         assert!(
-            render_status(&snapshot(1_000, 996), &History::new(), SummaryMode::Compact)
+            render_status(&snapshot(1_000, 996), &History::new())
                 .label
                 .as_str()
                 .contains("99%")
@@ -590,6 +549,6 @@ History       ··················▅▆"
         let frames = harness.drain_status();
         assert_eq!(frames.len(), 1, "{frames:?}");
         assert!(frames[0]["memory_label"].ends_with('%'), "{frames:?}");
-        assert!(memory.summary(&harness.context()).is_some());
+        assert!(memory.summary().is_some());
     }
 }

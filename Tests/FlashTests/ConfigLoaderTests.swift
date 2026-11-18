@@ -2517,7 +2517,8 @@ final class ConfigLoaderTests: XCTestCase {
       XCTAssertNil(config.plugins.settings[merged], merged)
       XCTAssertTrue(
         config.loadingDiagnostics.contains {
-          $0.message.contains("[plugins.\(merged)] was removed; use [plugins.sysinfo]")
+          $0.message.contains(
+            "[plugins.\(merged)] was removed; the plugin is now sysinfo and has no settings")
         }, merged)
     }
   }

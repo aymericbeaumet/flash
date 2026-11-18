@@ -1,42 +1,12 @@
-//! What every domain shares: the one `[plugins.sysinfo] summary_mode`
-//! setting, raw-segment formatting, the once-per-episode failure log and the
-//! per-collector gate.
+//! What every domain shares: raw-segment formatting, the once-per-episode
+//! failure log and the per-collector gate.
 
 use std::sync::{Mutex, MutexGuard};
 
-use flash_plugin::{Context, History, Markup, StatusValue};
+use flash_plugin::{History, Markup, StatusValue};
 
 /// Every domain keeps this many fast samples for its chart and history.
 pub(crate) const HISTORY_SAMPLES: usize = 20;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SummaryMode {
-    Compact,
-    Full,
-}
-
-/// The configured mode and whether the value was one the setting accepts.
-pub(crate) fn parse_summary_mode(configured: &str) -> (SummaryMode, bool) {
-    match configured {
-        "" | "compact" => (SummaryMode::Compact, true),
-        "full" => (SummaryMode::Full, true),
-        _ => (SummaryMode::Compact, false),
-    }
-}
-
-pub(crate) fn configured_summary_mode(ctx: &Context) -> SummaryMode {
-    parse_summary_mode(&ctx.config_str("summary_mode")).0
-}
-
-/// Logged once at start: the five domains read one setting.
-pub(crate) fn warn_invalid_summary_mode(ctx: &Context) {
-    if !parse_summary_mode(&ctx.config_str("summary_mode")).1 {
-        ctx.log(
-            "warn",
-            "[sysinfo] summary_mode must be compact or full; using compact",
-        );
-    }
-}
 
 /// A raw segment's value as literal text: no styling and no preview.
 pub(crate) fn plain(value: &str) -> StatusValue {
@@ -135,41 +105,6 @@ pub(crate) fn domain_segments(segments: &[String], prefix: &str) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn summary_mode_contract_defaults_to_compact_and_rejects_unknown_values() {
-        assert_eq!(parse_summary_mode(""), (SummaryMode::Compact, true));
-        assert_eq!(parse_summary_mode("compact"), (SummaryMode::Compact, true));
-        assert_eq!(parse_summary_mode("full"), (SummaryMode::Full, true));
-        assert_eq!(parse_summary_mode("dense"), (SummaryMode::Compact, false));
-    }
-
-    #[test]
-    fn an_invalid_summary_mode_warns_once_under_the_plugin_name() {
-        let mut harness = flash_plugin::testing::Harness::with_config(
-            "sysinfo",
-            serde_json::json!({ "summary_mode": "dense" }),
-        );
-        warn_invalid_summary_mode(&harness.context());
-        let logs: Vec<String> = harness
-            .drain()
-            .into_iter()
-            .filter(|frame| frame["method"] == "log")
-            .map(|frame| frame["params"]["message"].to_string())
-            .collect();
-        assert_eq!(logs.len(), 1, "{logs:?}");
-        assert!(
-            logs[0].contains("[sysinfo] summary_mode must be compact or full; using compact"),
-            "{logs:?}"
-        );
-        let mut valid = flash_plugin::testing::Harness::with_config(
-            "sysinfo",
-            serde_json::json!({ "summary_mode": "full" }),
-        );
-        warn_invalid_summary_mode(&valid.context());
-        assert_eq!(configured_summary_mode(&valid.context()), SummaryMode::Full);
-        assert!(valid.drain().is_empty());
-    }
 
     #[test]
     fn collection_failure_logs_once_until_a_success_rearms_it() {

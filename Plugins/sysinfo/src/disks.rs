@@ -6,17 +6,13 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use flash_plugin::status::{
-    bytes_iec, bytes_iec_compact, percent2, rate_iec, sparkline_padded, sparkline_scaled,
-};
+use flash_plugin::status::{bytes_iec, percent2, rate_iec, sparkline_padded, sparkline_scaled};
 use flash_plugin::{
     Color, Context, History, Markup, ObservedCadences, PerformResponse, PollPriority, Preview,
     Published, RefreshGate, StatusValue,
 };
 
-use crate::common::{
-    HISTORY_SAMPLES, SummaryMode, configured_summary_mode, first_failure, lock, plain, whole_rate,
-};
+use crate::common::{HISTORY_SAMPLES, first_failure, lock, plain, whole_rate};
 use crate::sys;
 
 /// The `core:status.observed` prefix of this domain's segments.
@@ -271,8 +267,8 @@ impl Disks {
     }
 
     /// The visible summary of the last sample.
-    pub(crate) fn summary(&self, ctx: &Context) -> Option<Markup> {
-        render_status(&self.state(), configured_summary_mode(ctx)).map(|rendered| rendered.visible)
+    pub(crate) fn summary(&self) -> Option<Markup> {
+        render_status(&self.state()).map(|rendered| rendered.visible)
     }
 
     fn state(&self) -> MutexGuard<'_, DiskState> {
@@ -367,7 +363,7 @@ fn current_response(state: &DiskState) -> PerformResponse {
 }
 
 fn publish_status(ctx: &Context, state: &mut DiskState) {
-    let Some(rendered) = render_status(state, configured_summary_mode(ctx)) else {
+    let Some(rendered) = render_status(state) else {
         return;
     };
     if let Some(rendered) = state.published.update(rendered) {
@@ -511,47 +507,22 @@ fn is_visible_mount(mount: &str) -> bool {
         .is_some_and(|name| !name.is_empty() && !name.contains('/'))
 }
 
-fn render_status(state: &DiskState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
+fn render_status(state: &DiskState) -> Option<RenderedStatus> {
     let preview = render_preview(state)?;
-    let bar = |metric: String| {
-        Markup::colored("DSK", Color::TITLE) + " " + Markup::colored(metric, Color::MUTED)
-    };
     let percent = state
         .capacity
         .as_ref()
         .and_then(CapacitySnapshot::primary)
-        .map(|volume| percent2(f64::from(volume.percent)));
-    let mut visible = bar(percent.clone().unwrap_or_else(|| "—".to_string()));
-    if summary_mode == SummaryMode::Full {
-        let (read, written) = state
-            .rates
-            .map(|rates| {
-                (
-                    bytes_iec_compact(rates.read),
-                    bytes_iec_compact(rates.written),
-                )
-            })
-            .unwrap_or_else(|| ("—".to_string(), "—".to_string()));
-        visible += " ";
-        visible += Markup::colored(format!("↓{read}"), Color::INBOUND);
-        visible += " ";
-        visible += Markup::colored(format!("↑{written}"), Color::OUTBOUND);
-        let chart = sparkline_scaled(
-            state
-                .read_history
-                .iter()
-                .zip(&state.write_history)
-                .map(|(read, written)| read.max(written)),
+        .map_or_else(
+            || "—".to_string(),
+            |volume| percent2(f64::from(volume.percent)),
         );
-        if !chart.is_empty() {
-            visible += " ";
-            visible += chart;
-        }
-    }
     Some(RenderedStatus {
-        visible,
+        visible: Markup::colored("DSK", Color::TITLE)
+            + " "
+            + Markup::colored(percent.as_str(), Color::MUTED),
         // The template owns the name and the width (`#[label]DSK #[default]#{p-3:…}`).
-        label: Markup::text(percent.unwrap_or_else(|| "—".to_string()).trim()),
+        label: Markup::text(percent.trim()),
         preview,
         raw: raw_metrics(state),
     })
@@ -696,7 +667,7 @@ mod tests {
 
     #[test]
     fn segments_carry_the_domain_prefix_in_manifest_order() {
-        let rendered = render_status(&activity_state(), SummaryMode::Compact).unwrap();
+        let rendered = render_status(&activity_state()).unwrap();
         assert_eq!(rendered.segments().map(|(name, _)| name), SEGMENTS);
         assert!(SEGMENTS.iter().all(|name| name.starts_with(PREFIX)));
     }
@@ -753,8 +724,7 @@ mod tests {
                 }),
                 ..DiskState::default()
             };
-            let [(_, summary), (_, label), ..] =
-                render_status(&state, SummaryMode::Full).unwrap().segments();
+            let [(_, summary), (_, label), ..] = render_status(&state).unwrap().segments();
             assert_eq!(label.render().unwrap(), expected);
             assert!(!label.render().unwrap().contains("#["));
             assert!(summary.render().unwrap().contains("popup="));
@@ -763,17 +733,11 @@ mod tests {
             capacity: Some(CapacitySnapshot::default()),
             ..DiskState::default()
         };
-        assert_eq!(
-            render_status(&state, SummaryMode::Compact)
-                .unwrap()
-                .label
-                .as_str(),
-            "—"
-        );
+        assert_eq!(render_status(&state).unwrap().label.as_str(), "—");
     }
 
     #[test]
-    fn compact_disk_summary_caps_at_two_percentage_digits() {
+    fn disk_summary_caps_at_two_percentage_digits() {
         for (percent, expected) in [
             (9, "#[fg=#EBCB8B]DSK#[default] #[fg=colour245] 9%#[default]"),
             (
@@ -791,9 +755,7 @@ mod tests {
                 }),
                 ..DiskState::default()
             };
-            let visible = render_status(&state, SummaryMode::Compact)
-                .expect("rendered disk status")
-                .visible;
+            let visible = render_status(&state).expect("rendered disk status").visible;
             assert_eq!(visible.as_str(), expected);
         }
     }
@@ -1062,7 +1024,7 @@ Free          100 KiB"
     #[test]
     fn renders_capacity_only_summary_with_activity_in_inline_popup() {
         let state = activity_state();
-        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
+        let rendered = render_status(&state).unwrap();
         assert_eq!(
             rendered.visible.as_str(),
             "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]"
@@ -1072,13 +1034,6 @@ Free          100 KiB"
         assert!(summary.starts_with("#[popup=inline:"));
         assert!(
             summary.ends_with("]#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default]#[nopopup]")
-        );
-        assert_eq!(
-            render_status(&state, SummaryMode::Full)
-                .unwrap()
-                .visible
-                .as_str(),
-            "#[fg=#EBCB8B]DSK#[default] #[fg=colour245]90%#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
         );
         assert_eq!(ACTIVITY_POLL, Duration::from_secs(3));
         assert_eq!(CAPACITY_POLL, Duration::from_secs(30));
@@ -1203,9 +1158,7 @@ Free          100 KiB"
 
     #[test]
     fn raw_segments_carry_startup_percent_and_whole_byte_rates() {
-        let raw = render_status(&activity_state(), SummaryMode::Compact)
-            .unwrap()
-            .raw;
+        let raw = render_status(&activity_state()).unwrap().raw;
         assert_eq!(
             raw,
             RawMetrics {
@@ -1255,7 +1208,7 @@ Free          100 KiB"
             }),
             ..DiskState::default()
         };
-        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
+        let rendered = render_status(&state).unwrap();
         assert!(rendered.label.as_str().contains("99%"));
         assert_eq!(rendered.raw.percent, "100");
         assert_eq!(rendered.raw.read_bps, "");

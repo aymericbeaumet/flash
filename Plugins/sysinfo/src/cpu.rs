@@ -12,8 +12,7 @@ use flash_plugin::{
 use nix::time::{ClockId, clock_gettime};
 
 use crate::common::{
-    GatePolicy, HISTORY_SAMPLES, SummaryMode, acquire_collection, configured_summary_mode, lock,
-    percent_series, plain, whole_percent,
+    GatePolicy, HISTORY_SAMPLES, acquire_collection, lock, percent_series, plain, whole_percent,
 };
 use crate::sys;
 
@@ -128,14 +127,9 @@ struct MonitorState {
 }
 
 impl MonitorState {
-    fn report(&self, summary_mode: SummaryMode) -> Option<Report> {
+    fn report(&self) -> Option<Report> {
         let cpu = self.cpu.as_ref()?;
-        Some(render_report(
-            cpu,
-            self.gpu.as_ref(),
-            &self.history,
-            summary_mode,
-        ))
+        Some(render_report(cpu, self.gpu.as_ref(), &self.history))
     }
 }
 
@@ -216,7 +210,7 @@ impl Cpu {
         if !self.cadences.observed() {
             self.refresh(ctx).await;
         }
-        details_response(current_report(ctx, &self.state))
+        details_response(current_report(&self.state))
     }
 
     /// A sample that skips a busy collector rather than queueing behind it.
@@ -232,8 +226,8 @@ impl Cpu {
     }
 
     /// The visible summary of the last report.
-    pub(crate) fn summary(&self, ctx: &Context) -> Option<Markup> {
-        current_report(ctx, &self.state).map(|report| report.summary)
+    pub(crate) fn summary(&self) -> Option<Markup> {
+        current_report(&self.state).map(|report| report.summary)
     }
 }
 
@@ -408,7 +402,7 @@ fn apply_gpu_result(
 fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
     let segments = {
         let mut state = lock(state);
-        let Some(report) = state.report(configured_summary_mode(ctx)) else {
+        let Some(report) = state.report() else {
             return;
         };
         state.published.update(report).map(Report::segments)
@@ -418,8 +412,8 @@ fn publish_if_changed(ctx: &Context, state: &Arc<Mutex<MonitorState>>) {
     }
 }
 
-fn current_report(ctx: &Context, state: &Arc<Mutex<MonitorState>>) -> Option<Report> {
-    lock(state).report(configured_summary_mode(ctx))
+fn current_report(state: &Arc<Mutex<MonitorState>>) -> Option<Report> {
+    lock(state).report()
 }
 
 fn details_response(report: Option<Report>) -> PerformResponse {
@@ -486,12 +480,7 @@ fn accelerator_snapshot(accelerator: &sys::GpuStatistics) -> Option<GpuSnapshot>
     Some(GpuSnapshot { utilization, model })
 }
 
-fn render_report(
-    cpu: &CpuSnapshot,
-    gpu: Option<&GpuSnapshot>,
-    history: &CpuHistory,
-    summary_mode: SummaryMode,
-) -> Report {
+fn render_report(cpu: &CpuSnapshot, gpu: Option<&GpuSnapshot>, history: &CpuHistory) -> Report {
     let (gpu_value, model) = gpu.map_or_else(
         || ("      —".to_string(), Markup::text("—")),
         |gpu| {
@@ -561,7 +550,7 @@ fn render_report(
     Report {
         // The template owns the name and the width (`#[label]CPU #[default]#{p-3:…}`).
         label: Markup::text(percent2(cpu.total()).trim()),
-        summary: visible_summary(cpu, gpu, history, summary_mode),
+        summary: visible_summary(cpu),
         preview,
         raw: raw_metrics(cpu, history),
     }
@@ -578,30 +567,10 @@ fn raw_metrics(cpu: &CpuSnapshot, history: &CpuHistory) -> RawMetrics {
 
 /// Yellow section name plus the grey two-digit percentage. `summary` only:
 /// `label` is the percentage, and the template owns the name.
-fn metric(name: &str, percent: f64) -> Markup {
-    Markup::colored(name, Color::TITLE) + " " + Markup::colored(percent2(percent), Color::MUTED)
-}
-
-fn visible_summary(
-    cpu: &CpuSnapshot,
-    gpu: Option<&GpuSnapshot>,
-    history: &CpuHistory,
-    summary_mode: SummaryMode,
-) -> Markup {
-    let mut visible = metric("CPU", cpu.total());
-    if summary_mode == SummaryMode::Compact {
-        return visible;
-    }
-    if let Some(gpu) = gpu {
-        visible += " ";
-        visible += Markup::colored("· ", Color::MUTED);
-        visible += metric("GPU", gpu.utilization);
-    }
-    if !history.is_empty() {
-        visible += " ";
-        visible += sparkline_percent(history);
-    }
-    visible
+fn visible_summary(cpu: &CpuSnapshot) -> Markup {
+    Markup::colored("CPU", Color::TITLE)
+        + " "
+        + Markup::colored(percent2(cpu.total()), Color::MUTED)
 }
 
 #[cfg(test)]
@@ -629,12 +598,7 @@ mod tests {
 
     #[test]
     fn segments_carry_the_domain_prefix_in_manifest_order() {
-        let report = render_report(
-            &sample(10.0, 1.0, None),
-            None,
-            &CpuHistory::new(),
-            SummaryMode::Compact,
-        );
+        let report = render_report(&sample(10.0, 1.0, None), None, &CpuHistory::new());
         assert_eq!(report.segments().map(|(name, _)| name), SEGMENTS);
         assert!(SEGMENTS.iter().all(|name| name.starts_with(PREFIX)));
     }
@@ -656,7 +620,7 @@ mod tests {
                 logical_cpus: None,
                 uptime_seconds: None,
             };
-            let report = render_report(&cpu, None, &history([user]), SummaryMode::Full);
+            let report = render_report(&cpu, None, &history([user]));
             assert_eq!(report.label.as_str(), expected);
             assert!(!report.label.as_str().contains("#["));
             let segments = wire(&report);
@@ -666,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_cpu_summary_caps_values_that_would_render_as_three_digits() {
+    fn cpu_summary_caps_values_that_would_render_as_three_digits() {
         for (user, expected) in [
             (
                 9.0,
@@ -693,33 +657,8 @@ mod tests {
                 logical_cpus: None,
                 uptime_seconds: None,
             };
-            assert_eq!(
-                visible_summary(&cpu, None, &CpuHistory::new(), SummaryMode::Compact).as_str(),
-                expected
-            );
+            assert_eq!(visible_summary(&cpu).as_str(), expected);
         }
-    }
-
-    #[test]
-    fn full_cpu_summary_caps_gpu_at_two_percentage_digits() {
-        let cpu = CpuSnapshot {
-            user: 9.0,
-            system: 0.0,
-            idle: 91.0,
-            load: [0.0; 3],
-            logical_cpus: None,
-            uptime_seconds: None,
-        };
-        let gpu = GpuSnapshot {
-            utilization: 100.0,
-            model: None,
-        };
-
-        assert_eq!(
-            visible_summary(&cpu, Some(&gpu), &CpuHistory::new(), SummaryMode::Full).as_str(),
-            "#[fg=#EBCB8B]CPU#[default] #[fg=colour245] 9%#[default] #[fg=colour245]\
-· #[default]#[fg=#EBCB8B]GPU#[default] #[fg=colour245]99%#[default]"
-        );
     }
 
     #[test]
@@ -864,8 +803,7 @@ mod tests {
         };
         assert!(gpu.is_none());
         let cpu = cpu_snapshot(10.0, 5.0, 85.0, [1.0, 2.0, 3.0]).expect("CPU snapshot");
-        let report = render_report(&cpu, gpu.as_ref(), &CpuHistory::new(), SummaryMode::Full);
-        assert!(!report.summary.as_str().contains("GPU"));
+        let report = render_report(&cpu, gpu.as_ref(), &CpuHistory::new());
         assert!(
             report
                 .preview
@@ -901,11 +839,11 @@ mod tests {
             cpu: Some(cpu),
             ..MonitorState::default()
         };
-        let report = state.report(SummaryMode::Compact).expect("report");
+        let report = state.report().expect("report");
         assert!(state.published.update(report.clone()).is_some());
         assert!(state.published.update(report).is_none());
         state.history.push(50.0);
-        let changed = state.report(SummaryMode::Compact).expect("report");
+        let changed = state.report().expect("report");
         assert!(state.published.update(changed).is_some());
     }
 
@@ -924,7 +862,7 @@ mod tests {
             model: Some("Apple M4 Pro".into()),
         };
         let history = history([10.0, 20.0]);
-        let report = render_report(&cpu, Some(&gpu), &history, SummaryMode::Compact);
+        let report = render_report(&cpu, Some(&gpu), &history);
         let segments = wire(&report);
         assert!(segments["cpu_summary"].starts_with("#[popup=inline:"));
         assert!(segments["cpu_summary"].ends_with("#[nopopup]"));
@@ -934,11 +872,6 @@ mod tests {
         assert_eq!(
             report.summary.as_str(),
             "#[fg=#EBCB8B]CPU#[default] #[fg=colour245]20%#[default]"
-        );
-        assert!(
-            visible_summary(&cpu, Some(&gpu), &history, SummaryMode::Full)
-                .as_str()
-                .contains("#[fg=#EBCB8B]GPU#[default] #[fg=colour245]59%#[default] ▂▂")
         );
         assert_eq!(CPU_SAMPLE_PERIOD, Duration::from_secs(1));
         assert_eq!(GPU_INTERVAL, Duration::from_secs(15));
@@ -978,7 +911,7 @@ GPU            59.0 %\n\
 Model         Apple M4 Pro"
         );
 
-        let without_gpu = render_report(&cpu, None, &CpuHistory::new(), SummaryMode::Compact);
+        let without_gpu = render_report(&cpu, None, &CpuHistory::new());
         assert!(wire(&without_gpu)["cpu_details"].ends_with(
             "#[fg=colour245]GPU           #[default]      —\n#[fg=colour245]Model         #[default]—"
         ));
@@ -999,7 +932,7 @@ Model         Apple M4 Pro"
             model: Some("GPU #[fg=colour196] #1".into()),
         };
 
-        let report = render_report(&cpu, Some(&gpu), &CpuHistory::new(), SummaryMode::Compact);
+        let report = render_report(&cpu, Some(&gpu), &CpuHistory::new());
         let details = report.preview.render();
         assert!(
             details
@@ -1024,14 +957,9 @@ Model         Apple M4 Pro"
             logical_cpus: Some(8),
             uptime_seconds: None,
         };
-        let details = render_report(
-            &cpu,
-            None,
-            &history([10.0, 20.0, 60.0]),
-            SummaryMode::Compact,
-        )
-        .preview
-        .render_plain();
+        let details = render_report(&cpu, None, &history([10.0, 20.0, 60.0]))
+            .preview
+            .render_plain();
         assert!(details.contains("Recent avg    30.0 %"), "{details}");
         assert!(details.contains("Recent peak   60.0 %"), "{details}");
         assert!(
@@ -1040,7 +968,7 @@ Model         Apple M4 Pro"
         );
         assert!(details.contains("1 / 5 / 15 min"), "{details}");
         assert!(details.lines().all(|line| line.chars().count() <= 50));
-        let empty = render_report(&cpu, None, &CpuHistory::new(), SummaryMode::Compact)
+        let empty = render_report(&cpu, None, &CpuHistory::new())
             .preview
             .render_plain();
         assert!(empty.contains("Recent avg    —"), "{empty}");
@@ -1068,12 +996,7 @@ Model         Apple M4 Pro"
             logical_cpus: Some(16),
             uptime_seconds: Some(3 * 86_400 + 4 * 3_600 + 59 * 60),
         };
-        let report = render_report(
-            &cpu,
-            None,
-            &history([0.4, 50.5, 99.6, 100.0]),
-            SummaryMode::Compact,
-        );
+        let report = render_report(&cpu, None, &history([0.4, 50.5, 99.6, 100.0]));
         let segments = wire(&report);
         assert_eq!(segments["cpu_percent"], "20");
         assert_eq!(segments["cpu_history"], "0 51 100 100");
@@ -1095,12 +1018,7 @@ Model         Apple M4 Pro"
             (99.6, "100"),
             (100.0, "100"),
         ] {
-            let report = render_report(
-                &sample(user, 0.0, None),
-                None,
-                &CpuHistory::new(),
-                SummaryMode::Compact,
-            );
+            let report = render_report(&sample(user, 0.0, None), None, &CpuHistory::new());
             assert_eq!(report.raw.percent, expected, "{user}");
         }
     }
@@ -1111,7 +1029,6 @@ Model         Apple M4 Pro"
             &sample(10.0, 0.0, None),
             None,
             &history((0..25).map(f64::from)),
-            SummaryMode::Compact,
         );
         let expected = (5..25).map(|value| value.to_string()).collect::<Vec<_>>();
         assert_eq!(report.raw.history, expected.join(" "));
@@ -1119,12 +1036,7 @@ Model         Apple M4 Pro"
 
     #[test]
     fn raw_load_keeps_two_decimals_and_missing_values_clear_their_segments() {
-        let report = render_report(
-            &sample(10.0, 12.3, None),
-            None,
-            &CpuHistory::new(),
-            SummaryMode::Compact,
-        );
+        let report = render_report(&sample(10.0, 12.3, None), None, &CpuHistory::new());
         let segments = wire(&report);
         assert_eq!(segments["cpu_load"], "12.30");
         assert_eq!(segments["cpu_history"], "");
@@ -1150,14 +1062,8 @@ Model         Apple M4 Pro"
         }
 
         let mut published = Published::new();
-        let render = |uptime| {
-            render_report(
-                &sample(10.0, 1.0, Some(uptime)),
-                None,
-                &CpuHistory::new(),
-                SummaryMode::Compact,
-            )
-        };
+        let render =
+            |uptime| render_report(&sample(10.0, 1.0, Some(uptime)), None, &CpuHistory::new());
         assert!(published.update(render(86_400 + 60)).is_some());
         assert!(published.update(render(86_400 + 120)).is_none());
         assert!(published.update(render(86_400 + 3_600)).is_some());

@@ -10,9 +10,7 @@ use flash_plugin::{
     Style,
 };
 
-use crate::common::{
-    HISTORY_SAMPLES, SummaryMode, configured_summary_mode, first_failure, lock, plain,
-};
+use crate::common::{HISTORY_SAMPLES, first_failure, lock, plain};
 use crate::sys;
 
 /// The published segments, in manifest order. Power follows
@@ -212,12 +210,7 @@ async fn collect_and_publish(
         }
         (health, state.history.clone())
     };
-    let status = render_status(
-        &snapshot,
-        health.as_ref(),
-        configured_summary_mode(&ctx),
-        &history,
-    );
+    let status = render_status(&snapshot, health.as_ref(), &history);
     let changed = lock(&state)
         .published
         .update(status.clone())
@@ -344,7 +337,6 @@ fn merge_health(
 fn render_status(
     snapshot: &PowerSnapshot,
     health: Option<&BatteryHealth>,
-    summary_mode: SummaryMode,
     history: &ChargeHistory,
 ) -> PowerStatus {
     // Charge is slow-moving, so it reads true and plain: no 99 cap like the
@@ -355,7 +347,7 @@ fn render_status(
         |battery| percent(f64::from(battery.percent)),
     );
     PowerStatus {
-        summary: visible_summary(snapshot, summary_mode),
+        summary: visible_summary(snapshot),
         // The template owns the name (`#[label]BAT`). Charge is unpadded: it
         // crosses a width boundary too rarely to reserve a column.
         label: Markup::text(charge.trim()),
@@ -469,7 +461,7 @@ fn preview(
         )
 }
 
-fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Markup {
+fn visible_summary(snapshot: &PowerSnapshot) -> Markup {
     if snapshot.source == PowerSource::Adapter
         && snapshot
             .battery
@@ -485,15 +477,6 @@ fn visible_summary(snapshot: &PowerSnapshot, summary_mode: SummaryMode) -> Marku
         ),
         None => ("—".to_string(), false),
     };
-    if summary_mode == SummaryMode::Full {
-        let secondary = snapshot
-            .battery
-            .as_ref()
-            .and_then(|battery| battery.estimate_minutes.map(duration_hours_minutes))
-            .unwrap_or_else(|| snapshot.source.label().to_string());
-        value.push_str(" · ");
-        value.push_str(&secondary);
-    }
     if breathing {
         value = format!("#[breathing]{value}#[nobreathing]");
     }
@@ -545,12 +528,7 @@ mod tests {
 
     #[test]
     fn segments_carry_the_domain_prefix_in_manifest_order() {
-        let status = render_status(
-            &snapshot(&charging()),
-            None,
-            SummaryMode::Compact,
-            &ChargeHistory::new(),
-        );
+        let status = render_status(&snapshot(&charging()), None, &ChargeHistory::new());
         assert_eq!(status.segments().map(|(name, _)| name), SEGMENTS);
         assert!(SEGMENTS.iter().all(|name| name.starts_with("power_")));
     }
@@ -575,7 +553,7 @@ mod tests {
                     estimate_minutes: Some(90),
                 }),
             };
-            let status = render_status(&snapshot, None, SummaryMode::Full, &ChargeHistory::new());
+            let status = render_status(&snapshot, None, &ChargeHistory::new());
             assert_eq!(status.label.as_str(), expected);
             assert!(!status.label.as_str().contains("#["));
             assert!(!status.preview.is_empty());
@@ -599,12 +577,7 @@ mod tests {
     #[test]
     fn publishes_the_preview_inline_on_the_summary_only() {
         let mut harness = flash_plugin::testing::Harness::new("sysinfo");
-        let status = render_status(
-            &snapshot(&charging()),
-            None,
-            SummaryMode::Compact,
-            &ChargeHistory::new(),
-        );
+        let status = render_status(&snapshot(&charging()), None, &ChargeHistory::new());
         harness.context().status(status.segments());
         let frames = harness.drain_status();
         assert_eq!(frames.len(), 1);
@@ -618,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_power_summary_uses_a_grey_unpadded_percentage() {
+    fn power_summary_uses_a_grey_unpadded_percentage() {
         for (percent, expected) in [(9, "9%"), (16, "16%"), (99, "99%"), (100, "100%")] {
             let snapshot = PowerSnapshot {
                 source: PowerSource::Battery,
@@ -629,7 +602,7 @@ mod tests {
                 }),
             };
             assert_eq!(
-                visible_summary(&snapshot, SummaryMode::Compact).as_str(),
+                visible_summary(&snapshot).as_str(),
                 format!(
                     "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]{expected}#[norange]#[default]#[pop-default]"
                 )
@@ -639,11 +612,9 @@ mod tests {
             source: PowerSource::Adapter,
             battery: None,
         };
-        assert!(visible_summary(&no_battery, SummaryMode::Compact)
-            .as_str()
-            .contains(
-                "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
-            ));
+        assert!(visible_summary(&no_battery).as_str().contains(
+            "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]—"
+        ));
     }
 
     /// An internal battery as IOPowerSources describes it: `percent` out of
@@ -919,21 +890,11 @@ mod tests {
             adapter_watts: Some(67),
             condition: Some("Good #[fg=colour196] #1".to_string()),
         };
-        let status = render_status(
-            &snapshot,
-            Some(&health),
-            SummaryMode::Compact,
-            &ChargeHistory::new(),
-        );
+        let status = render_status(&snapshot, Some(&health), &ChargeHistory::new());
 
         assert_eq!(
-            visible_summary(&snapshot, SummaryMode::Compact).as_str(),
+            visible_summary(&snapshot).as_str(),
             "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]#[breathing]73%#[nobreathing]#[norange]#[default]#[pop-default]"
-        );
-        assert!(
-            visible_summary(&snapshot, SummaryMode::Full)
-                .as_str()
-                .contains("73% · 1h 24m")
         );
         assert!(status.label.as_str().contains("73%"));
         let details = status.preview.render();
@@ -1001,35 +962,27 @@ History       ····················"
                         estimate_minutes: None,
                     }),
                 };
-                for mode in [SummaryMode::Compact, SummaryMode::Full] {
-                    let status = render_status(&snapshot, None, mode, &ChargeHistory::new());
-                    let visible = visible_summary(&snapshot, mode).into_string();
-                    assert!(!status.label.is_empty(), "{snapshot:?} {mode:?}");
-                    assert!(!status.preview.is_empty(), "{snapshot:?} {mode:?}");
-                    assert!(!status.label.as_str().contains("popup="));
-                    assert_eq!(status.summary.as_str(), visible, "{snapshot:?} {mode:?}");
-                    assert!(visible.contains("range=user|bat-prefs"));
-                    if label_only {
-                        assert_eq!(
-                            visible, "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
-                            "{snapshot:?} {mode:?}"
-                        );
-                    } else {
-                        assert!(
-                            visible.contains(&format!("{percent}%")),
-                            "{snapshot:?} {mode:?}"
-                        );
-                        if mode == SummaryMode::Full {
-                            assert!(visible.contains(source.label()));
-                        }
-                    }
-                    assert!(
-                        status
-                            .preview
-                            .render_plain()
-                            .contains(&format!("Charge        {percent:>3} %"))
+                let status = render_status(&snapshot, None, &ChargeHistory::new());
+                let visible = visible_summary(&snapshot).into_string();
+                assert!(!status.label.is_empty(), "{snapshot:?}");
+                assert!(!status.preview.is_empty(), "{snapshot:?}");
+                assert!(!status.label.as_str().contains("popup="));
+                assert_eq!(status.summary.as_str(), visible, "{snapshot:?}");
+                assert!(visible.contains("range=user|bat-prefs"));
+                if label_only {
+                    assert_eq!(
+                        visible, "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
+                        "{snapshot:?}"
                     );
+                } else {
+                    assert!(visible.contains(&format!("{percent}%")), "{snapshot:?}");
                 }
+                assert!(
+                    status
+                        .preview
+                        .render_plain()
+                        .contains(&format!("Charge        {percent:>3} %"))
+                );
             }
         }
     }
@@ -1056,7 +1009,7 @@ History       ····················"
         for source in [charging, finishing, charged] {
             let snapshot = snapshot(&drawing_from("AC Power", vec![source.clone()]));
             assert_eq!(
-                visible_summary(&snapshot, SummaryMode::Compact).as_str(),
+                visible_summary(&snapshot).as_str(),
                 "#[fg=#EBCB8B]#[range=user|bat-prefs]BAT#[norange]#[default]",
                 "{source:?}"
             );
@@ -1073,11 +1026,11 @@ History       ····················"
             }],
         ));
         assert_eq!(
-            visible_summary(&snapshot, SummaryMode::Compact).as_str(),
+            visible_summary(&snapshot).as_str(),
             "#[fg=#EBCB8B]BAT#[default] #[push-default]#[range=user|bat-prefs fg=colour245]25%#[norange]#[default]#[pop-default]"
         );
         assert_eq!(
-            render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new())
+            render_status(&snapshot, None, &ChargeHistory::new())
                 .preview
                 .render()
                 .as_str(),
@@ -1112,9 +1065,7 @@ History       ····················"
         history.push(0.0);
         history.push(100.0);
         let snapshot = snapshot(&discharging());
-        let details = render_status(&snapshot, None, SummaryMode::Compact, &history)
-            .preview
-            .render();
+        let details = render_status(&snapshot, None, &history).preview.render();
         assert!(
             details
                 .as_str()
@@ -1166,12 +1117,7 @@ History       ····················"
     }
 
     fn raw(sources: &sys::PowerSources) -> (String, &'static str) {
-        let status = render_status(
-            &snapshot(sources),
-            None,
-            SummaryMode::Compact,
-            &ChargeHistory::new(),
-        );
+        let status = render_status(&snapshot(sources), None, &ChargeHistory::new());
         (status.percent, status.state)
     }
 
@@ -1212,7 +1158,7 @@ History       ····················"
     fn desktop_without_a_battery_clears_percent_and_reports_ac() {
         let mut harness = flash_plugin::testing::Harness::new("sysinfo");
         let snapshot = snapshot(&drawing_from("AC Power", Vec::new()));
-        let status = render_status(&snapshot, None, SummaryMode::Compact, &ChargeHistory::new());
+        let status = render_status(&snapshot, None, &ChargeHistory::new());
         harness.context().status(status.segments());
         let frames = harness.drain_status();
         assert_eq!(
@@ -1225,7 +1171,7 @@ History       ····················"
             source: PowerSource::Unknown,
             battery: None,
         };
-        let status = render_status(&unknown, None, SummaryMode::Compact, &ChargeHistory::new());
+        let status = render_status(&unknown, None, &ChargeHistory::new());
         assert_eq!((status.percent.as_str(), status.state), ("", ""));
     }
 }

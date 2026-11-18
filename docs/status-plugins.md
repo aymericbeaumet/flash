@@ -51,11 +51,13 @@ interface (`1.2M`, `12K`); `p-4` reserves its four cells, in decimal
 bytes per second. Counting the default route avoids double-counting VPN traffic.
 The labels contain no links or inline popups, so surrounding template bindings
 own the name, the colour, clicks, and hover. `summary` remains the plugin's own
-one-token line (name, metric, and in `full` mode the chart). [Raw numeric segments](#raw-numeric-segments) carry the
+one-token line: the name and its primary percentage (`NET` is the name alone,
+as is `BAT` at full charge on the adapter).
+[Raw numeric segments](#raw-numeric-segments) carry the
 same figures without markup. The maintained configuration shows `details` in PTY pagers;
-no third-party monitoring application is required. The five domains read one
-`[plugins.sysinfo] summary_mode = "compact" | "full"`, default to compact, and
-warn once before falling back from an invalid value.
+no third-party monitoring application is required. The plugin reads no
+settings. For live charts and per-process tables, run `btop` in a
+[terminal popup](popups.md) and wrap the labels in `#[popup=btop]`.
 
 | Domain | Nominal fast path | Slower path | Command |
 | --- | --- | --- | --- |

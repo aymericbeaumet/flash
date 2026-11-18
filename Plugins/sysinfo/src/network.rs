@@ -7,9 +7,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use flash_plugin::status::{
-    bytes_iec, bytes_iec_compact, rate_cells4, rate_iec, sparkline_padded, sparkline_scaled,
-};
+use flash_plugin::status::{bytes_iec, rate_cells4, rate_iec, sparkline_padded, sparkline_scaled};
 use flash_plugin::{
     Candidate, Color, Context, History, Markup, PerformResponse, PollHandle, PollPriority, Preview,
     Published, RefreshGate, StatusValue,
@@ -18,10 +16,7 @@ use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
 use tokio::task::JoinHandle;
 
-use crate::common::{
-    HISTORY_SAMPLES, SummaryMode, configured_summary_mode, first_failure, lock, plain, rate_series,
-    whole_rate,
-};
+use crate::common::{HISTORY_SAMPLES, first_failure, lock, plain, rate_series, whole_rate};
 use crate::sys;
 
 /// The `core:status.observed` prefix of this domain's segments.
@@ -329,8 +324,8 @@ impl Network {
     }
 
     /// The visible summary of the last discovery and sample.
-    pub(crate) fn summary(&self, ctx: &Context) -> Option<Markup> {
-        render_status(&self.state(), configured_summary_mode(ctx)).map(|rendered| rendered.summary)
+    pub(crate) fn summary(&self) -> Option<Markup> {
+        render_status(&self.state()).map(|rendered| rendered.summary)
     }
 
     /// Apply the host's observed segment set: the traffic cadence is armed
@@ -501,7 +496,7 @@ impl Network {
     fn emit_status_if_changed(&self, ctx: &Context) {
         let segments = {
             let mut state = self.state();
-            let Some(rendered) = render_status(&state, configured_summary_mode(ctx)) else {
+            let Some(rendered) = render_status(&state) else {
                 return;
             };
             let Some(rendered) = state.published.update(rendered) else {
@@ -613,14 +608,15 @@ fn calculate_rates(previous: &TimedCounters, current: &TimedCounters) -> RateDec
     })
 }
 
-fn render_status(state: &NetworkState, summary_mode: SummaryMode) -> Option<RenderedStatus> {
+fn render_status(state: &NetworkState) -> Option<RenderedStatus> {
     let details = render_preview(state)?;
     let rate = state.rates.map_or_else(
         || "   —".to_string(),
         |rates| rate_cells4(rates.received + rates.sent),
     );
     Some(RenderedStatus {
-        summary: visible_summary(state, summary_mode),
+        // The name alone: the rates are the label's and the details'.
+        summary: Markup::colored("NET", Color::TITLE),
         // The template owns the name and the width (`#[label]NET #[default]#{p-4:…}`).
         // The host trims a status value, so the reserved cells live in `p-4`.
         label: Markup::text(rate.trim()),
@@ -747,38 +743,6 @@ fn history_chart(history: &History<HISTORY_SAMPLES>) -> String {
     sparkline_padded(&sparkline_scaled(history), HISTORY_SAMPLES)
 }
 
-fn visible_summary(state: &NetworkState, summary_mode: SummaryMode) -> Markup {
-    let label = Markup::colored("NET", Color::TITLE);
-    if summary_mode == SummaryMode::Compact {
-        return label;
-    }
-    let (received, sent) = state.rates.map_or_else(
-        || ("—".to_string(), "—".to_string()),
-        |rates| {
-            (
-                bytes_iec_compact(rates.received),
-                bytes_iec_compact(rates.sent),
-            )
-        },
-    );
-    let chart = sparkline_scaled(
-        state
-            .received_history
-            .iter()
-            .zip(&state.sent_history)
-            .map(|(received, sent)| received.max(sent)),
-    );
-    let mut summary = label
-        + " "
-        + Markup::colored(format!("↓{received}"), Color::INBOUND)
-        + " "
-        + Markup::colored(format!("↑{sent}"), Color::OUTBOUND);
-    if !chart.is_empty() {
-        summary += format!(" {chart}");
-    }
-    summary
-}
-
 fn is_link_local(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => ip.is_link_local(),
@@ -814,7 +778,7 @@ mod tests {
             default_interface: Some("en0".to_string()),
             ..NetworkState::default()
         };
-        let status = render_status(&state, SummaryMode::Compact).unwrap();
+        let status = render_status(&state).unwrap();
         assert_eq!(status.segments().map(|(name, _)| name), SEGMENTS);
         assert!(SEGMENTS.iter().all(|name| name.starts_with(PREFIX)));
         // The traffic filter reads the names the domain sees: prefix-free.
@@ -893,7 +857,7 @@ mod tests {
                 }),
                 ..NetworkState::default()
             };
-            let status = render_status(&state, SummaryMode::Full).unwrap();
+            let status = render_status(&state).unwrap();
             assert_eq!(status.label.as_str(), expected);
             assert!(!status.label.as_str().contains("#["));
             let wire = wire(&status);
@@ -1120,24 +1084,11 @@ mod tests {
         };
         state.received_history.push(1.0);
         state.sent_history.push(0.5);
-        let rendered = render_status(&state, SummaryMode::Compact).unwrap();
+        let rendered = render_status(&state).unwrap();
         let wire = wire(&rendered);
         assert!(wire["network_summary"].starts_with("#[popup=inline:"));
         assert!(wire["network_summary"].ends_with("]#[fg=#EBCB8B]NET#[default]#[nopopup]"));
-        assert!(!wire["network_summary"].contains("↓1.5MiB"));
-        assert_eq!(
-            visible_summary(&state, SummaryMode::Compact).as_str(),
-            "#[fg=#EBCB8B]NET#[default]"
-        );
-        assert!(
-            !visible_summary(&state, SummaryMode::Full)
-                .as_str()
-                .contains("Studio")
-        );
-        assert_eq!(
-            visible_summary(&state, SummaryMode::Full).as_str(),
-            "#[fg=#EBCB8B]NET#[default] #[fg=colour39]↓1.5MiB#[default] #[fg=colour214]↑2.0KiB#[default] █"
-        );
+        assert_eq!(rendered.summary.as_str(), "#[fg=#EBCB8B]NET#[default]");
         assert!(
             rendered
                 .details
@@ -1173,11 +1124,7 @@ mod tests {
         };
 
         assert_eq!(
-            render_status(&state, SummaryMode::Compact)
-                .unwrap()
-                .details
-                .render()
-                .as_str(),
+            render_status(&state).unwrap().details.render().as_str(),
             "#[fg=#EBCB8B]Network#[default]\n\
 #[fg=colour245]Wi-Fi         #[default]Atelier\n\
 #[fg=colour245]Interface     #[default]en0\n\
@@ -1241,24 +1188,12 @@ mod tests {
             default_interface: Some("en0".into()),
             ..NetworkState::default()
         };
-        assert_eq!(
-            render_status(&state, SummaryMode::Compact)
-                .unwrap()
-                .label
-                .as_str(),
-            "—"
-        );
+        assert_eq!(render_status(&state).unwrap().label.as_str(), "—");
         state.rates = Some(TransferRates {
             received: 600_000.0,
             sent: 600_000.0,
         });
-        assert_eq!(
-            render_status(&state, SummaryMode::Compact)
-                .unwrap()
-                .label
-                .as_str(),
-            "1.2M"
-        );
+        assert_eq!(render_status(&state).unwrap().label.as_str(), "1.2M");
     }
 
     // -- Scenarios over the SDK harness with a scripted host ----------------
@@ -1475,7 +1410,7 @@ mod tests {
             sent_history: history([10.0, 20.0, 2_048.4]),
             ..NetworkState::default()
         };
-        let wire = wire(&render_status(&state, SummaryMode::Compact).unwrap());
+        let wire = wire(&render_status(&state).unwrap());
         assert_eq!(wire["network_down_bps"], "1572864");
         assert_eq!(wire["network_up_bps"], "2048");
         assert_eq!(wire["network_down_history"], "0 1536 1025");

@@ -4,7 +4,7 @@
 //! `disks_`, `network_`), and publishes `<domain>_<segment>` values; power
 //! follows `core:power.changed`, disks `core:volumes.changed` and network
 //! `core:network.changed`. The `network.addresses` catalog keeps the process
-//! resident. All five read one `[plugins.sysinfo] summary_mode`.
+//! resident.
 
 mod common;
 mod cpu;
@@ -31,7 +31,6 @@ flash_plugin::plugin!(Sysinfo);
 
 impl FlashPlugin for Sysinfo {
     async fn on_start(&self, ctx: Context) {
-        common::warn_invalid_summary_mode(&ctx);
         tokio::join!(
             self.cpu.start(&ctx),
             self.memory.start(&ctx),
@@ -87,10 +86,10 @@ impl Sysinfo {
             self.power.refresh(ctx),
         );
         let summaries: Vec<String> = [
-            self.cpu.summary(ctx),
-            self.memory.summary(ctx),
-            self.disks.summary(ctx),
-            self.network.summary(ctx),
+            self.cpu.summary(),
+            self.memory.summary(),
+            self.disks.summary(),
+            self.network.summary(),
             self.power.summary(),
         ]
         .into_iter()

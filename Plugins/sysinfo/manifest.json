@@ -2,7 +2,7 @@
   "id": "sysinfo",
   "name": "System info",
   "version": "0.1.0",
-  "description": "Publish the Mac's own figures as status segments: one-second CPU snapshots with periodically refreshed GPU telemetry, one-second memory snapshots, three-second disk activity with capacity re-read on every mount change, one-second default-route traffic with network identity refreshed on every network change, and battery snapshots on power-source changes with TTL-bounded health. Every domain carries a summary, a label, structured hover details and raw numeric segments; summary_mode=full restores charts and secondary telemetry inline. Local addresses are copyable from @network.",
+  "description": "Publish the Mac's own figures as status segments: one-second CPU snapshots with periodically refreshed GPU telemetry, one-second memory snapshots, three-second disk activity with capacity re-read on every mount change, one-second default-route traffic with network identity refreshed on every network change, and battery snapshots on power-source changes with TTL-bounded health. Every domain carries a summary, a label, structured hover details and raw numeric segments. Local addresses are copyable from @network.",
   "sandbox": {
     "mach": [
       "com.apple.PowerManagement.control"

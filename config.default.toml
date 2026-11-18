@@ -291,15 +291,10 @@ startup_timeout = 5
 # grok_auth_file = "~/.grok/auth.json"
 #
 # The sysinfo plugin publishes the CPU, memory, disks, network and power
-# segments (#{flash.plugin.sysinfo.cpu_label}, …power_percent) and one display
-# setting covers all five. `compact` is the default: the bar keeps only the
-# primary percentage (or the NET label), while ticking charts and secondary
-# metrics stay in the hover popup. `full` opts the charts/secondary metrics
-# back into the bar. Unknown string values log a warning and fall back to
-# `compact`.
-#
-# [plugins.sysinfo]
-# summary_mode = "full" # "compact" | "full"
+# segments (#{flash.plugin.sysinfo.cpu_label}, …power_percent) and reads no
+# settings. A summary is the name and its primary percentage (NET is the name
+# alone); the charts and secondary metrics are in the hover details. For a
+# live dashboard, show btop in a terminal popup ([popup.btop] below).
 
 # RSS headlines from the last 24 hours. No requests run until a URL is set.
 # The template owns the name and the hovers. The name and the headline can
