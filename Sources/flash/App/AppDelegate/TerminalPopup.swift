@@ -16,7 +16,7 @@ extension AppDelegate {
   func configureTerminalPopupInput() {
     let popup = overlay.statusPopupController
     terminalInputMappings = TerminalInputMappingHandler<StatusTerminalInputOrigin>(
-      mappings: (lastAppliedMappingMode ?? config.mode).compiledTerminal,
+      mappings: (effectiveMappingCache.applied ?? config.mode).compiledTerminal,
       timeoutMs: config.mode.sequenceTimeoutMs,
       replay: { [weak self] event, origin in
         guard let self else { return }
@@ -104,7 +104,7 @@ extension AppDelegate {
   func reloadTerminalPopupConfiguration() {
     // Replay pending prefix input while the original view/session is still bound.
     terminalInputMappings?.replaceMappings(
-      (lastAppliedMappingMode ?? config.mode).compiledTerminal,
+      (effectiveMappingCache.applied ?? config.mode).compiledTerminal,
       timeoutMs: config.mode.sequenceTimeoutMs)
     // Sessions start with the login environment, so their commands see the
     // user's PATH and tooling; the launch refresh applies them once it lands.

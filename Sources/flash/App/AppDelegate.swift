@@ -164,15 +164,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Bumped by every switcher opened and every window it chose, so only the
   /// latest choice activates its app.
   var windowSwitcherFocusGeneration: UInt64 = 0
-  /// Per-focused-app effective mapping tables (config + applicable plugin
-  /// mappings), keyed by bundle id ("" for none/unknown). Cleared on config
-  /// reload and when a plugin's mappings change.
-  var effectiveMappingCache: [String: Config.Mode] = [:]
-  /// The effective mode last handed to `MappingsCoordinator`, so a focus
-  /// change only re-registers Carbon hotkeys when the chord set changed.
-  var lastAppliedMappingMode: Config.Mode?
-  /// The selector cache key `lastAppliedMappingMode` was resolved for.
-  var lastAppliedMappingKey: String?
+  /// Per-focused-app effective mapping tables and the one applied; cleared
+  /// on config reload and when a plugin's mappings change.
+  var effectiveMappingCache = EffectiveMappingCache()
   /// The config error last shown: its message, so an unchanged error is not
   /// re-shown on every reload, and its toast, so clearing the error closes
   /// that toast and never another one.

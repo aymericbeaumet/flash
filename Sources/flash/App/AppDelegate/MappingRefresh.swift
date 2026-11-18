@@ -18,18 +18,15 @@ extension AppDelegate {
     overlay?.hyperModeMappings = effective.compiledHyper
     // The cache hands back one value per selector key, so a focus change
     // that lands on the key already applied skips the six-table compare.
-    let selectorChanged = lastAppliedMappingKey != context.cacheKey || lastAppliedMappingMode == nil
-    guard selectorChanged else { return }
-    lastAppliedMappingKey = context.cacheKey
+    guard effectiveMappingCache.select(context.cacheKey) else { return }
     // A half-typed sequence and the timeout armed for it were resolved
     // against the table this replaces; neither may complete against this one.
     resetPendingNormalSequence(reason: "mappings_refreshed")
-    if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
+    if effectiveMappingCache.apply(effective) {
       terminalInputMappings?.replaceMappings(
         effective.compiledTerminal,
         timeoutMs: config.mode.sequenceTimeoutMs)
       mappings.apply(mode: effective)
-      lastAppliedMappingMode = effective
       debugStateDidChange()
     }
   }
@@ -39,7 +36,7 @@ extension AppDelegate {
   /// otherwise. A half-typed
   /// sequence belongs to the table it was typed against, so a switch drops it.
   func applyInterpreterTable(for scope: MappingScope) {
-    guard let overlay, let effective = lastAppliedMappingMode else { return }
+    guard let overlay, let effective = effectiveMappingCache.applied else { return }
     let table = Self.interpreterTable(for: scope, in: effective)
     guard overlay.normalModeMappings != table else { return }
     overlay.normalModeMappings = table
@@ -96,9 +93,7 @@ extension AppDelegate {
   /// Drop cached effective modes and force the next refresh to re-apply the
   /// coordinator. Called when the base config or any plugin's mappings change.
   func invalidateEffectiveMappings() {
-    effectiveMappingCache.removeAll()
-    lastAppliedMappingMode = nil
-    lastAppliedMappingKey = nil
+    effectiveMappingCache.invalidate()
   }
 
   /// Selectors only need a bundle id. A caller that already knows the
@@ -119,19 +114,10 @@ extension AppDelegate {
   }
 
   func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {
-    let key = context.cacheKey
-    if let cached = effectiveMappingCache[key] { return cached }
-    let pluginMappings = pluginManager.mappings(in: context)
-    let effective = EffectiveMappings.merge(
-      base: config.mode, plugin: pluginMappings, bundleID: context.bundleID)
-    effectiveMappingCache[key] = effective
-    return effective
-  }
-
-  private func mappingModeChanged(from old: Config.Mode?, to new: Config.Mode) -> Bool {
-    guard let old else { return true }
-    return old.all != new.all || old.normal != new.normal || old.insert != new.insert
-      || old.command != new.command || old.terminal != new.terminal || old.hyper != new.hyper
-      || old.hold != new.hold || old.layers != new.layers
+    effectiveMappingCache.mode(for: context.cacheKey) {
+      EffectiveMappings.merge(
+        base: config.mode, plugin: pluginManager.mappings(in: context),
+        bundleID: context.bundleID)
+    }
   }
 }
