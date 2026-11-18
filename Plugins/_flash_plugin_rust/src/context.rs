@@ -26,7 +26,14 @@ use crate::types::{Candidate, Event, PerformResponse, RunningApplication};
 /// response arrives and drains the registry at teardown so every waiter gets
 /// the `host closed stdin` sentinel. Cloned into [`Context`] so any handler
 /// can call the host.
-pub(crate) type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
+pub(crate) type HostPending = Arc<Mutex<HashMap<u64, PendingHostCall>>>;
+
+/// One in-flight host call: the method it named, whose rules its reply is
+/// held to, and the handler awaiting that reply.
+pub(crate) struct PendingHostCall {
+    method: String,
+    reply: oneshot::Sender<Value>,
+}
 
 pub(crate) const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
 pub(crate) const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
@@ -364,7 +371,13 @@ impl Context {
             if pending.len() >= HOST_CALL_CAPACITY {
                 return json!({ "ok": false, "error": "host call capacity exceeded" });
             }
-            pending.insert(id, tx);
+            pending.insert(
+                id,
+                PendingHostCall {
+                    method: method.to_string(),
+                    reply: tx,
+                },
+            );
         }
         let _pending_call = PendingCall {
             pending: self.host_pending.clone(),
@@ -411,11 +424,29 @@ impl Context {
     /// Fulfil the in-flight host call `id` with the host's `result`; `false`
     /// when no call awaits that id (late and unsolicited replies are dropped).
     pub(crate) fn resolve_host_call(&self, id: u64, result: Value) -> bool {
+        self.take_host_call(id)
+            .is_some_and(|call| call.reply.send(result).is_ok())
+    }
+
+    /// Fulfil the in-flight host call `id` with a reply read off the wire,
+    /// held to the rules of the method the call named: one that breaks them
+    /// reaches the caller as the `invalid host response` sentinel.
+    pub(crate) fn settle_host_reply(&self, id: u64, result: Value) -> bool {
+        self.take_host_call(id).is_some_and(|call| {
+            let result = if crate::wire::valid_host_reply(&call.method, &result) {
+                result
+            } else {
+                json!({ "ok": false, "error": "invalid host response" })
+            };
+            call.reply.send(result).is_ok()
+        })
+    }
+
+    fn take_host_call(&self, id: u64) -> Option<PendingHostCall> {
         self.host_pending
             .lock()
             .ok()
             .and_then(|mut pending| pending.remove(&id))
-            .is_some_and(|tx| tx.send(result).is_ok())
     }
 
     /// Drop every in-flight host call so each waiter observes the closed

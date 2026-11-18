@@ -1067,7 +1067,10 @@ is a lowercase plural noun (`recipes`, `tickets`).
 **The response law.** Every `result` is a JSON object carrying boolean `ok`.
 `ok: false` carries a non-empty, content-free `error` string — with one
 deliberate exception: `perform`'s `{"ok": false, "unhandled": true}` (see
-below). Protocol-level failures use the canonical exact strings from
+below). A failure holds those two keys and no other; only a
+`host.applescript` failure may add an integer `status`, and the SDK takes
+any other reply that breaks the law as `invalid host response`.
+Protocol-level failures use the canonical exact strings from
 `protocol.json` (`unknown method: <m>`, `protocol version mismatch: host
 v<H>, plugin v1`, `initialize may only be called once`, …); domain failures
 are free-form but never contain query text, candidate data, clipboard

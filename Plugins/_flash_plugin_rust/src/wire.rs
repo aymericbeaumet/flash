@@ -112,6 +112,23 @@ pub(crate) fn valid_result(method: &str, result: &Value) -> bool {
     true
 }
 
+/// A reply to the host RPC `method`: the response law every result follows,
+/// plus the one key a failure may add, the integer `status` of a
+/// `host.applescript` script that ran and failed or timed out.
+pub(crate) fn valid_host_reply(method: &str, result: &Value) -> bool {
+    if method == "host.applescript"
+        && result.get("ok") == Some(&Value::Bool(false))
+        && let Some(status) = result.get("status")
+    {
+        let mut law = result.clone();
+        if let Some(object) = law.as_object_mut() {
+            object.remove("status");
+        }
+        return status.as_i64().is_some() && valid_result("host", &law);
+    }
+    valid_result("host", result)
+}
+
 /// Columns and rows of a `text_grid` reply are each at most this: tmux's own
 /// window limit, so a grid the host lays out stays bounded.
 pub(crate) const MAX_TEXT_GRID_DIMENSION: u64 = 10_000;

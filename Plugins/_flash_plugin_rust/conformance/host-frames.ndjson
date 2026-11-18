@@ -61,6 +61,8 @@
 {"name": "host.applescript.reply.unsupported", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"unsupported AppleScript operation or field"}}}
 {"name": "host.applescript.reply.without-an-operation", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"host.applescript requires a supported operation"}}}
 {"name": "host.applescript.reply.invalid-index", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"operation requires a positive integer index"}}}
+{"name": "host.applescript.reply.script-failed", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"execution error: no such tab (-1728)","status":1}}}
+{"name": "host.applescript.reply.status-not-an-integer", "expect": "reject", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"applescript timed out timeout_ms=10000","status":"124"}}}
 {"name": "host.normal_mode_target.reply", "expect": "accept", "reply_to": "host.normal_mode_target", "frame": {"id":1,"result":{"ok":true,"present":true,"pid":512,"bundle_id":"com.example.app","window_id":4021}}}
 {"name": "host.normal_mode_target.reply.absent", "expect": "accept", "reply_to": "host.normal_mode_target", "frame": {"id":1,"result":{"ok":true,"present":false}}}
 {"name": "host.activate.reply", "expect": "accept", "reply_to": "host.activate", "frame": {"id":1,"result":{"ok":true}}}
@@ -95,5 +97,6 @@
 {"name": "host-reply.error-not-a-string", "expect": "reject", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":404}}}
 {"name": "host-reply.failure-with-another-key", "expect": "reject", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"open failed","detail":"LaunchServices"}}}
 {"name": "host-reply.success-with-an-error", "expect": "reject", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true,"error":"open failed"}}}
+{"name": "host-reply.status-outside-applescript", "expect": "reject", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"fetch failed","status":502}}}
 {"name": "host-reply.result-not-an-object", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1,"result":[]}}
 {"name": "host-reply.without-a-result", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1}}

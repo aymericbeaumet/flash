@@ -411,13 +411,8 @@ where
         if method.is_empty() {
             if let Some(request_id) = id.as_u64() {
                 let result = frame.get("result").cloned().unwrap_or(Value::Null);
-                let result = if crate::wire::valid_result("host", &result) {
-                    result
-                } else {
-                    json!({ "ok": false, "error": "invalid host response" })
-                };
                 // Responses to unknown ids are dropped silently.
-                ctx.resolve_host_call(request_id, result);
+                ctx.settle_host_reply(request_id, result);
             }
             continue;
         }
