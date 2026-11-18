@@ -47,6 +47,7 @@ name = "flash-plugin-sysinfo"
 version = "0.1.0"
 dependencies = [
  "flash_plugin",
+ "libc",
  "nix",
  "serde_json",
  "tokio",

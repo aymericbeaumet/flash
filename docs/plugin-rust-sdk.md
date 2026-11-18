@@ -148,6 +148,11 @@ Handed to every handler; cheap to clone. Key surface:
   waits while sampling; it preserves timeout warnings while moving that call's
   default one-second slow warning. `.into_perform()` turns a capture into a
   `PerformResponse`.
+- Process table: `flash_plugin::sys::process_parents()` lists every
+  `(pid, ppid)` through libproc, so no plugin forks `ps` for a process tree.
+  The SDK carries only the native bindings more than one plugin needs; a
+  reader one plugin uses lives in that plugin (the `sysinfo` monitors' Mach,
+  sysctl and IOKit samplers are `Plugins/sysinfo/src/sys/`).
 - AppleScript: `ctx.applescript(&AppleScriptOperation::…, timeout)` returns
   `Result<String, String>` through `host.applescript`. Named operations cover
   browser tab listing/selection/moves, listing/running shortcuts and sending

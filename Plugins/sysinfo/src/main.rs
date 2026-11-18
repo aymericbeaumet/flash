@@ -12,6 +12,7 @@ mod disks;
 mod memory;
 mod network;
 mod power;
+mod sys;
 
 use flash_plugin::{CommandRequest, Context, Event, PerformResponse, host_events, run};
 

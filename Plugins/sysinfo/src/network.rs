@@ -12,7 +12,7 @@ use flash_plugin::status::{
 };
 use flash_plugin::{
     Candidate, Color, Context, History, Markup, PerformResponse, PollHandle, PollPriority, Preview,
-    Published, RefreshGate, StatusValue, sys,
+    Published, RefreshGate, StatusValue,
 };
 use nix::ifaddrs::getifaddrs;
 use nix::net::if_::InterfaceFlags;
@@ -22,6 +22,7 @@ use crate::common::{
     HISTORY_SAMPLES, SummaryMode, configured_summary_mode, first_failure, lock, plain, rate_series,
     whole_rate,
 };
+use crate::sys;
 
 /// The `core:status.observed` prefix of this domain's segments.
 pub(crate) const PREFIX: &str = "network_";

@@ -1,7 +1,7 @@
 //! CoreFoundation glue for the framework readers (`sys::gpu_statistics`,
-//! `sys::power_sources`, `sys::smart_battery`, …). Crate-private: plugins
-//! only ever see owned Rust values, and every CF reference created here is
-//! released by [`Owned`].
+//! `sys::power_sources`, `sys::smart_battery`, …). Private to `sys`: the
+//! domains only ever see owned Rust values, and every CF reference created
+//! here is released by [`Owned`].
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;

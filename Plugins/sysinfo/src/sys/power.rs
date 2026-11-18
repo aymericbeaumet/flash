@@ -2,8 +2,9 @@
 //! prints) and the `AppleSmartBattery` registry entry (what
 //! `ioreg -r -c AppleSmartBattery -l` prints).
 
-use super::{SysError, matching_services, registry_properties};
-use crate::cf;
+use super::SysError;
+use super::cf;
+use super::iokit::{matching_services, registry_properties};
 
 #[link(name = "IOKit", kind = "framework")]
 unsafe extern "C" {
@@ -16,39 +17,39 @@ unsafe extern "C" {
 /// The power-source snapshot `pmset -g batt` prints: what powers the Mac,
 /// and every internal battery or UPS macOS reports, in its order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PowerSources {
+pub(crate) struct PowerSources {
     /// `AC Power`, `Battery Power` or `UPS Power`
     /// (`IOPSGetProvidingPowerSourceType`); `None` when macOS names none.
-    pub providing: Option<String>,
+    pub(crate) providing: Option<String>,
     /// One description per internal battery or UPS; empty on a Mac with
     /// neither.
-    pub sources: Vec<PowerSource>,
+    pub(crate) sources: Vec<PowerSource>,
 }
 
 /// One power source's description (`IOPSGetPowerSourceDescription`). A field
 /// is `None` when the source does not publish it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PowerSource {
+pub(crate) struct PowerSource {
     /// `Power Source State`: `AC Power`, `Battery Power` or `Off Line`.
-    pub state: Option<String>,
+    pub(crate) state: Option<String>,
     /// `Current Capacity`, out of `Max Capacity` (percent on Apple batteries).
-    pub current_capacity: Option<i64>,
-    pub max_capacity: Option<i64>,
+    pub(crate) current_capacity: Option<i64>,
+    pub(crate) max_capacity: Option<i64>,
     /// `Is Charging`.
-    pub is_charging: Option<bool>,
+    pub(crate) is_charging: Option<bool>,
     /// `Is Charged`.
-    pub is_charged: Option<bool>,
+    pub(crate) is_charged: Option<bool>,
     /// `Is Finishing Charge`.
-    pub is_finishing_charge: Option<bool>,
+    pub(crate) is_finishing_charge: Option<bool>,
     /// `Time to Empty` in minutes; -1 while macOS is still estimating.
-    pub time_to_empty: Option<i64>,
+    pub(crate) time_to_empty: Option<i64>,
     /// `Time to Full Charge` in minutes; -1 while macOS is still estimating.
-    pub time_to_full_charge: Option<i64>,
+    pub(crate) time_to_full_charge: Option<i64>,
 }
 
 /// The current power-source snapshot, from IOPowerSources (powerd's
 /// `com.apple.PowerManagement.control` service).
-pub fn power_sources() -> Result<PowerSources, SysError> {
+pub(crate) fn power_sources() -> Result<PowerSources, SysError> {
     // SAFETY: a Copy-rule snapshot, released by `Owned`.
     let blob = unsafe { cf::Owned::new(IOPSCopyPowerSourcesInfo()) }
         .ok_or_else(|| SysError("IOPSCopyPowerSourcesInfo returned no snapshot".into()))?;
@@ -99,26 +100,26 @@ unsafe fn power_source(description: cf::CFTypeRef) -> PowerSource {
 /// The `AppleSmartBattery` registry properties the power monitor shows. A
 /// field is `None` when the battery does not publish it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SmartBattery {
+pub(crate) struct SmartBattery {
     /// `CycleCount`.
-    pub cycle_count: Option<i64>,
+    pub(crate) cycle_count: Option<i64>,
     /// `DesignCapacity`, in mAh.
-    pub design_capacity: Option<i64>,
+    pub(crate) design_capacity: Option<i64>,
     /// `AppleRawMaxCapacity`: today's full-charge capacity, in mAh.
-    pub raw_max_capacity: Option<i64>,
+    pub(crate) raw_max_capacity: Option<i64>,
     /// `NominalChargeCapacity`, in mAh.
-    pub nominal_charge_capacity: Option<i64>,
+    pub(crate) nominal_charge_capacity: Option<i64>,
     /// `Temperature`, in hundredths of a degree Celsius.
-    pub temperature: Option<i64>,
+    pub(crate) temperature: Option<i64>,
     /// `AdapterDetails` → `Watts`: the connected adapter's rating.
-    pub adapter_watts: Option<i64>,
+    pub(crate) adapter_watts: Option<i64>,
     /// `BatteryHealthCondition`, when macOS flags one.
-    pub health_condition: Option<String>,
+    pub(crate) health_condition: Option<String>,
 }
 
 /// The first `AppleSmartBattery` service's properties, read from the IOKit
 /// registry; `Ok(None)` on a Mac without a battery.
-pub fn smart_battery() -> Result<Option<SmartBattery>, SysError> {
+pub(crate) fn smart_battery() -> Result<Option<SmartBattery>, SysError> {
     let Some(service) = matching_services(c"AppleSmartBattery")?.into_iter().next() else {
         return Ok(None);
     };
@@ -153,7 +154,7 @@ unsafe fn smart_battery_from(properties: cf::CFTypeRef) -> SmartBattery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cf::fixtures::*;
+    use crate::sys::cf::fixtures::*;
 
     #[test]
     fn power_source_descriptions_read_typed_fields() {

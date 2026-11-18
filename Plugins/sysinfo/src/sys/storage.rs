@@ -6,24 +6,25 @@ use std::ffi::{CStr, CString, c_char};
 use std::mem;
 use std::ptr;
 
-use super::{SysError, matching_services, registry_entry_id, registry_property};
-use crate::cf;
+use super::SysError;
+use super::cf;
+use super::iokit::{matching_services, registry_entry_id, registry_property};
 
 /// One block-storage driver's lifetime transfer counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlockStorageStatistics {
+pub(crate) struct BlockStorageStatistics {
     /// The driver's registry entry ID (`ioreg`'s `id 0x…`): a stable key
     /// while the device stays attached.
-    pub registry_id: u64,
+    pub(crate) registry_id: u64,
     /// `Statistics` → `Bytes (Read)` since the driver attached.
-    pub bytes_read: Option<u64>,
+    pub(crate) bytes_read: Option<u64>,
     /// `Statistics` → `Bytes (Write)` since the driver attached.
-    pub bytes_written: Option<u64>,
+    pub(crate) bytes_written: Option<u64>,
 }
 
 /// Counters for every `IOBlockStorageDriver` (one per attached disk, disk
 /// image included), read from the IOKit registry.
-pub fn block_storage_statistics() -> Result<Vec<BlockStorageStatistics>, SysError> {
+pub(crate) fn block_storage_statistics() -> Result<Vec<BlockStorageStatistics>, SysError> {
     Ok(matching_services(c"IOBlockStorageDriver")?
         .iter()
         .filter_map(|driver| {
@@ -56,15 +57,15 @@ unsafe fn block_storage_from(
 
 /// One mounted local file system's size, in its own block units.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalVolume {
+pub(crate) struct LocalVolume {
     /// Where it is mounted (`f_mntonname`), as `df`'s `Mounted on`.
-    pub mount_point: String,
+    pub(crate) mount_point: String,
     /// The fundamental block size in bytes (`f_bsize`).
-    pub block_size: u32,
+    pub(crate) block_size: u32,
     /// Total blocks (`f_blocks`).
-    pub blocks: u64,
+    pub(crate) blocks: u64,
     /// Blocks available to an unprivileged user (`f_bavail`).
-    pub blocks_available: u64,
+    pub(crate) blocks_available: u64,
 }
 
 /// Every mount `df -l` lists, in mount-table order: file systems whose type
@@ -72,7 +73,7 @@ pub struct LocalVolume {
 /// are left out; `devfs` and `autofs` are too, as `df -l` leaves them out),
 /// each re-read with `statfs` for current figures and falling back to the
 /// mount table's cached ones when that fails.
-pub fn local_volumes() -> Result<Vec<LocalVolume>, SysError> {
+pub(crate) fn local_volumes() -> Result<Vec<LocalVolume>, SysError> {
     let remote = remote_filesystem_types();
     Ok(mount_table()?
         .iter()
@@ -197,7 +198,7 @@ fn c_text(chars: &[c_char]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cf::fixtures::*;
+    use crate::sys::cf::fixtures::*;
 
     #[test]
     fn statistics_read_the_byte_counters_and_reject_negative_or_missing_ones() {

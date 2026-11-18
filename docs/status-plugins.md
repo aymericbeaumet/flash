@@ -69,10 +69,11 @@ warn once before falling back from an invalid value.
 and answers with one line of their summaries.
 
 Every domain retains 20 fast samples for its chart. No domain spawns a
-process: each reads the kernel and system frameworks through the SDK's
-`flash_plugin::sys` module (the unsafe FFI lives in the SDK, never in a
-plugin), the same interfaces the CLIs they replaced read, so a busy exec
-policy daemon cannot stall a sample. `cpu` reads GPU utilization from the
+process: each reads the kernel and system frameworks through the plugin's
+own `sys` module (`Plugins/sysinfo/src/sys/`, where the unsafe FFI stays
+behind safe wrappers; no other plugin reads these interfaces, so the SDK
+does not carry them), the same interfaces the CLIs they replaced read, so a
+busy exec policy daemon cannot stall a sample. `cpu` reads GPU utilization from the
 module's IOKit registry reader and caches the logical CPU count; `disks` reads
 the `IOBlockStorageDriver` statistics `ioreg` prints and the local volumes
 `df -l` lists; `power` reads the IOPowerSources snapshot `pmset -g batt`

@@ -7,7 +7,7 @@ use std::time::Duration;
 use flash_plugin::status::{duration_uptime, percent2, sparkline_padded, sparkline_percent};
 use flash_plugin::{
     Color, Context, History, Markup, ObservedCadences, PerformResponse, PollPriority, Preview,
-    Published, StatusValue, sys,
+    Published, StatusValue,
 };
 use nix::time::{ClockId, clock_gettime};
 
@@ -15,6 +15,7 @@ use crate::common::{
     GatePolicy, HISTORY_SAMPLES, SummaryMode, acquire_collection, configured_summary_mode, lock,
     percent_series, plain, whole_percent,
 };
+use crate::sys;
 
 /// The `core:status.observed` prefix of this domain's segments.
 pub(crate) const PREFIX: &str = "cpu_";

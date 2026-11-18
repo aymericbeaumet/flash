@@ -6,7 +6,8 @@ use std::ffi::CStr;
 use std::mem;
 use std::ptr;
 
-use super::{SysError, sysctl_buffer};
+use super::SysError;
+use super::sysctl::sysctl_buffer;
 
 /// `RTAX_*` slots of the sockaddrs that follow a routing message.
 const RTAX_DST: usize = 0;
@@ -15,7 +16,7 @@ const RTAX_MAX: usize = libc::RTAX_MAX as usize;
 
 /// The routing table to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RouteFamily {
+pub(crate) enum RouteFamily {
     Ipv4,
     Ipv6,
 }
@@ -31,17 +32,17 @@ impl RouteFamily {
 
 /// One default route's outgoing interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DefaultRoute {
+pub(crate) struct DefaultRoute {
     /// The interface's kernel index (`rtm_index`).
-    pub interface_index: u16,
+    pub(crate) interface_index: u16,
     /// The interface name (`en0`, `netstat`'s `Netif`); `None` when the index
     /// no longer names an interface.
-    pub interface: Option<String>,
+    pub(crate) interface: Option<String>,
 }
 
 /// Every default route of `family`, in the order `netstat -rn` lists them:
 /// the primary route first, then the interface-scoped ones.
-pub fn default_routes(family: RouteFamily) -> Result<Vec<DefaultRoute>, SysError> {
+pub(crate) fn default_routes(family: RouteFamily) -> Result<Vec<DefaultRoute>, SysError> {
     let mut mib = [
         libc::CTL_NET,
         libc::PF_ROUTE,

@@ -7,12 +7,13 @@ use std::time::{Duration, Instant};
 use flash_plugin::status::{duration_hours_minutes, percent, sparkline_padded, sparkline_percent};
 use flash_plugin::{
     Color, Context, History, Markup, PerformResponse, Preview, Published, RefreshGate, StatusValue,
-    Style, sys,
+    Style,
 };
 
 use crate::common::{
     HISTORY_SAMPLES, SummaryMode, configured_summary_mode, first_failure, lock, plain,
 };
+use crate::sys;
 
 /// The published segments, in manifest order. Power follows
 /// `core:power.changed`, so no cadence waits on `core:status.observed`.

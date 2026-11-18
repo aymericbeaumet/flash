@@ -11,12 +11,13 @@ use flash_plugin::status::{
 };
 use flash_plugin::{
     Color, Context, History, Markup, ObservedCadences, PerformResponse, PollPriority, Preview,
-    Published, RefreshGate, StatusValue, sys,
+    Published, RefreshGate, StatusValue,
 };
 
 use crate::common::{
     HISTORY_SAMPLES, SummaryMode, configured_summary_mode, first_failure, lock, plain, whole_rate,
 };
+use crate::sys;
 
 /// The `core:status.observed` prefix of this domain's segments.
 pub(crate) const PREFIX: &str = "disks_";
