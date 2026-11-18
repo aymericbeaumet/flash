@@ -100,7 +100,7 @@ else.
 | `test:plugin` | `cargo test --workspace --locked` in `Plugins/<id>` | One crate while iterating: `mise run test:plugin terminals` |
 | `fmt:inspector` | `prettier --write` in `Inspector/` | Format the help UI sources |
 | `lint:inspector` | `prettier --check` and `eslint` in `Inspector/` | Lint the help UI sources |
-| `test:inspector` | `pnpm lint`, `pnpm check` and `node --test *.test.ts` in `Inspector/` | Help UI changes |
+| `test:inspector` | `pnpm lint`, `pnpm check` and `node --test *.test.ts` in `Inspector/` | Help UI and docs changes: the unit tests also build the published site and hold it and the committed help page to their size budgets |
 | `test:status-format` | `Scripts/test-status-format-oracle.py`, after `build:tmux-oracle` | Status-language changes; `-- --record` updates the corpus |
 | `test:integration` | `test:integration:native`, `:browser`, `:electron`, in turn | Hint discovery or commit changes |
 | `test:integration:native` | `Scripts/test-integration-native.sh`, after `install:dev` | AppKit fixture: real host clicks |
@@ -130,7 +130,7 @@ else.
 | `bench:plugins` | `Scripts/benchmark-plugins.py --build` | Plugin startup, ping, RSS and threads ([plugin performance](plugin-performance.md)) |
 | `bench:footprint` | `Scripts/measure-footprint.sh` | The resident's CPU, wakeups and memory before and after a change |
 | `bench:cli` | `Scripts/benchmark-cli.py` | The installed `flash` CLI's start-up and its round trip to the running resident over the socket ([performance](performance.md#cli-round-trip)) |
-| `bench:help` | `Scripts/benchmark-help.mjs` | The browser help against the running resident: server replies, then load, navigation, typing and stream cost in headless Chrome ([performance](performance.md#browser-help)) |
+| `bench:help` | `Scripts/benchmark-help.mjs` | The browser help against the running resident: server replies, then load, navigation, typing and stream cost in headless Chrome ([performance](performance.md#browser-help)). `-- --site` measures a build of the published site instead, with no resident: its weight, first visits, a followed link and a search ([the published site](performance.md#the-published-site)) |
 | `generate:otlp` | `Scripts/generate-otlp.sh`, with the pinned `protoc` | Regenerate `Sources/FlashOTLP` after an OTLP pin change |
 | `update:bangs` | `Scripts/update-bangs.sh` | Refresh the vendored Kagi bang list |
 | `update:emoji-keywords` | `Scripts/update-emoji-keywords.sh` | Refresh the vendored CLDR emoji keywords |

@@ -217,7 +217,7 @@ the mapping keyboard's keycaps. List rows and navigation links are at least
 reading state, onboarding, mapping search, keyboard, request retry, clipboard
 history paging and resume, monitors, toasts, state patches, and the documentation: rendering, routes on
 both sites, every link of every page, and the published site's search files and their loader), renders the toast components on the server and holds the
-committed page to its size budget (`Inspector/budget.test.ts`). The page must remain
+committed page (`Inspector/budget.test.ts`) and the published site (`Inspector/site-budget.test.ts`) to their size budgets. The page must remain
 self-contained and must render plugin-authored Markdown as untrusted content.
 
 ## Keeping it fast

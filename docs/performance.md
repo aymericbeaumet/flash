@@ -771,6 +771,70 @@ popup anchors, a tenth of a whole snapshot in a test resident.
   off screen, but an anchor link into a long page then lands on estimated
   positions.
 
+### The published site
+
+The site at <https://aymericbeaumet.github.io/flash/> is the same manual
+with no resident behind it: a reader's first visit is one page's HTML, the
+site's script and styles and the navigation, and nothing else until a link
+or a search.
+
+```sh
+mise run build:site
+mise run bench:help -- --site                  # build/site, 5 runs
+mise run bench:help -- --site build/site --runs 10
+```
+
+`--site` needs no resident. It weighs the build (raw, and gzipped at level
+9), then serves it from its own process over loopback under the site's
+path, compressed as a static host sends it, and drives headless Chrome: a
+first visit of the home page, `getting-started` and `commands`, each in a
+fresh browser context (bytes transferred, requests, first contentful paint,
+when the page is hydrated, long tasks); a link from the home page followed
+with a bare click, then after the pointer rested on it, with whether Chrome
+had the page ahead; and a search from the search field taking focus, with
+the text held back until the outline's results are read, then released.
+Loopback has no latency, so the times are the browser's own work: on a
+network, bytes and requests are what a visit costs.
+
+2026-11-19, Apple M4 Pro, macOS 26.6.2, headless Chrome 157 at 1440×900,
+175 pages, medians of 5 runs:
+
+| Measure | Raw | Gzip |
+| --- | ---: | ---: |
+| Total HTML (175 pages, 48 alias stubs) | 7,798 KiB | 1,654 KiB |
+| Median page | 40.4 KiB | 8.0 KiB |
+| Largest page (`plugin-protocol`) | 136.5 KiB | 38.1 KiB |
+| Site JavaScript | 81.4 KiB | 29.9 KiB |
+| CSS | 36.0 KiB | 7.0 KiB |
+| Navigation asset | 35.3 KiB | 5.1 KiB |
+| Search outline | 58.5 KiB | 11.0 KiB |
+| Search text | 1,405.6 KiB | 475.4 KiB |
+
+| Measure | Result |
+| --- | ---: |
+| First visit of the home page: transferred, in 4 requests | 50.1 KiB |
+| First visit of `getting-started` / `commands`: transferred | 52.4 / 74.8 KiB |
+| First visit of the home page: first contentful paint / hydrated | 48 / 35 ms |
+| First visit of `commands`: first contentful paint / hydrated | 68 / 59 ms |
+| First visit: long tasks | 0 ms |
+| Link followed with a bare click: transferred, hydrated | 31.7 KiB, 40 ms |
+| Link pointed at, then pressed | fetched ahead |
+| Search: transferred before the first results (the outline) | 11.3 KiB |
+| Search: transferred for complete results (the text) | 476.5 KiB more |
+| Search: text read and results complete | 16 ms |
+| Typing in the search: per key, median / p95 | 2.1 / 10.4 ms |
+
+As one file, the search would cost 1,529 KiB (493 KiB gzipped) before its
+first result. Chrome refuses to render a page ahead while DevTools
+drives the tab (`PrerenderingDisabledByDevTools`), so the benchmark sees the
+fetch-ahead half of the speculation rules and never the prerender.
+
+`Inspector/site-budget.test.ts` (in `mise run test:inspector`) builds the
+site and holds total HTML, the median and the largest page, the site's
+JavaScript and CSS, the navigation asset and the search outline to budgets
+about 12% above these figures. The search text is the manual's own words:
+it is measured, not held.
+
 ## Not measured, by design
 
 - **Pixels.** Flash never reads the screen, so it has no OCR, vision or

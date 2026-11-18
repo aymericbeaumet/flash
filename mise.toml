@@ -248,7 +248,7 @@ description = "Time the installed flash CLI's round trip to the running resident
 run = "python3 -I Scripts/benchmark-cli.py"
 
 [tasks."bench:help"]
-description = "Time the browser help: server replies, then load, navigation, typing and stream cost in headless Chrome (-- --runs 5)"
+description = "Time the browser help: server replies, then load, navigation, typing and stream cost in headless Chrome (-- --runs 5; -- --site: a build of the published site instead)"
 run = "node Scripts/benchmark-help.mjs"
 
 [tasks."bench:footprint"]
