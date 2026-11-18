@@ -308,7 +308,7 @@ startup_timeout = 5
 # `label` is the rotating headline. `summary` adds archive and source links
 # and an inline article preview. Neither segment prints a section name.
 # [plugins.feed]
-# url = "https://example.com/feed.xml"
+# url = "https://example.com/feed.xml" # https only; Flash fetches it for the plugin
 # refresh_interval = 300 # seconds between feed requests
 # cycle_interval = 30    # seconds per headline; Flash rotates the carousel
 

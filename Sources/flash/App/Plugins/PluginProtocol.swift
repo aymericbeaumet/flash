@@ -46,8 +46,13 @@ enum PluginProtocol {
   static let maxAnswers = 16
   static let maxAnswersBytes = 256 * 1024
   static let maxAnswerFieldBytes = 16 * 1024
+  /// The bounds of a `host.fetch` response, and the most a manifest's
+  /// `fetch_limits` may raise them to: a body at the ceiling still fits one
+  /// frame once it is a JSON string.
   static let maxFetchResponseBytes = 1_048_576
   static let fetchTimeoutMs = 8_000
+  static let fetchResponseBytesCeiling = 4 * 1024 * 1024
+  static let fetchTimeoutMsCeiling = 30_000
   /// Columns and rows of a `text_grid` reply are each at most this.
   static let maxTextGridDimension = 10_000
   /// Percent-encoded bytes of one `#[popup=inline:…]` body in a status

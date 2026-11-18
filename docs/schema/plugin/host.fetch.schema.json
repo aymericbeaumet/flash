@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.fetch.schema.json",
   "title": "host.fetch",
-  "description": "Plugin to host: GET one https URL inside the manifest's fetch_urls allowlist.",
+  "description": "Plugin to host: GET one https URL inside the plugin's fetch allowlist: the manifest's fetch_urls prefixes and the URLs its fetch_settings hold.",
   "type": "object",
   "additionalProperties": false,
   "required": [

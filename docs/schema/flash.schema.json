@@ -1685,7 +1685,8 @@
               "type" : "boolean"
             },
             "url" : {
-              "description" : "The RSS or Atom feed to read: an http or https URL without credentials. No request runs until it is set.",
+              "description" : "The RSS or Atom feed to read: an https URL without credentials, which Flash fetches for the plugin. No request runs until it is set.",
+              "pattern" : "^(https://\\S+)?$",
               "type" : "string"
             }
           },

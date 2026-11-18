@@ -2,8 +2,8 @@ use crate::feed::{self, Article};
 use flash_plugin::{
     Color, Markup, Preview, Published, StatusCarousel, StatusSegment, StatusValue, Style,
 };
-use reqwest::Url;
 use std::time::Duration;
+use url::Url;
 
 /// The articles inside the rolling window, published as one host-rotated
 /// carousel: Flash owns the cadence and the visible line, the plugin only

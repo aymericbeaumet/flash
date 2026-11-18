@@ -20,9 +20,10 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// or buggy plugin can't exfiltrate. Only a sandboxed plugin declares it.
   case network
   /// Fetch specific URLs through the host (`host.fetch`): the host performs
-  /// the request itself against the manifest's `fetch_urls` allowlist with a
-  /// hard timeout and 1 MiB response cap, so the plugin needs no network
-  /// access of its own and keeps a fully network-denied sandbox.
+  /// the request itself against the manifest's `fetch_urls` and
+  /// `fetch_settings` allowlist, within its `fetch_limits`, so the plugin
+  /// needs no network access of its own and keeps a fully network-denied
+  /// sandbox.
   case networkFetch = "network_fetch"
   /// Read the host's current normal-mode target pid/bundle
   /// (`host.normal_mode_target`) and raise an app by pid (`host.activate`).
@@ -519,8 +520,15 @@ struct PluginManifest: Decodable, Equatable {
   var sandbox: PluginSandboxDeclaration?
   /// HTTPS URL prefixes the plugin may request through `host.fetch`.
   /// Requires the `network_fetch` capability; the host rejects any request
-  /// whose URL doesn't start with one of these.
+  /// whose URL starts with neither one of these nor a `fetch_settings` URL.
   var fetchURLs: [String]
+  /// `fetch_settings`: names of `[plugins.<id>]` string settings holding an
+  /// HTTPS URL the user chose, which the plugin may request like a
+  /// `fetch_urls` prefix. Requires the `network_fetch` capability.
+  var fetchSettings: [String]
+  /// `fetch_limits`: the bounds of a `host.fetch` response when they are not
+  /// the standard ones; nil when the manifest declares none.
+  var fetchLimits: PluginFetchLimitsDeclaration?
   /// Bundle ids of the apps the plugin's fixed operations may address through
   /// `host.applescript`. Requires the
   /// `apple_events` capability; the host refuses a script naming any other
@@ -729,6 +737,8 @@ struct PluginManifest: Decodable, Equatable {
     case watchSettings = "watch_settings"
     case settings
     case fetchURLs = "fetch_urls"
+    case fetchSettings = "fetch_settings"
+    case fetchLimits = "fetch_limits"
     case appleEventsTargets = "apple_events_targets"
     case onlyBundleIDs = "only_bundle_ids"
     case onlyTerminals = "only_terminals"
@@ -748,6 +758,8 @@ struct PluginManifest: Decodable, Equatable {
     install: String? = nil, exec: [String]? = nil,
     sandbox: PluginSandboxDeclaration? = nil,
     fetchURLs: [String] = [],
+    fetchSettings: [String] = [],
+    fetchLimits: PluginFetchLimitsDeclaration? = nil,
     appleEventsTargets: [String] = [],
     listen: [String] = [],
     lifecycle: PluginLifecycleDeclaration? = nil,
@@ -780,11 +792,13 @@ struct PluginManifest: Decodable, Equatable {
     self.exec = exec
     self.sandbox = sandbox
     self.fetchURLs = Self.uniqueTrimmed(fetchURLs)
+    self.fetchSettings = Self.uniqueTrimmed(fetchSettings)
+    self.fetchLimits = fetchLimits
     self.appleEventsTargets = Self.uniqueTrimmed(appleEventsTargets)
     self.listen = Self.uniqueTrimmed(listen)
     self.lifecycle = lifecycle
     self.watchSettings = Self.uniqueTrimmed(watchSettings)
-    self.settings = settings
+    self.settings = PluginSettings.marking(fetchSettings: self.fetchSettings, in: settings)
     self.hints = hints
     self.query = query
     self.commands = commands
@@ -816,6 +830,10 @@ struct PluginManifest: Decodable, Equatable {
     self.sandbox = try c.decodeIfPresent(PluginSandboxDeclaration.self, forKey: .sandbox)
     self.fetchURLs = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .fetchURLs) ?? [])
+    self.fetchSettings = Self.uniqueTrimmed(
+      try c.decodeIfPresent([String].self, forKey: .fetchSettings) ?? [])
+    self.fetchLimits = try c.decodeIfPresent(
+      PluginFetchLimitsDeclaration.self, forKey: .fetchLimits)
     let rawTargets = try c.decodeIfPresent([String].self, forKey: .appleEventsTargets) ?? []
     guard !rawTargets.contains(where: { $0.trimmed.isEmpty }) else {
       throw PluginError.failure("manifest.json apple_events_targets entries must be bundle ids")
@@ -825,8 +843,10 @@ struct PluginManifest: Decodable, Equatable {
     self.lifecycle = try c.decodeIfPresent(PluginLifecycleDeclaration.self, forKey: .lifecycle)
     self.watchSettings = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .watchSettings) ?? [])
-    self.settings =
-      try c.decodeIfPresent([String: PluginSettingDeclaration].self, forKey: .settings) ?? [:]
+    self.settings = PluginSettings.marking(
+      fetchSettings: fetchSettings,
+      in: try c.decodeIfPresent([String: PluginSettingDeclaration].self, forKey: .settings) ?? [:]
+    )
     self.hints = try c.decodeIfPresent(PluginHints.self, forKey: .hints)
     self.query = try c.decodeIfPresent(PluginQuery.self, forKey: .query)
     self.commands =
@@ -924,6 +944,22 @@ struct PluginManifest: Decodable, Equatable {
     return BrowserEngineTable(engines)
   }
 
+  /// What `host.fetch` may reach for this plugin: the `fetch_urls` prefixes
+  /// and the URL each `fetch_settings` setting holds. A value the host would
+  /// not fetch adds nothing.
+  func fetchAllowlist(settings: [String: PluginConfigValue]) -> [String] {
+    fetchURLs
+      + fetchSettings.compactMap { name in
+        guard case .string(let url)? = settings[name], PluginHostFetch.isFetchable(url) else {
+          return nil
+        }
+        return url
+      }
+  }
+
+  /// The bounds of this plugin's `host.fetch` responses.
+  var effectiveFetchLimits: PluginFetchLimits { fetchLimits?.limits ?? .standard }
+
   static func load(from root: URL) throws -> PluginManifest {
     let url = root.appendingPathComponent("manifest.json")
     let data = try Data(contentsOf: url)
@@ -950,6 +986,9 @@ struct PluginManifest: Decodable, Equatable {
     try rejectObject(
       dictionary["sandbox"], allowed: keys(PluginSandboxSpec.CodingKeys.self),
       path: "manifest.json sandbox")
+    try rejectObject(
+      dictionary["fetch_limits"], allowed: keys(PluginFetchLimitsDeclaration.CodingKeys.self),
+      path: "manifest.json fetch_limits")
     try rejectObject(
       dictionary["hints"], allowed: keys(PluginHints.CodingKeys.self),
       path: "manifest.json hints")
@@ -1052,6 +1091,10 @@ struct PluginManifest: Decodable, Equatable {
       throw PluginError.failure(
         "manifest.json watch_settings names \(name), which settings does not declare as a string")
     }
+    for name in fetchSettings where settings[name]?.type != .string {
+      throw PluginError.failure(
+        "manifest.json fetch_settings names \(name), which settings does not declare as a string")
+    }
     if lifecycle == .publishThenExit {
       guard exec != nil else {
         throw PluginError.failure("manifest.json lifecycle publish_then_exit needs exec")
@@ -1094,6 +1137,8 @@ struct PluginManifest: Decodable, Equatable {
         ("settings", !settings.isEmpty),
         ("sandbox", sandbox != nil),
         ("fetch_urls", !fetchURLs.isEmpty),
+        ("fetch_settings", !fetchSettings.isEmpty),
+        ("fetch_limits", fetchLimits != nil),
         ("apple_events_targets", !appleEventsTargets.isEmpty),
       ]
       if let field = processBound.first(where: { $0.1 })?.0 {
@@ -1103,9 +1148,18 @@ struct PluginManifest: Decodable, Equatable {
     }
     // A host-performed capability comes with the allowlist it is checked
     // against, and only with it.
-    if capabilities.contains(.networkFetch) != !fetchURLs.isEmpty {
+    if capabilities.contains(.networkFetch) == (fetchURLs.isEmpty && fetchSettings.isEmpty) {
       throw PluginError.failure(
-        "manifest.json network_fetch capability and fetch_urls must be declared together")
+        "manifest.json network_fetch capability comes with fetch_urls or fetch_settings, "
+          + "and only with them")
+    }
+    if let fetchLimits {
+      guard capabilities.contains(.networkFetch) else {
+        throw PluginError.failure("manifest.json fetch_limits needs the network_fetch capability")
+      }
+      if let error = fetchLimits.validationError {
+        throw PluginError.failure("manifest.json \(error)")
+      }
     }
     for prefix in fetchURLs where !prefix.hasPrefix("https://") {
       throw PluginError.failure(

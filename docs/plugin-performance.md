@@ -41,7 +41,9 @@ text plus a sorted trigger index, about 4 MiB live. It publishes its
 10,000-row catalog about 90 ms after start (80 ms of CPU) and settles near
 17 MiB physical footprint, most of it the freed publish buffers; `publish`
 serializes rows straight into the frame rather than through a JSON tree,
-which took the same start from 29 MiB.
+which took the same start from 29 MiB. Those figures predate the move of its
+list download to `host.fetch`, which removed its HTTP and TLS stack; the
+footprint has not been measured again since.
 
 Those counts describe the plugin set of their dates. The bundled plugins have
 since merged into twelve, eight of them resident by default

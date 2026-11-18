@@ -185,7 +185,10 @@ pages say which tool covers each one.
   only, with no Notification Center entry, sound or e-mail. Alerts pause
   while the displays sleep.
 - **Sandboxed plugins cannot use the Keychain or the system trust store**,
-  so they verify TLS against bundled roots. Browser and Shortcuts Apple
+  so Flash downloads for them (`host.fetch`): HTTPS only, and a redirect is
+  followed only to a URL the plugin's manifest allows. A feed whose URL
+  redirects elsewhere stays empty until `[plugins.feed] url` names the final
+  address. Browser and Shortcuts Apple
   Events run through fixed host operations, keeping both plugins sandboxed.
   Three bundled plugins still need unsandboxed external or credentialed helpers
   ([plugin isolation](privacy.md#plugin-isolation)).

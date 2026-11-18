@@ -293,10 +293,12 @@ command = ["newsboat-article", "$FLASH_STATUS_LINK"]
 cwd = "."
 ```
 
-Set `[plugins.feed] url` to an RSS feed URL; without one, the plugin makes no
-network requests. `refresh_interval` defaults to 300 seconds and `cycle_interval`
-to 30 seconds. RSS responses are limited to 32 MiB, including streamed responses
-without a declared content length. The plugin publishes every article in the window as one
+Set `[plugins.feed] url` to an RSS feed's `https://` URL; without one, no
+request is made. Flash fetches the feed for the plugin, which has no network
+access of its own: `http://` URLs are refused, and a redirect to another
+address is not followed, so name the feed's final URL. `refresh_interval`
+defaults to 300 seconds and `cycle_interval` to 30 seconds. A response is
+limited to 4 MiB of UTF-8 text and 15 seconds. The plugin publishes every article in the window as one
 host-rotated carousel; Flash rotates the headline, keeps the visible line until
 its scheduled rotation across refreshes, and slides the title and domain
 through the full bar height. A name written in the template stays still,

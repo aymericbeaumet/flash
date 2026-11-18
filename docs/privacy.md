@@ -117,17 +117,20 @@ Flash serves its optional inspector, and its optional OpenTelemetry receiver,
 only on loopback; the socket the `flash` command uses is a local file, not a
 network port. Remote requests come from configured plugin installation,
 plugin-declared host fetches, the OpenTelemetry exporter when you give it an
-endpoint, or the plugins and CLI tools listed below. `answers` uses the host's `fetch`, which only reaches URLs
-allowlisted in its manifest, so the plugin process itself stays network-denied;
-the others make their own requests or run the CLI tools named here.
+endpoint, or the plugins and CLI tools listed below. No bundled plugin holds
+the `network` capability: `answers`, `feed` and `searchproviders` ask Flash
+to fetch (`host.fetch`), which reaches only the HTTPS URLs their manifests
+allow, follows a redirect only to such a URL, and sends no cookie or stored
+credential, so those plugin processes stay network-denied. The others run the
+CLI tools named here.
 
 | Plugin | Destination | When | Default |
 | --- | --- | --- | --- |
 | Flash (updates) | `api.github.com/repos/aymericbeaumet/flash/releases/latest` (a GET with `If-None-Match` and a `Flash/<version>` user agent); for a newer release, its `Flash-<version>.zip` from `github.com`, which redirects to GitHub's release-asset storage | A minute after launch, then daily, an hour after a failure; on `updates check`, `updates install` and the About window's button | On; `[app] updates = "off"` stops the automatic ones; never for a development build |
 | `answers` | `www.ecb.europa.eu` (daily exchange rates) | At start, then every 6 hours | On |
-| `feed` | The URL you configure | Every `refresh_interval` | Off until `url` is set |
+| `feed` | The `https://` URL you configure, fetched by Flash for the plugin | Every `refresh_interval` | Off until `url` is set |
 | `terminals` | Noninteractive SSH to hosts running tmux | Every few seconds | Off: only hosts listed in `[plugins.terminals] ssh_hosts` |
-| `searchproviders` list | `duckduckgo.com/bang.js`, DuckDuckGo's public bang list; no query is sent | When the flashlight opens and the cached copy is missing or a week old; after a failure, at most once an hour | On |
+| `searchproviders` list | `duckduckgo.com/bang.js`, DuckDuckGo's public bang list, fetched by Flash for the plugin; no query is sent | When the flashlight opens and the cached copy is missing or a week old; after a failure, at most once an hour | On |
 | `searchproviders` bangs | The site the bang names, in your browser; DuckDuckGo only for its own searches such as `!i` | When you invoke a search bang; the query is in the URL | On use |
 | `aiproviders` quotas | `api.anthropic.com/api/oauth/usage` (Anthropic's usage endpoint, a read-only GET) with the access token Claude Code already stored; Codex's own service through `codex app-server --stdio`; `cli-chat-proxy.grok.com/v1/billing` (Grok's billing endpoint, a read-only GET) with the access token already in Grok's auth file | While the `claude`, `codex` or `grok` segment is observed; a reading is reused for 2 minutes, and a failed fetch waits 5 | Off until quota segments are displayed |
 | `aiproviders` chat bangs | The chat provider the bang names (`chatgpt.com`, `claude.ai`, `duck.ai` and `duckduckgo.com`, `chat.mistral.ai`, …; the full list is in [flashlight bangs](flashlight.md#bangs)) in your browser | When you invoke the provider's bang; a nonempty query is put in the URL where the provider takes one, and then Return is sent only while that app remains focused | On use |

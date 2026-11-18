@@ -1888,7 +1888,8 @@ final class PluginSystemTests: XCTestCase {
       defer { try? FileManager.default.removeItem(at: root) }
       XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
         XCTAssertTrue(
-          String(describing: error).contains("must be declared together"),
+          String(describing: error).contains(
+            "network_fetch capability comes with fetch_urls or fetch_settings"),
           String(describing: error))
       }
     }

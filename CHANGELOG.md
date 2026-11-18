@@ -53,6 +53,10 @@ monitors read that no plugin publishes any more, with its replacement.
   `[statusbar.click]` URLs are your own configuration and still open any
   scheme ([status bar](docs/statusbar.md#turn-a-label-into-an-action)).
 
+- **`[plugins.feed] url` is an `https://` URL that answers directly.** An
+  `http://` feed is refused, a redirect to another address is not followed
+  (name the feed's final URL), and a feed over 4 MiB is not read, where the
+  limit was 32 MiB.
 - **`h` `j` `k` `l` are the arrow keys on a page too.** A web page or a PDF
   scrolls on them as before, a field the page focused gets them, and a
   terminal still scrolls; `ctrl+d` / `ctrl+u` and `gg` / `G` are unchanged.
@@ -304,6 +308,14 @@ monitors read that no plugin publishes any more, with its replacement.
 
 ### New
 
+- `feed` and `searchproviders` no longer open network connections: Flash
+  downloads the feed and DuckDuckGo's bang list for them through
+  `host.fetch`, and their sandboxes deny the network like every other bundled
+  plugin's. A manifest names a user-chosen URL with `fetch_settings` and
+  raises the response bounds with `fetch_limits` (at most 4 MiB and 30
+  seconds). `flash config check` reports a `[plugins.feed] url` that is not
+  an `https://` URL. The Rust SDK's `fetch` returns the body of a 2xx
+  response alone; another status is an error.
 - Which apps are browsers, and of which engine, is plugin data: the new
   manifest key `browser_engines` (`chromium`, `webkit`, `gecko`), declared by
   the bundled `defaults` plugin. Flash itself names no browser. The engine

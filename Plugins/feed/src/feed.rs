@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 
 use chrono::DateTime;
-use reqwest::Url;
 use roxmltree::{Document, Node, ParsingOptions};
+use url::Url;
 
-pub(crate) const MAX_BYTES: usize = 32 * 1024 * 1024;
+/// The most a feed weighs: what the manifest's `fetch_limits` has the host
+/// accept.
+pub(crate) const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ITEMS: usize = 2000;
 pub(crate) const WINDOW_SECONDS: i64 = 24 * 60 * 60;
 

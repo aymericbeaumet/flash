@@ -90,6 +90,9 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(quotas["answer_field_bytes"] as? Int, PluginProtocol.maxAnswerFieldBytes)
     XCTAssertEqual(quotas["fetch_response_bytes"] as? Int, PluginProtocol.maxFetchResponseBytes)
     XCTAssertEqual(quotas["fetch_timeout_ms"] as? Int, PluginProtocol.fetchTimeoutMs)
+    XCTAssertEqual(
+      quotas["fetch_response_bytes_max"] as? Int, PluginProtocol.fetchResponseBytesCeiling)
+    XCTAssertEqual(quotas["fetch_timeout_ms_max"] as? Int, PluginProtocol.fetchTimeoutMsCeiling)
     XCTAssertEqual(quotas["text_grid_dimension"] as? Int, PluginProtocol.maxTextGridDimension)
     XCTAssertEqual(quotas["inline_preview_bytes"] as? Int, PluginProtocol.maxInlinePreviewBytes)
   }

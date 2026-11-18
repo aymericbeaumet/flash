@@ -1,6 +1,45 @@
 import FlashCore
 import Foundation
 
+/// The bounds of one `host.fetch` response.
+struct PluginFetchLimits: Equatable {
+  var maxBytes: Int
+  var timeoutMs: Int
+
+  static let standard = PluginFetchLimits(
+    maxBytes: PluginProtocol.maxFetchResponseBytes, timeoutMs: PluginProtocol.fetchTimeoutMs)
+}
+
+/// A manifest's `fetch_limits`: the bounds it sets, each under the host's
+/// ceiling. One it leaves out keeps the standard bound.
+struct PluginFetchLimitsDeclaration: Decodable, Equatable {
+  var maxBytes: Int?
+  var timeoutMs: Int?
+
+  enum CodingKeys: String, CodingKey, CaseIterable {
+    case maxBytes = "max_bytes"
+    case timeoutMs = "timeout_ms"
+  }
+
+  var limits: PluginFetchLimits {
+    PluginFetchLimits(
+      maxBytes: maxBytes ?? PluginFetchLimits.standard.maxBytes,
+      timeoutMs: timeoutMs ?? PluginFetchLimits.standard.timeoutMs)
+  }
+
+  /// Why a manifest cannot declare this; nil when it can.
+  var validationError: String? {
+    if maxBytes == nil, timeoutMs == nil { return "fetch_limits must set max_bytes or timeout_ms" }
+    if let maxBytes, !(1...PluginProtocol.fetchResponseBytesCeiling).contains(maxBytes) {
+      return "fetch_limits.max_bytes must be 1 to \(PluginProtocol.fetchResponseBytesCeiling)"
+    }
+    if let timeoutMs, !(1...PluginProtocol.fetchTimeoutMsCeiling).contains(timeoutMs) {
+      return "fetch_limits.timeout_ms must be 1 to \(PluginProtocol.fetchTimeoutMsCeiling)"
+    }
+    return nil
+  }
+}
+
 enum PluginHostFetch {
   struct Payload {
     let status: Int
@@ -17,9 +56,9 @@ enum PluginHostFetch {
     var message: String {
       switch self {
       case .transport(let error): String(describing: error)
-      case .oversized: "response exceeds the 1 MiB host.fetch cap"
-      case .disallowedURL: "url not in fetch_urls allowlist"
-      case .disallowedRedirect: "redirect not in fetch_urls allowlist"
+      case .oversized: "response exceeds the host.fetch byte cap"
+      case .disallowedURL: "url not in the fetch allowlist"
+      case .disallowedRedirect: "redirect not in the fetch allowlist"
       case .invalidResponse: "host.fetch requires an HTTP response"
       }
     }
@@ -27,12 +66,17 @@ enum PluginHostFetch {
 
   @discardableResult
   static func start(
-    request: URLRequest, allowlist: [String], configuration: URLSessionConfiguration,
+    request: URLRequest, allowlist: [String], limits: PluginFetchLimits = .standard,
+    configuration: URLSessionConfiguration,
     completion: @escaping (Result<Payload, Failure>) -> Void
   ) -> URLSessionDataTask {
-    Transfer(allowlist: allowlist, completion: completion).start(
+    Transfer(allowlist: allowlist, limits: limits, completion: completion).start(
       request: request, configuration: configuration)
   }
+
+  /// Whether `text` is a URL the host fetches: HTTPS, with a host and no
+  /// credentials.
+  static func isFetchable(_ text: String) -> Bool { canonicalURL(text) != nil }
 
   static func urlIsAllowed(_ text: String, byPrefix prefix: String) -> Bool {
     guard let url = canonicalURL(text), let allowed = canonicalURL(prefix), url.hasPrefix(allowed)
@@ -73,13 +117,18 @@ enum PluginHostFetch {
   /// queue. Session invalidation releases its delegate after the one result.
   private final class Transfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let allowlist: [String]
+    private let limits: PluginFetchLimits
     private var completion: ((Result<Payload, Failure>) -> Void)?
     private var session: URLSession?
     private var response: HTTPURLResponse?
     private var body = Data()
 
-    init(allowlist: [String], completion: @escaping (Result<Payload, Failure>) -> Void) {
+    init(
+      allowlist: [String], limits: PluginFetchLimits,
+      completion: @escaping (Result<Payload, Failure>) -> Void
+    ) {
       self.allowlist = allowlist
+      self.limits = limits
       self.completion = completion
     }
 
@@ -90,7 +139,7 @@ enum PluginHostFetch {
       // A plugin's `perform` waits on this reply; the work itself is a copy.
       delegateQueue.qualityOfService = .userInitiated
       let isolated = configuration.copy() as! URLSessionConfiguration
-      isolated.timeoutIntervalForResource = Double(PluginProtocol.fetchTimeoutMs) / 1_000
+      isolated.timeoutIntervalForResource = Double(limits.timeoutMs) / 1_000
       isolated.httpCookieStorage = nil
       isolated.urlCredentialStorage = nil
       isolated.urlCache = nil
@@ -145,7 +194,7 @@ enum PluginHostFetch {
         finish(.failure(.invalidResponse))
         return
       }
-      guard response.expectedContentLength <= Int64(PluginProtocol.maxFetchResponseBytes) else {
+      guard response.expectedContentLength <= Int64(limits.maxBytes) else {
         completionHandler(.cancel)
         finish(.failure(.oversized))
         return
@@ -156,7 +205,7 @@ enum PluginHostFetch {
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
       guard completion != nil else { return }
-      guard data.count <= PluginProtocol.maxFetchResponseBytes - body.count else {
+      guard data.count <= limits.maxBytes - body.count else {
         finish(.failure(.oversized))
         return
       }

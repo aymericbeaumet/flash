@@ -55,7 +55,7 @@
 {"name": "event.without-payload", "expect": "accept", "schema": "reject", "frame": {"method":"event","params":{"name":"core:space.changed"}}}
 {"name": "host.ping.reply", "expect": "accept", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":true}}}
 {"name": "host.fetch.reply", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":true,"status":200,"body":"{\"items\":[]}"}}}
-{"name": "host.fetch.reply.outside-the-allowlist", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"url not in fetch_urls allowlist"}}}
+{"name": "host.fetch.reply.outside-the-allowlist", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"url not in the fetch allowlist"}}}
 {"name": "host.fetch.reply.invalid-url", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"host.fetch requires a valid https url param"}}}
 {"name": "host.wifi_info.reply", "expect": "accept", "reply_to": "host.wifi_info", "frame": {"id":1,"result":{"ok":true,"present":true,"ssid":"Atelier"}}}
 {"name": "host.wifi_info.reply.absent", "expect": "accept", "reply_to": "host.wifi_info", "frame": {"id":1,"result":{"ok":true,"present":false}}}

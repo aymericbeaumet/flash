@@ -239,6 +239,7 @@ enum ConfigSchema {
       node["items"] = ["type": "string"]
     }
     node["enum"] = declaration.allowed
+    if declaration.fetchURL { node["pattern"] = #"^(https://\S+)?$"# }
     node["minimum"] = declaration.min.map(bound)
     node["maximum"] = declaration.max.map(bound)
     node["default"] = declaration.defaultValue?.jsonValue

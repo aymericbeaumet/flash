@@ -93,6 +93,11 @@ Handed to every handler; cheap to clone. Key surface:
 - Dirs: `data_dir`, `home_dir()`, `config_dir()`, `cache_dir()`,
   `share_dir()`, `bin_dir()` — all under the plugin's own data dir.
   `FLASH_PLUGIN_DATA_DIR` is required; there is no cwd fallback.
+- Network: `fetch(url)` has the host GET an HTTPS URL the manifest allows
+  (`fetch_urls`, `fetch_settings`) and returns the body of a 2xx response;
+  any other status is `Err("HTTP <status>")`, and a refusal or a transport
+  failure is the host's message. The plugin needs the `network_fetch`
+  capability and no network access.
 - Settings: `config_str(key)` / `config_json(key)` read the plugin's
   `[plugins.<id>]` table as the host resolved it against the manifest's
   `settings`: a value of the declared type, or the declared default when no

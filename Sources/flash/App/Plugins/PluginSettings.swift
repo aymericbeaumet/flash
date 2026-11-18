@@ -19,6 +19,9 @@ struct PluginSettingDeclaration: Decodable, Equatable {
   /// Inclusive bounds of an `integer` or a `number`.
   var min: Double?
   var max: Double?
+  /// The manifest's `fetch_settings` names this string: the host fetches the
+  /// URL it holds, so it is an HTTPS URL or empty.
+  var fetchURL = false
 
   enum CodingKeys: String, CodingKey, CaseIterable {
     case type, description, min, max
@@ -65,6 +68,7 @@ struct PluginSettingDeclaration: Decodable, Equatable {
   var requirement: String {
     switch type {
     case .string:
+      if fetchURL { return "must be an https:// URL without credentials" }
       guard let allowed else { return "must be a string" }
       return "must be one of \(allowed.joined(separator: ", "))"
     case .boolean: return "must be true or false"
@@ -91,7 +95,9 @@ struct PluginSettingDeclaration: Decodable, Equatable {
       (min.map { number >= $0 } ?? true) && (max.map { number <= $0 } ?? true)
     }
     switch (type, value) {
-    case (.string, .string(let string)): return allowed?.contains(string) ?? true
+    case (.string, .string(let string)):
+      if fetchURL { return string.isEmpty || PluginHostFetch.isFetchable(string) }
+      return allowed?.contains(string) ?? true
     case (.integer, .int(let int)), (.number, .int(let int)): return inBounds(Double(int))
     case (.number, .double(let double)): return inBounds(double)
     case (.boolean, .bool), (.stringArray, .stringArray): return true
@@ -159,6 +165,15 @@ enum PluginSettings {
     }
   }
 
+  /// `settings` with the ones a manifest's `fetch_settings` names marked.
+  static func marking(
+    fetchSettings: [String], in settings: [String: PluginSettingDeclaration]
+  ) -> [String: PluginSettingDeclaration] {
+    var settings = settings
+    for name in fetchSettings { settings[name]?.fetchURL = true }
+    return settings
+  }
+
   static func problem(
     key: String, value: PluginConfigValue, declared: [String: PluginSettingDeclaration]
   ) -> Problem? {
@@ -199,6 +214,12 @@ struct PluginSettingsCatalog: Equatable {
   private struct Declared: Decodable {
     var id: String
     var settings: [String: PluginSettingDeclaration]?
+    var fetchSettings: [String]?
+
+    enum CodingKeys: String, CodingKey {
+      case id, settings
+      case fetchSettings = "fetch_settings"
+    }
   }
 
   private struct Cached {
@@ -234,7 +255,8 @@ struct PluginSettingsCatalog: Equatable {
         cached = read
       }
       guard let entry = cached?.entry, declared[entry.id] == nil else { continue }
-      declared[entry.id] = entry.settings ?? [:]
+      declared[entry.id] = PluginSettings.marking(
+        fetchSettings: entry.fetchSettings ?? [], in: entry.settings ?? [:])
     }
     return PluginSettingsCatalog(declared: declared)
   }

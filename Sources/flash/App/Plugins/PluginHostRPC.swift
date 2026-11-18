@@ -66,6 +66,7 @@ final class PluginHostRPC {
     pluginID: String,
     capabilities: Set<PluginCapability>,
     fetchURLs: [String] = [],
+    fetchLimits: PluginFetchLimits = .standard,
     appleEventsTargets: [String] = [],
     scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
@@ -118,7 +119,8 @@ final class PluginHostRPC {
       axBroker.handle(request, pluginID: pluginID, scope: scope, reply: reply)
     case .fetch(let url, let text):
       hostFetch(
-        url: url, text: text, allowlist: fetchURLs, pluginID: pluginID, scope: scope, reply: reply)
+        url: url, text: text, allowlist: fetchURLs, limits: fetchLimits, pluginID: pluginID,
+        scope: scope, reply: reply)
     case .wifiInfo(let requestAuthorization):
       guard let wifiInfoProvider else {
         reply(["ok": true, "present": false])
@@ -142,11 +144,13 @@ final class PluginHostRPC {
     }
   }
 
-  /// `host.fetch`: perform an HTTPS GET on the plugin's behalf. The manifest's
-  /// `fetch_urls` prefixes are the allowlist, the response is capped at 1 MiB
-  /// of UTF-8 text, and the request runs entirely off the main thread on
-  /// URLSession's delegate queue with a hard timeout — a slow remote can never
-  /// touch tap responsiveness. Telemetry stays content-free (no URL/body).
+  /// `host.fetch`: perform an HTTPS GET on the plugin's behalf. The allowlist
+  /// is the manifest's `fetch_urls` prefixes and the URLs its `fetch_settings`
+  /// hold; the response is UTF-8 text within the plugin's limits (1 MiB and
+  /// 8 s unless its `fetch_limits` say otherwise), and the request runs
+  /// entirely off the main thread on URLSession's delegate queue with a hard
+  /// timeout — a slow remote can never touch tap responsiveness. Telemetry
+  /// stays content-free (no URL/body).
   var hostFetchConfiguration = URLSessionConfiguration.ephemeral
 
   /// True when `url` sits inside the allowlisted `prefix` at a URL component
@@ -157,19 +161,20 @@ final class PluginHostRPC {
   }
 
   private func hostFetch(
-    url: URL, text: String, allowlist: [String], pluginID: String,
+    url: URL, text: String, allowlist: [String], limits: PluginFetchLimits, pluginID: String,
     scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
     guard allowlist.contains(where: { Self.urlIsAllowed(text, byPrefix: $0) }) else {
-      reply(["ok": false, "error": "url not in fetch_urls allowlist"])
+      reply(["ok": false, "error": PluginHostFetch.Failure.disallowedURL.message])
       return
     }
     var request = URLRequest(url: url)
-    request.timeoutInterval = Double(PluginProtocol.fetchTimeoutMs) / 1_000
+    request.timeoutInterval = Double(limits.timeoutMs) / 1_000
     let startedAt = DispatchTime.now()
     PluginHostFetch.start(
-      request: request, allowlist: allowlist, configuration: hostFetchConfiguration
+      request: request, allowlist: allowlist, limits: limits,
+      configuration: hostFetchConfiguration
     ) { result in
       guard scope.isCurrent() else { return }
       let elapsedMs = Int(

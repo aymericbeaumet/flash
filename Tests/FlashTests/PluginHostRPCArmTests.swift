@@ -377,13 +377,13 @@ final class PluginHostRPCArmTests: XCTestCase {
       hostReply(
         rpc, "host.fetch", ["url": "https://evil.example/x"],
         capabilities: [.networkFetch], fetchURLs: allowlist)["error"] as? String,
-      "url not in fetch_urls allowlist")
+      "url not in the fetch allowlist")
     // Component boundary: the prefix "…/api" must NOT admit "…/apix".
     XCTAssertEqual(
       hostReply(
         rpc, "host.fetch", ["url": "https://example.com/apix"],
         capabilities: [.networkFetch], fetchURLs: allowlist)["error"] as? String,
-      "url not in fetch_urls allowlist")
+      "url not in the fetch allowlist")
 
     // The boundary rule itself, on the pure function (no network).
     XCTAssertTrue(

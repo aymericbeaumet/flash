@@ -353,10 +353,10 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   out of the deny, canonicalize symlinked paths, and retain secret-read denies.
   Local socket connections require network capability. Do not widen the sandbox
   to host credentialed network CLIs that require the subprocess shape.
-  Sandboxed HTTPS clients verify against bundled roots (reqwest
-  `tls_certs_only` over `webpki-root-certs`), never the platform verifier.
-  After a TLS dependency bump, confirm a live fetch under the sandbox, not
-  only unit tests ([trust boundaries](docs/architecture.md#trust-boundaries)).
+  Bundled plugins hold no `network` capability and no HTTPS client: a
+  download goes through `host.fetch`, allowed by manifest `fetch_urls` or
+  `fetch_settings` within `fetch_limits`
+  ([trust boundaries](docs/architecture.md#trust-boundaries)).
 - Standards ([docs/standards.md](docs/standards.md)): what Flash defines uses
   exactly one modern standard; what it consumes from other tools is accepted
   as they write it. Never add a parallel format or second spelling of a Flash

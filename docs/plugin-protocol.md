@@ -687,9 +687,14 @@ attribute such as `AXFocused`; a non-boolean value is rejected.
 `network-outbound` into the sandbox profile, so only a sandboxed plugin
 declares it) and `network_fetch` (the host
 performs HTTPS GETs on the plugin's behalf via `host.fetch`, restricted to
-the manifest's `fetch_urls` prefixes, 8 s timeout, 1 MiB UTF-8 cap — the
-plugin keeps a fully network-denied sandbox; the two must be declared
-together). `open` hands URLs/bundle ids to LaunchServices host-side.
+the manifest's `fetch_urls` prefixes and the URLs its `fetch_settings` hold,
+answering UTF-8 text within its `fetch_limits` — the plugin keeps a fully
+network-denied sandbox; the capability comes with `fetch_urls` or
+`fetch_settings`, and only with them). `host.fetch` answers
+`{ok, status, body}` whatever the HTTP status; the Rust SDK's `fetch`
+returns the body of a 2xx response alone. A redirect is followed only to a
+URL the allowlist admits. `open` hands URLs/bundle ids to LaunchServices
+host-side.
 `wifi_info` exposes only the current SSID after host-owned Location
 authorization. Omitted capabilities are default-denied. The registry is
 frozen: additions are allowed, renames never.
@@ -846,6 +851,23 @@ Section semantics:
   table that names no bundled plugin while `[plugins] third_party` is empty.
   For a third-party plugin the host logs the key, never its value, when the
   plugin loads.
+- **`fetch_urls`** — HTTPS URL prefixes the plugin may request through
+  `host.fetch`. A prefix admits itself and what continues it at a URL
+  boundary (`/`, `?` or `#`): `https://api.example.com/v1` admits
+  `https://api.example.com/v1/items`, not `https://api.example.com/v1beta`.
+  Another scheme rejects the manifest.
+- **`fetch_settings`** — names of declared string `settings` holding an HTTPS
+  URL the user chooses, which the plugin may request like a `fetch_urls`
+  prefix. `flash config check` and a reload report a value that is not an
+  `https://` URL without credentials; an empty value is unset, and the
+  generated config schema carries the same rule.
+- **`fetch_limits`** — `{ "max_bytes"?, "timeout_ms"? }`, the bounds of one
+  `host.fetch` response when they are not the standard 1 MiB and 8 seconds:
+  at most 4 MiB and 30 seconds (`quotas.fetch_response_bytes_max` and
+  `quotas.fetch_timeout_ms_max` in `protocol.json`), so a body at the ceiling
+  still fits one frame. An object that sets neither, a bound outside the
+  range, or `fetch_limits` without the `network_fetch` capability rejects the
+  manifest.
 - **`watch_settings`** — names of declared string `settings` whose value is
   a file path the host watches to run a `publish_then_exit` plugin again;
   needs that lifecycle. `~` expands to the home and a relative path is under

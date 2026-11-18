@@ -24,6 +24,13 @@
   ],
   "capabilities": [
     "open",
-    "network"
-  ]
+    "network_fetch"
+  ],
+  "fetch_urls": [
+    "https://duckduckgo.com/bang.js"
+  ],
+  "fetch_limits": {
+    "max_bytes": 4194304,
+    "timeout_ms": 30000
+  }
 }

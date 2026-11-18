@@ -132,12 +132,14 @@ names its peer: it holds at most 32 connections, closes one that has not
 said `hello` within 5 seconds, and bounds each connection's line length,
 requests in flight and unread events ([limits](ipc-protocol.md#limits-and-timeouts)).
 
-A sandboxed plugin's HTTPS client verifies against the roots bundled with it
-(reqwest `tls_certs_only` over `webpki-root-certs`). The platform verifier
+No bundled plugin carries an HTTPS client: what `answers`, `feed` and
+`searchproviders` download, the host downloads for them through `host.fetch`,
+against the manifest's allowlist and limits, and their sandboxes deny the
+network. A sandboxed plugin that does open its own connections (the `network`
+capability) verifies against roots bundled with it: the platform verifier
 needs the trust service and the keychains, and the seatbelt profile denies
 both, so it fails every handshake under the sandbox while passing every unit
-test outside it. A TLS dependency bump is therefore confirmed with a live
-fetch under the sandbox.
+test outside it.
 
 ## Hint activation
 

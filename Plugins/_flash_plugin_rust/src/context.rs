@@ -55,6 +55,12 @@ pub(crate) const APPLESCRIPT_CONCURRENCY: usize = 4;
 /// reply, not the SDK's timeout sentinel, carries the outcome.
 const APPLESCRIPT_REPLY_SLACK: Duration = Duration::from_secs(2);
 
+/// The longest a `host.fetch` call waits for its reply: past the largest
+/// timeout a manifest's `fetch_limits` may set (`quotas.fetch_timeout_ms_max`
+/// in `protocol.json`), so the host's own answer, not the SDK's timeout
+/// sentinel, carries a slow fetch's outcome.
+const FETCH_REPLY_TIMEOUT: Duration = Duration::from_secs(32);
+
 /// Canonical `call_host` sentinels (pinned in `protocol.json`): `call_host`
 /// never errors and never returns nil — host death and the call timeout
 /// arrive as these result objects instead.
@@ -483,26 +489,19 @@ impl Context {
         wifi_ssid_from_response(&response)
     }
 
-    /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`). The
-    /// host enforces the manifest's `fetch_urls` prefixes, an 8-second
-    /// timeout, and a 1 MiB UTF-8 response cap — the plugin itself needs no
-    /// network access (declare the `network_fetch` capability instead of
-    /// `network` and keep a fully network-denied sandbox).
+    /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`): a GET
+    /// answered with the body of a 2xx response. The host allows the
+    /// manifest's `fetch_urls` prefixes and the URLs its `fetch_settings`
+    /// hold, and bounds the response to UTF-8 text within the manifest's
+    /// `fetch_limits` (1 MiB and 8 seconds unless it sets others) — the
+    /// plugin itself needs no network access (declare the `network_fetch`
+    /// capability instead of `network` and keep a fully network-denied
+    /// sandbox).
     pub async fn fetch(&self, url: &str) -> Result<String, String> {
         let response = self
-            .call_host_timeout("host.fetch", json!({ "url": url }), Duration::from_secs(10))
+            .call_host_timeout("host.fetch", json!({ "url": url }), FETCH_REPLY_TIMEOUT)
             .await;
-        if !ok(&response) {
-            let error = response
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("host.fetch failed");
-            return Err(error.to_string());
-        }
-        match response.get("body").and_then(Value::as_str) {
-            Some(body) => Ok(body.to_string()),
-            None => Err("host.fetch response missing body".to_string()),
-        }
+        fetch_body_from_response(response)
     }
 
     /// Run a data-only operation using a host-owned AppleScript template.
@@ -781,6 +780,27 @@ impl PluginEnv {
                 .map(PathBuf::from),
             config: parse_config(std::env::var("FLASH_PLUGIN_CONFIG").ok().as_deref()),
         }
+    }
+}
+
+/// The body of a `host.fetch` reply: the text of a 2xx response, or why
+/// there is none.
+fn fetch_body_from_response(mut response: Value) -> Result<String, String> {
+    if !ok(&response) {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("host.fetch failed");
+        return Err(error.to_string());
+    }
+    match response.get("status").and_then(Value::as_u64) {
+        Some(200..=299) => {}
+        Some(status) => return Err(format!("HTTP {status}")),
+        None => return Err("host.fetch response missing status".to_string()),
+    }
+    match response.get_mut("body").map(Value::take) {
+        Some(Value::String(body)) => Ok(body),
+        _ => Err("host.fetch response missing body".to_string()),
     }
 }
 
@@ -1311,7 +1331,7 @@ mod tests {
         }
         // One permissive reply satisfies every wrapper's result decoder.
         let host_reply = json!({
-            "ok": true, "present": true, "ssid": "Atelier", "body": "b",
+            "ok": true, "present": true, "ssid": "Atelier", "status": 200, "body": "b",
             "pid": 7, "bundle_id": "com.example.App"
         });
         let table: Vec<(&str, Value, Call, Value)> = vec![
@@ -1415,6 +1435,57 @@ mod tests {
             assert!(harness.reply_host(id, host_reply.clone()), "{method}");
             assert_eq!(task.await.unwrap(), expected, "{method}");
         }
+    }
+
+    #[test]
+    fn a_fetch_answers_the_body_of_a_successful_response_alone() {
+        assert_eq!(
+            fetch_body_from_response(json!({ "ok": true, "status": 200, "body": "text" })),
+            Ok("text".to_string())
+        );
+        assert_eq!(
+            fetch_body_from_response(json!({ "ok": true, "status": 204, "body": "" })),
+            Ok(String::new())
+        );
+        for (status, error) in [(404, "HTTP 404"), (500, "HTTP 500"), (304, "HTTP 304")] {
+            assert_eq!(
+                fetch_body_from_response(json!({ "ok": true, "status": status, "body": "page" })),
+                Err(error.to_string())
+            );
+        }
+        assert_eq!(
+            fetch_body_from_response(
+                json!({ "ok": false, "error": "url not in the fetch allowlist" })
+            ),
+            Err("url not in the fetch allowlist".to_string())
+        );
+        assert_eq!(
+            fetch_body_from_response(json!({ "ok": false })),
+            Err("host.fetch failed".to_string())
+        );
+        assert_eq!(
+            fetch_body_from_response(json!({ "ok": true, "body": "text" })),
+            Err("host.fetch response missing status".to_string())
+        );
+        assert_eq!(
+            fetch_body_from_response(json!({ "ok": true, "status": 200 })),
+            Err("host.fetch response missing body".to_string())
+        );
+    }
+
+    /// The host answers a fetch by the largest timeout a manifest may set;
+    /// the SDK waits past it.
+    #[test]
+    fn a_fetch_waits_past_the_longest_timeout_a_manifest_sets() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let longest = contract["quotas"]["fetch_timeout_ms_max"].as_u64().unwrap();
+        assert!(FETCH_REPLY_TIMEOUT > Duration::from_millis(longest));
+        assert!(
+            contract["quotas"]["fetch_response_bytes_max"]
+                .as_u64()
+                .unwrap()
+                < contract["quotas"]["frame_bytes"].as_u64().unwrap()
+        );
     }
 
     #[test]

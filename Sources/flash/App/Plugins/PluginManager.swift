@@ -991,7 +991,8 @@ final class PluginManager {
         // from there would invert the reload path
         // (manager queue -> stopAndWait -> process queue) and can deadlock.
         let capabilities = manifest.capabilities
-        let fetchURLs = manifest.fetchURLs
+        let fetchURLs = manifest.fetchAllowlist(settings: settings)
+        let fetchLimits = manifest.effectiveFetchLimits
         let appleEventsTargets = manifest.appleEventsTargets
         plugin.onHostRequest = { [weak self] method, params, pluginID, scope, reply in
           self?.hostRPC.handleHostRequest(
@@ -1000,6 +1001,7 @@ final class PluginManager {
             pluginID: pluginID,
             capabilities: capabilities,
             fetchURLs: fetchURLs,
+            fetchLimits: fetchLimits,
             appleEventsTargets: appleEventsTargets,
             scope: scope,
             reply: reply)

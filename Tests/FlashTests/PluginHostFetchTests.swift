@@ -35,6 +35,7 @@ private final class FetchFixtureProtocol: URLProtocol, @unchecked Sendable {
 final class PluginHostFetchTests: XCTestCase {
   private func fetch(
     _ url: String = "https://allowed.test/api/start",
+    limits: PluginFetchLimits = .standard,
     handler: @escaping (FetchFixtureProtocol) -> Void
   ) throws -> Result<PluginHostFetch.Payload, PluginHostFetch.Failure> {
     FetchFixtureProtocol.handler.withLock { $0 = handler }
@@ -47,7 +48,7 @@ final class PluginHostFetchTests: XCTestCase {
       initialState: nil)
     let task = PluginHostFetch.start(
       request: URLRequest(url: try XCTUnwrap(URL(string: url))),
-      allowlist: ["https://allowed.test/api"], configuration: configuration
+      allowlist: ["https://allowed.test/api"], limits: limits, configuration: configuration
     ) { result in
       XCTAssertFalse(Thread.isMainThread, "host fetch must never run its callback on main")
       received.withLock { $0 = result }
@@ -115,6 +116,29 @@ final class PluginHostFetchTests: XCTestCase {
     guard case .success(let payload) = result else { return XCTFail("\(result)") }
     XCTAssertEqual(payload.data.count, PluginProtocol.maxFetchResponseBytes)
     XCTAssertEqual(payload.data.suffix(3), Data("end".utf8))
+  }
+
+  /// A manifest's `fetch_limits` move the byte cap, up or down.
+  func testTheByteCapIsThePluginsLimit() throws {
+    let raised = PluginFetchLimits(
+      maxBytes: PluginProtocol.fetchResponseBytesCeiling, timeoutMs: 8_000)
+    let body = Data(repeating: 120, count: PluginProtocol.maxFetchResponseBytes + 1)
+    guard
+      case .success(let payload) = try fetch(
+        limits: raised, handler: { $0.respond(chunks: [body]) })
+    else { return XCTFail("a body under the raised cap was refused") }
+    XCTAssertEqual(payload.data.count, body.count)
+    let over = Data(repeating: 120, count: raised.maxBytes + 1)
+    guard
+      case .failure(.oversized) = try fetch(
+        limits: raised, handler: { $0.respond(chunks: [over], finish: false) })
+    else { return XCTFail("a body over the raised cap was accepted") }
+
+    let lowered = PluginFetchLimits(maxBytes: 16, timeoutMs: 8_000)
+    guard
+      case .failure(.oversized) = try fetch(
+        limits: lowered, handler: { $0.respond(chunks: [Data(repeating: 120, count: 17)]) })
+    else { return XCTFail("a body over the lowered cap was accepted") }
   }
 
   func testRejectsRedirectOutsideApprovedPathOnTheSameHost() throws {

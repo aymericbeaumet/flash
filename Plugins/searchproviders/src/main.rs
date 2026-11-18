@@ -2,11 +2,12 @@
 //! here rather than through a search engine's redirect.
 //!
 //! Kagi's community list (MIT) is vendored at a pinned commit. DuckDuckGo's
-//! list carries no licence that permits redistributing it, so the plugin
-//! downloads it (`https://duckduckgo.com/bang.js`, no query attached) into its
-//! data directory when the flashlight opens and the copy is missing or a week
-//! old, at most once an hour after a failure. Until then the Kagi list alone
-//! answers. DuckDuckGo's bangs win; Kagi's fill the triggers DuckDuckGo lacks.
+//! list carries no licence that permits redistributing it, so the plugin has
+//! the host download it (`https://duckduckgo.com/bang.js`, no query attached)
+//! and keeps it in its data directory, when the flashlight opens and the copy
+//! is missing or a week old, at most once an hour after a failure. Until then
+//! the Kagi list alone answers. DuckDuckGo's bangs win; Kagi's fill the
+//! triggers DuckDuckGo lacks. The plugin itself has no network access.
 
 mod bangs;
 
@@ -14,11 +15,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bangs::{KAGI, List, MAX_LIST_BYTES, Table, cache_fetched_at, duckduckgo_cache};
 use flash_plugin::{Candidate, CommandRequest, Context, Event, PerformResponse, host_events, run};
-use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, OnceCell};
 
@@ -29,7 +29,6 @@ const REFRESH_SECONDS: u64 = 7 * 86_400;
 /// After a failed download, the next flashlight session tries again an hour
 /// later at the earliest.
 const RETRY_SECONDS: u64 = 3_600;
-const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// A smaller list is not DuckDuckGo's: the cached copy stays.
 const MIN_LIST_BANGS: usize = 1_000;
 
@@ -121,45 +120,6 @@ fn refresh_due(fetched_at: u64, last_attempt: u64, now: u64) -> bool {
     stale && (last_attempt == 0 || now.saturating_sub(last_attempt) >= RETRY_SECONDS)
 }
 
-/// Mozilla roots for rustls: the deny-default sandbox blocks the macOS trust
-/// service and keychains the platform verifier needs.
-fn http_client() -> reqwest::Result<Client> {
-    let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
-        .iter()
-        .filter_map(|der| reqwest::Certificate::from_der(der).ok());
-    Client::builder()
-        .tls_certs_only(roots)
-        .timeout(FETCH_TIMEOUT)
-        .connect_timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .user_agent("Flash searchproviders/0.1")
-        .build()
-}
-
-async fn download_list(client: &Client) -> Result<String, &'static str> {
-    let mut response = client
-        .get(BANG_LIST_URL)
-        .send()
-        .await
-        .map_err(|_| "request failed")?
-        .error_for_status()
-        .map_err(|_| "HTTP error")?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_LIST_BYTES as u64)
-    {
-        return Err("list exceeds byte limit");
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "response read failed")? {
-        if bytes.len().saturating_add(chunk.len()) > MAX_LIST_BYTES {
-            return Err("list exceeds byte limit");
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    String::from_utf8(bytes).map_err(|_| "list is not UTF-8")
-}
-
 /// Atomic replace through a sibling temporary file.
 async fn write_cache(path: &Path, body: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -196,7 +156,7 @@ async fn refresh(ctx: &Context, state: &State) {
         return;
     }
     state.last_attempt.store(now, Ordering::Relaxed);
-    match download_cache(now).await {
+    match download_cache(ctx, now).await {
         Ok(cache) => {
             if write_cache(&ctx.data_dir().join(CACHE_FILE), &cache)
                 .await
@@ -226,11 +186,17 @@ async fn refresh(ctx: &Context, state: &State) {
     }
 }
 
-/// Download bang.js and convert it to the cache text, refusing a list too
+/// Have the host download bang.js (`host.fetch`, within the manifest's
+/// `fetch_limits`) and convert it to the cache text, refusing a list too
 /// small to be DuckDuckGo's.
-async fn download_cache(now: u64) -> Result<String, &'static str> {
-    let client = http_client().map_err(|_| "client setup failed")?;
-    let body = download_list(&client).await?;
+async fn download_cache(ctx: &Context, now: u64) -> Result<String, &'static str> {
+    let body = ctx.fetch(BANG_LIST_URL).await.map_err(|error| {
+        if error.starts_with("HTTP ") {
+            "HTTP error"
+        } else {
+            "request failed"
+        }
+    })?;
     let (cache, count) = tokio::task::spawn_blocking(move || duckduckgo_cache(&body, now))
         .await
         .map_err(|_| "parser failed")??;
@@ -293,14 +259,103 @@ mod tests {
     use flash_plugin::testing::Harness;
     use serde_json::json;
 
+    /// The manifest allows exactly the list's URL, with room for the list.
     #[test]
-    fn http_client_verifies_against_every_bundled_root() {
-        let parsed = webpki_root_certs::TLS_SERVER_ROOT_CERTS
-            .iter()
-            .filter(|der| reqwest::Certificate::from_der(der).is_ok())
-            .count();
-        assert_eq!(parsed, webpki_root_certs::TLS_SERVER_ROOT_CERTS.len());
-        assert!(http_client().is_ok());
+    fn the_manifest_lets_the_host_fetch_the_list_and_nothing_else() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        assert_eq!(manifest["fetch_urls"], json!([BANG_LIST_URL]));
+        assert_eq!(manifest["capabilities"], json!(["open", "network_fetch"]));
+        assert!(manifest["fetch_limits"]["max_bytes"].as_u64().unwrap() <= MAX_LIST_BYTES as u64);
+    }
+
+    fn bang_list(count: usize) -> String {
+        let entries: Vec<serde_json::Value> = (0..count)
+            .map(|index| {
+                json!({
+                    "t": format!("site{index}"),
+                    "u": format!("https://site{index}.example/search?q={{{{{{s}}}}}}"),
+                    "s": format!("Site {index}"),
+                    "d": format!("site{index}.example"),
+                    "c": "Tech",
+                    "sc": "Tools",
+                    "r": index,
+                })
+            })
+            .collect();
+        serde_json::to_string(&entries).unwrap()
+    }
+
+    /// A due refresh asks the host for the list, caches it and publishes it.
+    #[tokio::test]
+    async fn a_refresh_downloads_the_list_through_the_host() {
+        let mut harness = Harness::new("searchproviders-test");
+        let state = Arc::new(State::default());
+        let refreshing = {
+            let (ctx, state) = (harness.context(), Arc::clone(&state));
+            tokio::spawn(async move { refresh(&ctx, &state).await })
+        };
+        let (id, method, params) = harness.next_host_request().await.expect("host request");
+        assert_eq!(
+            (method.as_str(), params),
+            ("host.fetch", json!({ "url": BANG_LIST_URL }))
+        );
+        assert!(harness.reply_host(
+            id,
+            json!({ "ok": true, "status": 200, "body": bang_list(MIN_LIST_BANGS) })
+        ));
+        refreshing.await.unwrap();
+        assert_ne!(state.fetched_at.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            state.table().resolve("site7", "a b"),
+            Ok("https://site7.example/search?q=a%20b".to_string())
+        );
+        let cached = tokio::fs::read_to_string(harness.data_dir().join(CACHE_FILE))
+            .await
+            .unwrap();
+        assert!(cache_fetched_at(&cached).is_some());
+    }
+
+    /// A failed or implausible download keeps what was loaded and waits an
+    /// hour, saying why without the response.
+    #[tokio::test]
+    async fn a_failed_download_keeps_the_loaded_list() {
+        for (reply, reason) in [
+            (
+                json!({ "ok": true, "status": 503, "body": "busy" }),
+                "HTTP error",
+            ),
+            (
+                json!({ "ok": false, "error": "response exceeds the host.fetch byte cap" }),
+                "request failed",
+            ),
+            (
+                json!({ "ok": true, "status": 200, "body": bang_list(MIN_LIST_BANGS - 1) }),
+                "too few bangs",
+            ),
+            (
+                json!({ "ok": true, "status": 200, "body": "<html>" }),
+                "not a bang list",
+            ),
+        ] {
+            let mut harness = Harness::new("searchproviders-test");
+            let state = Arc::new(State::default());
+            let refreshing = {
+                let (ctx, state) = (harness.context(), Arc::clone(&state));
+                tokio::spawn(async move { refresh(&ctx, &state).await })
+            };
+            let (id, _, _) = harness.next_host_request().await.expect("host request");
+            assert!(harness.reply_host(id, reply));
+            refreshing.await.unwrap();
+            assert_eq!(state.fetched_at.load(Ordering::Relaxed), 0, "{reason}");
+            assert_ne!(state.last_attempt.load(Ordering::Relaxed), 0, "{reason}");
+            let failure = harness
+                .drain()
+                .into_iter()
+                .find(|frame| frame["params"]["level"] == "warn")
+                .expect(reason);
+            assert_eq!(failure["params"]["fields"]["reason"], reason);
+        }
     }
 
     #[test]
