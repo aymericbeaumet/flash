@@ -288,11 +288,10 @@ final class PluginSchemaTests: XCTestCase {
         allowedSources: ["example.items", "example.tabs"])
       return decoded == nil ? .malformed : .success
     case ("status"?, _):
-      guard let segments = params["segments"] as? [String: Any] else { return .malformed }
-      let malformed = segments.values.contains {
-        PluginWireCodec.statusSegment(from: $0) == .malformed
-      }
-      return malformed ? .malformed : .success
+      guard
+        let segments = PluginWireCodec.statusSegments(from: params, declared: ["summary", "feed"])
+      else { return .malformed }
+      return segments.contains { $0.segment == .malformed } ? .malformed : .success
     case ("poll"?, _):
       return PluginWireCodec.pollRegistrations(from: params) == nil ? .malformed : .success
     case (.some, _):

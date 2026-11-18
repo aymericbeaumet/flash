@@ -2021,14 +2021,17 @@ final class PluginProcess {
   /// Internal (not private) so the lost-update regression test can drive it
   /// without a live child process.
   func applyStatusSegments(_ params: [String: Any]) {
-    guard let raw = params["segments"] as? [String: Any] else { return }
-    let declared = declaredStatusSegments
-    guard !declared.isEmpty else { return }
+    guard
+      let segments = PluginWireCodec.statusSegments(from: params, declared: declaredStatusSegments)
+    else {
+      FlashLog.plugin(
+        .warn, pluginID: manifest.id,
+        message: "[plugin] status rejected: expected {segments: {name: value}}")
+      return
+    }
     var decoded: [(key: String, segment: PluginStatusSegment?)] = []
-    for (name, value) in raw {
-      let key = name.trimmed
-      guard declared.contains(key) else { continue }
-      switch PluginWireCodec.statusSegment(from: value) {
+    for (key, segment) in segments {
+      switch segment {
       case .clear: decoded.append((key, nil))
       case .value(let segment): decoded.append((key, segment))
       case .malformed:

@@ -541,6 +541,21 @@ enum PluginWireCodec {
     case malformed
   }
 
+  /// One `status` notification: each segment `declared` names, decoded. A
+  /// name the manifest does not declare is skipped unread. `nil` rejects the
+  /// frame: the params are exactly `{"segments": {name: value}}`.
+  static func statusSegments(
+    from params: [String: Any], declared: Set<String>
+  ) -> [(name: String, segment: DecodedStatusSegment)]? {
+    guard params.count == 1, let raw = params["segments"] as? [String: Any] else { return nil }
+    var decoded: [(name: String, segment: DecodedStatusSegment)] = []
+    for (name, value) in raw {
+      let key = name.trimmed
+      if declared.contains(key) { decoded.append((key, statusSegment(from: value))) }
+    }
+    return decoded
+  }
+
   private static let carouselKeys: Set<String> = ["prefix", "lines", "cycle_seconds"]
 
   /// A segment value is markup (`""` clears) or a carousel object
