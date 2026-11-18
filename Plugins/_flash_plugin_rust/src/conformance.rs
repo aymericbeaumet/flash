@@ -164,6 +164,12 @@ impl Plugin for Fixture {
                 TextGridLine::format(23, 0, 80, "#[align=right]main"),
             ],
         )
+        .cell(crate::TextGridCell {
+            width: 9.0,
+            height: 18.0,
+            pad_x: 0.0,
+            pad_y: 5.5,
+        })
     }
 
     async fn perform(&self, ctx: Context, request: Perform) -> PerformResponse {

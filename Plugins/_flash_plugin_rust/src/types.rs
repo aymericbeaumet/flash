@@ -1008,14 +1008,27 @@ impl TextGridLine {
     }
 }
 
+/// Where a text grid's cells are inside the window, in AppKit points: one
+/// cell's size, and the padding between the window's left and top edges and
+/// the grid. A terminal that centres or pads its grid reports it; without
+/// one the host divides the window evenly by columns and rows.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct TextGridCell {
+    pub width: f64,
+    pub height: f64,
+    pub pad_x: f64,
+    pub pad_y: f64,
+}
+
 /// The focused app's visible text as a `columns` × `rows` cell grid,
 /// answering one `text_grid` request. The host searches it for a letter when
 /// the app publishes no Accessibility text. No lines means no grid.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextGridResponse {
     pub columns: u32,
     pub rows: u32,
     pub lines: Vec<TextGridLine>,
+    pub cell: Option<TextGridCell>,
 }
 
 impl TextGridResponse {
@@ -1024,7 +1037,29 @@ impl TextGridResponse {
             columns,
             rows,
             lines,
+            cell: None,
         }
+    }
+
+    /// Say where the cells are, for a grid that does not fill its window
+    /// evenly.
+    pub fn cell(mut self, cell: TextGridCell) -> Self {
+        self.cell = Some(cell);
+        self
+    }
+
+    /// The reply's `result`, as written on the wire.
+    pub(crate) fn to_value(&self) -> serde_json::Value {
+        let mut result = serde_json::json!({
+            "ok": true,
+            "columns": self.columns,
+            "rows": self.rows,
+            "lines": serde_json::to_value(&self.lines).unwrap_or_else(|_| serde_json::json!([])),
+        });
+        if let Some(cell) = self.cell {
+            result["cell"] = serde_json::to_value(cell).unwrap_or(serde_json::Value::Null);
+        }
+        result
     }
 }
 
@@ -1085,6 +1120,66 @@ mod tests {
         );
         let result = json!({ "ok": true, "columns": 9, "rows": 2, "lines": lines });
         assert!(crate::wire::valid_result("text_grid", &result));
+    }
+
+    #[test]
+    fn a_text_grid_reply_carries_its_cell_only_when_the_plugin_measured_one() {
+        let grid = TextGridResponse::new(9, 2, vec![TextGridLine::text(1, 2, "ab")]);
+        assert_eq!(
+            grid.to_value(),
+            json!({ "ok": true, "columns": 9, "rows": 2, "lines": [
+                { "row": 1, "column": 2, "text": "ab" },
+            ] })
+        );
+        let measured = grid.cell(TextGridCell {
+            width: 8.0,
+            height: 16.5,
+            pad_x: 0.0,
+            pad_y: 1.5,
+        });
+        assert_eq!(
+            measured.to_value()["cell"],
+            json!({ "width": 8.0, "height": 16.5, "pad_x": 0.0, "pad_y": 1.5 })
+        );
+        assert!(crate::wire::valid_result("text_grid", &measured.to_value()));
+        for cell in [
+            TextGridCell {
+                width: 0.0,
+                height: 16.0,
+                pad_x: 0.0,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: 8.0,
+                height: -1.0,
+                pad_x: 0.0,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: 8.0,
+                height: 16.0,
+                pad_x: -0.5,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: f64::NAN,
+                height: 16.0,
+                pad_x: 0.0,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: 8.0,
+                height: 16.0,
+                pad_x: 0.0,
+                pad_y: f64::INFINITY,
+            },
+        ] {
+            let refused = TextGridResponse::new(9, 2, vec![]).cell(cell).to_value();
+            assert!(
+                !crate::wire::valid_result("text_grid", &refused),
+                "{cell:?}"
+            );
+        }
     }
 
     #[test]

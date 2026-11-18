@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/text_grid.reply.schema.json",
   "title": "text_grid reply",
-  "description": "Plugin to host: the grid, or a failure the host serves as none. No lines means no grid; one malformed line rejects the whole reply.",
+  "description": "Plugin to host: the grid, or a failure the host serves as none. No lines means no grid; one malformed line, or a malformed cell, rejects the whole reply. Without a cell the host divides the window evenly by columns and rows.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -43,6 +43,9 @@
               "items": {
                 "$ref": "definitions.schema.json#/definitions/text_grid_line"
               }
+            },
+            "cell": {
+              "$ref": "definitions.schema.json#/definitions/text_grid_cell"
             }
           }
         },

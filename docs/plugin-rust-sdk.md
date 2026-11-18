@@ -57,7 +57,8 @@ a bool flag with `has_flag("force")`, a value with `flag("key")`),
 `navigation` ⇒ `on_navigate`, `hints` ⇒ `on_hints`. Optional: `on_event`,
 `on_resolve`, `on_text_grid` (a hint provider's visible text as a
 `TextGridResponse` of `TextGridLine::text` / `TextGridLine::format` lines,
-for letter search; the default is no grid), `on_shutdown` (runs on stdin EOF
+for letter search, with `.cell(TextGridCell { .. })` when the terminal pads
+or centres its grid; the default is no grid), `on_shutdown` (runs on stdin EOF
 before exit). Forgetting a required handler is a compile error, not a runtime
 surprise. A manifest `"lifecycle": "publish_then_exit"` makes `on_start` the
 whole run: publish from it and return, and the runtime runs `on_shutdown`,

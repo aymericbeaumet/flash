@@ -179,6 +179,12 @@ fn reported_geometry(
     ))
 }
 
+/// Whether `bundle_id`'s cells are read from what the terminal reports, so
+/// they cannot be told without the window they are in.
+pub(crate) fn reports_cells(bundle_id: &str) -> bool {
+    ALACRITTY_BUNDLES.contains(&bundle_id)
+}
+
 pub(crate) async fn resolve_geometry(
     bundle_id: &str,
     pid: i64,

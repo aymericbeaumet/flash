@@ -169,8 +169,9 @@ available. Tab selection uses the same host mouse-click path as pane selection.
 Letter search in a terminal with no accessibility text asks the same hint
 providers for a `text_grid`: tmux answers with this same client grid,
 including the status line and each pane-border title, from the same layout
-read and captures, and the host lays it on the same window rectangle. The
-request is asynchronous; its reply returns to the AX queue and is dropped
+read and captures, with the cell geometry its hints use, and the host lays
+it on the same window rectangle without reading any terminal's
+configuration. The request is asynchronous; its reply returns to the AX queue and is dropped
 unless the search's generation is still current. `f` and `cf` label that
 grid's panes, links, window tabs and pane titles; they also label the same
 status-bar spans.

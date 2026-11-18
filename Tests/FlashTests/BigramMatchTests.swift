@@ -268,11 +268,10 @@ final class BigramMatchTests: XCTestCase {
 
   func testTerminalGridPlacesALetterOnItsCell() {
     let window = CGRect(x: 10, y: 20, width: 800, height: 400)
-    let cells = TerminalTextGrid.metrics(
-      bundleIdentifier: "com.example.term", window: window, columns: 80, rows: 20)
+    let cells = TerminalTextGrid.evenCell(window: window, columns: 80, rows: 20)
     let grid = TerminalTextGrid.Grid(
-      cellWidth: cells.cellWidth,
-      cellHeight: cells.cellHeight,
+      cellWidth: cells.width,
+      cellHeight: cells.height,
       padX: cells.padX,
       padY: cells.padY,
       origin: CGPoint(x: window.minX, y: window.minY),
@@ -322,8 +321,7 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertEqual(title.span(location: titleHit.location, length: 1)?.column, 14)
 
     let window = CGRect(x: 0, y: 0, width: 200, height: 60)
-    let grid = try XCTUnwrap(
-      TerminalTextGrid.grid(reply, bundleIdentifier: "com.example.term", window: window))
+    let grid = try XCTUnwrap(TerminalTextGrid.grid(reply, window: window))
     XCTAssertEqual(grid.cellWidth, 10, accuracy: 0.01)
     XCTAssertEqual(grid.cellHeight, 10, accuracy: 0.01)
     let hits = grid.targets(matching: "a", pid: 3)
@@ -340,7 +338,55 @@ final class BigramMatchTests: XCTestCase {
     // A grid whose only line lays out blank has nothing to search.
     let blank = PluginTextGrid(
       columns: 4, rows: 1, lines: [.format(row: 0, column: 0, width: 4, format: "#[fg=red]  ")])
-    XCTAssertNil(TerminalTextGrid.grid(blank, bundleIdentifier: "com.example.term", window: window))
+    XCTAssertNil(TerminalTextGrid.grid(blank, window: window))
+  }
+
+  /// A terminal that centres its grid says where the cells are; the host
+  /// places a letter there and reads no terminal's configuration.
+  func testAMeasuredCellPlacesTheGridWhereThePluginSays() throws {
+    let window = CGRect(x: 100, y: 50, width: 803, height: 603)
+    let reply = PluginTextGrid(
+      columns: 80, rows: 30, lines: [.text(row: 2, column: 4, text: "a")],
+      cell: PluginTextGrid.Cell(width: 10, height: 20, padX: 1.5, padY: 1.5))
+    let hit = try XCTUnwrap(
+      TerminalTextGrid.grid(reply, window: window)?.targets(matching: "a", pid: 9).first)
+    XCTAssertEqual(
+      hit.frame,
+      CGRect(x: 100 + 1.5 + 4 * 10, y: 50 + 603 - 1.5 - 3 * 20, width: 10, height: 20))
+
+    // Without one, the window is divided evenly.
+    let even = PluginTextGrid(
+      columns: 80, rows: 30, lines: [.text(row: 2, column: 4, text: "a")])
+    let evenHit = try XCTUnwrap(
+      TerminalTextGrid.grid(even, window: window)?.targets(matching: "a", pid: 9).first)
+    XCTAssertEqual(evenHit.frame.width, 803.0 / 80, accuracy: 0.001)
+    XCTAssertEqual(evenHit.frame.minX, 100 + 4 * 803.0 / 80, accuracy: 0.001)
+  }
+
+  func testATextGridReplyDecodesItsCellOrIsRefusedWhole() {
+    let grid: [String: Any] = [
+      "ok": true, "columns": 80, "rows": 24,
+      "lines": [["row": 0, "column": 0, "text": "a"]],
+    ]
+    XCTAssertNil(PluginWireCodec.textGrid(from: grid)?.cell)
+    var measured = grid
+    measured["cell"] = ["width": 9, "height": 18.5, "pad_x": 0, "pad_y": 5.5]
+    XCTAssertEqual(
+      PluginWireCodec.textGrid(from: measured)?.cell,
+      PluginTextGrid.Cell(width: 9, height: 18.5, padX: 0, padY: 5.5))
+    for cell: Any in [
+      ["width": 0, "height": 18, "pad_x": 0, "pad_y": 0],
+      ["width": 9, "height": 18, "pad_x": -1, "pad_y": 0],
+      ["width": 9, "height": 18],
+      ["width": 9, "height": 18, "pad_x": 0, "pad_y": 0, "baseline": 14],
+      ["width": "9", "height": 18, "pad_x": 0, "pad_y": 0],
+      ["width": true, "height": 18, "pad_x": 0, "pad_y": 0],
+      "9x18",
+    ] {
+      var refused = grid
+      refused["cell"] = cell
+      XCTAssertNil(PluginWireCodec.textGrid(from: refused), "\(cell)")
+    }
   }
 
   func testStatusFormatsLayOutWithoutStyleMarkers() throws {

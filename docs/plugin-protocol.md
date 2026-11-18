@@ -407,7 +407,7 @@ never asks the host what it supports. See the
   its backend, client tty, server process, session, window and pane identities,
   so a reused pane label in another session cannot receive a captured click.
 - `text_grid` — `{bundle_id, pid, front_window_frame, display_scale?}` → `{"ok": true,
-  "columns": C, "rows": R, "lines": [...]}`: the focused app's visible text
+  "columns": C, "rows": R, "lines": [...], "cell"?: {...}}`: the focused app's visible text
   as a `C` × `R` cell grid, row 0 at the top, for a letter search (`s`) in an
   app whose Accessibility tree has no text, such as a terminal that draws its
   own glyphs. The host asks the plugins that would provide that app's
@@ -420,11 +420,18 @@ never asks the host what it supports. See the
   rules, for a status line or a pane-border title. `row < rows`,
   `column < columns`, `width >= 1` and `column + width <= columns`; columns
   and rows are each at most `quotas.text_grid_dimension` (10000). One
-  malformed line rejects the whole reply. The host measures the cells on the
-  window `f` uses, so a plugin returns no geometry. No lines means no grid;
+  malformed line rejects the whole reply. The host lays the grid on the
+  window `f` uses and divides it evenly by `C` and `R`, unless the reply
+  carries `cell`: `{width, height, pad_x, pad_y}` in AppKit points, one
+  cell's size (above zero) and the padding between the window's left and top
+  edges and the grid (zero or more), for a terminal that pads or centres its
+  grid. All four keys are required and a malformed `cell` rejects the whole
+  reply. No lines means no grid;
   the SDK's default handler answers `{"ok": true, "columns": 0, "rows": 0,
   "lines": []}`. Tmux answers with the focused client's panes, its status line
-  and each pane-border title, read over its control-mode connection.
+  and each pane-border title, read over its control-mode connection, on the
+  cells its hints use: Alacritty's are the pixels it reports to tmux, and an
+  Alacritty layout the plugin cannot place exactly gets no grid.
 - `perform` — the single effect method. Three kinds:
 
   ```json

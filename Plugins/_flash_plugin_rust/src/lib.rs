@@ -46,8 +46,9 @@ pub use status::{
 pub use types::{
     Candidate, CandidateEffect, CommandContext, CommandRequest, EvaluateRequest, EvaluateResponse,
     Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, Perform,
-    PerformResponse, Priority, QueryAnswer, RunningApplication, TERMINAL_LINK_ROLE, TextGridLine,
-    TextGridRequest, TextGridResponse, ax_notifications, candidate_metadata, host_events,
+    PerformResponse, Priority, QueryAnswer, RunningApplication, TERMINAL_LINK_ROLE, TextGridCell,
+    TextGridLine, TextGridRequest, TextGridResponse, ax_notifications, candidate_metadata,
+    host_events,
 };
 
 pub use applescript::AppleScriptOperation;

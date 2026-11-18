@@ -142,9 +142,30 @@ pub(crate) const MAX_TEXT_GRID_DIMENSION: u64 = 10_000;
 #[cfg(test)]
 pub(crate) const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 
+/// Every key of a `text_grid` reply's `cell` (`protocol.json`
+/// `text_grid_cell`), all required.
+pub(crate) const TEXT_GRID_CELL_KEYS: [&str; 4] = ["width", "height", "pad_x", "pad_y"];
+
+/// A `text_grid` cell: a finite size above zero and finite padding at or
+/// above it.
+fn valid_text_grid_cell(cell: &Value) -> bool {
+    let Some(object) = cell.as_object() else {
+        return false;
+    };
+    let number = |key: &str| object.get(key).and_then(Value::as_f64);
+    object.len() == TEXT_GRID_CELL_KEYS.len()
+        && ["width", "height"]
+            .iter()
+            .all(|key| number(key).is_some_and(|value| value.is_finite() && value > 0.0))
+        && ["pad_x", "pad_y"]
+            .iter()
+            .all(|key| number(key).is_some_and(|value| value.is_finite() && value >= 0.0))
+}
+
 /// A `text_grid` success: `columns` × `rows` cells and lines inside them,
 /// each captured text `{row, column, text}` or a status format laid out over
-/// `{row, column, width, format}` cells.
+/// `{row, column, width, format}` cells, and the `cell` they sit on when the
+/// plugin measured one.
 fn valid_text_grid(result: &Value) -> bool {
     let dimension = |key: &str| {
         result
@@ -155,7 +176,13 @@ fn valid_text_grid(result: &Value) -> bool {
     let (Some(columns), Some(rows)) = (dimension("columns"), dimension("rows")) else {
         return false;
     };
-    if !only_keys(result, &["ok", "columns", "rows", "lines"]) {
+    if !only_keys(result, &["ok", "columns", "rows", "lines", "cell"]) {
+        return false;
+    }
+    if result
+        .get("cell")
+        .is_some_and(|cell| !valid_text_grid_cell(cell))
+    {
         return false;
     }
     let Some(lines) = result.get("lines").and_then(Value::as_array) else {
@@ -493,6 +520,10 @@ mod tests {
         assert_eq!(
             contract["quotas"]["text_grid_dimension"],
             MAX_TEXT_GRID_DIMENSION
+        );
+        assert_eq!(
+            contract["text_grid_cell"]["keys"],
+            serde_json::json!(TEXT_GRID_CELL_KEYS)
         );
         let shapes = &contract["text_grid_line"];
         assert_eq!(shapes["text"], serde_json::json!(["row", "column", "text"]));

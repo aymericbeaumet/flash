@@ -295,6 +295,16 @@ struct PluginWireTarget {
 /// One validated `text_grid` reply: `columns` × `rows` cells and the lines
 /// inside them, row 0 at the top. No lines means no grid.
 struct PluginTextGrid: Equatable {
+  /// Where the cells are inside the window, in points, as the plugin
+  /// measured them: one cell's size, and the padding between the window's
+  /// left and top edges and the grid.
+  struct Cell: Equatable {
+    var width: CGFloat
+    var height: CGFloat
+    var padX: CGFloat
+    var padY: CGFloat
+  }
+
   enum Line: Equatable {
     /// Captured cell text, one UTF-16 unit per cell from `column` on.
     case text(row: Int, column: Int, text: String)
@@ -305,4 +315,6 @@ struct PluginTextGrid: Equatable {
   var columns: Int
   var rows: Int
   var lines: [Line]
+  /// Nil when the plugin measured none: the grid fills the window evenly.
+  var cell: Cell?
 }

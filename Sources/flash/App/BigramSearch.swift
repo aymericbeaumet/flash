@@ -101,10 +101,7 @@ final class BigramSearch {
           self?.queue.async { [weak self] in
             guard let self, self.currentGeneration == generation else { return }
             self.awaitingTextGrid = false
-            self.textGrid = reply.flatMap {
-              TerminalTextGrid.grid(
-                $0, bundleIdentifier: context.bundleIdentifier, window: window)
-            }
+            self.textGrid = reply.flatMap { TerminalTextGrid.grid($0, window: window) }
             self.resolveIfReady(generation: generation)
           }
         }

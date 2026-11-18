@@ -403,6 +403,35 @@
       },
       "description": "One hint target: geometry and semantics, nothing about the mode."
     },
+    "text_grid_cell": {
+      "description": "Where a text grid's cells are inside the window, in AppKit points: one cell's size, and the padding between the window's left and top edges and the grid.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "pad_x",
+        "pad_y"
+      ],
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_x": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pad_y": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
     "text_grid_line": {
       "description": "One line of a text grid: captured text, or a status format laid out over width cells.",
       "$comment": "row < rows, column < columns and width <= columns - column; the receiver checks them against the reply's dimensions.",

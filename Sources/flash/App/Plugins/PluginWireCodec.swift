@@ -232,13 +232,27 @@ enum PluginWireCodec {
   }
 
   static let textGridKeys: Set<String> = ["ok", "columns", "rows", "lines"]
+  /// The exact key set of a `text_grid` reply's `cell` (`text_grid_cell`).
+  static let textGridCellKeys: Set<String> = ["width", "height", "pad_x", "pad_y"]
   /// The two exact key sets of a `text_grid` line (`text_grid_line`).
   static let textGridTextLineKeys: Set<String> = ["row", "column", "text"]
   static let textGridFormatLineKeys: Set<String> = ["row", "column", "width", "format"]
 
+  /// Decode a `text_grid` cell: a finite size above zero and finite padding
+  /// at or above it, under exactly the four keys.
+  static func textGridCell(from value: Any) -> PluginTextGrid.Cell? {
+    guard let cell = value as? [String: Any], Set(cell.keys) == textGridCellKeys,
+      let width = PluginJSON.number(cell["width"]), width > 0,
+      let height = PluginJSON.number(cell["height"]), height > 0,
+      let padX = PluginJSON.number(cell["pad_x"]), padX >= 0,
+      let padY = PluginJSON.number(cell["pad_y"]), padY >= 0
+    else { return nil }
+    return PluginTextGrid.Cell(width: width, height: height, padX: padX, padY: padY)
+  }
+
   /// Decode a `text_grid` reply. Atomic: a missing or out-of-bound
-  /// dimension, or one line off the grid or of neither exact shape, rejects
-  /// the whole reply (`nil`).
+  /// dimension, a malformed cell, or one line off the grid or of neither
+  /// exact shape, rejects the whole reply (`nil`).
   static func textGrid(from payload: [String: Any]) -> PluginTextGrid? {
     func dimension(_ value: Any?) -> Int? {
       guard let value = PluginJSON.integer(value),
@@ -246,10 +260,16 @@ enum PluginWireCodec {
       else { return nil }
       return value
     }
-    guard PluginJSON.boolean(payload["ok"]) == true, Set(payload.keys) == textGridKeys,
+    guard PluginJSON.boolean(payload["ok"]) == true,
+      Set(payload.keys).subtracting(["cell"]) == textGridKeys,
       let columns = dimension(payload["columns"]), let rows = dimension(payload["rows"]),
       let raw = payload["lines"] as? [Any]
     else { return nil }
+    var cell: PluginTextGrid.Cell?
+    if let declared = payload["cell"] {
+      guard let decoded = textGridCell(from: declared) else { return nil }
+      cell = decoded
+    }
     var lines: [PluginTextGrid.Line] = []
     lines.reserveCapacity(raw.count)
     for item in raw {
@@ -268,7 +288,7 @@ enum PluginWireCodec {
         return nil
       }
     }
-    return PluginTextGrid(columns: columns, rows: rows, lines: lines)
+    return PluginTextGrid(columns: columns, rows: rows, lines: lines, cell: cell)
   }
 
   /// One decoded `publish`: the rows of the whole catalog (`source` nil) or

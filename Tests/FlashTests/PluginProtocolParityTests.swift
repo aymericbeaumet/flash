@@ -64,6 +64,8 @@ final class PluginProtocolParityTests: XCTestCase {
 
   /// The two `text_grid` line shapes the host decodes are the contract's.
   func testTextGridLineShapesMatchSpec() throws {
+    let cell = try XCTUnwrap(try spec()["text_grid_cell"] as? [String: Any])
+    XCTAssertEqual(Set(cell["keys"] as? [String] ?? []), PluginWireCodec.textGridCellKeys)
     let shapes = try XCTUnwrap(try spec()["text_grid_line"] as? [String: Any])
     XCTAssertEqual(
       Set(try XCTUnwrap(shapes["text"] as? [String])), PluginWireCodec.textGridTextLineKeys)

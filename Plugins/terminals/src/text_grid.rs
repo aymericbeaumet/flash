@@ -1,16 +1,19 @@
 //! The text grid for letter search: the focused client's cells as rows and
 //! columns.
 
-use flash_plugin::{Context, TextGridLine, TextGridRequest, TextGridResponse};
+use flash_plugin::{Context, TextGridCell, TextGridLine, TextGridRequest, TextGridResponse};
 
 use crate::clients::focused_tmux_client;
+use crate::geometry::{reports_cells, resolve_geometry};
 use crate::hints::{
     ClientLayout, capture_panes, client_layout, parse_status_top_offset, status_format_row,
 };
 use crate::{Tmux, pane_capture, status_hints};
 
 /// The focused client's cells for a letter search: the same client, layout
-/// read and pane captures as `hints`, so both see one surface.
+/// read, pane captures and cell geometry as `hints`, so both see one
+/// surface. A terminal whose cells cannot be placed exactly gets no grid,
+/// as it gets no hints.
 pub(crate) async fn text_grid_for_context(
     plugin: &Tmux,
     ctx: &Context,
@@ -25,11 +28,44 @@ pub(crate) async fn text_grid_for_context(
     let Some(layout) = client_layout(plugin, &client).await else {
         return TextGridResponse::default();
     };
+    let bundle_id = req.bundle_id.as_deref().unwrap_or("");
+    let window = req
+        .front_window_frame
+        .filter(|frame| frame.width > 0.0 && frame.height > 0.0);
+    let cell = match window {
+        Some(window) => {
+            let Some((width, height, pad_x, pad_y)) = resolve_geometry(
+                bundle_id,
+                pid,
+                window.width,
+                window.height,
+                &layout,
+                req.display_scale,
+            )
+            .await
+            else {
+                return TextGridResponse::default();
+            };
+            Some(TextGridCell {
+                width,
+                height,
+                pad_x,
+                pad_y,
+            })
+        }
+        None if reports_cells(bundle_id) => return TextGridResponse::default(),
+        // No window to measure: the host divides its own evenly.
+        None => None,
+    };
     let captures = capture_panes(plugin, &client, &layout.panes).await;
     if client_layout(plugin, &client).await.as_ref() != Some(&layout) {
         return TextGridResponse::default();
     }
-    text_grid(&layout, &captures)
+    let grid = text_grid(&layout, &captures);
+    match cell {
+        Some(cell) if !grid.lines.is_empty() => grid.cell(cell),
+        _ => grid,
+    }
 }
 
 /// Lay one client out as grid lines. The status line and each pane-border
@@ -180,6 +216,49 @@ esac"#,
             text_grid_for_context(&plugin, &harness.context(), &TextGridRequest::default()).await,
             TextGridResponse::default()
         );
+
+        // With the window, the grid says where its cells are: an even split
+        // for a terminal that fills its window.
+        let measured = text_grid_for_context(
+            &plugin,
+            &harness.context(),
+            &TextGridRequest {
+                pid: Some(42),
+                bundle_id: Some("com.example.term".into()),
+                front_window_frame: Some(flash_plugin::Frame::new(0.0, 0.0, 200.0, 60.0)),
+                display_scale: Some(2.0),
+            },
+        )
+        .await;
+        assert_eq!(measured.lines, grid.lines);
+        assert_eq!(
+            measured.cell,
+            Some(TextGridCell {
+                width: 10.0,
+                height: 10.0,
+                pad_x: 0.0,
+                pad_y: 0.0,
+            })
+        );
+
+        // Alacritty's cells are the ones it reports to tmux; with no window
+        // or an unsupported layout there is no grid, as there are no hints.
+        for frame in [None, Some(flash_plugin::Frame::new(0.0, 0.0, 200.0, 60.0))] {
+            assert_eq!(
+                text_grid_for_context(
+                    &plugin,
+                    &harness.context(),
+                    &TextGridRequest {
+                        pid: Some(42),
+                        bundle_id: Some("org.alacritty".into()),
+                        front_window_frame: frame,
+                        display_scale: Some(2.0),
+                    },
+                )
+                .await,
+                TextGridResponse::default()
+            );
+        }
         fixture.cleanup().await;
     }
 

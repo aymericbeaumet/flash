@@ -571,13 +571,7 @@ where
                             deadline_exceeded(&ctx, id, "text_grid", deadline).await;
                             return;
                         };
-                        let mut result = json!({
-                            "ok": true,
-                            "columns": response.columns,
-                            "rows": response.rows,
-                            "lines": serde_json::to_value(&response.lines)
-                                .unwrap_or_else(|_| json!([])),
-                        });
+                        let mut result = response.to_value();
                         if !crate::wire::valid_result("text_grid", &result) {
                             result = json!({ "ok": false, "error": "invalid text_grid response" });
                         }

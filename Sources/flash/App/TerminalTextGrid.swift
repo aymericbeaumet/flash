@@ -1,13 +1,13 @@
-import AppKit
+import CoreGraphics
 import FlashCore
 import Foundation
 
 /// Visible terminal cells for an EasyMotion letter, used when the focused
 /// terminal's accessibility tree has no text. The cells come from the plugin
 /// that hints the app (`text_grid`; tmux reads its client), laid out here on
-/// the window `f` measures. Geometry matches the terminals plugin: Alacritty
-/// centres its font grid in the window; other terminals divide the window by
-/// the grid's cell count.
+/// the window `f` measures. The plugin says where the cells are when the
+/// terminal pads or centres its grid; otherwise the grid's cell count
+/// divides the window.
 enum TerminalTextGrid {
   /// One UTF-16 unit of a laid-out line. `column` is the screen column.
   /// `width` is the glyph's cell span on its first unit and 0 on the rest,
@@ -99,17 +99,15 @@ enum TerminalTextGrid {
   }
 
   /// Lay a `text_grid` reply on `window`. Nil when no line has text.
-  static func grid(_ reply: PluginTextGrid, bundleIdentifier: String, window: CGRect) -> Grid? {
+  static func grid(_ reply: PluginTextGrid, window: CGRect) -> Grid? {
     let lines = placedLines(reply)
     guard !lines.isEmpty else { return nil }
-    let cells = metrics(
-      bundleIdentifier: bundleIdentifier, window: window,
-      columns: CGFloat(reply.columns), rows: CGFloat(reply.rows))
+    let cell = reply.cell ?? evenCell(window: window, columns: reply.columns, rows: reply.rows)
     return Grid(
-      cellWidth: cells.cellWidth,
-      cellHeight: cells.cellHeight,
-      padX: cells.padX,
-      padY: cells.padY,
+      cellWidth: cell.width,
+      cellHeight: cell.height,
+      padX: cell.padX,
+      padY: cell.padY,
       origin: CGPoint(x: window.minX, y: window.minY),
       windowHeight: window.height,
       lines: lines)
@@ -128,22 +126,12 @@ enum TerminalTextGrid {
     }
   }
 
-  static func metrics(
-    bundleIdentifier: String, window: CGRect, columns: CGFloat, rows: CGFloat
-  ) -> (cellWidth: CGFloat, cellHeight: CGFloat, padX: CGFloat, padY: CGFloat) {
-    let columns = max(columns, 1)
-    let rows = max(rows, 1)
-    if isAlacritty(bundleIdentifier),
-      let font = alacrittyFont(),
-      let cell = cellMetrics(family: font.family, size: font.size)
-    {
-      let contentWidth = columns * cell.width
-      let contentHeight = rows * cell.height
-      let padX = max(0, (window.width - contentWidth) / 2)
-      let padY = max(0, (window.height - contentHeight) / 2)
-      return (cell.width, cell.height, padX, padY)
-    }
-    return (window.width / columns, window.height / rows, 0, 0)
+  /// The cell of a grid that fills `window` evenly: what a reply without a
+  /// measured cell means.
+  static func evenCell(window: CGRect, columns: Int, rows: Int) -> PluginTextGrid.Cell {
+    PluginTextGrid.Cell(
+      width: window.width / CGFloat(max(columns, 1)),
+      height: window.height / CGFloat(max(rows, 1)), padX: 0, padY: 0)
   }
 
   /// One captured line. Each UTF-16 unit is one cell, which is how
@@ -177,68 +165,5 @@ enum TerminalTextGrid {
     }
     guard text.unicodeScalars.contains(where: { !$0.properties.isWhitespace }) else { return nil }
     return PlacedLine(row: row, text: text, units: units)
-  }
-
-  private static func isAlacritty(_ bundleIdentifier: String) -> Bool {
-    bundleIdentifier == "org.alacritty" || bundleIdentifier == "io.alacritty"
-  }
-
-  private static func alacrittyFont() -> (family: String, size: CGFloat)? {
-    let home = NSHomeDirectory()
-    let paths = [
-      "\(home)/.config/alacritty/alacritty.toml",
-      "\(home)/.alacritty.toml",
-    ]
-    for path in paths {
-      guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
-      let size = CGFloat(tomlNumber(text, section: "font", key: "size") ?? 11)
-      let family = tomlString(text, section: "font.normal", key: "family") ?? "Menlo"
-      return (family, size)
-    }
-    return nil
-  }
-
-  private static func cellMetrics(family: String, size: CGFloat) -> (
-    width: CGFloat, height: CGFloat
-  )? {
-    let font =
-      NSFont(name: family, size: size) ?? NSFont(name: "Menlo", size: size)
-    guard let font else { return nil }
-    let width = font.maximumAdvancement.width
-    let height = font.ascender - font.descender
-    guard width > 0, height > 0 else { return nil }
-    return (width, height)
-  }
-
-  private static func tomlNumber(_ text: String, section: String, key: String) -> Double? {
-    guard let raw = tomlRaw(text, section: section, key: key) else { return nil }
-    return Double(raw)
-  }
-
-  private static func tomlString(_ text: String, section: String, key: String) -> String? {
-    guard var raw = tomlRaw(text, section: section, key: key) else { return nil }
-    if raw.count >= 2, raw.hasPrefix("\""), raw.hasSuffix("\"") {
-      raw = String(raw.dropFirst().dropLast())
-    }
-    return raw.isEmpty ? nil : raw
-  }
-
-  private static func tomlRaw(_ text: String, section: String, key: String) -> String? {
-    var inSection = false
-    for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-      let line = rawLine.trimmingCharacters(in: .whitespaces)
-      if line.isEmpty || line.hasPrefix("#") { continue }
-      if line.hasPrefix("["), line.hasSuffix("]") {
-        inSection =
-          String(line.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces) == section
-        continue
-      }
-      guard inSection, let split = line.split(separator: "=", maxSplits: 1).last else { continue }
-      let name = line.split(separator: "=", maxSplits: 1).first?
-        .trimmingCharacters(in: .whitespaces)
-      guard name == key else { continue }
-      return split.trimmingCharacters(in: .whitespaces)
-    }
-    return nil
   }
 }

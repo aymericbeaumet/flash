@@ -316,6 +316,13 @@ monitors read that no plugin publishes any more, with its replacement.
   seconds). `flash config check` reports a `[plugins.feed] url` that is not
   an `https://` URL. The Rust SDK's `fetch` returns the body of a 2xx
   response alone; another status is an error.
+- A `text_grid` reply may say where its cells are (`cell`: size and
+  padding in points), and `terminals` does: a letter search in Alacritty
+  under tmux lands on the cells Alacritty reports, the ones `f` already
+  used, where Flash used to estimate them from Alacritty's font. Flash reads
+  no terminal's configuration; an Alacritty layout the plugin cannot place
+  exactly (decorated, or without dynamic padding) gets no letter-search
+  grid, as it gets no hints.
 - Which apps are browsers, and of which engine, is plugin data: the new
   manifest key `browser_engines` (`chromium`, `webkit`, `gecko`), declared by
   the bundled `defaults` plugin. Flash itself names no browser. The engine
