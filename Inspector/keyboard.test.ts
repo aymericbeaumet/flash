@@ -1,6 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ansiRows, alphabetHeat, bindingsByCap, capsAt, categoryOf, keycapLabel, keySteps, stepsToKey, layerModes, mappingModes, mappingSnippet, parseKey, phaseKeys, rowsForMode, rowsUnder, scopesForMode, zoneOf } from "./src/lib/keyboard.ts";
+import {
+  ansiRows,
+  alphabetHeat,
+  bindingsByCap,
+  capsAt,
+  categoryOf,
+  keycapLabel,
+  keySteps,
+  stepsToKey,
+  layerModes,
+  mappingModes,
+  mappingSnippet,
+  parseKey,
+  phaseKeys,
+  rowsForMode,
+  rowsUnder,
+  scopesForMode,
+  zoneOf,
+} from "./src/lib/keyboard.ts";
 import type { KeyboardState, MappingRow } from "./src/lib/types.ts";
 
 const keyboard: KeyboardState = {
@@ -16,7 +34,11 @@ const keyboard: KeyboardState = {
 };
 
 test("a chord is one key with its modifiers", () => {
-  assert.deepEqual(parseKey("cmd+shift+space", "space"), { cap: "space", modifiers: ["cmd", "shift"], rest: "" });
+  assert.deepEqual(parseKey("cmd+shift+space", "space"), {
+    cap: "space",
+    modifiers: ["cmd", "shift"],
+    rest: "",
+  });
   assert.deepEqual(parseKey("ctrl+d", ""), { cap: "d", modifiers: ["ctrl"], rest: "" });
   assert.deepEqual(parseKey("shift+-", ""), { cap: "-", modifiers: ["shift"], rest: "" });
   assert.deepEqual(parseKey("+", ""), { cap: "+", modifiers: [], rest: "" });
@@ -38,8 +60,15 @@ test("a function key is its own cap, bare in a sequence or held in a chord", () 
   assert.deepEqual(parseKey("<f20>g", ""), { cap: "f20", modifiers: [], rest: "g" });
   assert.deepEqual(parseKey("cmd+<f5>", ""), { cap: "f5", modifiers: ["cmd"], rest: "" });
   assert.deepEqual(parseKey("cmd+f5", ""), { cap: "f5", modifiers: ["cmd"], rest: "" });
-  assert.deepEqual(keySteps("g<f1>", ""), [{ cap: "g", modifiers: [] }, { cap: "f1", modifiers: [] }]);
-  assert.equal(stepsToKey([{ cap: "f12", modifiers: [] }]), "<f12>", "bare, f12 is the keys f, 1, 2");
+  assert.deepEqual(keySteps("g<f1>", ""), [
+    { cap: "g", modifiers: [] },
+    { cap: "f1", modifiers: [] },
+  ]);
+  assert.equal(
+    stepsToKey([{ cap: "f12", modifiers: [] }]),
+    "<f12>",
+    "bare, f12 is the keys f, 1, 2",
+  );
   assert.equal(stepsToKey([{ cap: "f12", modifiers: ["cmd", "shift"] }]), "cmd+shift+f12");
 });
 
@@ -62,8 +91,17 @@ test("each layer is a mode button of its own, reading its keys and all", () => {
     { scope: "all", key: "cmd+space", action: "flash app switch" },
     { scope: "normal", key: "f", action: "flash mouse target" },
   ];
-  assert.deepEqual(layerModes(rows).map((mode) => [mode.id, mode.label]), [["layers.media", "media"], ["layers.resize", "resize"]]);
-  assert.deepEqual(rowsForMode(rows, "layers.resize").map((row) => row.key), ["h", "<escape>", "cmd+space"]);
+  assert.deepEqual(
+    layerModes(rows).map((mode) => [mode.id, mode.label]),
+    [
+      ["layers.media", "media"],
+      ["layers.resize", "resize"],
+    ],
+  );
+  assert.deepEqual(
+    rowsForMode(rows, "layers.resize").map((row) => row.key),
+    ["h", "<escape>", "cmd+space"],
+  );
   assert.equal(
     mappingSnippet(rows[0]),
     '[mode.layers.resize.mappings]\n"h" = ["flash", "window", "move", "--position=lefthalf"]  # change the command\n# "h" = false  # or remove the key',
@@ -71,7 +109,10 @@ test("each layer is a mode button of its own, reading its keys and all", () => {
 });
 
 test("the mode buttons pick what the keyboard lights and the list shows", () => {
-  assert.deepEqual(mappingModes.map((mode) => mode.id), ["all", "normal", "text", "visual", "hold", "hyper", "insert", "command", "terminal"]);
+  assert.deepEqual(
+    mappingModes.map((mode) => mode.id),
+    ["all", "normal", "text", "visual", "hold", "hyper", "insert", "command", "terminal"],
+  );
   const rows: MappingRow[] = [
     { scope: "normal", key: "f", action: "flash mouse target" },
     { scope: "hold", key: "j", action: "flash mouse nudge --direction=down --distance=16" },
@@ -80,9 +121,18 @@ test("the mode buttons pick what the keyboard lights and the list shows", () => 
     { scope: "hyper", key: "1", action: "flash key system --key=brightness_down" },
   ];
   assert.deepEqual(rowsForMode(rows, "all").length, 5);
-  assert.deepEqual(rowsForMode(rows, "hold").map((row) => row.key), ["f", "j", "cmd+space"]);
-  assert.deepEqual(rowsForMode(rows, "hyper").map((row) => row.key), ["1"]);
-  assert.deepEqual(rowsForMode(rows, "insert").map((row) => row.key), ["cmd+space", "ctrl+["]);
+  assert.deepEqual(
+    rowsForMode(rows, "hold").map((row) => row.key),
+    ["f", "j", "cmd+space"],
+  );
+  assert.deepEqual(
+    rowsForMode(rows, "hyper").map((row) => row.key),
+    ["1"],
+  );
+  assert.deepEqual(
+    rowsForMode(rows, "insert").map((row) => row.key),
+    ["cmd+space", "ctrl+["],
+  );
 });
 
 test("a key is the steps you press, a capital being its shift layer", () => {
@@ -90,8 +140,14 @@ test("a key is the steps you press, a capital being its shift layer", () => {
   assert.deepEqual(keySteps("G", "space"), [{ cap: "g", modifiers: ["shift"] }]);
   assert.deepEqual(keySteps("ctrl+d", "space"), [{ cap: "d", modifiers: ["ctrl"] }]);
   assert.deepEqual(keySteps("cmd+shift+]", "space"), [{ cap: "]", modifiers: ["cmd", "shift"] }]);
-  assert.deepEqual(keySteps("[t", "space"), [{ cap: "[", modifiers: [] }, { cap: "t", modifiers: [] }]);
-  assert.deepEqual(keySteps("<leader>s", "space"), [{ cap: "space", modifiers: [] }, { cap: "s", modifiers: [] }]);
+  assert.deepEqual(keySteps("[t", "space"), [
+    { cap: "[", modifiers: [] },
+    { cap: "t", modifiers: [] },
+  ]);
+  assert.deepEqual(keySteps("<leader>s", "space"), [
+    { cap: "space", modifiers: [] },
+    { cap: "s", modifiers: [] },
+  ]);
 });
 
 const drillRows: MappingRow[] = [
@@ -121,9 +177,18 @@ test("the keyboard shows what each key does at a prefix, in one modifier layer",
 
 test("the list keeps the bindings under a prefix and a picked key", () => {
   const g = [{ cap: "g", modifiers: [] }];
-  assert.deepEqual(rowsUnder(drillRows, g, null, "space").map((row) => row.key), ["g1", "gg"]);
-  assert.deepEqual(rowsUnder(drillRows, g, { cap: "1", modifiers: [] }, "space").map((row) => row.key), ["g1"]);
-  assert.deepEqual(rowsUnder(drillRows, [], { cap: "c", modifiers: [] }, "space").map((row) => row.key), ["c", "cf"]);
+  assert.deepEqual(
+    rowsUnder(drillRows, g, null, "space").map((row) => row.key),
+    ["g1", "gg"],
+  );
+  assert.deepEqual(
+    rowsUnder(drillRows, g, { cap: "1", modifiers: [] }, "space").map((row) => row.key),
+    ["g1"],
+  );
+  assert.deepEqual(
+    rowsUnder(drillRows, [], { cap: "c", modifiers: [] }, "space").map((row) => row.key),
+    ["c", "cf"],
+  );
   assert.equal(rowsUnder(drillRows, [], null, "space").length, drillRows.length);
 });
 
@@ -154,7 +219,13 @@ test("steps read back as flash.toml key syntax", () => {
   for (const key of ["f", "G", "ctrl+d", "cmd+shift+]", "[t", "gg", "<space>s"]) {
     assert.equal(stepsToKey(keySteps(key, "")!), key);
   }
-  assert.equal(stepsToKey([{ cap: "space", modifiers: [] }, { cap: "x", modifiers: [] }]), "<space>x");
+  assert.equal(
+    stepsToKey([
+      { cap: "space", modifiers: [] },
+      { cap: "x", modifiers: [] },
+    ]),
+    "<space>x",
+  );
   assert.equal(stepsToKey([{ cap: "return", modifiers: ["ctrl"] }]), "ctrl+return");
 });
 
@@ -164,7 +235,11 @@ test("a binding's snippet remaps or removes it in its own table", () => {
     '[mode.normal.mappings]\n"f" = ["flash", "mouse", "target"]  # change the command\n# "f" = false  # or remove the key',
   );
   assert.equal(
-    mappingSnippet({ scope: "hold", key: "j", action: "flash mouse nudge --direction=down --distance=16" }),
+    mappingSnippet({
+      scope: "hold",
+      key: "j",
+      action: "flash mouse nudge --direction=down --distance=16",
+    }),
     '[mode.hold.mappings]\n"j" = ["flash", "mouse", "nudge", "--direction=down", "--distance=16"]  # change the command\n# "j" = false  # or remove the key',
   );
 });
@@ -178,7 +253,10 @@ test("bindings group by the key cap they start on, sorted", () => {
   ];
   const byCap = bindingsByCap(rows, ["normal", "all"], "space");
   assert.deepEqual([...byCap.keys()].sort(), ["c", "space"]);
-  assert.deepEqual(byCap.get("c")?.map((b) => b.row.key), ["c", "cf"]);
+  assert.deepEqual(
+    byCap.get("c")?.map((b) => b.row.key),
+    ["c", "cf"],
+  );
   assert.equal(byCap.get("x"), undefined, "insert is not read in NORMAL");
 });
 
@@ -218,16 +296,38 @@ test("the board is a US ANSI keyboard whatever the layout", () => {
   const rows = ansiRows(keyboard);
   assert.equal(rows.length, 6, "escape, numbers, top, home, bottom, modifiers");
   for (const row of rows.slice(1)) assert.equal(width(row), 15);
-  assert.deepEqual(rows[0].map((slot) => slot.cap).join(" "), "esc f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12");
-  assert.deepEqual(rows[1].map((slot) => slot.cap).join(" "), "` 1 2 3 4 5 6 7 8 9 0 - = backspace");
+  assert.deepEqual(
+    rows[0].map((slot) => slot.cap).join(" "),
+    "esc f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12",
+  );
+  assert.deepEqual(
+    rows[1].map((slot) => slot.cap).join(" "),
+    "` 1 2 3 4 5 6 7 8 9 0 - = backspace",
+  );
   assert.deepEqual(rows[2].map((slot) => slot.cap).join(" "), "tab q w e r t y u i o p [ ] \\");
   assert.deepEqual(rows[3].map((slot) => slot.cap).join(" "), "caps a s d f g h j k l ; ' return");
   assert.deepEqual(rows[4].map((slot) => slot.cap).join(" "), "shift z x c v b n m , . / shift");
   assert.equal(rows[5].find((slot) => slot.cap === "space")?.units, 6.5);
-  assert.deepEqual(rows[5].filter((slot) => slot.modifier).map((slot) => slot.modifier), ["ctrl", "alt", "cmd", "cmd", "alt", "ctrl"]);
-  const dvorak = ansiRows({ ...keyboard, layout: "dvorak", rows: ["1234567890", "',.pyfgcrl", "aoeuidhtns", ";qjkxbmwvz"] });
-  assert.deepEqual(dvorak[1].slice(-3).map((slot) => slot.cap), ["[", "]", "backspace"]);
-  assert.deepEqual(dvorak[2].slice(-4).map((slot) => slot.cap), ["l", "/", "=", "\\"]);
-  assert.deepEqual(dvorak[3].slice(-2).map((slot) => slot.cap), ["-", "return"]);
+  assert.deepEqual(
+    rows[5].filter((slot) => slot.modifier).map((slot) => slot.modifier),
+    ["ctrl", "alt", "cmd", "cmd", "alt", "ctrl"],
+  );
+  const dvorak = ansiRows({
+    ...keyboard,
+    layout: "dvorak",
+    rows: ["1234567890", "',.pyfgcrl", "aoeuidhtns", ";qjkxbmwvz"],
+  });
+  assert.deepEqual(
+    dvorak[1].slice(-3).map((slot) => slot.cap),
+    ["[", "]", "backspace"],
+  );
+  assert.deepEqual(
+    dvorak[2].slice(-4).map((slot) => slot.cap),
+    ["l", "/", "=", "\\"],
+  );
+  assert.deepEqual(
+    dvorak[3].slice(-2).map((slot) => slot.cap),
+    ["-", "return"],
+  );
   for (const row of dvorak.slice(1)) assert.equal(width(row), 15);
 });

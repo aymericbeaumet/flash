@@ -17,12 +17,15 @@ test("raw HTML splits into allowed tags and text; everything else is text or dro
     { tag: "br", close: false },
   ]);
   // Attributes never survive; unknown and dangerous tags are dropped.
-  assert.deepEqual(htmlParts('<span onclick="x()">a</span><script>alert(1)</script><img src=x onerror=y>'), [
-    { tag: "span", close: false },
-    { text: "a" },
-    { tag: "span", close: true },
-    { text: "alert(1)" },
-  ]);
+  assert.deepEqual(
+    htmlParts('<span onclick="x()">a</span><script>alert(1)</script><img src=x onerror=y>'),
+    [
+      { tag: "span", close: false },
+      { text: "a" },
+      { tag: "span", close: true },
+      { text: "alert(1)" },
+    ],
+  );
   assert.deepEqual(htmlParts("a < b"), [{ text: "a < b" }]);
   // An HTML comment is a note to the source (`<!-- modes: assumed on -->`), never text.
   assert.deepEqual(htmlParts("<!-- modes: assumed on -->"), []);

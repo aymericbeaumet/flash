@@ -14,7 +14,9 @@ import { viteSingleFile } from "vite-plugin-singlefile";
 // and its server render, each run in a directory of its own under `dist-site/`.
 export default defineConfig(({ mode }) => {
   if (mode === "site") {
-    const site = JSON.parse(readFileSync(new URL("../docs/nav.json", import.meta.url), "utf8")) as { site: { url: string } };
+    const site = JSON.parse(readFileSync(new URL("../docs/nav.json", import.meta.url), "utf8")) as {
+      site: { url: string };
+    };
     return {
       base: new URL(site.site.url).pathname,
       plugins: [svelte()],

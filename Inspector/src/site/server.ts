@@ -10,7 +10,11 @@ import { siteLinks, type DocsBundle, type SiteMode } from "../lib/docsite";
 import { router } from "../lib/router.svelte";
 import { useSite } from "../lib/routes";
 
-export function renderPage(mode: SiteMode, bundle: DocsBundle, path: string): { head: string; body: string } {
+export function renderPage(
+  mode: SiteMode,
+  bundle: DocsBundle,
+  path: string,
+): { head: string; body: string } {
   useSite(siteLinks(mode, bundle.site));
   docsStore.prime(bundle, mode === "local");
   router.prime(new URL(path, bundle.site.url));

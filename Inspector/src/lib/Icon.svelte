@@ -23,7 +23,8 @@
     menu: "M4 6h16 M4 12h16 M4 18h16",
     warning: "M12 3 2 21h20L12 3z M12 9v5 M12 17h.01",
     monitors: "M3 17a9 9 0 0 1 18 0 M12 17l4.5-5 M5.6 10.6l1.1 1.1 M12 8v1.5 M18.4 10.6l-1.1 1.1",
-    telemetry: "M12 12v9 M9 21h6 M8.5 8.5a5 5 0 0 0 0 7 M15.5 8.5a5 5 0 0 1 0 7 M5.6 5.6a9 9 0 0 0 0 12.8 M18.4 5.6a9 9 0 0 1 0 12.8 M12 12h.01",
+    telemetry:
+      "M12 12v9 M9 21h6 M8.5 8.5a5 5 0 0 0 0 7 M15.5 8.5a5 5 0 0 1 0 7 M5.6 5.6a9 9 0 0 0 0 12.8 M18.4 5.6a9 9 0 0 1 0 12.8 M12 12h.01",
     refresh: "M20 11a8 8 0 1 0-2.3 5.7 M20 4v7h-7",
     trash: "M4 7h16 M10 11v6 M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3",
     image: "M3 5h18v14H3z M3 16l5-5 4 4 3-3 6 6 M15.5 9.5h.01",
@@ -35,4 +36,14 @@
   };
 </script>
 
-<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={paths[name] ?? paths.docs} /></svg>
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.6"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"><path d={paths[name] ?? paths.docs} /></svg
+>

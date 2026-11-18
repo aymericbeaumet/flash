@@ -23,7 +23,11 @@ export class RequestError extends Error {
    * request or a reply the page cannot read fails the same way next time. */
   get transient(): boolean {
     if (this.kind === "offline" || this.kind === "timeout") return true;
-    return this.kind === "http" && this.status !== undefined && (this.status >= 500 || this.status === 408 || this.status === 429);
+    return (
+      this.kind === "http" &&
+      this.status !== undefined &&
+      (this.status >= 500 || this.status === 408 || this.status === 429)
+    );
   }
 }
 
@@ -35,11 +39,14 @@ export function contractError(message: string): RequestError {
 /** Any thrown value as a classified failure. */
 export function classify(error: unknown): RequestError {
   if (error instanceof RequestError) return error;
-  if (error instanceof DOMException && error.name === "AbortError") return new RequestError("aborted", "Request cancelled");
-  if (error instanceof DOMException && error.name === "TimeoutError") return new RequestError("timeout", "Flash took too long to answer");
+  if (error instanceof DOMException && error.name === "AbortError")
+    return new RequestError("aborted", "Request cancelled");
+  if (error instanceof DOMException && error.name === "TimeoutError")
+    return new RequestError("timeout", "Flash took too long to answer");
   // fetch rejects with a TypeError when nothing answers on the port.
   if (error instanceof TypeError) return new RequestError("offline", "Flash is not answering");
-  if (error instanceof SyntaxError) return new RequestError("contract", `Unreadable reply: ${error.message}`);
+  if (error instanceof SyntaxError)
+    return new RequestError("contract", `Unreadable reply: ${error.message}`);
   return new RequestError("contract", error instanceof Error ? error.message : String(error));
 }
 
@@ -47,13 +54,18 @@ export function classify(error: unknown): RequestError {
 export function describeFailure(error: unknown): string {
   const failure = classify(error);
   switch (failure.kind) {
-    case "offline": return "Flash is not answering (offline)";
-    case "timeout": return "Flash took too long to answer (timeout)";
+    case "offline":
+      return "Flash is not answering (offline)";
+    case "timeout":
+      return "Flash took too long to answer (timeout)";
     case "http":
-      if (failure.status === 401) return "Flash refused this page its data (HTTP 401): open the help from Flash, with flash help show, to unlock it";
+      if (failure.status === 401)
+        return "Flash refused this page its data (HTTP 401): open the help from Flash, with flash help show, to unlock it";
       return `Flash answered HTTP ${failure.status}${failure.message ? `: ${failure.message}` : ""}`;
-    case "contract": return `Unexpected reply (contract error): ${failure.message}`;
-    case "aborted": return "Request cancelled";
+    case "contract":
+      return `Unexpected reply (contract error): ${failure.message}`;
+    case "aborted":
+      return "Request cancelled";
   }
 }
 
@@ -77,23 +89,40 @@ export function backoff(attempt: number, baseDelayMs = 500, maxDelayMs = 8000): 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new RequestError("aborted", "Request cancelled"));
-    const timer = setTimeout(() => { signal?.removeEventListener("abort", stop); resolve(); }, ms);
-    const stop = () => { clearTimeout(timer); reject(new RequestError("aborted", "Request cancelled")); };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", stop);
+      resolve();
+    }, ms);
+    const stop = () => {
+      clearTimeout(timer);
+      reject(new RequestError("aborted", "Request cancelled"));
+    };
     signal?.addEventListener("abort", stop, { once: true });
   });
 }
 
 /** Runs `attempt` until it succeeds, retrying transient failures with
  * backoff; a lasting failure, the last retry or an abort rethrows it classified. */
-export async function withRetry<T>(attempt: (signal?: AbortSignal) => Promise<T>, options: RetryOptions = {}): Promise<T> {
-  const { retries = 3, baseDelayMs = 500, maxDelayMs = 8000, signal, sleep: wait = sleep, onRetry } = options;
+export async function withRetry<T>(
+  attempt: (signal?: AbortSignal) => Promise<T>,
+  options: RetryOptions = {},
+): Promise<T> {
+  const {
+    retries = 3,
+    baseDelayMs = 500,
+    maxDelayMs = 8000,
+    signal,
+    sleep: wait = sleep,
+    onRetry,
+  } = options;
   for (let tries = 0; ; tries += 1) {
     try {
       if (signal?.aborted) throw new RequestError("aborted", "Request cancelled");
       return await attempt(signal);
     } catch (error) {
       const failure = classify(error);
-      if (signal?.aborted || failure.kind === "aborted") throw new RequestError("aborted", "Request cancelled");
+      if (signal?.aborted || failure.kind === "aborted")
+        throw new RequestError("aborted", "Request cancelled");
       if (!failure.transient || tries >= retries) throw failure;
       const delay = backoff(tries + 1, baseDelayMs, maxDelayMs);
       onRetry?.(failure, tries + 1, delay);
@@ -103,20 +132,30 @@ export async function withRetry<T>(attempt: (signal?: AbortSignal) => Promise<T>
 }
 
 /** GETs or sends JSON with a time limit, classifying every failure. */
-export async function requestJSON(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<unknown> {
+export async function requestJSON(
+  url: string,
+  init: RequestInit & { timeoutMs?: number } = {},
+): Promise<unknown> {
   const { timeoutMs = 10_000, signal, ...rest } = init;
   if (signal?.aborted) throw new RequestError("aborted", "Request cancelled");
   // One controller ends the request for the caller's abort or the time limit.
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   const cancel = () => controller.abort();
   signal?.addEventListener("abort", cancel, { once: true });
   try {
     let response: Response;
     let text: string;
     try {
-      response = await fetch(url, { ...rest, headers: authorize(url, rest.headers), signal: controller.signal });
+      response = await fetch(url, {
+        ...rest,
+        headers: authorize(url, rest.headers),
+        signal: controller.signal,
+      });
       text = await response.text();
     } catch (error) {
       if (signal?.aborted) throw new RequestError("aborted", "Request cancelled");
@@ -125,12 +164,17 @@ export async function requestJSON(url: string, init: RequestInit & { timeoutMs?:
     }
     let body: unknown = null;
     if (text) {
-      try { body = JSON.parse(text); } catch {
+      try {
+        body = JSON.parse(text);
+      } catch {
         if (response.ok) throw contractError(`${url} did not return JSON`);
       }
     }
     if (!response.ok) {
-      const reason = body && typeof body === "object" && "error" in body && typeof body.error === "string" ? body.error : response.statusText;
+      const reason =
+        body && typeof body === "object" && "error" in body && typeof body.error === "string"
+          ? body.error
+          : response.statusText;
       throw new RequestError("http", reason, response.status);
     }
     return body;

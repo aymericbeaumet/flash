@@ -86,19 +86,31 @@ test("a configured Mac is done except for guides it has not opened", () => {
 });
 
 test("a starter install still needs the commented shortcuts", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 2,
-    runtime: {
-      accessibility_trusted: true,
-      keyboard_capture_active: true,
-      secure_input: false,
-      config_path: "/Users/ab/.config/flash/flash.toml",
-      config_error: null,
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 2,
+      runtime: {
+        accessibility_trusted: true,
+        keyboard_capture_active: true,
+        secure_input: false,
+        config_path: "/Users/ab/.config/flash/flash.toml",
+        config_error: null,
+      },
+      config: {
+        statusbar: { enabled: false },
+        widgets: {},
+        popup: { popups: {} },
+        mode: { apps: {} },
+      },
+      plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
+      mappings: {
+        normal_leader: "<space>",
+        rows: [row("all", "cmd+shift+space", "flash mouse target", "config")],
+      },
     },
-    config: { statusbar: { enabled: false }, widgets: {}, popup: { popups: {} }, mode: { apps: {} } },
-    plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
-    mappings: { normal_leader: "<space>", rows: [row("all", "cmd+shift+space", "flash mouse target", "config")] },
-  }, true, new Set());
+    true,
+    new Set(),
+  );
   const steps = model.sections.flatMap((section) => section.steps);
   assert.equal(find(steps, "hints").status, "done");
   assert.equal(find(steps, "grid").status, "todo");
@@ -111,19 +123,26 @@ test("a starter install still needs the commented shortcuts", () => {
 });
 
 test("permission, config, and plugin failures are the missing list", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 3,
-    runtime: {
-      accessibility_trusted: false,
-      keyboard_capture_active: false,
-      secure_input: false,
-      config_path: "/Users/ab/.config/flash/flash.toml",
-      config_error: 'popup.bonsai.size must be "COLUMNSxROWS"',
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 3,
+      runtime: {
+        accessibility_trusted: false,
+        keyboard_capture_active: false,
+        secure_input: false,
+        config_path: "/Users/ab/.config/flash/flash.toml",
+        config_error: 'popup.bonsai.size must be "COLUMNSxROWS"',
+      },
+      plugins: [{ id: "feed", name: "Feed", version: "1", state: "failed", last_error: "dns" }],
+      mappings: { normal_leader: "", rows: [] },
     },
-    plugins: [{ id: "feed", name: "Feed", version: "1", state: "failed", last_error: "dns" }],
-    mappings: { normal_leader: "", rows: [] },
-  }, true, new Set());
-  assert.deepEqual(model.blockers.map((step) => step.id), ["accessibility", "config", "plugins"]);
+    true,
+    new Set(),
+  );
+  assert.deepEqual(
+    model.blockers.map((step) => step.id),
+    ["accessibility", "config", "plugins"],
+  );
   assert.equal(model.title, "Something still needs you");
   assert.match(model.blockers[1].evidence, /COLUMNSxROWS/);
   assert.match(model.blockers[2].evidence, /feed/);
@@ -132,28 +151,41 @@ test("permission, config, and plugin failures are the missing list", () => {
 });
 
 test("secure input is its own attention item once Accessibility is granted", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 4,
-    runtime: { accessibility_trusted: true, keyboard_capture_active: false, secure_input: true, config_error: null },
-    plugins: [],
-    mappings: { normal_leader: "", rows: [] },
-  }, true, new Set());
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 4,
+      runtime: {
+        accessibility_trusted: true,
+        keyboard_capture_active: false,
+        secure_input: true,
+        config_error: null,
+      },
+      plugins: [],
+      mappings: { normal_leader: "", rows: [] },
+    },
+    true,
+    new Set(),
+  );
   const keyboard = find(model.sections[0].steps, "keyboard");
   assert.equal(keyboard.status, "attention");
   assert.match(keyboard.evidence, /Secure input/);
 });
 
 test("one side of NORMAL is not enough", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 5,
-    runtime: { accessibility_trusted: true, keyboard_capture_active: true, config_error: null },
-    plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
-    mappings: {
-      normal_leader: "<space>",
-      rows: [row("all", "cmd+ctrl+[", "flash mode normal")],
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 5,
+      runtime: { accessibility_trusted: true, keyboard_capture_active: true, config_error: null },
+      plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
+      mappings: {
+        normal_leader: "<space>",
+        rows: [row("all", "cmd+ctrl+[", "flash mode normal")],
+      },
+      config: { statusbar: { enabled: false } },
     },
-    config: { statusbar: { enabled: false } },
-  }, true, new Set( ["getting-started", "hints", "normal-mode", "configuration"]));
+    true,
+    new Set(["getting-started", "hints", "normal-mode", "configuration"]),
+  );
   const normal = find(model.sections[2].steps, "normal");
   assert.equal(normal.status, "todo");
   assert.match(normal.evidence, /all cmd\+ctrl\+\[ enters NORMAL/);

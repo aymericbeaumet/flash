@@ -1,4 +1,10 @@
-import { renderUncached, routeOf, sectionsOf, type RenderContext, type Target } from "./markdown.ts";
+import {
+  renderUncached,
+  routeOf,
+  sectionsOf,
+  type RenderContext,
+  type Target,
+} from "./markdown.ts";
 import table from "./help-routes.json" with { type: "json" };
 import { hashBody } from "./reading.ts";
 
@@ -22,7 +28,8 @@ export interface SiteInfo {
 }
 
 /** `docs/nav.json`: pages by file, grouped; a page may take short `aliases`. */
-export type NavSource = { title: string; page: string; aliases?: string[] } | { title: string; items: NavSource[] };
+export type NavSource =
+  { title: string; page: string; aliases?: string[] } | { title: string; items: NavSource[] };
 
 /** The bundled navigation: pages by route path. */
 export interface NavNode {
@@ -99,7 +106,16 @@ const reservedPaths = new Set(["search", "404", "_app"]);
 /** Files a page may link, which the resident serves as they are (`DebugServer.docsFile`). */
 const servableFiles = /\.(toml|json|txt|png|jpe?g|gif|webp)$/i;
 /** Generated files at the site root. */
-const reservedFiles = new Set(["docs.json", "search.json", "favicon.svg", "404.html", "sitemap.xml", "robots.txt", ".nojekyll", "index.html"]);
+const reservedFiles = new Set([
+  "docs.json",
+  "search.json",
+  "favicon.svg",
+  "404.html",
+  "sitemap.xml",
+  "robots.txt",
+  ".nojekyll",
+  "index.html",
+]);
 
 function isNavGroup(item: NavSource): item is { title: string; items: NavSource[] } {
   return "items" in item;
@@ -137,14 +153,30 @@ export function configIndex(text: string): Record<string, number> {
   return { ...example, ...real };
 }
 
-export function bundleDocs(navJSON: string, markdown: Map<string, string>, otherFiles: string[], configText?: string): { bundle: DocsBundle; problems: Problem[] } {
+export function bundleDocs(
+  navJSON: string,
+  markdown: Map<string, string>,
+  otherFiles: string[],
+  configText?: string,
+): { bundle: DocsBundle; problems: Problem[] } {
   const problems: Problem[] = [];
-  const config = JSON.parse(navJSON) as { site: SiteInfo; nav: NavSource[]; unlisted?: (string | { page: string; aliases?: string[] })[] };
+  const config = JSON.parse(navJSON) as {
+    site: SiteInfo;
+    nav: NavSource[];
+    unlisted?: (string | { page: string; aliases?: string[] })[];
+  };
   const site = config.site;
-  if (!site?.url?.endsWith("/")) problems.push({ file: "nav.json", message: "site.url must end with /" });
+  if (!site?.url?.endsWith("/"))
+    problems.push({ file: "nav.json", message: "site.url must end with /" });
   const pages: ManualPage[] = [];
   const seen = new Set<string>();
-  const add = (title: string, file: string, trail: string[], listed: boolean, aliases: string[] = []): string | undefined => {
+  const add = (
+    title: string,
+    file: string,
+    trail: string[],
+    listed: boolean,
+    aliases: string[] = [],
+  ): string | undefined => {
     if (seen.has(file)) {
       problems.push({ file: "nav.json", message: `${file} appears twice` });
       return undefined;
@@ -156,13 +188,15 @@ export function bundleDocs(navJSON: string, markdown: Map<string, string>, other
       return undefined;
     }
     const path = routeOf(file);
-    if (reservedPaths.has(path.split("/")[0])) problems.push({ file, message: `the route ${path} is reserved` });
+    if (reservedPaths.has(path.split("/")[0]))
+      problems.push({ file, message: `the route ${path} is reserved` });
     pages.push({ path, file, title, trail, markdown: text, hash: hashBody(text), listed, aliases });
     return path;
   };
   const walk = (items: NavSource[], trail: string[]): NavNode[] =>
     items.flatMap((item): NavNode[] => {
-      if (isNavGroup(item)) return [{ title: item.title, items: walk(item.items, [...trail, item.title]) }];
+      if (isNavGroup(item))
+        return [{ title: item.title, items: walk(item.items, [...trail, item.title]) }];
       const path = add(item.title, item.page, trail, true, item.aliases ?? []);
       return path === undefined ? [] : [{ title: item.title, path }];
     });
@@ -176,28 +210,59 @@ export function bundleDocs(navJSON: string, markdown: Map<string, string>, other
   const claimed = new Map<string, string>();
   for (const page of pages) {
     for (const alias of page.aliases) {
-      if (!/^[a-z0-9][a-z0-9_-]*$/.test(alias)) problems.push({ file: page.file, message: `the alias ${alias} is not one lowercase word` });
-      else if (paths.has(alias) || reservedPaths.has(alias) || otherFiles.some((file) => file.split("/")[0] === alias)) problems.push({ file: page.file, message: `the alias ${alias} names another page or file` });
-      else if (claimed.has(alias)) problems.push({ file: page.file, message: `the alias ${alias} also names ${claimed.get(alias)}` });
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(alias))
+        problems.push({ file: page.file, message: `the alias ${alias} is not one lowercase word` });
+      else if (
+        paths.has(alias) ||
+        reservedPaths.has(alias) ||
+        otherFiles.some((file) => file.split("/")[0] === alias)
+      )
+        problems.push({
+          file: page.file,
+          message: `the alias ${alias} names another page or file`,
+        });
+      else if (claimed.has(alias))
+        problems.push({
+          file: page.file,
+          message: `the alias ${alias} also names ${claimed.get(alias)}`,
+        });
       else claimed.set(alias, page.file);
     }
   }
   for (const file of markdown.keys()) {
-    if (!seen.has(file)) problems.push({ file, message: "is neither in the navigation nor unlisted in nav.json" });
+    if (!seen.has(file))
+      problems.push({ file, message: "is neither in the navigation nor unlisted in nav.json" });
   }
   for (const file of otherFiles) {
-    if (reservedFiles.has(file) || reservedPaths.has(file.split("/")[0])) problems.push({ file, message: "takes a name the site reserves" });
-    if (!servableFiles.test(file) || file.split("/").some((segment) => !/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(segment))) {
-      problems.push({ file, message: "is not a file the help can serve (a plain name ending in .toml, .json, .txt, .png, .jpg, .gif or .webp)" });
+    if (reservedFiles.has(file) || reservedPaths.has(file.split("/")[0]))
+      problems.push({ file, message: "takes a name the site reserves" });
+    if (
+      !servableFiles.test(file) ||
+      file.split("/").some((segment) => !/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(segment))
+    ) {
+      problems.push({
+        file,
+        message:
+          "is not a file the help can serve (a plain name ending in .toml, .json, .txt, .png, .jpg, .gif or .webp)",
+      });
     }
   }
-  for (const page of pages) page.heading = renderUncached(page.markdown, neutralContext(markdown, otherFiles, page.file, site)).title;
+  for (const page of pages)
+    page.heading = renderUncached(
+      page.markdown,
+      neutralContext(markdown, otherFiles, page.file, site),
+    ).title;
   const bundle: DocsBundle = { site, nav, pages, files: [...otherFiles].sort() };
   if (configText !== undefined) bundle.config = { lines: configIndex(configText) };
   return { bundle, problems };
 }
 
-function neutralContext(markdown: Map<string, string>, files: string[], file: string, site: SiteInfo): RenderContext {
+function neutralContext(
+  markdown: Map<string, string>,
+  files: string[],
+  file: string,
+  site: SiteInfo,
+): RenderContext {
   const known = new Set([...markdown.keys(), ...files]);
   return { file, hasFile: (path) => known.has(path), href: () => "#", siteURL: site.url };
 }
@@ -302,19 +367,29 @@ export class Manual {
   /** A target spelled for this site; undefined when it names nothing here. */
   href(target: Target): string | undefined {
     switch (target.kind) {
-      case "page": return this.byPath.has(target.path) ? this.links.page(target.path, target.anchor) : undefined;
-      case "file": return this.bundle.files.includes(target.path) ? this.links.file(target.path) : undefined;
-      case "anchor": return `#${encodeURIComponent(target.anchor)}`;
-      case "external": return this.pin(target.url);
+      case "page":
+        return this.byPath.has(target.path)
+          ? this.links.page(target.path, target.anchor)
+          : undefined;
+      case "file":
+        return this.bundle.files.includes(target.path) ? this.links.file(target.path) : undefined;
+      case "anchor":
+        return `#${encodeURIComponent(target.anchor)}`;
+      case "external":
+        return this.pin(target.url);
       // Live pages exist only in the resident's help.
-      case "live": return this.links.mode === "local" ? target.path + (target.anchor ? `#${encodeURIComponent(target.anchor)}` : "") : undefined;
+      case "live":
+        return this.links.mode === "local"
+          ? target.path + (target.anchor ? `#${encodeURIComponent(target.anchor)}` : "")
+          : undefined;
       case "config": {
         const line = this.bundle.config?.lines[target.key];
         if (line === undefined) return undefined;
         const repository = this.bundle.site.repository.replace(/\/$/, "");
         return `${repository}/blob/${this.bundle.revision ?? "main"}/config.default.toml#L${line}`;
       }
-      case "route": return undefined;
+      case "route":
+        return undefined;
     }
   }
 
@@ -325,7 +400,8 @@ export class Manual {
     const repository = this.bundle.site.repository.replace(/\/$/, "");
     for (const kind of ["blob", "tree"]) {
       const prefix = `${repository}/${kind}/main/`;
-      if (url.startsWith(prefix)) return `${repository}/${kind}/${revision}/${url.slice(prefix.length)}`;
+      if (url.startsWith(prefix))
+        return `${repository}/${kind}/${revision}/${url.slice(prefix.length)}`;
     }
     return url;
   }
@@ -361,7 +437,9 @@ export function searchSections(bundle: DocsBundle): SearchSection[] {
   const manual = new Manual(bundle, siteLinks("public", bundle.site));
   return bundle.pages.flatMap((page) => {
     const title = page.heading ?? page.title;
-    return sectionsOf(renderUncached(page.markdown, manual.context(page.file)).nodes).map((section) => ({ path: page.path, title, ...section }));
+    return sectionsOf(renderUncached(page.markdown, manual.context(page.file)).nodes).map(
+      (section) => ({ path: page.path, title, ...section }),
+    );
   });
 }
 
@@ -388,7 +466,10 @@ export function checkLinks(bundle: DocsBundle, links: SiteLinks): Problem[] {
       }
       const target = link.target;
       if (target?.kind === "page" && target.anchor && !ids.get(target.path)?.has(target.anchor)) {
-        problems.push({ file: page.file, message: `${link.href}: no heading #${target.anchor} on ${target.path || "the home page"}` });
+        problems.push({
+          file: page.file,
+          message: `${link.href}: no heading #${target.anchor} on ${target.path || "the home page"}`,
+        });
       }
     }
   }

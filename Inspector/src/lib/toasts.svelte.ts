@@ -10,7 +10,9 @@ let current = $state.raw<readonly Toast[]>([]);
 function browserStorage(): Storage | undefined {
   try {
     // A server render has no browser storage (and Node warns on a look).
-    return typeof window === "undefined" || typeof localStorage === "undefined" ? undefined : localStorage;
+    return typeof window === "undefined" || typeof localStorage === "undefined"
+      ? undefined
+      : localStorage;
   } catch {
     return undefined;
   }
@@ -23,12 +25,16 @@ export const toasts = new ToastStack(
     setTimer: (callback, delay) => setTimeout(callback, delay),
     clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout> | undefined),
   },
-  (next) => { current = next; },
+  (next) => {
+    current = next;
+  },
 );
 
 /** The toasts up now, oldest first. */
 export const toastList = {
-  get current(): readonly Toast[] { return current; },
+  get current(): readonly Toast[] {
+    return current;
+  },
 };
 
 /**

@@ -6,10 +6,18 @@ export type MonitorState = MonitorInfo["state"];
 /** Worst first: the order of the page and of its summary. */
 export const severities: MonitorState[] = ["error", "warning", "unknown", "ok"];
 
-export const stateLabels: Record<MonitorState, string> = { error: "Error", warning: "Warning", unknown: "Unknown", ok: "OK" };
+export const stateLabels: Record<MonitorState, string> = {
+  error: "Error",
+  warning: "Warning",
+  unknown: "Unknown",
+  ok: "OK",
+};
 
-const byName = (a: MonitorInfo, b: MonitorInfo) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }) || a.id.localeCompare(b.id);
-const rank = (monitor: MonitorInfo) => (monitor.enabled ? severities.indexOf(monitor.state) : severities.length);
+const byName = (a: MonitorInfo, b: MonitorInfo) =>
+  a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }) ||
+  a.id.localeCompare(b.id);
+const rank = (monitor: MonitorInfo) =>
+  monitor.enabled ? severities.indexOf(monitor.state) : severities.length;
 
 /** Enabled monitors worst first, then by name; disabled ones last. */
 export function sortMonitors(monitors: MonitorInfo[]): MonitorInfo[] {
@@ -17,9 +25,13 @@ export function sortMonitors(monitors: MonitorInfo[]): MonitorInfo[] {
 }
 
 /** Enabled value monitors per state; an event monitor has no state to count. */
-export function monitorCounts(monitors: (MonitorInfo | EventMonitorInfo)[]): Record<MonitorState, number> {
+export function monitorCounts(
+  monitors: (MonitorInfo | EventMonitorInfo)[],
+): Record<MonitorState, number> {
   const counts: Record<MonitorState, number> = { error: 0, warning: 0, unknown: 0, ok: 0 };
-  for (const monitor of monitors) if (monitor.kind !== "event" && monitor.enabled && monitor.state in counts) counts[monitor.state] += 1;
+  for (const monitor of monitors)
+    if (monitor.kind !== "event" && monitor.enabled && monitor.state in counts)
+      counts[monitor.state] += 1;
   return counts;
 }
 
@@ -32,15 +44,20 @@ export function runSteps(run: string[][] | null | undefined): string[] {
  * `Step 2 of 2 failed in 3.0s: mo clean exited 1`. Null before the first. */
 export function lastRunText(run: MonitorRun | null | undefined): string | null {
   if (!run) return null;
-  if (run.status === "running") return `Running ${run.steps === 1 ? "1 step" : `${run.steps} steps`}`;
+  if (run.status === "running")
+    return `Running ${run.steps === 1 ? "1 step" : `${run.steps} steps`}`;
   const took = run.duration_ms == null ? "" : ` in ${duration(run.duration_ms)}`;
   if (run.status === "succeeded") return `Succeeded${took}`;
   return `Step ${run.failed_step ?? "?"} of ${run.steps} failed${took}: ${[run.failed_command, run.reason].filter(Boolean).join(" ")}`;
 }
 
-export interface GaugeScale { min: number; max: number }
+export interface GaugeScale {
+  min: number;
+  max: number;
+}
 
-const finite = (value: number | null | undefined): value is number => typeof value === "number" && Number.isFinite(value);
+const finite = (value: number | null | undefined): value is number =>
+  typeof value === "number" && Number.isFinite(value);
 
 /** The smallest 1, 2, 2.5 or 5 times a power of ten at or above `value`. */
 export function niceCeil(value: number): number {
@@ -68,11 +85,18 @@ export function gaugeFraction(value: number, scale: GaugeScale): number {
   return Math.min(1, Math.max(0, (value - scale.min) / (scale.max - scale.min)));
 }
 
-export interface GaugeZone { from: number; to: number; state: "ok" | "warning" | "error" }
+export interface GaugeZone {
+  from: number;
+  to: number;
+  state: "ok" | "warning" | "error";
+}
 
 /** The coloured bands of the dial, as fractions: healthy, warning, error,
  * mirrored when lower values are worse. */
-export function gaugeZones(monitor: Pick<MonitorInfo, "direction" | "warning" | "error">, scale: GaugeScale): GaugeZone[] {
+export function gaugeZones(
+  monitor: Pick<MonitorInfo, "direction" | "warning" | "error">,
+  scale: GaugeScale,
+): GaugeZone[] {
   const warning = finite(monitor.warning) ? gaugeFraction(monitor.warning, scale) : null;
   const error = finite(monitor.error) ? gaugeFraction(monitor.error, scale) : null;
   const zones: GaugeZone[] = [];
@@ -90,11 +114,15 @@ export function gaugeZones(monitor: Pick<MonitorInfo, "direction" | "warning" | 
 
 /** A number as a dial label or threshold: at most two decimals, no trailing zeros. */
 export function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2,
+  }).format(value);
 }
 
 /** The thresholds a monitor sets, mildest first. */
-export function thresholds(monitor: Pick<MonitorInfo, "warning" | "error">): { state: "warning" | "error"; value: number }[] {
+export function thresholds(
+  monitor: Pick<MonitorInfo, "warning" | "error">,
+): { state: "warning" | "error"; value: number }[] {
   return [
     ...(finite(monitor.warning) ? [{ state: "warning" as const, value: monitor.warning }] : []),
     ...(finite(monitor.error) ? [{ state: "error" as const, value: monitor.error }] : []),
@@ -102,15 +130,24 @@ export function thresholds(monitor: Pick<MonitorInfo, "warning" | "error">): { s
 }
 
 /** `warning above 80 · error above 92`, or `no thresholds`. */
-export function thresholdText(monitor: Pick<MonitorInfo, "direction" | "warning" | "error">): string {
+export function thresholdText(
+  monitor: Pick<MonitorInfo, "direction" | "warning" | "error">,
+): string {
   const parts: string[] = [];
-  if (finite(monitor.warning)) parts.push(`warning ${monitor.direction} ${formatNumber(monitor.warning)}`);
-  if (finite(monitor.error)) parts.push(`error ${monitor.direction} ${formatNumber(monitor.error)}`);
+  if (finite(monitor.warning))
+    parts.push(`warning ${monitor.direction} ${formatNumber(monitor.warning)}`);
+  if (finite(monitor.error))
+    parts.push(`error ${monitor.direction} ${formatNumber(monitor.error)}`);
   return parts.length ? parts.join(" · ") : "no thresholds";
 }
 
 /** A point on the dial: a half circle from the left end (0) over the top to the right (1). */
-export function dialPoint(fraction: number, radius: number, cx: number, cy: number): [number, number] {
+export function dialPoint(
+  fraction: number,
+  radius: number,
+  cx: number,
+  cy: number,
+): [number, number] {
   const angle = Math.PI + fraction * Math.PI;
   return [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)];
 }

@@ -23,14 +23,22 @@
 
   function copy(event: MouseEvent) {
     const code = (event.currentTarget as HTMLButtonElement).closest("pre")?.querySelector("code");
-    void copyText(code?.textContent ?? "", "the code block", "Select the code and copy it instead.");
+    void copyText(
+      code?.textContent ?? "",
+      "the code block",
+      "Select the code and copy it instead.",
+    );
   }
 
   function append(parent: Node, list: MdNode[]) {
     for (const node of list) {
-      if (typeof node === "string") { parent.appendChild(document.createTextNode(node)); continue; }
+      if (typeof node === "string") {
+        parent.appendChild(document.createTextNode(node));
+        continue;
+      }
       const element = document.createElement(node.tag);
-      for (const [name, value] of Object.entries(node.attrs ?? {})) element.setAttribute(name, value);
+      for (const [name, value] of Object.entries(node.attrs ?? {}))
+        element.setAttribute(name, value);
       if (!voids.has(node.tag)) append(element, node.children ?? []);
       if (node.tag === "pre") {
         const button = document.createElement("button");
@@ -55,10 +63,26 @@
   }
 </script>
 
-{#snippet tree(list: MdNode[])}{#each list as node}{#if typeof node === "string"}{node}{:else if voids.has(node.tag)}<svelte:element this={node.tag} {...node.attrs} />{:else if node.tag === "pre"}<pre {...node.attrs}>{@render tree(node.children ?? [])}{#if interactive}<button type="button" class="copy-code" aria-label="Copy code" onclick={copy}>Copy</button>{/if}</pre>{:else}<svelte:element this={node.tag} {...node.attrs}>{@render tree(node.children ?? [])}</svelte:element>{/if}{/each}{/snippet}
+{#snippet tree(
+  list: MdNode[],
+)}{#each list as node}{#if typeof node === "string"}{node}{:else if voids.has(node.tag)}<svelte:element
+        this={node.tag}
+        {...node.attrs}
+      />{:else if node.tag === "pre"}<pre {...node.attrs}
+        >{@render tree(node.children ?? [])}{#if interactive}<button
+            type="button"
+            class="copy-code"
+            aria-label="Copy code"
+            onclick={copy}>Copy</button
+          >{/if}</pre
+      >{:else}<svelte:element this={node.tag} {...node.attrs}
+        >{@render tree(node.children ?? [])}</svelte:element
+      >{/if}{/each}{/snippet}
 {#if direct}<div class="markdown" {@attach build(nodes)}></div>{:else}{@render tree(nodes)}{/if}
 
 <style>
   /* No box of its own: the article's rules and layout see the content directly. */
-  .markdown { display: contents; }
+  .markdown {
+    display: contents;
+  }
 </style>

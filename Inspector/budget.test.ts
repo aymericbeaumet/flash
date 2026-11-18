@@ -14,6 +14,12 @@ test("the committed help page stays within its size budget", () => {
   const page = readFileSync(new URL("../Sources/flash/Resources/inspector.html", import.meta.url));
   const gzip = gzipSync(page, { level: 9 }).length;
   const kib = (bytes: number) => `${(bytes / 1024).toFixed(1)} KiB`;
-  assert.ok(page.length <= budget.bytes, `inspector.html is ${kib(page.length)}, over its ${kib(budget.bytes)} budget`);
-  assert.ok(gzip <= budget.gzipBytes, `inspector.html is ${kib(gzip)} gzipped, over its ${kib(budget.gzipBytes)} budget`);
+  assert.ok(
+    page.length <= budget.bytes,
+    `inspector.html is ${kib(page.length)}, over its ${kib(budget.bytes)} budget`,
+  );
+  assert.ok(
+    gzip <= budget.gzipBytes,
+    `inspector.html is ${kib(gzip)} gzipped, over its ${kib(budget.gzipBytes)} budget`,
+  );
 });

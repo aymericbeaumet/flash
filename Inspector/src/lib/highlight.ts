@@ -6,7 +6,17 @@
  * from the network and nothing is parsed as HTML.
  */
 
-export type TokenKind = "comment" | "string" | "number" | "keyword" | "key" | "section" | "variable" | "flag" | "function" | "type";
+export type TokenKind =
+  | "comment"
+  | "string"
+  | "number"
+  | "keyword"
+  | "key"
+  | "section"
+  | "variable"
+  | "flag"
+  | "function"
+  | "type";
 export type Run = { text: string; kind?: TokenKind };
 
 type Rule = [TokenKind, RegExp];
@@ -41,14 +51,24 @@ const shell: Rule[] = [
   ["string", singleQuoted],
   ["variable", /\$(?:\{[^}\n]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9@#?*$!-])/y],
   ["flag", /(?<=\s)--?[A-Za-z][\w-]*/y],
-  ["keyword", word("if then else elif fi for while until do done case esac function in export local return set source")],
+  [
+    "keyword",
+    word(
+      "if then else elif fi for while until do done case esac function in export local return set source",
+    ),
+  ],
 ];
 
 const rust: Rule[] = [
   ["comment", /\/\/[^\n]*|\/\*[\s\S]*?\*\//y],
   ["string", /r#*"[\s\S]*?"#*/y],
   ["string", doubleQuoted],
-  ["keyword", word("as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while")],
+  [
+    "keyword",
+    word(
+      "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while",
+    ),
+  ],
   ["function", /\b[a-z_][a-z0-9_]*!/y],
   ["type", /\b[A-Z][A-Za-z0-9_]*\b/y],
   ["number", number],
@@ -58,11 +78,28 @@ const lua: Rule[] = [
   ["comment", /--\[\[[\s\S]*?\]\]|--[^\n]*/y],
   ["string", doubleQuoted],
   ["string", singleQuoted],
-  ["keyword", word("and break do else elseif end false for function if in local nil not or repeat return then true until while")],
+  [
+    "keyword",
+    word(
+      "and break do else elseif end false for function if in local nil not or repeat return then true until while",
+    ),
+  ],
   ["number", number],
 ];
 
-const languages: Record<string, Rule[]> = { toml, json, jsonc: json, sh: shell, bash: shell, shell, zsh: shell, console: shell, rust, rs: rust, lua };
+const languages: Record<string, Rule[]> = {
+  toml,
+  json,
+  jsonc: json,
+  sh: shell,
+  bash: shell,
+  shell,
+  zsh: shell,
+  console: shell,
+  rust,
+  rs: rust,
+  lua,
+};
 
 /** Splits `code` into runs; an unknown language is one plain run. */
 export function highlight(code: string, language: string | undefined): Run[] {
@@ -76,7 +113,10 @@ export function highlight(code: string, language: string | undefined): Run[] {
       pattern.lastIndex = position;
       const match = pattern.exec(code);
       if (!match || !match[0]) continue;
-      if (plain) { runs.push({ text: plain }); plain = ""; }
+      if (plain) {
+        runs.push({ text: plain });
+        plain = "";
+      }
       runs.push({ text: match[0], kind });
       position += match[0].length;
       continue outer;

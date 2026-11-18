@@ -25,7 +25,8 @@ class DocsStore {
   get manual(): Manual | null {
     const bundle = this.bundle;
     if (!bundle) return null;
-    if (this.built?.bundle !== bundle || this.built.links !== site.links) this.built = { bundle, links: site.links, manual: new Manual(bundle, site.links) };
+    if (this.built?.bundle !== bundle || this.built.links !== site.links)
+      this.built = { bundle, links: site.links, manual: new Manual(bundle, site.links) };
     return this.built.manual;
   }
 
@@ -36,7 +37,10 @@ class DocsStore {
    */
   readable(topics: DocTopic[]): Readable[] {
     if (site.public || !this.complete || !this.bundle) return [];
-    return [...this.bundle.pages.map((page) => ({ name: page.path, hash: page.hash })), ...topics.map((topic) => ({ name: topic.name, hash: bodyHash(topic.body) }))];
+    return [
+      ...this.bundle.pages.map((page) => ({ name: page.path, hash: page.hash })),
+      ...topics.map((topic) => ({ name: topic.name, hash: bodyHash(topic.body) })),
+    ];
   }
 
   /** A prerendered page's bundle, before hydration. */
@@ -55,7 +59,8 @@ class DocsStore {
     this.loading ??= withRetry((signal) => requestJSON(this.url("docs"), { signal }))
       .then((value) => {
         const bundle = value as DocsBundle | null;
-        if (!bundle || !Array.isArray(bundle.pages) || !Array.isArray(bundle.nav)) throw new Error("The documentation bundle is malformed");
+        if (!bundle || !Array.isArray(bundle.pages) || !Array.isArray(bundle.nav))
+          throw new Error("The documentation bundle is malformed");
         this.bundle = bundle;
         this.complete = true;
         this.error = "";
@@ -63,7 +68,9 @@ class DocsStore {
       .catch((error) => {
         this.error = `The documentation did not load. ${describeFailure(error)}.`;
       })
-      .finally(() => { this.loading = null; });
+      .finally(() => {
+        this.loading = null;
+      });
     return this.loading;
   }
 
@@ -73,8 +80,12 @@ class DocsStore {
       .then((value) => {
         if (Array.isArray(value)) this.sections = value as SearchSection[];
       })
-      .catch(() => { /* Search keeps the guides, commands and mappings it has. */ })
-      .finally(() => { this.searching = null; });
+      .catch(() => {
+        /* Search keeps the guides, commands and mappings it has. */
+      })
+      .finally(() => {
+        this.searching = null;
+      });
     return this.searching;
   }
 }

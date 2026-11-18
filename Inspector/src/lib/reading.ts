@@ -56,7 +56,9 @@ export function bodyHash(text: string): string {
 function storage(): Storage | undefined {
   try {
     // A server render has no browser storage (and Node warns on a look).
-    return typeof window === "undefined" || typeof localStorage === "undefined" ? undefined : localStorage;
+    return typeof window === "undefined" || typeof localStorage === "undefined"
+      ? undefined
+      : localStorage;
   } catch {
     return undefined;
   }
@@ -83,7 +85,13 @@ function parseSeen(raw: string): SeenGuides | null {
     if (!parsed || typeof parsed !== "object" || !("hashes" in parsed)) return null;
     const hashes = (parsed as { hashes: unknown }).hashes;
     if (!hashes || typeof hashes !== "object") return null;
-    return { hashes: Object.fromEntries(Object.entries(hashes as Record<string, unknown>).filter(([, value]) => typeof value === "string")) as Record<string, string> };
+    return {
+      hashes: Object.fromEntries(
+        Object.entries(hashes as Record<string, unknown>).filter(
+          ([, value]) => typeof value === "string",
+        ),
+      ) as Record<string, string>,
+    };
   } catch {
     return null;
   }
@@ -126,7 +134,12 @@ export function markAllSeen(docs: Readable[]): SeenGuides {
  * dismissed notice sticks under it until the documentation changes again.
  */
 export function readingKey(docs: Readable[]): string {
-  return hashBody(docs.map((doc) => `${doc.name}\u0000${doc.hash}`).sort().join("\n"));
+  return hashBody(
+    docs
+      .map((doc) => `${doc.name}\u0000${doc.hash}`)
+      .sort()
+      .join("\n"),
+  );
 }
 
 /**
@@ -147,7 +160,10 @@ export function freshNotice(key: string, markAllRead: () => void): ToastOptions 
 }
 
 /** The version this browser last saw, and whether it just changed. */
-export function versionChanged(version: string | undefined): { previous: string | null; changed: boolean } {
+export function versionChanged(version: string | undefined): {
+  previous: string | null;
+  changed: boolean;
+} {
   if (!version) return { previous: null, changed: false };
   const store = storage();
   const previous = store?.getItem(versionKey) ?? null;

@@ -63,20 +63,33 @@ class InspectorStore {
   private schedule() {
     // The first state and logs show at once: there is nothing to coalesce
     // them with, and the page is waiting for them.
-    if (this.state.snapshot_seq === undefined && this.pendingState) { this.state = this.pendingState; this.pendingState = null; }
+    if (this.state.snapshot_seq === undefined && this.pendingState) {
+      this.state = this.pendingState;
+      this.pendingState = null;
+    }
     if (!this.logs.length && this.pendingLogs) this.showLogs();
     if (this.frame) return;
     const logsDue = !!this.pendingLogs && performance.now() - this.logsShownAt >= LOG_INTERVAL_MS;
     if (!this.pendingState && !logsDue) {
       if (this.pendingLogs && this.logTimer === undefined) {
-        this.logTimer = setTimeout(() => { this.logTimer = undefined; this.schedule(); }, LOG_INTERVAL_MS - (performance.now() - this.logsShownAt));
+        this.logTimer = setTimeout(
+          () => {
+            this.logTimer = undefined;
+            this.schedule();
+          },
+          LOG_INTERVAL_MS - (performance.now() - this.logsShownAt),
+        );
       }
       return;
     }
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
-      if (this.pendingState) { this.state = this.pendingState; this.pendingState = null; }
-      if (this.pendingLogs && performance.now() - this.logsShownAt >= LOG_INTERVAL_MS) this.showLogs();
+      if (this.pendingState) {
+        this.state = this.pendingState;
+        this.pendingState = null;
+      }
+      if (this.pendingLogs && performance.now() - this.logsShownAt >= LOG_INTERVAL_MS)
+        this.showLogs();
       if (this.pendingLogs) this.schedule();
     });
   }
@@ -121,28 +134,47 @@ class InspectorStore {
     source.addEventListener("state", (event) => {
       try {
         const state = JSON.parse((event as MessageEvent).data) as InspectorState;
-        if (state && typeof state === "object") { this.pendingState = state; this.schedule(); }
-      } catch { /* Keep the last complete snapshot until the next event. */ }
+        if (state && typeof state === "object") {
+          this.pendingState = state;
+          this.schedule();
+        }
+      } catch {
+        /* Keep the last complete snapshot until the next event. */
+      }
     });
     source.addEventListener("patch", (event) => {
       let patch;
-      try { patch = parsePatch(JSON.parse((event as MessageEvent).data)); } catch { patch = null; }
+      try {
+        patch = parsePatch(JSON.parse((event as MessageEvent).data));
+      } catch {
+        patch = null;
+      }
       // A patch the page cannot read or place is replaced by a whole snapshot.
       const outcome = patch ? applyPatch(this.current, patch) : "gap";
       if (outcome === "gap") void this.resync();
-      else if (outcome !== "stale") { this.pendingState = outcome.state; this.schedule(); }
+      else if (outcome !== "stale") {
+        this.pendingState = outcome.state;
+        this.schedule();
+      }
     });
     source.addEventListener("logs", (event) => {
       try {
         const value = JSON.parse((event as MessageEvent).data) as { logs?: LogRecord[] };
-        if (Array.isArray(value.logs)) { this.pendingLogs = value.logs.slice(-MAX_LOGS); this.schedule(); }
-      } catch { /* A malformed event must not interrupt the live stream. */ }
+        if (Array.isArray(value.logs)) {
+          this.pendingLogs = value.logs.slice(-MAX_LOGS);
+          this.schedule();
+        }
+      } catch {
+        /* A malformed event must not interrupt the live stream. */
+      }
     });
     source.addEventListener("log", (event) => {
       try {
         const record = JSON.parse((event as MessageEvent).data) as LogRecord;
         if (record && typeof record === "object") this.appendLog(record);
-      } catch { /* A malformed event must not interrupt the live stream. */ }
+      } catch {
+        /* A malformed event must not interrupt the live stream. */
+      }
     });
   }
 
@@ -151,7 +183,12 @@ class InspectorStore {
     this.source = null;
     clearTimeout(this.reopenTimer);
     this.reopenAttempts += 1;
-    this.reopenTimer = setTimeout(() => { if (this.requests) this.open(); }, backoff(this.reopenAttempts, 1000, 30_000));
+    this.reopenTimer = setTimeout(
+      () => {
+        if (this.requests) this.open();
+      },
+      backoff(this.reopenAttempts, 1000, 30_000),
+    );
   }
 
   /** Reconnect now rather than at the next scheduled attempt. */
@@ -178,8 +215,12 @@ class InspectorStore {
   private resync(): Promise<void> {
     this.resyncing ??= requestJSON("/api/state", { signal: this.requests?.signal })
       .then((value) => this.apply(value))
-      .catch(() => { /* The stream delivers the state anyway. */ })
-      .finally(() => { this.resyncing = null; });
+      .catch(() => {
+        /* The stream delivers the state anyway. */
+      })
+      .finally(() => {
+        this.resyncing = null;
+      });
     return this.resyncing;
   }
 

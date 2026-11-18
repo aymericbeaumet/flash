@@ -9,7 +9,10 @@ import { siteLinks, type DocsBundle } from "../lib/docsite";
 import { router } from "../lib/router.svelte";
 import { useSite } from "../lib/routes";
 
-const boot = JSON.parse(document.getElementById("flash-docs")!.textContent!) as { bundle: DocsBundle; route: string };
+const boot = JSON.parse(document.getElementById("flash-docs")!.textContent!) as {
+  bundle: DocsBundle;
+  route: string;
+};
 useSite(siteLinks("public", boot.bundle.site));
 docsStore.prime(boot.bundle, false);
 router.prime(new URL(boot.route, location.href));

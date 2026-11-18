@@ -24,9 +24,19 @@ export type PatchOutcome =
 export function parsePatch(value: unknown): StatePatch | null {
   if (!value || typeof value !== "object") return null;
   const patch = value as Partial<StatePatch>;
-  if (typeof patch.base !== "number" || !patch.set || typeof patch.set !== "object" || Array.isArray(patch.set)) return null;
+  if (
+    typeof patch.base !== "number" ||
+    !patch.set ||
+    typeof patch.set !== "object" ||
+    Array.isArray(patch.set)
+  )
+    return null;
   if (typeof patch.set.snapshot_seq !== "number") return null;
-  if (patch.unset !== undefined && (!Array.isArray(patch.unset) || patch.unset.some((key) => typeof key !== "string"))) return null;
+  if (
+    patch.unset !== undefined &&
+    (!Array.isArray(patch.unset) || patch.unset.some((key) => typeof key !== "string"))
+  )
+    return null;
   return { base: patch.base, set: patch.set, unset: patch.unset ?? [] };
 }
 
@@ -34,7 +44,9 @@ export function parsePatch(value: unknown): StatePatch | null {
 export function isNewer(next: InspectorState, current: InspectorState): boolean {
   const at = next.snapshot_at_unix_ms ?? 0;
   const currentAt = current.snapshot_at_unix_ms ?? 0;
-  return at > currentAt || (at === currentAt && (next.snapshot_seq ?? 0) > (current.snapshot_seq ?? 0));
+  return (
+    at > currentAt || (at === currentAt && (next.snapshot_seq ?? 0) > (current.snapshot_seq ?? 0))
+  );
 }
 
 /** `patch` on `current`, which keeps every section the patch leaves alone. */

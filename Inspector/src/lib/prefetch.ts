@@ -4,7 +4,11 @@
  * pointer only crosses (`restMs`) prepares nothing; each link prepares once
  * per visit to it.
  */
-export function prepareOnIntent(target: EventTarget, prepare: (url: URL) => void, restMs = 60): () => void {
+export function prepareOnIntent(
+  target: EventTarget,
+  prepare: (url: URL) => void,
+  restMs = 60,
+): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let armed: HTMLAnchorElement | null = null;
   const anchorOf = (event: Event) => {
@@ -16,9 +20,16 @@ export function prepareOnIntent(target: EventTarget, prepare: (url: URL) => void
     if (!anchor || anchor === armed) return;
     clearTimeout(timer);
     armed = anchor;
-    timer = setTimeout(() => {
-      try { prepare(new URL(anchor.href)); } catch { /* A link that is not a URL prepares nothing. */ }
-    }, event.type === "focusin" ? 0 : restMs);
+    timer = setTimeout(
+      () => {
+        try {
+          prepare(new URL(anchor.href));
+        } catch {
+          /* A link that is not a URL prepares nothing. */
+        }
+      },
+      event.type === "focusin" ? 0 : restMs,
+    );
   };
   const disarm = (event: Event) => {
     const anchor = anchorOf(event);

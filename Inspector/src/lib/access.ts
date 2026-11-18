@@ -15,7 +15,11 @@ export interface AccessStore {
 }
 
 function defaultStore(): AccessStore | null {
-  try { return globalThis.localStorage ?? null; } catch { return null; }
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Keeps the token the address arrived with and returns the address without
@@ -48,7 +52,11 @@ export function withToken(url: string, value: string | null = token()): string {
 }
 
 /** `headers` with the token, for a request to a data endpoint. */
-export function authorize(url: string, headers?: HeadersInit, value: string | null = token()): Headers {
+export function authorize(
+  url: string,
+  headers?: HeadersInit,
+  value: string | null = token(),
+): Headers {
   const result = new Headers(headers);
   if (value && isDataEndpoint(url)) result.set("Authorization", `Bearer ${value}`);
   return result;

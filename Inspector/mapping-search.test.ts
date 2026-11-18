@@ -3,7 +3,9 @@ import test from "node:test";
 import { explainMapping, scoreSearch, searchFields } from "./src/lib/mapping-search.ts";
 import type { CommandInfo, MappingRow } from "./src/lib/types.ts";
 
-function row(partial: Partial<MappingRow> & Pick<MappingRow, "key" | "action" | "explanation">): MappingRow {
+function row(
+  partial: Partial<MappingRow> & Pick<MappingRow, "key" | "action" | "explanation">,
+): MappingRow {
   return { scope: "hyper", origin: "default", ...partial };
 }
 
@@ -44,10 +46,13 @@ test("the explanation outranks a source-only hit and a key still wins when it is
   const byEffect = row({
     key: "mf",
     action: "flash mouse target --move",
-    explanation: "Labels targets in the focused window and moves the pointer onto the one you pick.",
+    explanation:
+      "Labels targets in the focused window and moves the pointer onto the one you pick.",
   });
   const byKey = row({ key: "pointer", action: "flash resident quit", explanation: "Quits Flash." });
-  assert.ok((score("pointer", byEffect) ?? 0) > (score("pointer", sourceOnly, "pointer plugin") ?? 0));
+  assert.ok(
+    (score("pointer", byEffect) ?? 0) > (score("pointer", sourceOnly, "pointer plugin") ?? 0),
+  );
   assert.ok((score("pointer", byKey) ?? 0) > (score("pointer", byEffect) ?? 0));
 });
 
@@ -80,15 +85,20 @@ test("a plugin description is the hover text and counts in the ranking", () => {
     action: "flash screenshot window",
     explanation: "Runs the screenshot window command.",
   });
-  const commands: CommandInfo[] = [{
-    name: ":screenshot window",
-    command: "screenshot",
-    subcommand: "window",
-    description: "Copy a capture of the focused window to the clipboard",
-    source: "screenshot",
-    source_kind: "plugin",
-  }];
-  assert.equal(explainMapping(mapping, commands), "Copy a capture of the focused window to the clipboard");
+  const commands: CommandInfo[] = [
+    {
+      name: ":screenshot window",
+      command: "screenshot",
+      subcommand: "window",
+      description: "Copy a capture of the focused window to the clipboard",
+      source: "screenshot",
+      source_kind: "plugin",
+    },
+  ];
+  assert.equal(
+    explainMapping(mapping, commands),
+    "Copy a capture of the focused window to the clipboard",
+  );
   const fields = searchFields(mapping, commands, "plugin screenshot");
   assert.match(fields.explanation, /Copy a capture of the focused window/);
   assert.match(fields.explanation, /Runs the screenshot window command/);

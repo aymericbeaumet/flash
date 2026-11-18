@@ -9,16 +9,32 @@ const hints: DocTopic = {
   summary: "Label controls, then type a label.",
   body: "# Hints\n\nPress the hotkey.\n\n## Right-click and drag\n\nUse `cf` for a context menu, see [the repo](https://github.com/aymericbeaumet/flash).\n\n## Scope\n\n`--scope=screen` labels every app.",
 };
-const grid: DocTopic = { name: "mouse-grid", title: "Mouse grid", summary: "Reach any position.", body: "# Grid\n\nThe keyboard-shaped grid. Press a key, then refine." };
+const grid: DocTopic = {
+  name: "mouse-grid",
+  title: "Mouse grid",
+  summary: "Reach any position.",
+  body: "# Grid\n\nThe keyboard-shaped grid. Press a key, then refine.",
+};
 
 test("a heading inside a code block is not a section", () => {
-  const doc: DocTopic = { name: "x", title: "X", summary: "", body: "# X\n\n```toml\n## not a heading\n```\n\n## Real\n\nBody." };
-  assert.deepEqual(sections(doc).map((part) => part.heading), [undefined, "Real"].filter(Boolean));
+  const doc: DocTopic = {
+    name: "x",
+    title: "X",
+    summary: "",
+    body: "# X\n\n```toml\n## not a heading\n```\n\n## Real\n\nBody.",
+  };
+  assert.deepEqual(
+    sections(doc).map((part) => part.heading),
+    [undefined, "Real"].filter(Boolean),
+  );
 });
 
 test("sections split at headings with GitHub-style ids", () => {
   const parts = sections(hints);
-  assert.deepEqual(parts.map((part) => part.id), [undefined, "right-click-and-drag", "scope"]);
+  assert.deepEqual(
+    parts.map((part) => part.id),
+    [undefined, "right-click-and-drag", "scope"],
+  );
   assert.equal(parts[1].heading, "Right-click and drag");
 });
 
@@ -32,7 +48,10 @@ test("every word must match and headings land on their anchor", () => {
 
 test("a URL in a guide does not make it match", () => {
   const index = buildIndex([hints, grid], [], [], []);
-  assert.deepEqual(search(index, "github").map((result) => result.href), []);
+  assert.deepEqual(
+    search(index, "github").map((result) => result.href),
+    [],
+  );
 });
 
 test("title matches rank before body matches", () => {
@@ -42,7 +61,15 @@ test("title matches rank before body matches", () => {
 });
 
 test("manual sections search on both sites and land on their heading", () => {
-  const manual = [{ path: "normal-mode", title: "Normal mode", heading: "Input capture", id: "input-capture", text: "The session tap swallows keys." }];
+  const manual = [
+    {
+      path: "normal-mode",
+      title: "Normal mode",
+      heading: "Input capture",
+      id: "input-capture",
+      text: "The session tap swallows keys.",
+    },
+  ];
   const index = buildIndex([], [], [], [], manual);
   const results = search(index, "tap swallows");
   assert.equal(results[0].kind, "Docs");

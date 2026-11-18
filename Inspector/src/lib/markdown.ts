@@ -118,7 +118,10 @@ const admonition: TokenizerExtension = {
     return source.match(/^!!! /m)?.index;
   },
   tokenizer(source) {
-    const match = /^!!! *([\w-]+)(?: +"([^"\n]*)")? *(?:\n|$)((?:(?: {4}|\t)[^\n]*(?:\n|$)|[ \t]*\n(?=(?: {4}|\t)))*)/.exec(source);
+    const match =
+      /^!!! *([\w-]+)(?: +"([^"\n]*)")? *(?:\n|$)((?:(?: {4}|\t)[^\n]*(?:\n|$)|[ \t]*\n(?=(?: {4}|\t)))*)/.exec(
+        source,
+      );
     if (!match) return undefined;
     const body = match[3].replace(/^(?: {4}|\t)/gm, "");
     return {
@@ -133,25 +136,61 @@ const admonition: TokenizerExtension = {
 
 const marked = new Marked({ gfm: true, extensions: [admonition] });
 
-const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " ", copy: "©", reg: "®", trade: "™", mdash: "—", ndash: "–", hellip: "…", rarr: "→", larr: "←", times: "×", middot: "·", laquo: "«", raquo: "»" };
+const entities: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…",
+  rarr: "→",
+  larr: "←",
+  times: "×",
+  middot: "·",
+  laquo: "«",
+  raquo: "»",
+};
 
 /** Character references in text, which an HTML renderer would leave to the browser. */
 function decode(text: string): string {
   if (!text.includes("&")) return text;
   return text.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => {
     if (name[0] === "#") {
-      const code = name[1] === "x" || name[1] === "X" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
-      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : whole;
+      const code =
+        name[1] === "x" || name[1] === "X"
+          ? parseInt(name.slice(2), 16)
+          : parseInt(name.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000
+        ? String.fromCodePoint(code)
+        : whole;
     }
     return entities[name.toLowerCase()] ?? whole;
   });
 }
 
-const element = (tag: string, attrs?: Record<string, string>, children: MdNode[] = []): MdElement => (attrs ? { tag, attrs, children } : { tag, children });
+const element = (
+  tag: string,
+  attrs?: Record<string, string>,
+  children: MdNode[] = [],
+): MdElement => (attrs ? { tag, attrs, children } : { tag, children });
 
 /** Text of a subtree, as a heading's id and title read it. */
 export function textOf(nodes: MdNode[]): string {
-  return nodes.map((node) => (typeof node === "string" ? node : node.attrs?.class === "heading-anchor" ? "" : textOf(node.children ?? []))).join("");
+  return nodes
+    .map((node) =>
+      typeof node === "string"
+        ? node
+        : node.attrs?.class === "heading-anchor"
+          ? ""
+          : textOf(node.children ?? []),
+    )
+    .join("");
 }
 
 function dirname(path: string) {
@@ -180,7 +219,11 @@ export function routeOf(file: string): string {
 }
 
 function decodeFragment(fragment: string) {
-  try { return decodeURIComponent(fragment); } catch { return fragment; }
+  try {
+    return decodeURIComponent(fragment);
+  } catch {
+    return fragment;
+  }
 }
 
 class Builder {
@@ -212,7 +255,9 @@ class Builder {
       return `no page at ${href}`;
     }
     if (/^[a-z][a-z\d+.-]*:/i.test(href)) {
-      return /^(https?|mailto):/i.test(href) ? { kind: "external", url: href } : `unsupported scheme in ${href}`;
+      return /^(https?|mailto):/i.test(href)
+        ? { kind: "external", url: href }
+        : `unsupported scheme in ${href}`;
     }
     if (href.startsWith("//")) return `protocol-relative link ${href}`;
     const [beforeFragment, fragment] = href.split("#", 2);
@@ -227,7 +272,9 @@ class Builder {
     const joined = joinPath(dirname(this.context.file ?? ""), decodeFragment(pathPart));
     if (joined === null) return `${href} leaves docs/`;
     if (joined.endsWith(".md")) {
-      return this.context.hasFile(joined) ? { kind: "page", path: routeOf(joined), anchor } : `missing page ${joined}`;
+      return this.context.hasFile(joined)
+        ? { kind: "page", path: routeOf(joined), anchor }
+        : `missing page ${joined}`;
     }
     const index = joined ? `${joined}/README.md` : "README.md";
     if (this.context.hasFile(index)) return { kind: "page", path: routeOf(index), anchor };
@@ -280,13 +327,17 @@ class Builder {
 
   private block(token: Token, out: MdNode[]) {
     switch (token.type) {
-      case "space": case "def": return;
+      case "space":
+      case "def":
+        return;
       case "heading": {
         const heading = token as Tokens.Heading;
         out.push(element(`h${Math.min(6, heading.depth)}`, undefined, this.inline(heading.tokens)));
         return;
       }
-      case "paragraph": out.push(element("p", undefined, this.inline((token as Tokens.Paragraph).tokens))); return;
+      case "paragraph":
+        out.push(element("p", undefined, this.inline((token as Tokens.Paragraph).tokens)));
+        return;
       case "text": {
         const text = token as Tokens.Text;
         out.push(...(text.tokens ? this.inline(text.tokens) : [decode(text.text)]));
@@ -295,8 +346,14 @@ class Builder {
       case "code": {
         const code = token as Tokens.Code;
         const language = code.lang?.trim().split(/\s+/)[0]?.toLowerCase() || undefined;
-        const runs = highlight(code.text, language).map((run): MdNode => (run.kind ? element("span", { class: `tok-${run.kind}` }, [run.text]) : run.text));
-        out.push(element("pre", language ? { "data-language": language } : undefined, [element("code", language ? { class: `language-${language}` } : undefined, runs)]));
+        const runs = highlight(code.text, language).map((run): MdNode =>
+          run.kind ? element("span", { class: `tok-${run.kind}` }, [run.text]) : run.text,
+        );
+        out.push(
+          element("pre", language ? { "data-language": language } : undefined, [
+            element("code", language ? { class: `language-${language}` } : undefined, runs),
+          ]),
+        );
         return;
       }
       case "blockquote": {
@@ -305,15 +362,31 @@ class Builder {
         out.push(quote);
         return;
       }
-      case "hr": out.push(element("hr")); return;
+      case "hr":
+        out.push(element("hr"));
+        return;
       case "list": {
         const list = token as Tokens.List;
-        const attrs = list.ordered && typeof list.start === "number" && list.start !== 1 ? { start: String(list.start) } : undefined;
+        const attrs =
+          list.ordered && typeof list.start === "number" && list.start !== 1
+            ? { start: String(list.start) }
+            : undefined;
         const node = element(list.ordered ? "ol" : "ul", attrs);
         for (const item of list.items) {
           const li = element("li", item.task ? { class: "task" } : undefined);
-          if (item.task) li.children!.push(element("input", { type: "checkbox", disabled: "disabled", ...(item.checked ? { checked: "checked" } : {}) }), " ");
-          this.blocks(item.tokens.filter((child) => child.type !== "checkbox"), li.children!);
+          if (item.task)
+            li.children!.push(
+              element("input", {
+                type: "checkbox",
+                disabled: "disabled",
+                ...(item.checked ? { checked: "checked" } : {}),
+              }),
+              " ",
+            );
+          this.blocks(
+            item.tokens.filter((child) => child.type !== "checkbox"),
+            li.children!,
+          );
           node.children!.push(li);
         }
         out.push(node);
@@ -321,22 +394,51 @@ class Builder {
       }
       case "table": {
         const table = token as Tokens.Table;
-        const cell = (tag: string, value: Tokens.TableCell) => element(tag, value.align ? { class: `align-${value.align}` } : undefined, this.inline(value.tokens));
-        out.push(element("table", undefined, [
-          element("thead", undefined, [element("tr", undefined, table.header.map((value) => cell("th", value)))]),
-          element("tbody", undefined, table.rows.map((row) => element("tr", undefined, row.map((value) => cell("td", value))))),
-        ]));
+        const cell = (tag: string, value: Tokens.TableCell) =>
+          element(
+            tag,
+            value.align ? { class: `align-${value.align}` } : undefined,
+            this.inline(value.tokens),
+          );
+        out.push(
+          element("table", undefined, [
+            element("thead", undefined, [
+              element(
+                "tr",
+                undefined,
+                table.header.map((value) => cell("th", value)),
+              ),
+            ]),
+            element(
+              "tbody",
+              undefined,
+              table.rows.map((row) =>
+                element(
+                  "tr",
+                  undefined,
+                  row.map((value) => cell("td", value)),
+                ),
+              ),
+            ),
+          ]),
+        );
         return;
       }
       case "admonition": {
         const generic = token as Tokens.Generic;
-        const node = element("div", { class: `admonition ${String(generic.kind).replace(/[^\w-]/g, "")}` });
-        if (generic.title) node.children!.push(element("p", { class: "admonition-title" }, [decode(String(generic.title))]));
+        const node = element("div", {
+          class: `admonition ${String(generic.kind).replace(/[^\w-]/g, "")}`,
+        });
+        if (generic.title)
+          node.children!.push(
+            element("p", { class: "admonition-title" }, [decode(String(generic.title))]),
+          );
         this.blocks(generic.tokens ?? [], node.children!);
         out.push(node);
         return;
       }
-      default: return;
+      default:
+        return;
     }
   }
 
@@ -353,16 +455,35 @@ class Builder {
           parent.push(...(text.tokens ? this.inline(text.tokens) : [decode(text.text)]));
           break;
         }
-        case "escape": parent.push((token as Tokens.Escape).text); break;
-        case "strong": parent.push(element("strong", undefined, this.inline((token as Tokens.Strong).tokens))); break;
-        case "em": parent.push(element("em", undefined, this.inline((token as Tokens.Em).tokens))); break;
-        case "del": parent.push(element("del", undefined, this.inline((token as Tokens.Del).tokens))); break;
-        case "codespan": parent.push(this.codespan((token as Tokens.Codespan).text)); break;
-        case "br": parent.push(element("br")); break;
-        case "link": parent.push(this.link(token as Tokens.Link)); break;
-        case "image": parent.push(this.image(token as Tokens.Image)); break;
-        case "html": this.raw((token as Tokens.HTML).text, stack, open); break;
-        default: break;
+        case "escape":
+          parent.push((token as Tokens.Escape).text);
+          break;
+        case "strong":
+          parent.push(element("strong", undefined, this.inline((token as Tokens.Strong).tokens)));
+          break;
+        case "em":
+          parent.push(element("em", undefined, this.inline((token as Tokens.Em).tokens)));
+          break;
+        case "del":
+          parent.push(element("del", undefined, this.inline((token as Tokens.Del).tokens)));
+          break;
+        case "codespan":
+          parent.push(this.codespan((token as Tokens.Codespan).text));
+          break;
+        case "br":
+          parent.push(element("br"));
+          break;
+        case "link":
+          parent.push(this.link(token as Tokens.Link));
+          break;
+        case "image":
+          parent.push(this.image(token as Tokens.Image));
+          break;
+        case "html":
+          this.raw((token as Tokens.HTML).text, stack, open);
+          break;
+        default:
+          break;
       }
     }
     return out;
@@ -377,8 +498,11 @@ class Builder {
       const href = help ? this.context.topic?.(help[1].toLowerCase()) : undefined;
       return href ? element("a", { href }, [code]) : code;
     }
-    const href = this.context.topic?.((help?.[1] ?? text).toLowerCase())
-      ?? (/^:[a-z][\w-]*(\s.*)?$/i.test(text) ? this.context.command?.(text.split(/\s/)[0]) : undefined);
+    const href =
+      this.context.topic?.((help?.[1] ?? text).toLowerCase()) ??
+      (/^:[a-z][\w-]*(\s.*)?$/i.test(text)
+        ? this.context.command?.(text.split(/\s/)[0])
+        : undefined);
     return href ? element("a", { href }, [code]) : code;
   }
 
@@ -394,9 +518,17 @@ class Builder {
     record.target = resolved;
     const href = this.context.href(resolved);
     // A live page the site does not have reads as its text.
-    if (href === undefined && resolved.kind === "live") return element("span", { class: "live-link", title: "A live page of Flash's own help (? in NORMAL or :help)" }, children);
+    if (href === undefined && resolved.kind === "live")
+      return element(
+        "span",
+        { class: "live-link", title: "A live page of Flash's own help (? in NORMAL or :help)" },
+        children,
+      );
     if (href === undefined) {
-      record.problem = resolved.kind === "config" ? `no ${resolved.key} in config.default.toml` : `${token.href} has no page on this site`;
+      record.problem =
+        resolved.kind === "config"
+          ? `no ${resolved.key} in config.default.toml`
+          : `${token.href} has no page on this site`;
       return element("a", undefined, children);
     }
     const attrs: Record<string, string> = { href };
@@ -404,10 +536,15 @@ class Builder {
     if (resolved.kind === "external" || resolved.kind === "config") {
       attrs.target = "_blank";
       attrs.rel = "noopener noreferrer";
-      try { attrs["data-external"] = new URL(href).host; } catch { attrs["data-external"] = ""; }
+      try {
+        attrs["data-external"] = new URL(href).host;
+      } catch {
+        attrs["data-external"] = "";
+      }
     }
     const node = element("a", attrs, children);
-    if (resolved.kind === "anchor") this.anchors.push({ node, link: record, anchor: resolved.anchor });
+    if (resolved.kind === "anchor")
+      this.anchors.push({ node, link: record, anchor: resolved.anchor });
     return node;
   }
 
@@ -432,7 +569,12 @@ class Builder {
       record.problem = `${token.href} has no file on this site`;
       return alt;
     }
-    return element("img", { src, alt, loading: "lazy", ...(token.title ? { title: decode(token.title) } : {}) });
+    return element("img", {
+      src,
+      alt,
+      loading: "lazy",
+      ...(token.title ? { title: decode(token.title) } : {}),
+    });
   }
 
   /** A same-page anchor that names no heading loses its link. */
@@ -454,7 +596,10 @@ function finish(nodes: MdNode[], builder: Builder): Rendered {
   const walk = (list: MdNode[]): MdNode[] => {
     const kept: MdNode[] = [];
     for (const node of list) {
-      if (typeof node === "string") { kept.push(node); continue; }
+      if (typeof node === "string") {
+        kept.push(node);
+        continue;
+      }
       const level = /^h([1-6])$/.exec(node.tag)?.[1];
       if (level) {
         const text = textOf(node.children ?? []).trim();
@@ -465,8 +610,16 @@ function finish(nodes: MdNode[], builder: Builder): Rendered {
           continue;
         }
         node.attrs = { ...node.attrs, id };
-        node.children = [...(node.children ?? []), element("a", { class: "heading-anchor", href: `#${id}`, "aria-label": `Link to “${text}”` }, ["#"])];
-        if (level === "2" || level === "3") headings.push({ id, title: text, level: Number(level) });
+        node.children = [
+          ...(node.children ?? []),
+          element(
+            "a",
+            { class: "heading-anchor", href: `#${id}`, "aria-label": `Link to “${text}”` },
+            ["#"],
+          ),
+        ];
+        if (level === "2" || level === "3")
+          headings.push({ id, title: text, level: Number(level) });
         kept.push(node);
         continue;
       }
@@ -477,7 +630,14 @@ function finish(nodes: MdNode[], builder: Builder): Rendered {
   };
   const body = walk(nodes);
   builder.checkAnchors(ids);
-  return { nodes: body, title, titleId, headings, ids: [...ids].filter((id) => !reservedIds.includes(id)), links: builder.links };
+  return {
+    nodes: body,
+    title,
+    titleId,
+    headings,
+    ids: [...ids].filter((id) => !reservedIds.includes(id)),
+    links: builder.links,
+  };
 }
 
 /** Renders without the cache; the site build checks every page through it. */
@@ -503,7 +663,18 @@ export function renderMarkdown(markdown: string, context: RenderContext): Render
   return rendered;
 }
 
-const inlineTags = new Set(["a", "code", "strong", "em", "del", "span", "kbd", "sup", "sub", "img"]);
+const inlineTags = new Set([
+  "a",
+  "code",
+  "strong",
+  "em",
+  "del",
+  "span",
+  "kbd",
+  "sup",
+  "sub",
+  "img",
+]);
 
 /** A rendered page split at its headings (levels two to four), code blocks left out, for search. */
 export function sectionsOf(nodes: MdNode[]): { heading?: string; id?: string; text: string }[] {
@@ -515,7 +686,10 @@ export function sectionsOf(nodes: MdNode[]): { heading?: string; id?: string; te
   };
   const visit = (list: MdNode[]) => {
     for (const node of list) {
-      if (typeof node === "string") { current.text += node; continue; }
+      if (typeof node === "string") {
+        current.text += node;
+        continue;
+      }
       if (/^h[2-4]$/.test(node.tag) && node.attrs?.id) {
         flush();
         current = { heading: textOf(node.children ?? []).trim(), id: node.attrs.id, text: "" };

@@ -2,9 +2,20 @@
 export type HTMLPart = { tag: string; close: boolean } | { text: string };
 
 /** Tags documentation may write as raw HTML. Attributes are never kept. */
-export const allowedRawTags = new Set(["details", "summary", "kbd", "sup", "sub", "br", "span", "div", "del"]);
+export const allowedRawTags = new Set([
+  "details",
+  "summary",
+  "kbd",
+  "sup",
+  "sub",
+  "br",
+  "span",
+  "div",
+  "del",
+]);
 
-const partPattern = /<!--[\s\S]*?(?:-->|$)|<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b(?:[^<>"']|"[^"]*"|'[^']*')*>/g;
+const partPattern =
+  /<!--[\s\S]*?(?:-->|$)|<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b(?:[^<>"']|"[^"]*"|'[^']*')*>/g;
 
 /** A raw HTML run split into allowed tags (no attributes) and plain text;
  * every other tag is dropped and its text kept as text, and an HTML comment

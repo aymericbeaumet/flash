@@ -14,7 +14,9 @@ export function clockTime(ms: number, today = Date.now()): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  return new Date(today).toDateString() === d.toDateString() ? time : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+  return new Date(today).toDateString() === d.toDateString()
+    ? time
+    : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
 }
 
 export function bytes(value?: number | null): string {
@@ -62,7 +64,8 @@ const logTexts = new WeakMap<LogText, string>();
 export function logSearchText(l: LogText): string {
   let text = logTexts.get(l);
   if (text === undefined) {
-    text = `${l.level || ""} ${l.source || ""} ${l.message || ""} ${JSON.stringify(l.fields || {})}`.toLowerCase();
+    text =
+      `${l.level || ""} ${l.source || ""} ${l.message || ""} ${JSON.stringify(l.fields || {})}`.toLowerCase();
     logTexts.set(l, text);
   }
   return text;

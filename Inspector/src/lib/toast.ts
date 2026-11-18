@@ -121,7 +121,10 @@ export class ToastStack {
       return id;
     }
     if (options.group !== undefined) {
-      for (const other of this.list.filter((toast) => toast.group === options.group && toast.id !== id)) this.close(other.id, "replaced");
+      for (const other of this.list.filter(
+        (toast) => toast.group === options.group && toast.id !== id,
+      ))
+        this.close(other.id, "replaced");
     }
     const toast: Toast = {
       id,
@@ -137,7 +140,10 @@ export class ToastStack {
     };
     const index = this.list.findIndex((candidate) => candidate.id === id);
     const previous = index >= 0 ? this.list[index] : undefined;
-    this.list = index >= 0 ? this.list.map((candidate) => (candidate === previous ? toast : candidate)) : [...this.list, toast];
+    this.list =
+      index >= 0
+        ? this.list.map((candidate) => (candidate === previous ? toast : candidate))
+        : [...this.list, toast];
     if (previous?.timeout !== toast.timeout) this.arm(id, toast.timeout);
     this.changed(this.list);
     return id;
@@ -160,13 +166,15 @@ export class ToastStack {
   close(id: string, reason: ToastCloseReason = "caller") {
     const toast = this.remove(id);
     if (!toast) return;
-    if (toast.persist !== undefined && (reason === "dismiss" || reason === "action")) this.remember(toast.persist);
+    if (toast.persist !== undefined && (reason === "dismiss" || reason === "action"))
+      this.remember(toast.persist);
     toast.onclose?.(reason);
   }
 
   /** Closes every toast of a group, as its caller: a new try makes the last one's report stale. */
   clear(group: string) {
-    for (const toast of this.list.filter((candidate) => candidate.group === group)) this.close(toast.id);
+    for (const toast of this.list.filter((candidate) => candidate.group === group))
+      this.close(toast.id);
   }
 
   /** Holds a toast's timeout while the reader points at or focuses it; releasing resumes the time it had left. */
@@ -222,7 +230,9 @@ export class ToastStack {
   private dismissed(): string[] {
     try {
       const parsed = JSON.parse(this.env.storage?.getItem(dismissedKey) ?? "[]") as unknown;
-      return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((key): key is string => typeof key === "string")
+        : [];
     } catch {
       return [];
     }
@@ -261,7 +271,10 @@ export function copiedToast(subject: string): ToastOptions {
 }
 
 /** A copy the browser refused, with how to copy by hand. */
-export function copyFailedToast(subject: string, hint = "Select the text and copy it instead."): ToastOptions {
+export function copyFailedToast(
+  subject: string,
+  hint = "Select the text and copy it instead.",
+): ToastOptions {
   return failedToast("copy", `Could not copy ${subject}. ${hint}`);
 }
 
@@ -272,12 +285,21 @@ export function copyFailedToast(subject: string, hint = "Select the text and cop
  * runtime page lists them. New or changed diagnostics are a failure that
  * offers `show`; diagnostics that clear are a confirmation.
  */
-export function configToast(previous: string | null | undefined, next: string | null, show: () => void): ToastOptions | undefined {
+export function configToast(
+  previous: string | null | undefined,
+  next: string | null,
+  show: () => void,
+): ToastOptions | undefined {
   if (previous === undefined || previous === next) return undefined;
   if (next === null) return doneToast("config", "The configuration loads without errors again.");
   const lines = next.split("\n");
-  const first = lines.find((line) => line.startsWith("- "))?.slice(2).trim();
+  const first = lines
+    .find((line) => line.startsWith("- "))
+    ?.slice(2)
+    .trim();
   const several = lines.filter((line) => line.startsWith("- ")).length > 1;
-  const message = first ? `The configuration has ${several ? "errors" : "an error"}: ${first}${several ? " …" : ""}` : "The configuration has errors.";
+  const message = first
+    ? `The configuration has ${several ? "errors" : "an error"}: ${first}${several ? " …" : ""}`
+    : "The configuration has errors.";
   return { ...failedToast("config", message), actions: [{ label: "Show", run: show }] };
 }

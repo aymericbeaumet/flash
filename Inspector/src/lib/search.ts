@@ -31,7 +31,11 @@ export interface SearchIndex {
 
 /** A guide split at its headings, so a match can land on the section; ids are the rendered ones. */
 export function sections(doc: DocTopic): { heading?: string; id?: string; text: string }[] {
-  const rendered = renderUncached(doc.body, { hasFile: () => false, href: () => undefined, siteURL: "" });
+  const rendered = renderUncached(doc.body, {
+    hasFile: () => false,
+    href: () => undefined,
+    siteURL: "",
+  });
   return sectionsOf(rendered.nodes);
 }
 
@@ -39,15 +43,36 @@ export function sections(doc: DocTopic): { heading?: string; id?: string; text: 
  * Manual sections (from `search.json`), then the plugins' guides, commands,
  * mappings and plugins. The published site has only the manual.
  */
-export function buildIndex(docs: DocTopic[], commands: CommandInfo[], rows: MappingRow[], plugins: PluginInfo[], manual: SearchSection[] = []): SearchIndex {
+export function buildIndex(
+  docs: DocTopic[],
+  commands: CommandInfo[],
+  rows: MappingRow[],
+  plugins: PluginInfo[],
+  manual: SearchSection[] = [],
+): SearchIndex {
   const entries: Entry[] = [];
   for (const section of manual) {
     const text = `${section.heading ?? section.title} ${section.text}`;
-    entries.push({ title: section.title, section: section.heading, text: (section.heading ? text : `${section.title} ${text}`).toLowerCase(), summary: section.text.slice(0, 220), kind: "Docs", icon: "docs", href: paths.docs(section.path, section.id) });
+    entries.push({
+      title: section.title,
+      section: section.heading,
+      text: (section.heading ? text : `${section.title} ${text}`).toLowerCase(),
+      summary: section.text.slice(0, 220),
+      kind: "Docs",
+      icon: "docs",
+      href: paths.docs(section.path, section.id),
+    });
   }
   for (const doc of docs) {
     const names = `${doc.title} ${doc.name}`;
-    entries.push({ title: doc.title, text: `${names} ${doc.summary}`.toLowerCase(), summary: doc.summary, kind: "Guide", icon: "docs", href: paths.docs(doc.name) });
+    entries.push({
+      title: doc.title,
+      text: `${names} ${doc.summary}`.toLowerCase(),
+      summary: doc.summary,
+      kind: "Guide",
+      icon: "docs",
+      href: paths.docs(doc.name),
+    });
     for (const section of sections(doc)) {
       if (!section.text && !section.heading) continue;
       entries.push({
@@ -62,13 +87,36 @@ export function buildIndex(docs: DocTopic[], commands: CommandInfo[], rows: Mapp
     }
   }
   for (const command of commands) {
-    entries.push({ title: command.name, text: [command.name, command.syntax, command.description, ...(command.aliases ?? [])].join(" ").toLowerCase(), summary: command.description ?? command.source, kind: "Command", icon: "commands", href: paths.commands(command.name) });
+    entries.push({
+      title: command.name,
+      text: [command.name, command.syntax, command.description, ...(command.aliases ?? [])]
+        .join(" ")
+        .toLowerCase(),
+      summary: command.description ?? command.source,
+      kind: "Command",
+      icon: "commands",
+      href: paths.commands(command.name),
+    });
   }
   for (const row of rows) {
-    entries.push({ title: row.key, text: [row.key, row.action, row.explanation, row.origin ?? ""].join(" ").toLowerCase(), summary: row.explanation || [row.action, row.origin].filter(Boolean).join(" · "), kind: "Mapping", icon: "mappings", href: paths.mappings(row.key) });
+    entries.push({
+      title: row.key,
+      text: [row.key, row.action, row.explanation, row.origin ?? ""].join(" ").toLowerCase(),
+      summary: row.explanation || [row.action, row.origin].filter(Boolean).join(" · "),
+      kind: "Mapping",
+      icon: "mappings",
+      href: paths.mappings(row.key),
+    });
   }
   for (const plugin of plugins) {
-    entries.push({ title: plugin.name || plugin.id, text: [plugin.id, plugin.name, plugin.description].join(" ").toLowerCase(), summary: plugin.description ?? plugin.state, kind: "Plugin", icon: "plugins", href: paths.plugins(plugin.id) });
+    entries.push({
+      title: plugin.name || plugin.id,
+      text: [plugin.id, plugin.name, plugin.description].join(" ").toLowerCase(),
+      summary: plugin.description ?? plugin.state,
+      kind: "Plugin",
+      icon: "plugins",
+      href: paths.plugins(plugin.id),
+    });
   }
   return { entries };
 }
@@ -84,12 +132,31 @@ export function search(index: SearchIndex, query: string, limit = 80): SearchRes
     if (!words.every((word) => entry.text.includes(word))) continue;
     const title = entry.title.toLowerCase().replace(/^:/, "");
     const heading = (entry.section ?? "").toLowerCase();
-    let score = title === needle ? 0 : title.startsWith(needle) ? 1 : title.includes(needle) ? 2 : heading.includes(needle) ? 3 : words.every((word) => title.includes(word) || heading.includes(word)) ? 4 : 5;
+    let score =
+      title === needle
+        ? 0
+        : title.startsWith(needle)
+          ? 1
+          : title.includes(needle)
+            ? 2
+            : heading.includes(needle)
+              ? 3
+              : words.every((word) => title.includes(word) || heading.includes(word))
+                ? 4
+                : 5;
     if (entry.kind !== "Guide" && entry.kind !== "Docs") score += 0.5;
     const key = entry.href;
     if (seen.has(key)) continue;
     seen.add(key);
-    results.push({ title: entry.title, summary: snippet(entry, words), section: entry.section, kind: entry.kind, icon: entry.icon, href: entry.href, score });
+    results.push({
+      title: entry.title,
+      summary: snippet(entry, words),
+      section: entry.section,
+      kind: entry.kind,
+      icon: entry.icon,
+      href: entry.href,
+      score,
+    });
   }
   return results.sort((a, b) => a.score - b.score).slice(0, limit);
 }

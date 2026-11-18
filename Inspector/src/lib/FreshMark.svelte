@@ -8,11 +8,22 @@
    * in its accessible name and tooltip; `label` names a group instead.
    */
   let { state, label }: { state: Freshness; label?: string } = $props();
-  const name = $derived(label ?? (state === "new" ? "New since your last visit" : "Updated since your last visit"));
+  const name = $derived(
+    label ?? (state === "new" ? "New since your last visit" : "Updated since your last visit"),
+  );
 </script>
 
-{#if state}<span class="fresh-mark" role="img" aria-label={name} title={name}><Icon name="sparkle" size={12} /></span>{/if}
+{#if state}<span class="fresh-mark" role="img" aria-label={name} title={name}
+    ><Icon name="sparkle" size={12} /></span
+  >{/if}
 
 <style>
-  .fresh-mark { display: inline-flex; align-items: center; flex: none; margin-left: 6px; color: var(--amber); vertical-align: -1px; }
+  .fresh-mark {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    margin-left: 6px;
+    color: var(--amber);
+    vertical-align: -1px;
+  }
 </style>

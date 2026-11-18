@@ -33,17 +33,25 @@ const isOffset = (value: unknown) => Number.isSafeInteger(value) && Number(value
 
 /** Reads one `/api/clipboard/history` reply, naming the field that breaks the contract. */
 export function parseClipboardPage(value: unknown): ClipboardPage {
-  if (typeof value !== "object" || value === null) throw contractError("clipboard page is not an object");
+  if (typeof value !== "object" || value === null)
+    throw contractError("clipboard page is not an object");
   const page = value as Record<string, unknown>;
   if (!Array.isArray(page.entries)) throw contractError("clipboard page has no entries array");
   if (!("next_offset" in page)) throw contractError("clipboard page has no next_offset");
-  if (page.next_offset !== null && !isOffset(page.next_offset)) throw contractError("clipboard page next_offset is not an offset or null");
+  if (page.next_offset !== null && !isOffset(page.next_offset))
+    throw contractError("clipboard page next_offset is not an offset or null");
   if (!isOffset(page.total)) throw contractError("clipboard page total is not a count");
   for (const entry of page.entries) {
-    if (typeof entry !== "object" || entry === null || typeof (entry as ClipboardEntry).id !== "string" || typeof (entry as ClipboardEntry).kind !== "string") {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      typeof (entry as ClipboardEntry).id !== "string" ||
+      typeof (entry as ClipboardEntry).kind !== "string"
+    ) {
       throw contractError("clipboard entry without an id and kind");
     }
-    if ("pinned" in entry && (entry as ClipboardEntry).pinned !== true) throw contractError("clipboard entry pinned is not true");
+    if ("pinned" in entry && (entry as ClipboardEntry).pinned !== true)
+      throw contractError("clipboard entry pinned is not true");
   }
   return page as unknown as ClipboardPage;
 }
@@ -82,11 +90,17 @@ export async function collectHistory(
     let page: ClipboardPage;
     try {
       page = await fetchPage(offset);
-      if (page.next_offset !== null && (!Number.isSafeInteger(page.next_offset) || page.next_offset <= offset)) {
+      if (
+        page.next_offset !== null &&
+        (!Number.isSafeInteger(page.next_offset) || page.next_offset <= offset)
+      ) {
         throw contractError("clipboard history cursor did not advance");
       }
     } catch (error) {
-      throw new HistoryLoadError({ entries: [...entries], nextOffset: offset, total: known }, classify(error));
+      throw new HistoryLoadError(
+        { entries: [...entries], nextOffset: offset, total: known },
+        classify(error),
+      );
     }
     if (signal?.aborted) return;
     for (const entry of page.entries) {
@@ -102,7 +116,11 @@ export async function collectHistory(
 
 /** While a reload is still under way, or after it stopped early, the older
  * entries it has not reached stay listed after the ones it reloaded. */
-export function withUnreached(loaded: ClipboardEntry[], previous: ClipboardEntry[], complete: boolean): ClipboardEntry[] {
+export function withUnreached(
+  loaded: ClipboardEntry[],
+  previous: ClipboardEntry[],
+  complete: boolean,
+): ClipboardEntry[] {
   if (complete) return loaded;
   const ids = new Set(loaded.map((entry) => entry.id));
   return [...loaded, ...previous.filter((entry) => !ids.has(entry.id))];
@@ -116,7 +134,12 @@ export const renderStep = 50;
 /** The render limit after the list's end came near, or a row past it was
  * reached (`reach`, a 0-based index): one more step, or up to that row,
  * never past what is `available`. */
-export function grownLimit(limit: number, available: number, reach = limit, step = renderStep): number {
+export function grownLimit(
+  limit: number,
+  available: number,
+  reach = limit,
+  step = renderStep,
+): number {
   if (limit >= available) return limit;
   return Math.min(Math.max(limit + step, reach + 1), available);
 }

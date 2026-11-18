@@ -1,14 +1,22 @@
 // The telemetry page's pure parts: reading `/api/telemetry`, formatting
 // readings, sparklines, the status-format snippets that bring a metric to the
 // bar, and the waterfall rows of each trace.
-import type { TelemetryData, TelemetryKind, TelemetryLog, TelemetryMetric, TelemetrySeries, TelemetrySpan } from "./types.ts";
+import type {
+  TelemetryData,
+  TelemetryKind,
+  TelemetryLog,
+  TelemetryMetric,
+  TelemetrySeries,
+  TelemetrySpan,
+} from "./types.ts";
 
 /** At most one `/api/telemetry` request per this many milliseconds. */
 export const FETCH_INTERVAL_MS = 1000;
 /** Traces the waterfall shows, newest first. */
 export const TRACE_LIMIT = 50;
 
-const finite = (value: number | null | undefined): value is number => typeof value === "number" && Number.isFinite(value);
+const finite = (value: number | null | undefined): value is number =>
+  typeof value === "number" && Number.isFinite(value);
 
 /** Whether a reply has the shape the page reads. */
 export function isTelemetryData(value: unknown): value is TelemetryData {
@@ -27,9 +35,12 @@ export function isDistribution(kind: TelemetryKind): boolean {
 }
 
 /** `sum · delta · monotonic`, `gauge`, `histogram · cumulative`. */
-export function kindLabel(metric: Pick<TelemetryMetric, "kind" | "temporality" | "monotonic">): string {
+export function kindLabel(
+  metric: Pick<TelemetryMetric, "kind" | "temporality" | "monotonic">,
+): string {
   const parts: string[] = [metric.kind.replace("_", " ")];
-  if (metric.kind !== "gauge" && metric.temporality !== "unspecified") parts.push(metric.temporality);
+  if (metric.kind !== "gauge" && metric.temporality !== "unspecified")
+    parts.push(metric.temporality);
   if (metric.kind === "sum" && metric.monotonic) parts.push("monotonic");
   return parts.join(" · ");
 }
@@ -88,7 +99,10 @@ export function sparklinePath(values: number[], width: number, height: number, i
 
 /** A series' attributes on one line, `type=input · model=sonnet`, sorted;
  * its sender is the resource's `service.name`. */
-export function seriesLabel(series: Pick<TelemetrySeries, "attributes" | "resource">): { attributes: string; service: string } {
+export function seriesLabel(series: Pick<TelemetrySeries, "attributes" | "resource">): {
+  attributes: string;
+  service: string;
+} {
   const attributes = Object.keys(series.attributes)
     .sort()
     .map((key) => `${key}=${series.attributes[key]}`)
@@ -98,12 +112,15 @@ export function seriesLabel(series: Pick<TelemetrySeries, "attributes" | "resour
 
 /** Series in a stable order, by their attributes, so live updates never reshuffle rows. */
 export function sortSeries(series: TelemetrySeries[]): TelemetrySeries[] {
-  const key = (item: TelemetrySeries) => `${seriesLabel(item).service}\u0000${seriesLabel(item).attributes}`;
+  const key = (item: TelemetrySeries) =>
+    `${seriesLabel(item).service}\u0000${seriesLabel(item).attributes}`;
   return [...series].sort((a, b) => key(a).localeCompare(key(b)));
 }
 
 function haystack(record: Record<string, string>): string {
-  return Object.entries(record).map(([key, value]) => `${key}=${value}`).join(" ");
+  return Object.entries(record)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(" ");
 }
 
 /** Metrics whose name, description or series attributes contain every word
@@ -116,8 +133,13 @@ export function filterMetrics(metrics: TelemetryMetric[], query: string): Teleme
   const result: TelemetryMetric[] = [];
   for (const metric of metrics) {
     const head = `${metric.name} ${metric.description} ${metric.unit}`;
-    if (matches(head)) { result.push(metric); continue; }
-    const series = metric.series.filter((item) => matches(`${head} ${haystack(item.attributes)} ${haystack(item.resource)}`));
+    if (matches(head)) {
+      result.push(metric);
+      continue;
+    }
+    const series = metric.series.filter((item) =>
+      matches(`${head} ${haystack(item.attributes)} ${haystack(item.resource)}`),
+    );
     if (series.length) result.push({ ...metric, series });
   }
   return result;
@@ -129,12 +151,15 @@ export function snippets(metric: Pick<TelemetryMetric, "name" | "kind">): string
   const list = [`#{flash.otel:${metric.name}}`];
   if (metric.kind === "sum") list.push(`#{flash.otel.total:${metric.name}}`);
   if (metric.kind !== "gauge") list.push(`#{flash.otel.rate:${metric.name}}`);
-  if (metric.kind === "histogram" || metric.kind === "exponential_histogram") list.push(`#{flash.otel.p95:${metric.name}}`);
+  if (metric.kind === "histogram" || metric.kind === "exponential_histogram")
+    list.push(`#{flash.otel.p95:${metric.name}}`);
   return list;
 }
 
 /** OTLP severity numbers: 1–4 trace … 21–24 fatal; the text when there is no number. */
-export function severityLevel(log: Pick<TelemetryLog, "severity" | "severity_number">): "trace" | "debug" | "info" | "warn" | "error" | "fatal" {
+export function severityLevel(
+  log: Pick<TelemetryLog, "severity" | "severity_number">,
+): "trace" | "debug" | "info" | "warn" | "error" | "fatal" {
   const n = log.severity_number;
   if (n >= 21) return "fatal";
   if (n >= 17) return "error";
@@ -196,7 +221,11 @@ export function traceGroups(spans: TelemetrySpan[], limit = TRACE_LIMIT, only = 
     const children = new Map<string, TelemetrySpan[]>();
     const roots: TelemetrySpan[] = [];
     for (const span of members) {
-      if (span.parent_span_id && span.parent_span_id !== span.span_id && ids.has(span.parent_span_id)) {
+      if (
+        span.parent_span_id &&
+        span.parent_span_id !== span.span_id &&
+        ids.has(span.parent_span_id)
+      ) {
         const list = children.get(span.parent_span_id);
         if (list) list.push(span);
         else children.set(span.parent_span_id, [span]);
@@ -204,7 +233,8 @@ export function traceGroups(spans: TelemetrySpan[], limit = TRACE_LIMIT, only = 
         roots.push(span);
       }
     }
-    const byStart = (a: TelemetrySpan, b: TelemetrySpan) => a.start_ms - b.start_ms || a.name.localeCompare(b.name);
+    const byStart = (a: TelemetrySpan, b: TelemetrySpan) =>
+      a.start_ms - b.start_ms || a.name.localeCompare(b.name);
     const rows: WaterfallRow[] = [];
     const visited = new Set<string>();
     const place = (span: TelemetrySpan, depth: number) => {
@@ -212,7 +242,12 @@ export function traceGroups(spans: TelemetrySpan[], limit = TRACE_LIMIT, only = 
       visited.add(span.span_id);
       const offset = duration > 0 ? ((span.start_ms - start) / duration) * 100 : 0;
       const width = duration > 0 ? (Math.max(0, span.duration_ms) / duration) * 100 : 100;
-      rows.push({ span, depth, offset: Math.min(100, Math.max(0, offset)), width: Math.min(100 - Math.min(100, Math.max(0, offset)), Math.max(0, width)) });
+      rows.push({
+        span,
+        depth,
+        offset: Math.min(100, Math.max(0, offset)),
+        width: Math.min(100 - Math.min(100, Math.max(0, offset)), Math.max(0, width)),
+      });
       for (const child of (children.get(span.span_id) ?? []).sort(byStart)) place(child, depth + 1);
     };
     for (const root of roots.sort(byStart)) place(root, 0);
@@ -220,7 +255,12 @@ export function traceGroups(spans: TelemetrySpan[], limit = TRACE_LIMIT, only = 
     for (const span of [...members].sort(byStart)) place(span, 0);
     const services = [...new Set(members.map((span) => span.service).filter(Boolean))].sort();
     groups.push({
-      traceId, start, end, duration, services, rows,
+      traceId,
+      start,
+      end,
+      duration,
+      services,
+      rows,
       name: rows[0]?.span.name ?? "",
       error: members.some((span) => span.status === "error"),
     });

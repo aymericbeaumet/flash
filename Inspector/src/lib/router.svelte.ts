@@ -7,7 +7,11 @@ let entries = 0;
 const newKey = () => `${Date.now().toString(36)}-${++entries}`;
 function currentAnchor() {
   const hash = location.hash.slice(1);
-  try { return decodeURIComponent(hash); } catch { return hash; }
+  try {
+    return decodeURIComponent(hash);
+  } catch {
+    return hash;
+  }
 }
 
 /**
@@ -18,7 +22,9 @@ function currentAnchor() {
  * heading has not rendered yet is revealed once it appears.
  */
 class Router {
-  route = $state<Route>(typeof location === "undefined" ? { page: "home", param: "" } : parseRoute(location));
+  route = $state<Route>(
+    typeof location === "undefined" ? { page: "home", param: "" } : parseRoute(location),
+  );
   /**
    * Whether a click on a page link stays in the app. The published site
    * lets the browser load a prerendered page until the whole manual is here.
@@ -101,9 +107,22 @@ class Router {
   }
 
   private onClick = (event: MouseEvent) => {
-    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
     const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
-    if (!(anchor instanceof HTMLAnchorElement) || (anchor.target && anchor.target !== "_self") || anchor.hasAttribute("download")) return;
+    if (
+      !(anchor instanceof HTMLAnchorElement) ||
+      (anchor.target && anchor.target !== "_self") ||
+      anchor.hasAttribute("download")
+    )
+      return;
     const url = new URL(anchor.href);
     if (url.origin !== location.origin) return;
     if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
@@ -124,7 +143,15 @@ class Router {
       this.onNavigate();
     }
     const saved = this.positions.get(this.key);
-    this.settle(saved !== undefined ? { top: saved } : location.hash ? "anchor" : samePage ? "keep" : { top: 0 });
+    this.settle(
+      saved !== undefined
+        ? { top: saved }
+        : location.hash
+          ? "anchor"
+          : samePage
+            ? "keep"
+            : { top: 0 },
+    );
   };
 
   /**
@@ -135,16 +162,19 @@ class Router {
   private settle(scroll: Settle) {
     this.anchor = scroll === "anchor" ? currentAnchor() : "";
     const key = this.key;
-    void tick().then(() => requestAnimationFrame(() => {
-      if (key !== this.key) return;
-      if (typeof scroll === "object" && this.main) {
-        this.main.scrollTop = scroll.top;
-        this.positions.set(key, this.main.scrollTop);
-        // The link that was clicked may be gone; keyboard users continue
-        // from the top of the new page rather than from the document body.
-        if (scroll.top === 0 && !(document.activeElement instanceof HTMLInputElement)) this.main.focus({ preventScroll: true });
-      } else if (scroll === "anchor") this.revealAnchor();
-    }));
+    void tick().then(() =>
+      requestAnimationFrame(() => {
+        if (key !== this.key) return;
+        if (typeof scroll === "object" && this.main) {
+          this.main.scrollTop = scroll.top;
+          this.positions.set(key, this.main.scrollTop);
+          // The link that was clicked may be gone; keyboard users continue
+          // from the top of the new page rather than from the document body.
+          if (scroll.top === 0 && !(document.activeElement instanceof HTMLInputElement))
+            this.main.focus({ preventScroll: true });
+        } else if (scroll === "anchor") this.revealAnchor();
+      }),
+    );
   }
 
   private entryKey() {

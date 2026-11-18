@@ -41,7 +41,11 @@ export function explainMapping(row: MappingRow, commands: CommandInfo[]): string
 }
 
 /** Haystack for ranking. The visible sentence and the verb sentence both count. */
-export function searchFields(row: MappingRow, commands: CommandInfo[], source: string): SearchFields {
+export function searchFields(
+  row: MappingRow,
+  commands: CommandInfo[],
+  source: string,
+): SearchFields {
   const plugin = pluginDescription(row.action, commands);
   const base = row.explanation?.trim() ?? "";
   const visible = plugin || base || row.action;
@@ -88,7 +92,10 @@ export function scorePrepared(tokens: string[], search: PreparedSearch): number 
 }
 
 /** Plugin commands by `flash <command> <subcommand>`, built once per command list. */
-const commandIndexes = new WeakMap<CommandInfo[], Map<string, { first: CommandInfo; last: CommandInfo }>>();
+const commandIndexes = new WeakMap<
+  CommandInfo[],
+  Map<string, { first: CommandInfo; last: CommandInfo }>
+>();
 
 function commandIndex(commands: CommandInfo[]) {
   let index = commandIndexes.get(commands);
@@ -133,7 +140,13 @@ function unique(parts: string[]): string[] {
 }
 
 function normalize(text: string): string {
-  return text.toLowerCase().replace(/[_+]/g, " ").replace(/-/g, " ").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  return text
+    .toLowerCase()
+    .replace(/[_+]/g, " ")
+    .replace(/-/g, " ")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function scoreField(token: string, field: PreparedField): number {
