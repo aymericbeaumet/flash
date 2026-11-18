@@ -742,7 +742,7 @@ popup anchors, a tenth of a whole snapshot in a test resident.
 ### Guards
 
 - `Inspector/budget.test.ts` (in `mise run test:inspector`) holds the
-  committed page to 460 KiB, 135 KiB gzipped (429 and 125 KiB now).
+  committed page to 460 KiB, 135 KiB gzipped (444 and 130 KiB now).
 - `DebugServerTests`: a patch carries only changed sections and a stream
   without a state gets it whole; a scoped change rebuilds only its sections;
   cached replies never wait on main (the requests block it) and cost under

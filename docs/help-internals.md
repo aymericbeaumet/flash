@@ -83,6 +83,27 @@ time ([performance](performance.md#browser-help)).
 | `/api/config/check` | `POST` returns `{"path", "diagnostics"}`: what [`flash config check`](configuration.md) reports for the body as the configuration file at `path`, over the bundled defaults and without environment overrides. Each diagnostic is `{"path", "message"}` with `line` and `column` when it has a location, in file and line order; a TOML syntax error is one of them. The body is parsed off the main thread and nothing is written |
 | `/api/telemetry` | What the OTLP receiver holds: every metric with its series, history and derived values, then the retained log records and spans, oldest first ([telemetry](telemetry.md#the-telemetry-page)) |
 
+The configuration editor on the runtime page (`RuntimePanel.svelte`) is a
+text area with a line gutter, never a generated form. Its logic is in four
+modules the panel only wires together:
+
+- `config-check.ts` asks `/api/config/check` once typing pauses
+  (`ConfigChecker`). Every edit starts a new generation: the check of an
+  earlier one is aborted and its reply dropped, so the diagnostics shown
+  describe the latest text or are marked as waiting for it. A save settles
+  the verdict on the text it writes first. A diagnostic raised by the
+  edited file is an error, which holds Save until Save anyway; one raised
+  by another file (the bundled defaults) is a warning. The module also
+  places the gutter's marks and a diagnostic's caret position.
+- `toml-caret.ts` names the key under the caret (`keyPathAt`): its table,
+  then the key its line assigns or the key whose value is still open there.
+- `config-schema.ts` reads that key's type, values and description from
+  `flash.toml`'s JSON Schema, which the resident serves with the manual's
+  files at `/docs/schema/flash.schema.json`; the editor fetches it when it
+  first takes focus.
+- `config-json.ts` draws the resolved configuration, and with Overrides
+  only keeps what the sparse `config_sources` tree marks.
+
 The page routes itself with the History API: same-origin page links navigate
 in place, back/forward restore each page's scroll position, and modified,
 middle or new-window clicks keep the browser's behavior. The top bar shows
@@ -215,7 +236,7 @@ the mapping keyboard's keycaps. List rows and navigation links are at least
 36 px tall and every other control at least 26 px, so dense pages stay dense.
 `mise run test:inspector` runs the pure tests (search,
 reading state, onboarding, mapping search, keyboard, request retry, clipboard
-history paging and resume, monitors, toasts, state patches, and the documentation: rendering, routes on
+history paging and resume, monitors, toasts, state patches, the configuration editor's check, key path and schema help, and the documentation: rendering, routes on
 both sites, every link of every page, and the published site's search files and their loader), renders the toast components on the server and holds the
 committed page (`Inspector/budget.test.ts`) and the published site (`Inspector/site-budget.test.ts`) to their size budgets. The page must remain
 self-contained and must render plugin-authored Markdown as untrusted content.

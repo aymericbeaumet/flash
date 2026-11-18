@@ -55,9 +55,18 @@ The inspector runtime page shows the resolved configuration as JSON and edits
 the selected file. Values that still come from the bundled default use the
 base text colour. A value a later layer wrote uses the override style and
 names that layer: `config` with the filename, or `env` with the `FLASH_`
-variable. Save writes the editor after the text parses as TOML. Purge
-defaults removes assignments that equal the bundled file and leaves the
-result in the editor; it does not write until Save. The request body is
+variable; **Overrides only** hides every value that still holds its default.
+
+The editor is a text editor with line numbers. Flash checks the text as
+`flash config check` does, a moment after typing pauses: each diagnostic is
+listed under the editor with its line, its line is marked in the gutter, and
+selecting one moves the caret there. Under the editor is what the schema
+says about the key the caret is on: its type, its values and its
+description. Save writes the editor after the text parses as TOML. While the
+text has errors Save waits, and Save anyway writes it as it is: Flash loads
+such a file and reports each diagnostic, as the next paragraph describes.
+Purge defaults removes assignments that equal the bundled file and leaves
+the result in the editor; it does not write until Save. The request body is
 limited to 256KB.
 
 Every layer uses the same TOML schema, diagnostics and validators. Invalid values

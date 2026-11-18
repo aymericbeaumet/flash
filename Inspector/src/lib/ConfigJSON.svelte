@@ -5,12 +5,25 @@
     config,
     sources,
     query = "",
-  }: { config: unknown; sources?: ConfigSourceNode; query?: string } = $props();
-  const document = $derived(configDocument(config, sources, query));
+    overridesOnly = false,
+  }: {
+    config: unknown;
+    sources?: ConfigSourceNode;
+    query?: string;
+    /** Show only what a layer above the bundled defaults wrote. */
+    overridesOnly?: boolean;
+  } = $props();
+  const document = $derived(configDocument(config, sources, query, overridesOnly));
 </script>
 
 {#if document.empty}
-  <p class="empty">No configuration values match.</p>
+  <p class="empty"
+    >{overridesOnly && !query.trim()
+      ? "Nothing is overridden: every value holds its bundled default."
+      : overridesOnly
+        ? "No overridden values match."
+        : "No configuration values match."}</p
+  >
 {:else}
   <pre class="config-json"
     >{#each document.tokens as token, index (index)}{#if token.where}<span class="override"

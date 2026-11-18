@@ -161,15 +161,47 @@ function emitArray(
   return tokens;
 }
 
+/**
+ * What a layer above the bundled defaults wrote: `value` without everything
+ * that still holds its default, or undefined when nothing in it was written.
+ * A marked node is kept whole; an unmarked one keeps its marked descendants.
+ */
+function overridden(value: unknown, source: ConfigSourceNode | undefined): unknown {
+  if (markOf(source)) return value;
+  if (!hasChildMarks(source)) return undefined;
+  if (Array.isArray(value)) {
+    const kept = value.filter(
+      (element) => overridden(element, arrayChild(source, element)) !== undefined,
+    );
+    return kept.length ? kept : undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const kept = Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => {
+    const own = overridden(child, childNode(source, key));
+    return own === undefined ? [] : [[key, own] as const];
+  });
+  return kept.length ? Object.fromEntries(kept) : undefined;
+}
+
+/**
+ * The resolved configuration as text, each override marked with its layer.
+ * `query` keeps what names it; `overridesOnly` first drops every value that
+ * still holds its bundled default.
+ */
 export function configDocument(
   config: unknown,
   sources: ConfigSourceNode | undefined,
   query: string,
+  overridesOnly = false,
 ): { tokens: ConfigToken[]; empty: boolean } {
-  const root =
+  const whole =
     config && typeof config === "object" && !Array.isArray(config)
       ? (config as Record<string, unknown>)
       : {};
+  const root = overridesOnly
+    ? (overridden(whole, sources) as Record<string, unknown> | undefined)
+    : whole;
+  if (!root) return { tokens: [], empty: true };
   const q = query.trim();
   if (q && !include("", root, sources, q, false)) return { tokens: [], empty: true };
   return { tokens: emitValue(root, 0, sources, undefined, q, false), empty: false };
