@@ -570,6 +570,10 @@ struct PluginManifest: Decodable, Equatable {
   /// Accessibility text, which NORMAL never engages; the union across
   /// plugins is `OwnTextEditingApps`.
   var ownTextEditing: [String]
+  /// The browsers this plugin declares, by engine; across plugins they are
+  /// `BrowserEngines`, and a browser an earlier plugin declared keeps its
+  /// engine.
+  var browserEngines: BrowserEngineTable
   var priority: Int
   /// Global active-window selector for this plugin, compounded with
   /// mapping-entry selectors.
@@ -736,6 +740,7 @@ struct PluginManifest: Decodable, Equatable {
     case terminalEmulators = "terminal_emulators"
     case onDemandHints = "on_demand_hints"
     case ownTextEditing = "own_text_editing"
+    case browserEngines = "browser_engines"
   }
 
   init(
@@ -759,6 +764,7 @@ struct PluginManifest: Decodable, Equatable {
     terminalEmulators: [String] = [],
     onDemandHints: [String] = [],
     ownTextEditing: [String] = [],
+    browserEngines: BrowserEngineTable = BrowserEngineTable(),
     priority: Int = 25,
     selector: PluginSelector = PluginSelector(),
     sources: [CandidateSourceDescriptor] = [],
@@ -790,6 +796,7 @@ struct PluginManifest: Decodable, Equatable {
     self.terminalEmulators = Self.uniqueTrimmed(terminalEmulators)
     self.onDemandHints = Self.uniqueTrimmed(onDemandHints)
     self.ownTextEditing = Self.uniqueTrimmed(ownTextEditing)
+    self.browserEngines = browserEngines
     self.priority = priority
     self.selector = selector
     self.sources = Self.uniqueSourceDescriptors(sources)
@@ -847,6 +854,8 @@ struct PluginManifest: Decodable, Equatable {
       try c.decodeIfPresent([String].self, forKey: .onDemandHints) ?? [])
     self.ownTextEditing = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .ownTextEditing) ?? [])
+    self.browserEngines = try Self.browserEngines(
+      try c.decodeIfPresent([String: [String]].self, forKey: .browserEngines) ?? [:])
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.selector = PluginSelector(
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
@@ -888,6 +897,31 @@ struct PluginManifest: Decodable, Equatable {
       out.append(descriptor)
     }
     return out
+  }
+
+  /// `browser_engines` as a table. An engine the host does not know, an id
+  /// that is not a bundle id and a browser listed twice each fail the load.
+  private static func browserEngines(_ declared: [String: [String]]) throws
+    -> BrowserEngineTable
+  {
+    var engines: [String: BrowserEngine] = [:]
+    for name in declared.keys.sorted() {
+      guard let engine = BrowserEngine(rawValue: name) else {
+        let known = BrowserEngine.allCases.map(\.rawValue).joined(separator: ", ")
+        throw PluginError.failure(
+          "manifest.json browser_engines: \(name) is not an engine (\(known))")
+      }
+      for bundleID in declared[name] ?? [] {
+        guard SecureInputRelease.isBundleID(bundleID) else {
+          throw PluginError.failure("manifest.json browser_engines.\(name): not a bundle id")
+        }
+        guard engines.updateValue(engine, forKey: bundleID) == nil else {
+          throw PluginError.failure(
+            "manifest.json browser_engines: \(bundleID) is declared twice")
+        }
+      }
+    }
+    return BrowserEngineTable(engines)
   }
 
   static func load(from root: URL) throws -> PluginManifest {
@@ -1043,8 +1077,8 @@ struct PluginManifest: Decodable, Equatable {
       // Manifest-only plugin: no child process ever runs, so any surface
       // that would need RPC into (or events delivered to) the plugin is
       // invalid. Mappings, help topics, bindings and app declarations
-      // (terminal emulators, on-demand hints, own text editing) are the
-      // complete allowed surface; a core `commands[]` entry needs a process
+      // (terminal emulators, on-demand hints, own text editing, browser
+      // engines) are the complete allowed surface; a core `commands[]` entry needs a process
       // like any other.
       let processBound: [(String, Bool)] = [
         ("listen", !listen.isEmpty),

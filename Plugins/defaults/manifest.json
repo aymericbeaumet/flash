@@ -2,7 +2,7 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Flash's default app knowledge: the macOS conventions apps share for Flash's commands (Cmd-T opens a tab, Cmd-Z undoes, Cmd-S saves, Cmd-C copies, Cmd-Right ends the line, the arrows move a caret or a list's selection…), the apps that bind them differently, such as editors' new tab and back/forward or Messages' conversation switching, or not at all; the apps whose accessibility tree is walked only on demand; and the editors with their own modal editing or partial Accessibility text, where NORMAL never engages a field.",
+  "description": "Flash's default app knowledge: the macOS conventions apps share for Flash's commands (Cmd-T opens a tab, Cmd-Z undoes, Cmd-S saves, Cmd-C copies, Cmd-Right ends the line, the arrows move a caret or a list's selection…), the apps that bind them differently, such as editors' new tab and back/forward or Messages' conversation switching, or not at all; the apps whose accessibility tree is walked only on demand; the editors with their own modal editing or partial Accessibility text, where NORMAL never engages a field; and which apps are browsers, by engine.",
   "bindings": {
     "tab select": {
       "": "cmd+{index}"
@@ -365,13 +365,44 @@
     "dev.zed.Zed-Preview",
     "com.sublimetext.4"
   ],
+  "browser_engines": {
+    "chromium": [
+      "com.google.Chrome",
+      "com.google.Chrome.beta",
+      "com.google.Chrome.dev",
+      "com.google.Chrome.canary",
+      "org.chromium.Chromium",
+      "com.brave.Browser",
+      "com.brave.Browser.beta",
+      "com.brave.Browser.nightly",
+      "com.microsoft.edgemac",
+      "com.microsoft.edgemac.Beta",
+      "com.microsoft.edgemac.Dev",
+      "com.microsoft.edgemac.Canary",
+      "company.thebrowser.Browser",
+      "com.vivaldi.Vivaldi",
+      "com.operasoftware.Opera",
+      "com.operasoftware.OperaNext",
+      "com.operasoftware.OperaDeveloper",
+      "com.operasoftware.OperaGX"
+    ],
+    "webkit": [
+      "com.apple.Safari",
+      "com.apple.SafariTechnologyPreview"
+    ],
+    "gecko": [
+      "org.mozilla.firefox",
+      "org.mozilla.firefoxdeveloperedition",
+      "org.mozilla.nightly"
+    ]
+  },
   "help": {
     "topics": [
       {
         "name": "defaults",
         "title": "Defaults",
         "summary": "Bundled plugin-layer defaults, including the canonical app bindings.",
-        "body": "# Defaults\n\nThis bundled plugin is Flash's default app knowledge. Flash itself knows no chord: every command it asks the focused app to perform (`tab new`, `app undo`, `app save`, `clipboard copy`, …) runs the binding a plugin declares for that app in `bindings`, keyed by the command line (`\"tab new\"`, `\"app reload --force\"`), unless a source such as tmux or the browsers plugin performs it first.\n\n`defaults` declares the macOS conventions for every app — Cmd-T opens a tab, Cmd-W closes it, Cmd-1…Cmd-9 select one, Cmd-[ / Cmd-] go back and forward, Cmd-Z / Cmd-Shift-Z undo and redo, Cmd-F finds and Cmd-G / Cmd-Shift-G step through the matches, Cmd-S saves, Cmd-P prints, Cmd-O opens, Cmd-N opens a window, Cmd-C / Cmd-V copy and paste, and in editable text Cmd-Left / Cmd-Right go to the line's start and end, Left / Right a character, Up / Down a line and Cmd-Up / Cmd-Down to the text's start and end (the `input` commands NORMAL's `h`, `j`, `k`, `l`, `gg` and `G` are made of; Flash never edits text, so none deletes, breaks a line or cuts), and where an app gives no text to measure Vim's motions fall back to Option-Left / Option-Right for `b` and `e`, Cmd-Left / Cmd-Right for `0` and `$` and Cmd-Up / Cmd-Down for `gg` and `G` (the `cursor` commands); VISUAL extends a selection there with Shift and those keys (the `input select_*` commands), and in a list, table, outline or column browser the arrows move the selection (`move down`, `up`, `left`, `right`, NORMAL's `h` `j` `k` `l` there) — and the apps that differ: editors open a tab with Cmd-N, reopen one with Cmd-Shift-T and go back with Control-Minus, Messages switches conversations with Control-Tab, and Notes, TextEdit, Pages and Mail have no tabs or history at all; none of the five has a tab to close (`tab close` is `false`), so `app close`, vim's `:q`, closes their window instead, and quits them with their last one. It also carries the everyday operations of an app's menus: Cmd-Shift-S saves as (Option-Cmd-Shift-S in TextEdit, Preview, Pages, Numbers, Keynote and Xcode, where Cmd-Shift-S duplicates: `document duplicate`), Cmd-Comma opens the settings, Cmd-A selects all, Cmd-Shift-/ opens the Help menu, Option-Cmd-W closes every window (Cmd-K Cmd-W in VS Code), Escape cancels (`app cancel`, NORMAL's Escape), and the File menu's Export as PDF…, Revert To › Last Saved (Revert File in VS Code, Revert to Saved… in Xcode), Rename… and Page Setup… and the Window menu's Zoom are pressed by title. Finder's Cmd-Shift-G is Go to Folder, so `app find_next` and `app find_previous` do nothing there. It also names the apps whose accessibility tree is walked only on demand (`on_demand_hints`), and the editors with their own modal editing or partial Accessibility text (`own_text_editing`: VS Code and its forks, the JetBrains IDEs, Zed and Sublime Text), where NORMAL never engages a field: every key keeps its page meaning, `v` / `V` do nothing and the text table never applies, unless `[mode.apps.\"<bundle id>\".text] enabled = true` forces it.\n\nAnother plugin overrides any of these for its apps (an app-specific entry, then a matching selector, then a higher `priority` wins). Disable it with `[plugins] disabled = [\"defaults\"]` and those commands do nothing.\n"
+        "body": "# Defaults\n\nThis bundled plugin is Flash's default app knowledge. Flash itself knows no chord: every command it asks the focused app to perform (`tab new`, `app undo`, `app save`, `clipboard copy`, …) runs the binding a plugin declares for that app in `bindings`, keyed by the command line (`\"tab new\"`, `\"app reload --force\"`), unless a source such as tmux or the browsers plugin performs it first.\n\n`defaults` declares the macOS conventions for every app — Cmd-T opens a tab, Cmd-W closes it, Cmd-1…Cmd-9 select one, Cmd-[ / Cmd-] go back and forward, Cmd-Z / Cmd-Shift-Z undo and redo, Cmd-F finds and Cmd-G / Cmd-Shift-G step through the matches, Cmd-S saves, Cmd-P prints, Cmd-O opens, Cmd-N opens a window, Cmd-C / Cmd-V copy and paste, and in editable text Cmd-Left / Cmd-Right go to the line's start and end, Left / Right a character, Up / Down a line and Cmd-Up / Cmd-Down to the text's start and end (the `input` commands NORMAL's `h`, `j`, `k`, `l`, `gg` and `G` are made of; Flash never edits text, so none deletes, breaks a line or cuts), and where an app gives no text to measure Vim's motions fall back to Option-Left / Option-Right for `b` and `e`, Cmd-Left / Cmd-Right for `0` and `$` and Cmd-Up / Cmd-Down for `gg` and `G` (the `cursor` commands); VISUAL extends a selection there with Shift and those keys (the `input select_*` commands), and in a list, table, outline or column browser the arrows move the selection (`move down`, `up`, `left`, `right`, NORMAL's `h` `j` `k` `l` there) — and the apps that differ: editors open a tab with Cmd-N, reopen one with Cmd-Shift-T and go back with Control-Minus, Messages switches conversations with Control-Tab, and Notes, TextEdit, Pages and Mail have no tabs or history at all; none of the five has a tab to close (`tab close` is `false`), so `app close`, vim's `:q`, closes their window instead, and quits them with their last one. It also carries the everyday operations of an app's menus: Cmd-Shift-S saves as (Option-Cmd-Shift-S in TextEdit, Preview, Pages, Numbers, Keynote and Xcode, where Cmd-Shift-S duplicates: `document duplicate`), Cmd-Comma opens the settings, Cmd-A selects all, Cmd-Shift-/ opens the Help menu, Option-Cmd-W closes every window (Cmd-K Cmd-W in VS Code), Escape cancels (`app cancel`, NORMAL's Escape), and the File menu's Export as PDF…, Revert To › Last Saved (Revert File in VS Code, Revert to Saved… in Xcode), Rename… and Page Setup… and the Window menu's Zoom are pressed by title. Finder's Cmd-Shift-G is Go to Folder, so `app find_next` and `app find_previous` do nothing there. It also names the apps whose accessibility tree is walked only on demand (`on_demand_hints`), and the editors with their own modal editing or partial Accessibility text (`own_text_editing`: VS Code and its forks, the JetBrains IDEs, Zed and Sublime Text), where NORMAL never engages a field: every key keeps its page meaning, `v` / `V` do nothing and the text table never applies, unless `[mode.apps.\"<bundle id>\".text] enabled = true` forces it. And it names the browsers, by engine (`browser_engines`: Chrome, Chromium, Brave, Edge, Arc, Vivaldi and Opera are `chromium`, Safari is `webkit`, Firefox is `gecko`): the engine is how Flash knows which AppleScript dialect lists a browser's tabs, and how to release secure input a browser left on.\n\nAnother plugin overrides any of these for its apps (an app-specific entry, then a matching selector, then a higher `priority` wins). Disable it with `[plugins] disabled = [\"defaults\"]` and those commands do nothing.\n"
       }
     ]
   }

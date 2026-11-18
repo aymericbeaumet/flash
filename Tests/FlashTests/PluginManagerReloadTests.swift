@@ -405,6 +405,10 @@ final class PluginManagerReloadTests: XCTestCase {
           "com.microsoft.VSCode"),
       "own_text_editing is the union of every plugin's list, the defaults plugin's included")
     XCTAssertFalse(OwnTextEditingApps.contains("com.example.app"))
+    XCTAssertEqual(
+      BrowserEngines.declared.table.engine(of: "com.apple.Safari"), .webkit,
+      "publishing declares the defaults plugin's browser engines")
+    XCTAssertNil(BrowserEngines.declared.table.engine(of: "com.example.app"))
   }
 
   /// A core-topic `commands[]` entry is a claim on the source chain, never a

@@ -1,22 +1,19 @@
+import FlashCore
 import Foundation
 
 /// Data selects a fixed host template. Plugin strings are always literals,
-/// never source, application terminology, property names or commands.
+/// never source, application terminology, property names or commands. Which
+/// apps are browsers, and which dialect each speaks, is `browsers`: the
+/// engines plugin manifests declare (`browser_engines`).
 enum PluginAppleScriptOperation {
   struct Refusal: Error, Equatable { let message: String }
 
-  private static let chromium = Set([
-    "com.google.Chrome", "com.google.Chrome.canary", "com.google.Chrome.beta",
-    "com.google.Chrome.dev", "org.chromium.Chromium", "com.brave.Browser",
-    "com.brave.Browser.beta", "com.brave.Browser.nightly", "com.microsoft.edgemac",
-    "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev", "com.microsoft.edgemac.Canary",
-    "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
-    "com.operasoftware.OperaNext", "com.operasoftware.OperaDeveloper",
-  ])
-  private static let safari = Set(["com.apple.Safari", "com.apple.SafariTechnologyPreview"])
-
-  static func script(_ params: [String: Any], targets: [String]) -> Result<String, Refusal> {
-    do { return .success(try build(params, targets: targets)) } catch let error as Refusal {
+  static func script(
+    _ params: [String: Any], targets: [String], browsers: BrowserEngineTable
+  ) -> Result<String, Refusal> {
+    do {
+      return .success(try build(params, targets: targets, browsers: browsers))
+    } catch let error as Refusal {
       return .failure(error)
     } catch { return .failure(Refusal(message: "invalid AppleScript operation")) }
   }
@@ -30,7 +27,9 @@ enum PluginAppleScriptOperation {
       .replacingOccurrences(of: "\t", with: "\\t") + "\""
   }
 
-  private static func build(_ params: [String: Any], targets: [String]) throws -> String {
+  private static func build(
+    _ params: [String: Any], targets: [String], browsers: BrowserEngineTable
+  ) throws -> String {
     func refuse(_ message: String) -> Refusal { Refusal(message: message) }
     guard let operation = params["operation"] as? String else {
       throw refuse("host.applescript requires a supported operation")
@@ -67,15 +66,18 @@ enum PluginAppleScriptOperation {
     } else if operation == "chat_submit" {
       target = "com.apple.systemevents"
     } else {
+      // Chromium and WebKit browsers script their tabs; Gecko has no
+      // AppleScript dictionary for them.
       target = try string("bundle_id")!
-      guard chromium.contains(target) || safari.contains(target) else {
+      let engine = browsers.engine(of: target)
+      guard engine == .chromium || engine == .webkit else {
         throw refuse("unsupported browser bundle_id")
       }
     }
     guard targets.contains(where: { $0.caseInsensitiveCompare(target) == .orderedSame }) else {
       throw refuse("operation target is outside apple_events_targets")
     }
-    let isSafari = safari.contains(target)
+    let isSafari = browsers.engine(of: target) == .webkit
     let title = isSafari ? "name" : "title"
     let active = isSafari ? "index of current tab of w" : "active tab index of w"
     let select = isSafari ? "set current tab of w to t" : "set active tab index of w to i"
@@ -96,10 +98,7 @@ enum PluginAppleScriptOperation {
       return "tell application id \(app) to run shortcut named \(quote(name))"
     case "chat_submit":
       let bundle = try string("bundle_id")!
-      let gecko = Set([
-        "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly",
-      ])
-      guard chromium.contains(bundle) || safari.contains(bundle) || gecko.contains(bundle) else {
+      guard browsers.engine(of: bundle) != nil else {
         throw refuse("chat_submit requires a supported browser bundle_id")
       }
       return

@@ -391,7 +391,11 @@ address-bar shortcut (the letter l with Command) via System Events, then
 returns to the app you were in. Any other holding app is activated and then
 left, which is what makes a background password manager drop the hold. The
 first of these can ask for Automation. Flash does not lock the screen, show a
-dialog, or read what you type. The log line names the app's bundle id.
+dialog, or read what you type. The log line names the app's bundle id. Which
+apps count as browsers, and of which engine, is the list plugins declare
+(manifest [`browser_engines`](plugin-protocol.md#manifest); the bundled
+`defaults` plugin carries it). With that plugin disabled, a browser holding
+the flag is treated like any other app.
 
 ## Startup commands
 

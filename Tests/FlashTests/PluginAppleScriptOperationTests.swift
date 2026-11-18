@@ -1,3 +1,4 @@
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -6,8 +7,10 @@ final class PluginAppleScriptOperationTests: XCTestCase {
   private let targets = [
     "com.apple.Safari", "com.google.Chrome", "com.apple.shortcuts.events", "com.apple.systemevents",
   ]
-  private func script(_ params: [String: Any]) throws -> String {
-    try PluginAppleScriptOperation.script(params, targets: targets).get()
+  private func script(
+    _ params: [String: Any], browsers: BrowserEngineTable = .sample
+  ) throws -> String {
+    try PluginAppleScriptOperation.script(params, targets: targets, browsers: browsers).get()
   }
 
   func testRejectsSourceAndUnknownOperationsBeforeExecution() {
@@ -25,7 +28,35 @@ final class PluginAppleScriptOperationTests: XCTestCase {
       ["operation": "shortcut_run", "name": "x\0y"],
     ] { XCTAssertThrowsError(try script(params), "\(params)") }
     XCTAssertThrowsError(
-      try PluginAppleScriptOperation.script(["operation": "shortcuts_list"], targets: []).get())
+      try PluginAppleScriptOperation.script(
+        ["operation": "shortcuts_list"], targets: [], browsers: .sample
+      ).get())
+  }
+
+  /// The host names no browser: an app is one, and speaks a dialect, because
+  /// a manifest declares its engine.
+  func testBrowserOperationsServeTheDeclaredEnginesInTheirDialect() throws {
+    let tabs: [String: Any] = ["operation": "browser_tabs", "bundle_id": "com.google.Chrome"]
+    XCTAssertTrue(try script(tabs).contains("active tab index of w"))
+    XCTAssertTrue(
+      try script(tabs, browsers: BrowserEngineTable(["com.google.Chrome": .webkit]))
+        .contains("index of current tab of w"), "the declared engine picks the dialect")
+    for undeclared in [
+      BrowserEngineTable(), BrowserEngineTable(["com.google.Chrome": .gecko]),
+    ] {
+      XCTAssertThrowsError(try script(tabs, browsers: undeclared)) { error in
+        XCTAssertEqual(
+          error as? PluginAppleScriptOperation.Refusal,
+          PluginAppleScriptOperation.Refusal(message: "unsupported browser bundle_id"))
+      }
+    }
+    let submit: [String: Any] = ["operation": "chat_submit", "bundle_id": "com.google.Chrome"]
+    XCTAssertThrowsError(try script(submit, browsers: BrowserEngineTable()))
+    XCTAssertNoThrow(
+      try script(submit, browsers: BrowserEngineTable(["com.google.Chrome": .gecko])))
+    XCTAssertNoThrow(
+      try script(["operation": "shortcuts_list"], browsers: BrowserEngineTable()),
+      "operations that address no browser need no declaration")
   }
 
   func testUntrustedTextIsAlwaysAnEscapedLiteral() throws {

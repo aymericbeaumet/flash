@@ -102,7 +102,9 @@ final class SecureInputFixer {
     case .start:
       switch request.kind {
       case .chromium:
-        if let script = SecureInputRelease.chromiumBlurScript(bundleID: request.bundleID) {
+        if let script = SecureInputRelease.chromiumBlurScript(
+          bundleID: request.bundleID, browsers: BrowserEngines.declared.table)
+        {
           _ = Self.runAppleScript(script)
         }
         schedule(plan.replacing(stage: .afterChromiumBlur), afterMs: 500)
@@ -219,7 +221,8 @@ final class SecureInputFixer {
       frontmostBundleID: apps.frontmostBundleID,
       focused: focusedElement(),
       runningBundleIDs: apps.runningBundleIDs,
-      ownPID: ProcessInfo.processInfo.processIdentifier)
+      ownPID: ProcessInfo.processInfo.processIdentifier,
+      browsers: BrowserEngines.declared.table)
   }
 
   /// AppKit's workspace reads stay on the main thread. The registry and the

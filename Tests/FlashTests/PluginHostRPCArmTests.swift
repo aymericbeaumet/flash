@@ -1,4 +1,5 @@
 import Carbon.HIToolbox
+import FlashCore
 import Foundation
 import XCTest
 
@@ -453,7 +454,8 @@ final class PluginHostRPCArmTests: XCTestCase {
     unexpected.isInverted = true
     PluginHostAppleScript.handle(
       ["operation": "shortcuts_list"], targets: ["com.apple.shortcuts.events"],
-      pluginID: "stale-operation", scope: PluginHostRequestScope(isCurrent: { false }),
+      browsers: BrowserEngineTable(), pluginID: "stale-operation",
+      scope: PluginHostRequestScope(isCurrent: { false }),
       runner: { _, _ in
         unexpected.fulfill()
         return AppleScriptOutput(status: 0, stdout: "", stderr: "")

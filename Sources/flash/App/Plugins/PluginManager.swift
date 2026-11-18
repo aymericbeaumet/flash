@@ -287,6 +287,7 @@ final class PluginManager {
     var terminalEmulators: Set<String> = []
     var onDemandHintApps: Set<String> = []
     var ownTextEditingApps: Set<String> = []
+    var browserEngines = BrowserEngineTable()
     var helpTopics: [HelpTopic] = []
     var order = 0
     for plugin in plugins {
@@ -342,6 +343,7 @@ final class PluginManager {
       terminalEmulators.formUnion(manifest.terminalEmulators)
       onDemandHintApps.formUnion(manifest.onDemandHints)
       ownTextEditingApps.formUnion(manifest.ownTextEditing)
+      browserEngines.merge(manifest.browserEngines)
 
       commandBindings.add(manifest)
       commandConfirmations.add(manifest)
@@ -403,6 +405,7 @@ final class PluginManager {
     // against it already sees these apps as terminals.
     TerminalEmulators.declared.declare(terminalEmulators)
     OnDemandHintApps.declared.declare(onDemandHintApps)
+    BrowserEngines.declared.declare(browserEngines)
     let ownTextEditingChanged = OwnTextEditingApps.declared.all != ownTextEditingApps
     OwnTextEditingApps.declared.declare(ownTextEditingApps)
     hotSnapshotLock.lock()

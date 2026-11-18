@@ -14,6 +14,8 @@ final class PluginHostRPC {
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
   var appleScriptRunner: (String, TimeInterval) -> AppleScriptOutput = AppleScriptRunner.run
+  /// The browsers `host.applescript` serves: the engines manifests declare.
+  var browserEngines: () -> BrowserEngineTable = { BrowserEngines.declared.table }
 
   /// `pid` quit: the AX handles plugins hold into it are dropped.
   func appTerminated(pid: pid_t) {
@@ -135,8 +137,8 @@ final class PluginHostRPC {
       hostOpen(target, scope: scope, reply: reply)
     case .appleScript(let params):
       PluginHostAppleScript.handle(
-        params, targets: appleEventsTargets, pluginID: pluginID, scope: scope,
-        runner: appleScriptRunner, reply: reply)
+        params, targets: appleEventsTargets, browsers: browserEngines(), pluginID: pluginID,
+        scope: scope, runner: appleScriptRunner, reply: reply)
     }
   }
 

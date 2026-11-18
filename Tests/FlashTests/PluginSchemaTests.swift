@@ -364,6 +364,7 @@ final class PluginSchemaTests: XCTestCase {
     rpc.appleScriptRunner = { _, _ in
       AppleScriptOutput(status: 0, stdout: "Focus\nRest\n", stderr: "")
     }
+    rpc.browserEngines = { .sample }
     return rpc
   }
 

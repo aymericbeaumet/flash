@@ -639,11 +639,15 @@ It accepts no `script` field or executable source. The fixed operations are
 `title`, paired positive `window`/`tab`), `browser_tab_index` (`bundle_id`,
 positive `index`), `browser_tab_move` (Safari `bundle_id`, boolean `forward`),
 `shortcuts_list`, `shortcut_run` (`name`), and `chat_submit` (`bundle_id` of the
-supported browser that must still be frontmost, Firefox included). Unknown
-fields, non-browser chat destinations and unsupported browsers are rejected.
+browser that must still be frontmost, Firefox included). A browser is an app
+some manifest declares in [`browser_engines`](#manifest): the tab operations
+serve `chromium` and `webkit` browsers, each in its engine's dialect
+(`browser_tab_move` is `webkit` alone), and `chat_submit` serves any engine.
+Unknown fields, non-browser chat destinations and undeclared browsers are
+rejected.
 Each operation selects a host-owned template; every supplied string becomes
 an escaped literal. Declare `apple_events` with nonempty
-`apple_events_targets`: supported browser IDs, `com.apple.shortcuts.events`
+`apple_events_targets`: declared browser IDs, `com.apple.shortcuts.events`
 for shortcut operations, or `com.apple.systemevents` for chat submit.
 Templates run in the resident off its main thread, so plugin senders retain
 their sandbox and Automation belongs to Flash. `protocol.json` bounds source
@@ -743,8 +747,8 @@ read-denied, network and exec open), with its full output persisted for
 forensics. `exec` (argv array) is required for any plugin that runs a
 process; omitting it declares a **manifest-only plugin** — no child process
 ever runs, and the manifest may only carry surfaces the host serves alone:
-`mappings`, `help`, `bindings`, `terminal_emulators`, `own_text_editing` and
-`on_demand_hints` (the bundled `defaults` plugin is the exemplar). Anything process-bound is
+`mappings`, `help`, `bindings`, `terminal_emulators`, `own_text_editing`,
+`on_demand_hints` and `browser_engines` (the bundled `defaults` plugin is the exemplar). Anything process-bound is
 rejected, a core `commands[]` entry included. Loading is strict — unknown top-level or nested
 keys and malformed known fields are rejected outright, and new manifest
 surface only ever arrives together with a protocol change, so "unknown key"
@@ -1040,6 +1044,21 @@ Section semantics:
   only when hints are requested and observed with the reduced notification
   set that drives mode, border and focus. The bundled `defaults` plugin
   declares Notes.
+- **`browser_engines`** — the browsers this plugin declares, as bundle ids
+  under their engine: `{"chromium": [...], "webkit": [...], "gecko": [...]}`.
+  The host names no browser, so the engine is how it knows one: the
+  `host.applescript` tab operations serve `chromium` and `webkit` browsers in
+  that engine's dialect, `chat_submit` serves any declared browser, and a
+  stuck secure-input hold is released by blurring a `chromium` browser's
+  focused element or by focusing a `webkit` or `gecko` browser's address bar
+  ([privacy](privacy.md#keyboard)). An engine outside those
+  three, an entry that is not a bundle id and a browser listed twice each
+  fail the load. Across plugins the tables merge, and a browser an earlier
+  plugin declared keeps its engine. The bundled `defaults` plugin declares
+  Chrome, Chromium, Brave, Edge, Arc, Vivaldi and Opera with their channels,
+  Safari and Safari Technology Preview, and Firefox with its Developer
+  Edition and Nightly; a plugin for another browser declares its own, along
+  with the `apple_events_targets` its operations need.
 - **`mappings`** — key bindings in any mode a config can map: `all | normal |
   insert | terminal | command | hyper | hold | text | visual` (default
   `normal`; `text` is the table NORMAL reads first in a field the user

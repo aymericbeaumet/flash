@@ -17,7 +17,7 @@ enum PluginHostAppleScript {
   }
 
   static func handle(
-    _ params: [String: Any], targets: [String], pluginID: String,
+    _ params: [String: Any], targets: [String], browsers: BrowserEngineTable, pluginID: String,
     scope: PluginHostRequestScope,
     runner: @escaping (String, TimeInterval) -> AppleScriptOutput = AppleScriptRunner.run,
     reply: @escaping ([String: Any]) -> Void
@@ -37,7 +37,7 @@ enum PluginHostAppleScript {
       timeoutMs = requested
     }
     let script: String
-    switch PluginAppleScriptOperation.script(params, targets: targets) {
+    switch PluginAppleScriptOperation.script(params, targets: targets, browsers: browsers) {
     case .success(let value): script = value
     case .failure(let refusal):
       reply(["ok": false, "error": refusal.message])

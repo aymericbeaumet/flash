@@ -304,6 +304,17 @@ monitors read that no plugin publishes any more, with its replacement.
 
 ### New
 
+- Which apps are browsers, and of which engine, is plugin data: the new
+  manifest key `browser_engines` (`chromium`, `webkit`, `gecko`), declared by
+  the bundled `defaults` plugin. Flash itself names no browser. The engine
+  picks the AppleScript dialect of the `host.applescript` tab operations and
+  how a stuck secure-input hold is released, from one list where there were
+  two that disagreed: Brave Nightly, Edge Dev and Canary and Opera's Next and
+  Developer channels are now blurred like the other Chromium browsers when
+  they hold secure input, where they used to be activated, and `chat_submit`
+  accepts Opera GX. With `defaults` disabled no app is a browser: the
+  tab operations are refused and a browser holding secure input is activated
+  like any other app.
 - A plugin manifest declares the macOS grants its work depends on with
   `permissions` (`screen_recording`). `flash resident doctor` reports one
   row per declared grant and names the plugins that declare it; the
