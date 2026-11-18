@@ -765,18 +765,18 @@ final class PluginProcess {
         self.applyLifecycle(.interrupted(self.lifecycle.generation))
         return
       }
-      guard PluginWireCodec.acceptsProtocolVersion(response) else {
-        let reported = PluginWireCodec.protocolVersionValue(response).map(String.init) ?? "missing"
+      switch PluginWireCodec.initializeReply(response) {
+      case .accepted:
+        break
+      case .versionMismatch(let reported):
         self.parkFailed(
-          "[plugin] protocol_version \(reported) != host v\(PluginProtocol.version)")
+          "[plugin] protocol_version \(reported.map(String.init) ?? "missing")"
+            + " != host v\(PluginProtocol.version)")
         return
-      }
-      guard PluginJSON.boolean(response["ok"]) == true else {
-        let error = response["error"] as? String ?? "plugin rejected initialize"
-        self.parkFailed("[plugin] initialize failed: \(error)")
+      case .refused(let error):
+        self.parkFailed("[plugin] initialize failed: \(error ?? "plugin rejected initialize")")
         return
-      }
-      guard Set(response.keys) == ["ok", "protocol_version"] else {
+      case .malformed:
         self.parkFailed("[plugin] malformed initialize reply")
         return
       }
@@ -1112,10 +1112,7 @@ final class PluginProcess {
       params: params,
       timeout: .milliseconds(Self.queryDeadlineMs)
     ) { [weak self] response in
-      guard let self, let payload = PluginWireCodec.okPayload(response),
-        Set(payload.keys) == ["ok", "answers"],
-        let raw = payload["answers"] as? [[String: Any]]
-      else {
+      guard let self, let raw = PluginWireCodec.evaluateAnswers(response) else {
         DispatchQueue.main.async { completion([]) }
         return
       }

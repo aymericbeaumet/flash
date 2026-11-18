@@ -79,6 +79,39 @@ enum PluginWireCodec {
     return result
   }
 
+  /// What an `initialize` reply settles.
+  enum InitializeReply: Equatable {
+    case accepted
+    /// The reply names another protocol version, or none.
+    case versionMismatch(reported: Int?)
+    /// `ok` is not `true`; the plugin's own reason when it gave one.
+    case refused(error: String?)
+    /// An accepted handshake carrying anything beyond `ok` and
+    /// `protocol_version`.
+    case malformed
+  }
+
+  static func initializeReply(_ response: [String: Any]) -> InitializeReply {
+    guard acceptsProtocolVersion(response) else {
+      return .versionMismatch(reported: protocolVersionValue(response))
+    }
+    guard PluginJSON.boolean(response["ok"]) == true else {
+      return .refused(error: response["error"] as? String)
+    }
+    guard Set(response.keys) == ["ok", "protocol_version"] else { return .malformed }
+    return .accepted
+  }
+
+  /// The `answers` array of an `evaluate` reply, still undecoded
+  /// (`queryAnswers` checks each one); nil unless the reply is exactly
+  /// `{"ok": true, "answers": [...]}`.
+  static func evaluateAnswers(_ response: [String: Any]?) -> [[String: Any]]? {
+    guard let payload = okPayload(response), Set(payload.keys) == ["ok", "answers"] else {
+      return nil
+    }
+    return payload["answers"] as? [[String: Any]]
+  }
+
   /// Decode one `perform` reply into the universal trichotomy. `nil`
   /// (deadline expiry, plugin crash mid-call) coerces to `.failed` — the
   /// plugin was dispatched, so the action may still land and the host must
