@@ -63,7 +63,7 @@ is one line of JSON with nothing before it.
 ▶ {"id":2,"method":"evaluate","params":{"query":"=2+2"},"trace":"k3x9","deadline_ms":49}
 ◀ {"id":2,"result":{"ok":true,"answers":[{"title":"4","effect":{"type":"copy_text","text":"4"}}]}}
 ▶ {"method":"event","params":{"name":"core:poll:refresh","payload":{}}}
-◀ {"method":"log","params":{"level":"info","message":"refreshed","fields":{"rows":1}}}
+◀ {"method":"log","params":{"level":"info","message":"refreshed","fields":{"rows":"1"}}}
 ▶ {"id":3,"method":"perform","params":{"kind":"command","command":"example","subcommand":"run","args":[]},"deadline_ms":9999}
 ◀ {"id":1,"method":"host.open","params":{"url":"https://example.com"}}
 ▶ {"id":1,"result":{"ok":true,"bundle_id":"com.apple.Safari"}}
@@ -246,9 +246,10 @@ interaction reads end to end across processes; see
 the milliseconds the host still waits for its reply as it writes it.
 `params`, `result` and an event's `payload` are JSON objects, never
 positional arrays: either end refuses an array where an object belongs. Ids
-are positive monotonic integers per sender. Booleans and floating-point values are never
-integer IDs or protocol versions; `ok` and other Boolean fields accept only
-JSON booleans. Native process IDs are checked positive 32-bit integers.
+are positive monotonic integers per sender. Booleans and floating-point
+values are never integer IDs or protocol versions; `ok` and other Boolean
+fields accept only JSON booleans. Native process IDs are checked positive
+32-bit integers.
 Host and plugin counters are independent and
 may overlap — an inbound `id`+`method` frame is always a request, never a
 reply. Exactly one reply per id'd request; responses to unknown ids are
@@ -599,7 +600,9 @@ surface that shows it again never reads stale figures.
   Reach for a cadence only when no event can tell you the value changed.
 - `log` — `{"level", "message", "fields"}`. Content-free (counts, stages,
   elapsed ms, method names — never query text, candidate data, clipboard
-  content, config values, or event payloads).
+  content, config values, or event payloads). Every `fields` value is a
+  string (`"rows": "12"`): the host keeps the line and drops the fields of
+  one that carries anything else.
 
 ### Host RPCs
 

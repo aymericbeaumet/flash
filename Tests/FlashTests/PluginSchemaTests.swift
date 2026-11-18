@@ -213,6 +213,26 @@ final class PluginSchemaTests: XCTestCase {
     }
   }
 
+  /// The session `docs/plugin-protocol.md` opens with is made of frames the
+  /// schemas take.
+  func testTheQuickStartFramesMeetTheSchemas() throws {
+    let page = try String(
+      contentsOf: Self.root.appendingPathComponent("docs/plugin-protocol.md"), encoding: .utf8)
+    let section = try XCTUnwrap(page.range(of: "## Quick start\n"))
+    let block = try XCTUnwrap(
+      page[section.upperBound...].components(separatedBy: "```").dropFirst().first)
+    var frames = 0
+    for line in block.split(separator: "\n") {
+      let fromHost = line.hasPrefix("▶ ")
+      guard fromHost || line.hasPrefix("◀ ") else { continue }
+      frames += 1
+      let union = fromHost ? "host-frame.schema.json" : "plugin-frame.schema.json"
+      XCTAssertEqual(
+        validator.problems(json: Data(line.dropFirst(2).utf8), against: union), [], String(line))
+    }
+    XCTAssertGreaterThan(frames, 8)
+  }
+
   func testTheCorpusCoversEveryMethodBothWays() throws {
     let methods = try Self.methods()
     XCTAssertEqual(Set(pluginFrames.map(\.name)).count, pluginFrames.count)
