@@ -126,12 +126,15 @@ seeded one.
 
 **Activation.** Unless it declares `publish_then_exit` (below), a plugin is
 *resident* — spawned at startup and kept running — iff its manifest declares
-`sources`, `query`, `hints`, `status`, or `listen`.
+pushed `sources`, `query`, `hints`, `status`, or `listen`.
 A plugin declaring only on-demand surfaces (`commands`, `bangs`,
-`navigation`) is *on-demand*: it stays unspawned until its first `perform`,
-which launches it (the `perform` deadline comfortably absorbs the startup
-budget) and then it stays running normally. Manifest-only plugins (no `exec`)
-never spawn at all.
+`navigation`, live `sources`) is *on-demand*: it stays unspawned until its
+first `perform` or `search`, which launches it, and then it stays running
+normally. The `perform` deadline comfortably absorbs the startup budget. A
+`search` waits for the child instead, up to the `startup` deadline, and its
+own deadline starts when the request is written: the first query scoped to
+a cold plugin is answered, and while the child starts only the newest query
+of a source waits. Manifest-only plugins (no `exec`) never spawn at all.
 
 An on-demand plugin is *warm* when a configured mapping (any mode or app
 scope, an enabled status-bar click, or a plugin's `mappings`) runs one of
@@ -140,7 +143,7 @@ on-demand plugin that is still idle, so the first keypress does not wait on
 process creation. See
 [warm plugins](plugin-performance.md#process-creation-and-warm-plugins).
 
-A *status-bound* plugin — `status` with no `sources`, `query` or `hints`, its
+A *status-bound* plugin — `status` with no pushed `sources`, `query` or `hints`, its
 `listen` subscriptions presumed to feed those segments — is resident only while
 the enabled status bar, one of its popups or a desktop widget
 shows one of its segments; otherwise it is on-demand. A config reload that
@@ -154,9 +157,9 @@ its files or settings, being disabled, a crash or Flash quitting.
 `:plugins show` reports the effective activation.
 
 A *publish-then-exit* plugin (manifest `"lifecycle": "publish_then_exit"`)
-provides data and nothing else: `exec` and `sources`, none of the surfaces a
-live child serves (`hints`, `query`, `status`, `listen`, `commands`, `bangs`,
-`navigation`). It is spawned at startup like a resident plugin, but its run is
+provides data and nothing else: `exec` and pushed `sources`, none of the
+surfaces a live child serves (`hints`, `query`, `status`, `listen`,
+`commands`, `bangs`, `navigation`, a source declared `live`). It is spawned at startup like a resident plugin, but its run is
 `on_start`: it publishes its catalog and exits 0 on its own. The host reads
 its stdout to the end, keeps the catalog as it keeps every catalog across
 restarts, reports the plugin as `published`, and counts that exit as success:
@@ -263,8 +266,8 @@ may overlap — an inbound `id`+`method` frame is always a request, never a
 reply. Exactly one reply per id'd request; responses to unknown ids are
 dropped. There is **no cancellation** message: late replies are dropped and
 the deadline table is the contract. A plugin may stop a handler whose answer
-would come too late: the Rust SDK drops a `hints` or `text_grid` handler
-still running a tenth of `deadline_ms` (at most 50 ms) before it,
+would come too late: the Rust SDK drops a `hints`, `text_grid` or `search`
+handler still running a tenth of `deadline_ms` (at most 50 ms) before it,
 which answers `{"ok": false, "error": "deadline exceeded"}` and logs a warning under the
 request's trace; `evaluate` and `perform` run to completion. Lines are capped at 10 MiB in both
 directions, excluding the terminating newline; an undecodable or oversized line is dropped (never fatal) and the
@@ -323,6 +326,7 @@ never asks the host what it supports. See the
 | `evaluate` | host → plugin | request | Answers for the flashlight input, per keystroke |
 | `hints` | host → plugin | request | Hint targets in the focused app |
 | `text_grid` | host → plugin | request | The focused app's visible text as a cell grid, for letter search |
+| `search` | host → plugin | request | The rows of a live source, for the flashlight query scoped to it |
 | `perform` | host → plugin | request | Run a row, a command, a bang or a navigation |
 | `publish` | plugin → host | notification | Replace the catalog, or one source's rows |
 | `status` | plugin → host | notification | Set status-bar segment values |
@@ -436,6 +440,20 @@ never asks the host what it supports. See the
   and each pane-border title, read over its control-mode connection, on the
   cells its hints use: Alacritty's are the pixels it reports to tmux, and an
   Alacritty layout the plugin cannot place exactly gets no grid.
+- `search` — `{source, query}` → `{"ok": true, "rows": [...]}`: the rows of
+  one live source (a `sources[]` entry declaring `live`), asked only while a
+  flashlight query is scoped to it: `@<type>`, or a bang bound to the source.
+  `query` is the text typed after the scope. A `per_query` source is asked
+  again each time that text changes; a `per_scope` source is asked once per
+  scope, with an empty `query`, and the host filters its rows as the user
+  types. Always live: the host keeps nothing, and the rows never enter the
+  catalog. Each row has the [row shape](#payloads-and-quotas) and carries the
+  `source` that was asked for; the reply is bounded like a catalog (10,000
+  rows, 4 MiB in the compact encoding of `rows`). One malformed row, a row of
+  another source or an over-quota reply rejects it whole, and the host serves
+  no rows. The flashlight drops the reply to a query the user has typed
+  past, so a late reply costs nothing but its rows. Selecting a row sends
+  `perform {kind: "resolve"}` with it, as for a published row.
 - `perform` — the single effect method. Three kinds:
 
   ```json
@@ -764,8 +782,9 @@ call override available) all arrive the same way.
 
 ## Payloads and quotas
 
-Catalog rows (for `publish`) are `{"source", "title", "url"?,
-"metadata"?, "effect"?}` — `source` must name a manifest `sources[].name`;
+Rows (of a `publish` and of a `search` reply) are `{"source", "title", "url"?,
+"metadata"?, "effect"?}` — `source` must name a manifest `sources[].name`,
+a pushed one in a publish and the one asked for in a search reply;
 routing `source_id` is always host-stamped and never crosses the wire.
 Catalogs are bounded to 10,000 rows / 4 MiB encoded; titles 4 KiB, URLs
 16 KiB, metadata 64 entries (256-byte keys, 64-KiB values), effect text
@@ -792,7 +811,9 @@ separator byte per row and the two brackets — which the host measures from
 the frame it received rather than by re-encoding the rows: the compact
 encoding is the floor, and a plugin pays for whitespace or escaping it adds
 inside a row (the Rust SDK writes compact rows, so its count is the compact
-encoding exactly; `protocol.json` `quotas` states it). The `answers` byte
+encoding exactly; `protocol.json` `quotas` states it). A `search` reply is
+bounded by the same two numbers, its bytes counted from the compact encoding
+of `rows`. The `answers` byte
 quota counts the compact UTF-8 JSON encoding of `answers`, including JSON
 syntax and string escaping, with literal Unicode and unescaped slashes. The
 surrounding request/response envelope is never counted.
@@ -941,7 +962,18 @@ Section semantics:
   [flashlight ranking](flashlight.md#ranking)): it orders rows against other
   sources inside one match tier and never lifts a partial hit above an exact
   one. Bundled: `tmux.windows` is `important`, apps and browser tabs `high`.
-  Every plugin source is warm: a complete catalog the plugin publishes.
+  A source is *pushed* unless it says otherwise: a complete catalog the
+  plugin publishes, which the flashlight reads from host memory. `live`
+  makes it *live* instead: the plugin publishes nothing for it, it stays out
+  of the default pool, and the host pulls it with [`search`](#host-plugin)
+  while a query is scoped to it. `"live": "per_query"` is pulled on every
+  change of the query text, for rows that depend on it (a search of a remote
+  index); `"live": "per_scope"` is pulled once per scope, for a short fixed
+  list the host can filter itself. A manifest's sources all declare the same
+  `live`, or none does: split pushed and live sources into two plugins. A
+  live source is never `kind: "locations"`, since location rows belong to
+  the default pool, and a `publish_then_exit` plugin declares none.
+  `protocol.json` `source_live` pins the values.
 - **`query`** — registers the per-input evaluator. `prefixes` are exact
   literal markers (never regexes) that route matching input only to this
   evaluator; without one, evaluators are additive. Evaluator ordering is the
@@ -1247,7 +1279,7 @@ content, or config values.
 | `capability_denied` | `missing <capability> capability` | A host RPC the manifest's capabilities do not allow |
 | `request_capacity` | `plugin request capacity exceeded` | More concurrent host requests than the plugin admits |
 | `host_call_capacity` | `host call capacity exceeded` | More concurrent host RPCs than the bound allows |
-| `deadline_exceeded` | `deadline exceeded` | A `hints` or `text_grid` handler dropped before its deadline |
+| `deadline_exceeded` | `deadline exceeded` | A `hints`, `text_grid` or `search` handler dropped before its deadline |
 
 ## Limits and deadlines
 
@@ -1266,6 +1298,7 @@ all share:
 | `query` | 50 ms | `evaluate` |
 | `hints` | 500 ms (fixed; the activation waits on it ahead of the prepared model) | `hints` |
 | `text_grid` | 500 ms (fixed; asked asynchronously, but the letter search waits on it) | `text_grid` |
+| `search` | 1 s (from the request being written; a search of a cold plugin first waits for its child, up to `startup`) | `search` |
 | `perform` | 10 s | `perform` |
 | `ping` | 10 s | `ping` reply |
 | `idle_before_ping` | 60 s | inbound silence before a ping |
@@ -1345,6 +1378,8 @@ no schema here.
   ([reply](schema/plugin/hints.reply.schema.json)),
   [`text_grid`](schema/plugin/text_grid.schema.json)
   ([reply](schema/plugin/text_grid.reply.schema.json)),
+  [`search`](schema/plugin/search.schema.json)
+  ([reply](schema/plugin/search.reply.schema.json)),
   [`perform`](schema/plugin/perform.schema.json)
   ([reply](schema/plugin/perform.reply.schema.json))
 - The host notification: [`event`](schema/plugin/event.schema.json), with

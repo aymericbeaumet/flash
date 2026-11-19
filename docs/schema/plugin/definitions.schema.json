@@ -267,7 +267,7 @@
       "properties": {
         "source": {
           "type": "string",
-          "description": "A manifest sources[].name of the publishing plugin."
+          "description": "A manifest sources[].name of the plugin: a pushed one in a publish, the live one asked for in a search reply."
         },
         "title": {
           "type": "string",
@@ -314,7 +314,7 @@
           ]
         }
       },
-      "description": "One catalog row: as a plugin publishes it, and as the host hands it back in perform {kind: resolve}."
+      "description": "One row: as a plugin publishes it or answers a search with it, and as the host hands it back in perform {kind: resolve}."
     },
     "answer": {
       "type": "object",

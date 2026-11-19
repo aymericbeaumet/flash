@@ -358,6 +358,14 @@ monitors read that no plugin publishes any more, with its replacement.
   volume-up is one move of five ticks. A plugin command that fails says why: its reason is the
   failure alert's text and what `flash <command>` prints, where both used to
   say only that the command failed.
+- A plugin's flashlight source can be live. `"live": "per_query"` or
+  `"per_scope"` on a manifest `sources[]` entry keeps the source out of the
+  default pool and of the catalog: Flash pulls it with the new `search`
+  request only while a query is scoped to it (`@<type>`, or a bang bound to
+  it), on every change of the text or once per scope. A plugin whose sources
+  are all live runs no process until the first such query or its first
+  command. The Rust SDK's `plugin!` makes `on_search` required for a live
+  source ([plugin protocol](docs/plugin-protocol.md#manifest)).
 - `feed` and `searchproviders` no longer open network connections: Flash
   downloads the feed and DuckDuckGo's bang list for them through
   `host.fetch`, and their sandboxes deny the network like every other bundled

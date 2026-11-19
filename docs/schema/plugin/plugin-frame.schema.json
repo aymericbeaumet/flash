@@ -20,6 +20,9 @@
       "$ref": "text_grid.reply.schema.json"
     },
     {
+      "$ref": "search.reply.schema.json"
+    },
+    {
       "$ref": "perform.reply.schema.json"
     },
     {

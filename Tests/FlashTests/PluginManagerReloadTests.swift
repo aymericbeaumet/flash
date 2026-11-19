@@ -620,6 +620,79 @@ final class PluginManagerReloadTests: XCTestCase {
     waitUntilTrue("old child killed") { kill(pid_t(firstPID), 0) != 0 }
   }
 
+  // MARK: - live sources
+
+  /// A plugin's live sources reach the flashlight through its adapter: kept
+  /// out of the warm fan-outs, listed for the scope that names their type,
+  /// and pulled from cold with one `search`. A `per_scope` source is asked
+  /// without the text, and a row it answered resolves like a catalog row.
+  func testALivePluginSourceIsPulledOnlyForAQueryScopedToIt() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "mgrlive",
+      manifest: PluginFixtureKit.manifest(
+        id: "mgrlive",
+        extra:
+          #""sources": [{ "name": "mgrlive.items", "type": "liveitems", "live": "per_scope" }]"#
+      ),
+      script: PluginFixtureKit.script(
+        onPerform: #"printf '%s\n' "$line" >> "$D/performs"; "# + PluginFixtureKit.performOK,
+        onSearch: """
+          printf '%s\\n' "$line" >> "$D/searches"
+          printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"mgrlive.items","title":"Lock screen"}]}}\\n' "$id"
+          """))
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("registered") { self.status(manager, "mgrlive")?.activation == "on_demand" }
+
+    let registry = SourceRegistry(
+      descriptors: [], runningApplications: [], pluginSourcesProvider: { manager.sources })
+    let live = registry.liveCandidateSources(matching: .type("liveitems"))
+    XCTAssertEqual(live.map(\.identifier), ["plugin:mgrlive"])
+    XCTAssertEqual(
+      registry.liveCandidateSources(matching: .source("mgrlive.items")).map(\.identifier),
+      ["plugin:mgrlive"], "a bang bound to the source pulls it too")
+    XCTAssertTrue(registry.liveCandidateSources(matching: .type("tabs")).isEmpty)
+    XCTAssertTrue(
+      registry.nonLocationCandidateSources(matching: .type("liveitems")).isEmpty,
+      "a live source is no warm catalog")
+    XCTAssertEqual(registry.resourceTypesBySource()["mgrlive.items"], "liveitems")
+    let source = try XCTUnwrap(live.first)
+    XCTAssertTrue(source.servesLiveCandidates)
+    XCTAssertFalse(source.liveCandidatesDependOnText, "per_scope: pulled once per scope")
+    XCTAssertEqual(AppDelegate.liveQueryText("lo", sources: [source]), "")
+    XCTAssertEqual(source.candidates(in: registry.environment, scope: .all).count, 0)
+    XCTAssertEqual(fixture.spawnCount(), 0, "nothing ran before a query named the type")
+
+    let answered = expectation(description: "live rows")
+    var rows: [Candidate] = []
+    source.liveCandidates(matching: "lo", in: registry.environment, scope: .all) {
+      XCTAssertTrue(Thread.isMainThread)
+      rows = $0
+      answered.fulfill()
+    }
+    wait(for: [answered], timeout: 8)
+    XCTAssertEqual(rows.map(\.title), ["Lock screen"])
+    XCTAssertEqual(fixture.spawnCount(), 1, "the first scoped query spawned it")
+    let sent = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("searches"), encoding: .utf8)
+    XCTAssertTrue(sent.contains(#""query":"""#), "a per_scope source gets no text: \(sent)")
+    XCTAssertEqual(manager.catalogStore.publishedPluginIDs(), [])
+
+    let resolved = expectation(description: "row resolved")
+    registry.resolveCandidate(CandidateFinder.prepare(rows)[0]) { resolution in
+      XCTAssertTrue(resolution.didResolve)
+      resolved.fulfill()
+    }
+    wait(for: [resolved], timeout: 8)
+    let performed = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("performs"), encoding: .utf8)
+    XCTAssertTrue(performed.contains(#""kind":"resolve""#), performed)
+    XCTAssertTrue(performed.contains(#""title":"Lock screen""#), performed)
+    XCTAssertTrue(performed.contains(#""source":"mgrlive.items""#), performed)
+  }
+
   func testManifestFileChangeReconcilesWithoutExplicitReload() throws {
     let fixture = try residentFixture(id: "definitionwatch")
     defer { fixture.cleanup() }

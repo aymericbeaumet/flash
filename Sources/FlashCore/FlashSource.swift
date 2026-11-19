@@ -72,6 +72,16 @@ public enum CandidateSourceKind: String, Codable, Sendable, Equatable, Hashable 
   case locations
 }
 
+/// How the flashlight pulls a live source (a manifest's `sources[].live`): one
+/// that keeps no catalog and answers only while a query is scoped to it.
+public enum CandidateSourceLive: String, Codable, Sendable, Equatable, Hashable, CaseIterable {
+  /// Pulled on every change of the query text, which the source reads.
+  case perQuery = "per_query"
+  /// Pulled once per scope: the rows are the same for every query, and the
+  /// flashlight filters them itself.
+  case perScope = "per_scope"
+}
+
 /// One flashlight source: its internal `name` (the label its rows carry, for
 /// routing, ranking and bang bindings) and the one-word resource `type` users
 /// filter by with `@<type>` (`tabs`, `history`, `emojis`). Every source of a
@@ -84,21 +94,25 @@ public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
   public var type: String
   public var kind: CandidateSourceKind
   public var priority: FlashPriority
+  /// Nil for a catalog the source keeps warm; else how its rows are pulled.
+  public var live: CandidateSourceLive?
 
   public init(
     name: String,
     type: String,
     kind: CandidateSourceKind = .standard,
-    priority: FlashPriority = .normal
+    priority: FlashPriority = .normal,
+    live: CandidateSourceLive? = nil
   ) {
     self.name = name
     self.type = type
     self.kind = kind
     self.priority = priority
+    self.live = live
   }
 
   public enum CodingKeys: String, CodingKey, CaseIterable {
-    case name, type, kind, priority
+    case name, type, kind, priority, live
   }
 
   public init(from decoder: Decoder) throws {
@@ -108,6 +122,22 @@ public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
     self.type = try c.decodeIfPresent(String.self, forKey: .type) ?? ""
     self.kind = try c.decodeIfPresent(CandidateSourceKind.self, forKey: .kind) ?? .standard
     self.priority = try c.decodeIfPresent(FlashPriority.self, forKey: .priority) ?? .normal
+    // A key that is present names one of the two values: `null`, another
+    // word or another type is a typo, never a pushed catalog.
+    if c.contains(.live) {
+      guard let raw = try? c.decode(String.self, forKey: .live),
+        let live = CandidateSourceLive(rawValue: raw)
+      else {
+        let values = CandidateSourceLive.allCases.map { "\"\($0.rawValue)\"" }
+          .joined(separator: " or ")
+        throw DecodingError.dataCorruptedError(
+          forKey: .live, in: c,
+          debugDescription: "source \(name) live must be \(values) (or absent: a pushed catalog)")
+      }
+      self.live = live
+    } else {
+      self.live = nil
+    }
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -120,6 +150,7 @@ public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
     if priority != .normal {
       try c.encode(priority, forKey: .priority)
     }
+    try c.encodeIfPresent(live, forKey: .live)
   }
 }
 
@@ -445,9 +476,9 @@ public protocol FlashSource: AnyObject {
   )
   /// Whether this source answers per-query `liveCandidates` pulls instead of
   /// keeping a warm catalog: catalogs that cannot be kept warm, such as the
-  /// frontmost app's menus or file search. Only built-in sources are live.
-  /// Live sources are excluded from the default pool, the warm fan-outs, and
-  /// the first-paint barrier.
+  /// frontmost app's menus or file search, and a plugin's sources declared
+  /// `live`. Live sources are excluded from the default pool, the warm
+  /// fan-outs, and the first-paint barrier.
   var servesLiveCandidates: Bool { get }
   /// Whether `liveCandidates` reads its `text`. A source that answers every
   /// query with the same in-memory rows returns false: the flashlight then

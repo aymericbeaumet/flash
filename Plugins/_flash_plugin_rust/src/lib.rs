@@ -3,8 +3,8 @@
 //! This crate speaks the NDJSON wire protocol over stdin/stdout — UTF-8, one
 //! JSON object per newline-terminated line — plus request/response
 //! correlation, the immediate-initialize lifecycle, the unified `perform`
-//! dispatch, the push-based `publish`/`status`/`log` notifications, and the
-//! typed host RPC client. Everything a plugin touches is a typed value.
+//! dispatch, the live `search` pull, the push-based `publish`/`status`/`log`
+//! notifications, and the typed host RPC client. Everything a plugin touches is a typed value.
 
 mod applescript;
 mod audio;
@@ -47,9 +47,9 @@ pub use status::{
 pub use types::{
     Candidate, CandidateEffect, CommandContext, CommandRequest, EvaluateRequest, EvaluateResponse,
     Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, Perform, PerformAlert,
-    PerformResponse, Priority, QueryAnswer, RunningApplication, TERMINAL_LINK_ROLE, TextGridCell,
-    TextGridLine, TextGridRequest, TextGridResponse, ax_notifications, candidate_metadata,
-    host_events,
+    PerformResponse, Priority, QueryAnswer, RunningApplication, SearchRequest, SearchResponse,
+    TERMINAL_LINK_ROLE, TextGridCell, TextGridLine, TextGridRequest, TextGridResponse,
+    ax_notifications, candidate_metadata, host_events,
 };
 
 pub use applescript::AppleScriptOperation;

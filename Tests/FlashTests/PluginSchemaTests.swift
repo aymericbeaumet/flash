@@ -153,6 +153,9 @@ final class PluginSchemaTests: XCTestCase {
     }
     let rows = node("publish.schema.json", "properties", "params", "properties", "rows")
     XCTAssertEqual(rows["maxItems"] as? Int, PluginProtocol.maxCatalogRows)
+    let found = node(
+      "search.reply.schema.json", "properties", "result", "anyOf", 0, "properties", "rows")
+    XCTAssertEqual(found["maxItems"] as? Int, PluginProtocol.maxCatalogRows)
     let registrations = node(
       "poll.schema.json", "properties", "params", "properties", "registrations")
     XCTAssertEqual(registrations["maxProperties"] as? Int, PluginProtocol.pollMaxRegistrations)
@@ -323,6 +326,11 @@ final class PluginSchemaTests: XCTestCase {
       let grid = PluginWireCodec.okPayload(object["result"] as? [String: Any]).flatMap(
         PluginWireCodec.textGrid(from:))
       return grid == nil ? .empty : .success
+    case (nil, "search"?):
+      let rows = PluginWireCodec.searchRows(
+        from: object["result"] as? [String: Any], source: "example.live",
+        sourceID: "plugin:example")
+      return rows == nil ? .empty : .success
     case (nil, _):
       // `ping`, and a reply to a request the plugin does not know.
       return PluginWireCodec.okPayload(object["result"] as? [String: Any]) == nil

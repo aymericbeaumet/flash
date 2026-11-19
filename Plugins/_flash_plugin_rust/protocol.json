@@ -2,11 +2,12 @@
   "$comment": "THE machine-readable Flash plugin protocol contract \u2014 the single source of truth for version, deadlines, quotas, error strings, the capability registry and transport limits. Normativity order: this file > docs/plugin-protocol.md prose > any implementation. Swift asserts its constants equal this file (PluginProtocolParityTests); the Rust SDK asserts its transport limits against it (wire.rs) and pins the behaviour in its runtime tests and probe crate. Changing anything here is a protocol change: update the host, SDK, affected plugins, tests, and docs in the same commit (repo rule 7 \u2014 no compatibility shims, no version bump while Flash has no external users).",
   "protocol_version": 1,
   "deadlines_ms": {
-    "$comment": "One deadline table. startup: initialize must be answered immediately (no warm-catalog wait; config [plugins] startup_timeout tunes it). query: per-keystroke evaluate. hints: activation hint pull; the activation waits on it ahead of the prepared model, so it is a fixed latency ceiling, while the AX queue serves other walks; a screen-scope walk and a commit revalidating its target wait on their queue for the same reply. text_grid: the letter-search grid pull, asked asynchronously only when the focused app publishes no Accessibility text; the search waits on it, so it shares the hints ceiling. perform: all three kinds. ping: reply budget for the idle-liveness probe (sent only after idle_before_ping_ms of inbound silence with no request in flight; ONE miss tears down). shutdown_grace: stdin-close -> SIGTERM; +500ms -> SIGKILL.",
+    "$comment": "One deadline table. startup: initialize must be answered immediately (no warm-catalog wait; config [plugins] startup_timeout tunes it). query: per-keystroke evaluate. hints: activation hint pull; the activation waits on it ahead of the prepared model, so it is a fixed latency ceiling, while the AX queue serves other walks; a screen-scope walk and a commit revalidating its target wait on their queue for the same reply. text_grid: the letter-search grid pull, asked asynchronously only when the focused app publishes no Accessibility text; the search waits on it, so it shares the hints ceiling. search: the live flashlight pull of a query scoped to a live source; the flashlight drops the reply to a query the user has typed past, so a late one costs nothing but its rows. perform: all three kinds. ping: reply budget for the idle-liveness probe (sent only after idle_before_ping_ms of inbound silence with no request in flight; ONE miss tears down). shutdown_grace: stdin-close -> SIGTERM; +500ms -> SIGKILL.",
     "startup": 5000,
     "query": 50,
     "hints": 500,
     "text_grid": 500,
+    "search": 1000,
     "perform": 10000,
     "ping": 10000,
     "idle_before_ping": 60000,
@@ -20,6 +21,7 @@
       "evaluate": "request {query} -> {ok, answers}; CPU-only over pre-warmed state",
       "hints": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, targets, context_pid?}; always live",
       "text_grid": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, columns, rows, lines, cell?}; always live; sent to the focused app's hint providers in hint order, first non-empty grid wins; each line is one text_grid_line shape; cell is the text_grid_cell shape, and without it the host divides the window evenly by columns and rows; empty lines = no grid",
+      "search": "request {source, query} -> {ok, rows}; always live; source is a manifest sources[].name that declares `live`, query the text typed after the scope (always empty for a per_scope source); each row is one row shape carrying that source, the reply under quotas.catalog_rows and quotas.catalog_bytes; a malformed or over-quota reply is served as no rows, and the rows never enter the catalog",
       "perform": "request {kind: resolve|command|navigate, ...} -> {ok, target_pid?, navigation_url?, message?, alert?} | {ok:false, unhandled:true} | {ok:false, error}; a command is one perform_command shape: a core command the manifest declares under one of Flash's topics (with context), the plugin's own command or a bang (without); alert is one perform_alert shape"
     },
     "plugin_to_host_notifications": {
@@ -207,7 +209,7 @@
     ]
   },
   "row": {
-    "$comment": "Catalog row shape for publish. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
+    "$comment": "Row shape of a publish and of a search reply. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
     "required": [
       "source",
       "title"
@@ -219,7 +221,7 @@
     ]
   },
   "lifecycle": {
-    "$comment": "The manifest `lifecycle` key. Absent, the surfaces decide (resident, on-demand, status-bound; see docs/plugin-protocol.md Activation). `publish_then_exit` is a catalog-only plugin: `exec` and `sources`, none of the surfaces a live child serves (`forbids`). Its run is `on_start`: it publishes its catalog and exits 0 on its own, and the host keeps the catalog, reports the plugin as `published`, counts that exit as success (no restart, no failure budget) and answers its performs `unhandled` (its rows carry host effects). A non-zero exit or a signal is still a crash. The host runs it again when its `[plugins.<id>]` settings change, when a file named by one of its `watch_settings` changes (`watch_settings` lists setting names whose string value is a path: `~` expands to the home, a relative path is under the plugin root; the key needs this lifecycle), on `plugins reload`, and when its own files change. Such a plugin receives no events, the running-apps snapshot included.",
+    "$comment": "The manifest `lifecycle` key. Absent, the surfaces decide (resident, on-demand, status-bound; see docs/plugin-protocol.md Activation). `publish_then_exit` is a catalog-only plugin: `exec` and pushed `sources` (none declares `live`), none of the surfaces a live child serves (`forbids`). Its run is `on_start`: it publishes its catalog and exits 0 on its own, and the host keeps the catalog, reports the plugin as `published`, counts that exit as success (no restart, no failure budget) and answers its performs `unhandled` (its rows carry host effects). A non-zero exit or a signal is still a crash. The host runs it again when its `[plugins.<id>]` settings change, when a file named by one of its `watch_settings` changes (`watch_settings` lists setting names whose string value is a path: `~` expands to the home, a relative path is under the plugin root; the key needs this lifecycle), on `plugins reload`, and when its own files change. Such a plugin receives no events, the running-apps snapshot included.",
     "values": [
       "publish_then_exit"
     ],
@@ -245,6 +247,13 @@
       ],
       "state": "published"
     }
+  },
+  "source_live": {
+    "$comment": "The manifest sources[].live key. Absent, the source is a pushed catalog (`publish`). `per_query` and `per_scope` make it live: it stays out of the default pool and of the catalog store, and the host pulls it with `search` only while a flashlight query is scoped to it (`@<type>`, or a bang bound to it). per_query is pulled on every change of the query text. per_scope is pulled once per scope with an empty query: its rows are the same whatever is typed, and the host filters them itself. A manifest's sources all declare the same `live`, or none does, and a live source is never `kind: locations` (location rows belong to the default pool). A plugin with live sources and none of pushed sources, query, hints, listen or an observed status is on demand: its first search or perform spawns it, and a search waits out that startup before its own deadline starts.",
+    "values": [
+      "per_query",
+      "per_scope"
+    ]
   },
   "source_types": {
     "$comment": "Every manifest sources[] entry declares one `type`, the one word users filter the flashlight by (`@tabs`). A type matches `pattern`. `core` types are fed by Flash alone; a plugin declaring one fails to load. A `shared` type fixes the `kind` every source of it declares. Any other matching word is a new type, and every plugin declaring it must agree on its kind. The plugin! macro checks each manifest against this table at build time; the host checks again at load.",
@@ -319,7 +328,7 @@
     ]
   },
   "quotas": {
-    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated. catalog_rows and catalog_bytes bound the plugin's whole catalog after a per-source merge. catalog_bytes counts the `rows` array as written on the wire \u2014 each row object's span in the publish frame, one separator byte per row and the two brackets \u2014 measured by the host from the frame it received, never by re-encoding: the compact encoding is the floor, and a plugin pays for whitespace or escaping it adds inside a row (the Rust SDK writes compact rows, so its count is the compact encoding exactly). answers_bytes counts the compact encoding of `answers`. inline_preview_bytes is the one bound that drops a part, not the payload: it counts the percent-encoded body of a `#[popup=inline:\u2026]` marker in a status segment as written, and a larger body leaves the segment's visible markup without its preview. fetch_response_bytes and fetch_timeout_ms bound a host.fetch response unless the manifest's fetch_limits set others, each at most fetch_response_bytes_max and fetch_timeout_ms_max. alert_title_bytes and alert_value_bytes bound the strings of a perform reply's alert.",
+    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated. catalog_rows and catalog_bytes bound the plugin's whole catalog after a per-source merge. catalog_bytes counts the `rows` array as written on the wire \u2014 each row object's span in the publish frame, one separator byte per row and the two brackets \u2014 measured by the host from the frame it received, never by re-encoding: the compact encoding is the floor, and a plugin pays for whitespace or escaping it adds inside a row (the Rust SDK writes compact rows, so its count is the compact encoding exactly). answers_bytes counts the compact encoding of `answers`. catalog_rows and catalog_bytes bound a `search` reply's rows too, the bytes counted from the compact encoding of `rows`. inline_preview_bytes is the one bound that drops a part, not the payload: it counts the percent-encoded body of a `#[popup=inline:\u2026]` marker in a status segment as written, and a larger body leaves the segment's visible markup without its preview. fetch_response_bytes and fetch_timeout_ms bound a host.fetch response unless the manifest's fetch_limits set others, each at most fetch_response_bytes_max and fetch_timeout_ms_max. alert_title_bytes and alert_value_bytes bound the strings of a perform reply's alert.",
     "frame_bytes": 10485760,
     "catalog_rows": 10000,
     "catalog_bytes": 4194304,
@@ -367,12 +376,12 @@
   "id_semantics": "positive monotonic integers per sender; host and plugin counters are independent and may overlap (an inbound id+method frame is always a request). Exactly one reply per id'd request. Responses to unknown ids are dropped silently. There is no cancellation: late replies are dropped and the deadline table is the contract.",
   "trace": {
     "pattern": "^[0-9a-z]{1,16}$",
-    "host_to_plugin": "optional `trace` key on a request envelope (hints, text_grid, evaluate, perform) naming the user interaction that caused it",
+    "host_to_plugin": "optional `trace` key on a request envelope (hints, text_grid, evaluate, search, perform) naming the user interaction that caused it",
     "plugin_to_host": "a `log` notification emitted while serving that request carries it back as params.trace; a malformed id is ignored"
   },
   "deadline": {
     "host_to_plugin": "optional `deadline_ms` on a request envelope: the milliseconds the host still waits for the reply as it writes the request, a positive integer",
-    "plugin": "a hints or text_grid handler still running a tenth of the deadline (at most 50 ms) before it is dropped and answers errors.deadline_exceeded; evaluate and perform run to completion"
+    "plugin": "a hints, text_grid or search handler still running a tenth of the deadline (at most 50 ms) before it is dropped and answers errors.deadline_exceeded; evaluate and perform run to completion"
   },
   "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline; EOF discards an unterminated record before shutdown",
   "transport_limits": {

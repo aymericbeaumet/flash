@@ -1,7 +1,7 @@
 //! The plugin runtime: the [`Plugin`] trait, the [`run`] entry point, and the
 //! serve loop speaking protocol v1 — immediate initialize reply, `ping`,
-//! `event` notifications, `evaluate`/`hints`/`text_grid`, the unified
-//! `perform`, and stdin-EOF shutdown. Parent liveness is stdin EOF: the host
+//! `event` notifications, `evaluate`/`hints`/`text_grid`/`search`, the
+//! unified `perform`, and stdin-EOF shutdown. Parent liveness is stdin EOF: the host
 //! owns the pipe, so a dead host ends the loop.
 
 use std::collections::BTreeMap;
@@ -22,8 +22,8 @@ use crate::events::EventMailbox;
 use crate::framing::{FrameReader, Record};
 use crate::types::{
     CommandRequest, EvaluateRequest, EvaluateResponse, Event, HintsRequest, HintsResponse,
-    NavigateRequest, Perform, PerformResponse, RunningApplication, TextGridRequest,
-    TextGridResponse,
+    NavigateRequest, Perform, PerformResponse, RunningApplication, SearchRequest, SearchResponse,
+    TextGridRequest, TextGridResponse,
 };
 
 pub(crate) const REQUEST_CAPACITY: usize = 16;
@@ -96,6 +96,18 @@ pub trait Plugin: Send + Sync + 'static {
     ) -> impl Future<Output = TextGridResponse> + Send {
         let _ = (ctx, request);
         async { TextGridResponse::default() }
+    }
+
+    /// The rows of one live source for one flashlight query (`search`).
+    /// Always live: the host asks while a query is scoped to the source and
+    /// keeps nothing. The empty default means no rows.
+    fn on_search(
+        &self,
+        ctx: Context,
+        request: SearchRequest,
+    ) -> impl Future<Output = SearchResponse> + Send {
+        let _ = (ctx, request);
+        async { SearchResponse::default() }
     }
 
     /// Dispatch one decoded `perform` request. Unregistered kinds answer
@@ -449,7 +461,7 @@ where
         }
         let permits = if matches!(
             method.as_str(),
-            "evaluate" | "hints" | "text_grid" | "perform"
+            "evaluate" | "hints" | "text_grid" | "search" | "perform"
         ) {
             match (
                 slots.clone().try_acquire_owned(),
@@ -576,6 +588,29 @@ where
                             result = json!({ "ok": false, "error": "invalid text_grid response" });
                         }
                         ctx.emit.respond(id, result).await;
+                    }));
+                }
+                Err(error) => {
+                    reply!(id, json!({ "ok": false, "error": error }));
+                }
+            },
+            "search" => match decode::<SearchRequest>(params, "search") {
+                Ok(request) => {
+                    let plugin = plugin.clone();
+                    let ctx = ctx.clone();
+                    tasks.spawn(crate::trace::scope(trace, async move {
+                        let _permits = permits;
+                        let handler = plugin.on_search(ctx.clone(), request);
+                        let Some(response) = crate::deadline::within(deadline, handler).await
+                        else {
+                            deadline_exceeded(&ctx, id, "search", deadline).await;
+                            return;
+                        };
+                        let rows =
+                            serde_json::to_value(&response.rows).unwrap_or_else(|_| json!([]));
+                        ctx.emit
+                            .respond(id, json!({ "ok": true, "rows": rows }))
+                            .await;
                     }));
                 }
                 Err(error) => {
@@ -738,6 +773,18 @@ mod tests {
                     ],
                 ),
             }
+        }
+
+        async fn on_search(&self, _: Context, request: SearchRequest) -> SearchResponse {
+            if request.query == "slow" {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            if request.source != "test.live" {
+                return SearchResponse::default();
+            }
+            SearchResponse::rows(vec![
+                Candidate::new("test.live", format!("found {}", request.query)).subtitle("live"),
+            ])
         }
 
         async fn perform(&self, ctx: Context, request: Perform) -> PerformResponse {
@@ -1383,6 +1430,70 @@ mod tests {
         assert_eq!(
             log["params"]["message"],
             "[plugin] text_grid exceeded its deadline"
+        );
+        assert_eq!(
+            wire.recv_response(2).await,
+            json!({ "ok": false, "error": "deadline exceeded" })
+        );
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    /// A search names one live source and the text typed after its scope;
+    /// the reply is that source's rows and nothing is published.
+    #[tokio::test]
+    async fn a_search_answers_the_rows_of_the_source_it_names() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({
+            "id": 2, "method": "search", "deadline_ms": 1000,
+            "params": { "source": "test.live", "query": "lock" }
+        }))
+        .await;
+        assert_eq!(
+            wire.recv().await,
+            json!({ "id": 2, "result": { "ok": true, "rows": [{
+                "source": "test.live", "title": "found lock", "metadata": { "subtitle": "live" }
+            }] } }),
+            "the reply is the next frame: a search publishes nothing"
+        );
+        wire.send(json!({
+            "id": 3, "method": "search",
+            "params": { "source": "test.other", "query": "" }
+        }))
+        .await;
+        assert_eq!(
+            wire.recv_response(3).await,
+            json!({ "ok": true, "rows": [] })
+        );
+        for (id, params) in [
+            (4, json!({ "query": "lock" })),
+            (5, json!({ "source": "test.live" })),
+            (6, json!({ "source": 7, "query": "lock" })),
+            (7, json!(["test.live", "lock"])),
+        ] {
+            wire.send(json!({ "id": id, "method": "search", "params": params }))
+                .await;
+            assert_eq!(
+                wire.recv_response(id).await,
+                json!({ "ok": false, "error": "invalid search params" })
+            );
+        }
+        wire.close_stdin().await;
+        wire.finished().await;
+    }
+
+    #[tokio::test]
+    async fn a_search_handler_past_its_deadline_answers_deadline_exceeded() {
+        let mut wire = serve(TestPlugin::default()).await;
+        wire.send(json!({
+            "id": 2, "method": "search", "deadline_ms": 60,
+            "params": { "source": "test.live", "query": "slow" }
+        }))
+        .await;
+        let log = wire.recv().await;
+        assert_eq!(
+            log["params"]["message"],
+            "[plugin] search exceeded its deadline"
         );
         assert_eq!(
             wire.recv_response(2).await,

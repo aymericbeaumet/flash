@@ -46,13 +46,14 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(
       Set(deadlines.keys.filter { !$0.hasPrefix("$") }),
       [
-        "startup", "query", "hints", "text_grid", "perform", "ping", "idle_before_ping",
-        "shutdown_grace",
+        "startup", "query", "hints", "text_grid", "search", "perform", "ping",
+        "idle_before_ping", "shutdown_grace",
       ])
     XCTAssertEqual(deadlines["startup"] as? Int, PluginProtocol.startupDeadlineMs)
     XCTAssertEqual(deadlines["query"] as? Int, PluginProtocol.queryDeadlineMs)
     XCTAssertEqual(deadlines["hints"] as? Int, PluginProtocol.hintsDeadlineMs)
     XCTAssertEqual(deadlines["text_grid"] as? Int, PluginProtocol.textGridDeadlineMs)
+    XCTAssertEqual(deadlines["search"] as? Int, PluginProtocol.searchDeadlineMs)
     XCTAssertEqual(deadlines["perform"] as? Int, PluginProtocol.performDeadlineMs)
     XCTAssertEqual(deadlines["ping"] as? Int, PluginProtocol.pingDeadlineMs)
     XCTAssertEqual(deadlines["idle_before_ping"] as? Int, PluginProtocol.idleBeforePingMs)
@@ -60,6 +61,16 @@ final class PluginProtocolParityTests: XCTestCase {
     // The config default mirrors the spec's startup entry.
     XCTAssertEqual(
       Config().plugins.startupTimeoutSeconds * 1_000, PluginProtocol.startupDeadlineMs)
+  }
+
+  /// A source is pushed, or live in one of the contract's two modes, and
+  /// the host pulls a live one with `search`.
+  func testLiveSourceModesMatchSpec() throws {
+    let live = try XCTUnwrap(try spec()["source_live"] as? [String: Any])
+    XCTAssertEqual(live["values"] as? [String], CandidateSourceLive.allCases.map(\.rawValue))
+    let methods = try XCTUnwrap(try spec()["methods"] as? [String: Any])
+    let hostToPlugin = try XCTUnwrap(methods["host_to_plugin"] as? [String: Any])
+    XCTAssertNotNil(hostToPlugin["search"])
   }
 
   /// The two `text_grid` line shapes the host decodes are the contract's.

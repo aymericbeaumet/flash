@@ -803,6 +803,16 @@ pub struct EvaluateRequest {
     pub query: String,
 }
 
+/// A `search` request: the live pull of one source the manifest declares
+/// with `live`, sent while a flashlight query is scoped to it. `query` is the
+/// text typed after the scope; a `per_scope` source always gets it empty.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct SearchRequest {
+    /// The manifest `sources[].name` asked for.
+    pub source: String,
+    pub query: String,
+}
+
 /// A decoded `perform` request, one variant per wire `kind`.
 #[derive(Clone, Debug)]
 pub enum Perform {
@@ -1024,6 +1034,20 @@ pub struct EvaluateResponse {
 impl EvaluateResponse {
     pub fn answers(answers: Vec<QueryAnswer>) -> Self {
         Self { answers }
+    }
+}
+
+/// The rows answering one `search` request. Every row carries the source
+/// that was asked for; the host serves a reply holding any other row, a
+/// malformed one or more than the catalog quotas as no rows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SearchResponse {
+    pub rows: Vec<Candidate>,
+}
+
+impl SearchResponse {
+    pub fn rows(rows: Vec<Candidate>) -> Self {
+        Self { rows }
     }
 }
 

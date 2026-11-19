@@ -54,7 +54,8 @@ enum PluginFixtureKit {
     prologue: String = "",
     onInitialize: String = initializeOK,
     onPing: String = pingOK,
-    onPerform: String = performOK
+    onPerform: String = performOK,
+    onSearch: String = ":"
   ) -> String {
     """
     #!/bin/sh
@@ -72,6 +73,9 @@ enum PluginFixtureKit {
         ;;
       *'"method":"perform"'*)
         \(onPerform)
+        ;;
+      *'"method":"search"'*)
+        \(onSearch)
         ;;
       esac
     done
@@ -1699,6 +1703,172 @@ final class PluginProcessLifecycleTests: XCTestCase {
     wait(for: [second], timeout: 8)
     XCTAssertEqual(fixture.spawnCount(), 1, "the second perform must not respawn")
     process.stopAndWait(reason: "test")
+  }
+
+  // MARK: 10b. Live sources
+
+  private static let liveManifestExtra =
+    #""sources": [{ "name": "live.items", "type": "liveitems", "live": "per_scope" }]"#
+
+  /// Answers every search with two rows of `live.items`, after recording
+  /// the request line.
+  private static let searchOK = """
+    printf '%s\\n' "$line" >> "$D/searches"
+    printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Lock screen","metadata":{"subtitle":"Require password"}},{"source":"live.items","title":"Sleep"}]}}\\n' "$id"
+    """
+
+  private func search(
+    _ process: PluginProcess, source: String = "live.items", query: String = ""
+  ) -> [Candidate] {
+    let answered = expectation(description: "search \(source) \(query)")
+    var rows: [Candidate] = []
+    process.search(source: source, query: query) {
+      XCTAssertTrue(Thread.isMainThread, "a search answers on main")
+      rows = $0
+      answered.fulfill()
+    }
+    wait(for: [answered], timeout: 8)
+    return rows
+  }
+
+  /// A plugin whose sources are live costs nothing until a query is scoped
+  /// to one: the first search spawns it and is answered from cold, with the
+  /// rows stamped as the plugin's and nothing published.
+  func testAFirstSearchSpawnsAColdLivePluginAndAnswersItsRows() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "livecold",
+      manifest: PluginFixtureKit.manifest(id: "livecold", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(onSearch: Self.searchOK))
+    defer { fixture.cleanup() }
+    let store = PluginCatalogStore()
+    let process = try makeProcess(fixture, store: store)
+    defer { process.stopAndWait(reason: "test") }
+    XCTAssertEqual(process.manifest.activation, .onDemand)
+    process.start()
+    settleRunLoop(0.3)
+    XCTAssertEqual(fixture.spawnCount(), 0, "live sources alone spawn nothing at start")
+
+    let rows = search(process)
+    XCTAssertEqual(rows.map(\.title), ["Lock screen", "Sleep"])
+    XCTAssertEqual(rows.map(\.source), ["live.items", "live.items"])
+    XCTAssertEqual(rows.map(\.sourceID), ["plugin:livecold", "plugin:livecold"])
+    XCTAssertEqual(rows.first?.subtitle, "Require password")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "it stays up for the next query")
+
+    XCTAssertEqual(search(process, query: "lo").count, 2)
+    XCTAssertEqual(fixture.spawnCount(), 1, "the second search reuses the process")
+    XCTAssertEqual(store.rows(for: "livecold").count, 0, "live rows never enter the catalog")
+    XCTAssertNil(store.entry(for: "livecold"))
+
+    let sent = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("searches"), encoding: .utf8
+    ).split(separator: "\n").map { line in
+      try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+    }
+    XCTAssertEqual(sent.count, 2)
+    XCTAssertEqual(sent[0]["method"] as? String, "search")
+    XCTAssertEqual(sent[0]["params"] as? [String: String], ["source": "live.items", "query": ""])
+    XCTAssertEqual(sent[1]["params"] as? [String: String], ["source": "live.items", "query": "lo"])
+    let deadline = try XCTUnwrap(sent[1]["deadline_ms"] as? Int)
+    XCTAssertTrue(
+      (1...PluginProtocol.searchDeadlineMs).contains(deadline), "its own deadline: \(deadline)")
+  }
+
+  /// A search that waits for a cold child is sent once the child runs, with
+  /// its whole deadline: a startup slower than the search deadline still
+  /// answers the query that asked.
+  func testASearchWaitsOutAStartupSlowerThanItsDeadline() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "liveslow",
+      manifest: PluginFixtureKit.manifest(id: "liveslow", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(
+        onInitialize: "sleep 0.6; " + PluginFixtureKit.initializeOK, onSearch: Self.searchOK))
+    defer { fixture.cleanup() }
+    let original = PluginProcess.searchDeadlineMs
+    defer { PluginProcess.searchDeadlineMs = original }
+    PluginProcess.searchDeadlineMs = 300
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    XCTAssertEqual(search(process).map(\.title), ["Lock screen", "Sleep"])
+  }
+
+  /// While the child starts, only the newest query of a source waits: the
+  /// one typed past answers nothing, and one request reaches the plugin.
+  func testANewerSearchReplacesTheOneStillWaitingForTheChild() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "livelatest",
+      manifest: PluginFixtureKit.manifest(
+        id: "livelatest",
+        extra: #""sources": [{ "name": "live.items", "type": "liveitems", "live": "per_query" }]"#),
+      script: PluginFixtureKit.script(
+        onInitialize: "sleep 0.4; " + PluginFixtureKit.initializeOK, onSearch: Self.searchOK))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    var answers: [String: [Candidate]] = [:]
+    for query in ["l", "lo", "loc"] {
+      process.search(source: "live.items", query: query) { answers[query] = $0 }
+    }
+    waitUntilTrue("every search settled") { answers.count == 3 }
+    XCTAssertEqual(answers["l"]?.count, 0)
+    XCTAssertEqual(answers["lo"]?.count, 0)
+    XCTAssertEqual(answers["loc"]?.count, 2)
+    let sent = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("searches"), encoding: .utf8)
+    XCTAssertEqual(sent.split(separator: "\n").count, 1)
+    XCTAssertTrue(sent.contains(#""query":"loc""#), sent)
+  }
+
+  /// A reply is served whole or not at all, like a publish; a source the
+  /// manifest does not declare live is never asked; and a live plugin's
+  /// `publish` is refused, having no pushed source to carry.
+  func testASearchReplyIsServedWholeOrNotAtAll() throws {
+    let replies = """
+      case "$line" in
+      *'"query":"foreign"'*)
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Mine"},{"source":"other.items","title":"Not mine"}]}}\\n' "$id" ;;
+      *'"query":"untitled"'*)
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Mine"},{"source":"live.items","title":""}]}}\\n' "$id" ;;
+      *'"query":"extra"'*)
+        printf '{"id":%s,"result":{"ok":true,"rows":[],"more":true}}\\n' "$id" ;;
+      *'"query":"refused"'*)
+        printf '{"id":%s,"result":{"ok":false,"error":"no"}}\\n' "$id" ;;
+      *'"query":"silent"'*) : ;;
+      *'"query":"publish"'*)
+        printf '{"method":"publish","params":{"rows":[{"source":"live.items","title":"Pushed"}]}}\\n'
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Pulled"}]}}\\n' "$id" ;;
+      *)
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Mine"}]}}\\n' "$id" ;;
+      esac
+      """
+    let fixture = try PluginFixtureKit.make(
+      id: "livestrict",
+      manifest: PluginFixtureKit.manifest(
+        id: "livestrict",
+        extra: #""sources": [{ "name": "live.items", "type": "liveitems", "live": "per_query" }]"#),
+      script: PluginFixtureKit.script(onSearch: replies))
+    defer { fixture.cleanup() }
+    let original = PluginProcess.searchDeadlineMs
+    defer { PluginProcess.searchDeadlineMs = original }
+    PluginProcess.searchDeadlineMs = 400
+    let store = PluginCatalogStore()
+    let process = try makeProcess(fixture, store: store)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    XCTAssertEqual(search(process, query: "ok").map(\.title), ["Mine"])
+    for query in ["foreign", "untitled", "extra", "refused", "silent"] {
+      XCTAssertEqual(search(process, query: query).map(\.title), [], query)
+    }
+    XCTAssertEqual(
+      search(process, source: "other.items", query: "ok").count, 0, "not a declared source")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    XCTAssertEqual(search(process, query: "publish").map(\.title), ["Pulled"])
+    process.drainLifecycleQueue()
+    settleRunLoop(0.2)
+    XCTAssertNil(store.entry(for: "livestrict"), "a live plugin publishes nothing")
   }
 
   func testRequestsCarryWhatIsLeftOfTheirDeadline() throws {

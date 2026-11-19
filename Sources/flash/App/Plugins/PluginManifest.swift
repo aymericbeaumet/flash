@@ -597,8 +597,11 @@ struct PluginManifest: Decodable, Equatable {
   var selector: PluginSelector
   /// Candidate source descriptors this plugin contributes to `:flashlight`.
   /// `name` is the label rows carry in their first-class `source` field;
-  /// `kind` is the semantic source class used for default ranking. Every
-  /// plugin source is warm: a complete catalog the plugin publishes.
+  /// `kind` is the semantic source class used for default ranking. A source
+  /// is pushed, a complete catalog the plugin publishes, unless it declares
+  /// `live`: the host then pulls it with `search` while a query is scoped
+  /// to it. A manifest's sources are all pushed or all live, of one mode
+  /// (``liveSources``).
   var sources: [CandidateSourceDescriptor]
   /// Sensitive host capabilities the plugin requests. Default-deny.
   var capabilities: Set<PluginCapability>
@@ -658,6 +661,17 @@ struct PluginManifest: Decodable, Equatable {
     sources.map(\.name)
   }
 
+  /// How the flashlight pulls this plugin's sources, or nil when they are
+  /// pushed catalogs (or there are none). `validate()` holds every source
+  /// to the same declaration.
+  var liveSources: CandidateSourceLive? { sources.first?.live }
+
+  /// The names a `publish` may carry: the pushed sources. A live source's
+  /// rows never enter the catalog store.
+  var pushedSources: [String] {
+    sources.filter { $0.live == nil }.map(\.name)
+  }
+
   var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     sources
   }
@@ -696,16 +710,18 @@ struct PluginManifest: Decodable, Equatable {
   }
 
   /// A plugin is resident — spawned at startup and kept running — iff its
-  /// manifest declares `sources`, `query`, `hints`, `status`, or `listen`.
-  /// On-demand surfaces alone (`commands`, `bangs`, `navigation`)
-  /// defer the spawn to the first `perform`, or to the settled-startup
-  /// prewarm when a configured mapping runs one of the plugin's commands
-  /// (`PluginWarmPolicy`). No `exec` means no process ever.
+  /// manifest declares pushed `sources`, `query`, `hints`, `status`, or
+  /// `listen`. On-demand surfaces alone (`commands`, `bangs`, `navigation`,
+  /// live `sources`) defer the spawn to the first `perform` or `search`, or
+  /// to the settled-startup prewarm when a configured mapping runs one of
+  /// the plugin's commands (`PluginWarmPolicy`). No `exec` means no process
+  /// ever.
   var activation: PluginActivation {
     if exec == nil { return .manifestOnly }
     if lifecycle == .publishThenExit { return .publishThenExit }
     let resident =
-      !sources.isEmpty || query != nil || hints != nil || !status.isEmpty || !listen.isEmpty
+      !pushedSources.isEmpty || query != nil || hints != nil || !status.isEmpty
+      || !listen.isEmpty
     return resident ? .resident : .onDemand
   }
 
@@ -713,10 +729,10 @@ struct PluginManifest: Decodable, Equatable {
   /// subscriptions, if any, feed those segments. Nothing reads the segments
   /// unless the enabled bar, one of its popups or a desktop widget shows one,
   /// so such a plugin is resident only while observed and otherwise waits for
-  /// its first `perform` like an on-demand plugin, or is warmed like one when
-  /// a configured mapping runs one of its commands.
+  /// its first `perform` or `search` like an on-demand plugin, or is warmed
+  /// like one when a configured mapping runs one of its commands.
   var isStatusBound: Bool {
-    !status.isEmpty && sources.isEmpty && query == nil && hints == nil
+    !status.isEmpty && pushedSources.isEmpty && query == nil && hints == nil
   }
 
   /// `activation`, given whether a status surface shows this plugin's segments.
@@ -894,9 +910,17 @@ struct PluginManifest: Decodable, Equatable {
     self.selector = PluginSelector(
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
       onlyTerminals: try c.decodeIfPresent(Bool.self, forKey: .onlyTerminals) ?? false)
-    self.sources =
-      Self.uniqueSourceDescriptors(
-        try c.decodeIfPresent([CandidateSourceDescriptor].self, forKey: .sources) ?? [])
+    do {
+      self.sources =
+        Self.uniqueSourceDescriptors(
+          try c.decodeIfPresent([CandidateSourceDescriptor].self, forKey: .sources) ?? [])
+    } catch DecodingError.dataCorrupted(let context)
+      where context.codingPath.last?.stringValue
+      == CandidateSourceDescriptor.CodingKeys.live.rawValue
+    {
+      // A `live` that is neither of its values, said in the manifest's terms.
+      throw PluginError.failure("manifest.json \(context.debugDescription)")
+    }
     let caps = try c.decodeIfPresent([PluginCapability].self, forKey: .capabilities) ?? []
     self.capabilities = Set(caps)
     self.permissions = Set(
@@ -1156,6 +1180,11 @@ struct PluginManifest: Decodable, Equatable {
       guard !sources.isEmpty else {
         throw PluginError.failure("manifest.json lifecycle publish_then_exit needs sources")
       }
+      guard liveSources == nil else {
+        throw PluginError.failure(
+          "manifest.json lifecycle publish_then_exit publishes its catalog and exits: its "
+            + "sources cannot be live")
+      }
       let declared = publishThenExitSurfacesDeclared
       if !declared.isEmpty {
         throw PluginError.failure(
@@ -1305,6 +1334,20 @@ struct PluginManifest: Decodable, Equatable {
       if let reason = ResourceTypes.pluginRejection(type: source.type, kind: source.kind) {
         throw PluginError.failure("plugin source \(source.name) \(reason)")
       }
+      // A live source is pulled only while a query is scoped to it; the
+      // default pool, where location rows live, reads pushed catalogs.
+      if source.live != nil, source.kind == .locations {
+        throw PluginError.failure(
+          "plugin source \(source.name) is live and kind locations: location rows belong to "
+            + "the default pool, which reads pushed catalogs")
+      }
+    }
+    // One adapter serves a plugin's sources, live or not as a whole and of
+    // one pull mode.
+    if Set(sources.map(\.live)).count > 1 {
+      throw PluginError.failure(
+        "manifest.json sources all declare the same live, or none does: split pushed and live "
+          + "sources into two plugins")
     }
     for bang in bangs {
       if bang.token.trimmed.isEmpty {

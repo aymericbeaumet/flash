@@ -11,9 +11,9 @@ import Foundation
 /// this object interprets effects and owns each child transport, with
 /// `failed` the parked terminal state (no auto-restart; file watchers stay
 /// armed so a rebuilt binary recovers). Resident plugins spawn at startup;
-/// on-demand plugins spawn on their first `perform`, or once startup has
-/// settled when a configured mapping keeps them warm (`prewarm`);
-/// manifest-only plugins never spawn.
+/// on-demand plugins spawn on their first `perform` or `search`, or once
+/// startup has settled when a configured mapping keeps them warm
+/// (`prewarm`); manifest-only plugins never spawn.
 final class PluginProcess {
   typealias RequestCompletion = ([String: Any]?) -> Void
   private let stderrLock = NSLock()
@@ -56,6 +56,16 @@ final class PluginProcess {
     let startedAt: DispatchTime
     let trace: Trace.ID?
     let completion: (PluginPerformOutcome) -> Void
+  }
+
+  /// A `search` accepted while the child is not running. Dispatched when
+  /// the plugin reaches `running`, with its whole deadline; settled empty if
+  /// that takes longer than the startup deadline, or never happens.
+  private struct DeferredSearch {
+    let id: Int
+    let query: String
+    let trace: Trace.ID?
+    let completion: ([Candidate]) -> Void
   }
 
   let root: URL
@@ -185,6 +195,7 @@ final class PluginProcess {
   @Synchronized static var idleBeforePingMs = PluginProtocol.idleBeforePingMs
   @Synchronized static var pingTimeoutMs = PluginProtocol.pingDeadlineMs
   @Synchronized static var queryDeadlineMs = PluginProtocol.queryDeadlineMs
+  @Synchronized static var searchDeadlineMs = PluginProtocol.searchDeadlineMs
   @Synchronized static var restartDelaySeconds: (Int) -> Int = { min(30, max(1, $0 + 1)) }
   /// Request deadlines settle callers that are waiting: a late timeout is a
   /// late failure on the key path, so this is not a utility queue either.
@@ -196,6 +207,10 @@ final class PluginProcess {
   private var pendingHostRequests: Set<UInt64> = []
   private var deferredPerforms: [DeferredPerform] = []
   private var deferredPerformID = 0
+  /// The search each live source waits to send, by source name: a newer
+  /// query of the same source replaces the one still waiting. Queue-confined.
+  private var deferredSearches: [String: DeferredSearch] = [:]
+  private var deferredSearchID = 0
   /// Uptime of the most recent inbound frame — any frame resets the idle
   /// clock, so a plugin that publishes or logs is never pinged.
   private var lastInboundFrameAt = DispatchTime.now()
@@ -423,10 +438,13 @@ final class PluginProcess {
     queue.async {
       let activation = self.activation
       self.applyLifecycle(.start(resident: activation.spawnsAtStart))
-      // Performs that arrived before the start — a replacement published
-      // while its predecessor was still stopping — asked for the child.
+      // Performs and searches that arrived before the start — a replacement
+      // published while its predecessor was still stopping — asked for the
+      // child.
       if activation == .onDemand, !self.deferredPerforms.isEmpty {
         self.performed = true
+        self.applyLifecycle(.activate)
+      } else if activation == .onDemand, !self.deferredSearches.isEmpty {
         self.applyLifecycle(.activate)
       }
       self.installFileWatchers()
@@ -436,6 +454,7 @@ final class PluginProcess {
   func stopAndWait(reason: String = "stop") {
     queue.sync {
       self.settleDeferredPerforms(as: .unhandled)
+      self.settleDeferredSearches()
       self.applyLifecycle(.stop)
     }
   }
@@ -476,6 +495,7 @@ final class PluginProcess {
         }
       case .park:
         settleDeferredPerforms(as: .unhandled)
+        settleDeferredSearches()
         if lifecycle.failures.count > Self.restartWindowAttempts {
           recordError(
             "[plugin] restart loop exhausted: \(lifecycle.failures.count) failures within \(Int(Self.restartWindowSeconds))s",
@@ -487,6 +507,7 @@ final class PluginProcess {
         // The catalog stays in the store; the watchers the teardown removed
         // come back, since a file change is what runs the plugin again.
         settleDeferredPerforms(as: .unhandled)
+        settleDeferredSearches()
         installFileWatchers()
         FlashLog.plugin(
           .info, pluginID: manifest.id,
@@ -829,6 +850,14 @@ final class PluginProcess {
         trace: item.trace,
         completion: item.completion)
     }
+    // A search waited out the startup; its own deadline starts now.
+    let searches = deferredSearches
+    deferredSearches.removeAll()
+    for source in searches.keys.sorted() {
+      guard let item = searches[source] else { continue }
+      dispatchSearch(
+        source: source, query: item.query, trace: item.trace, completion: item.completion)
+    }
   }
 
   /// Terminal park: no auto-restart. Used for initialize NAKs and protocol
@@ -1157,6 +1186,101 @@ final class PluginProcess {
       }
       DispatchQueue.main.async { completion(items) }
     }
+  }
+
+  // MARK: - Search (the live flashlight pull)
+
+  /// Pull one live source for one flashlight query (`search`). `completion`
+  /// runs once, on the main queue, with the source's rows; a timeout, a
+  /// rejected reply and a plugin that cannot run all answer `[]`. Like a
+  /// `perform`, a search spawns an on-demand child. One that finds the child
+  /// not running yet waits for it — up to the startup deadline — and is then
+  /// sent with its whole deadline, so the first scoped query of a cold plugin
+  /// is answered; a newer search of the same source replaces one still
+  /// waiting. Nothing here reaches the catalog store.
+  func search(source: String, query: String, completion: @escaping ([Candidate]) -> Void) {
+    let trace = Trace.current
+    // Called once, by whichever queue settles the search; it only hands
+    // the rows to main.
+    nonisolated(unsafe) let deliver: ([Candidate]) -> Void = { rows in
+      DispatchQueue.main.async { Trace.run(in: trace) { completion(rows) } }
+    }
+    guard manifest.exec != nil,
+      manifest.sources.contains(where: { $0.name == source && $0.live != nil })
+    else {
+      deliver([])
+      return
+    }
+    queue.async { [weak self] in
+      guard let self else {
+        deliver([])
+        return
+      }
+      let route = PluginLifecycle.performRoute(
+        state: self.lifecycle.state, onDemand: self.activation == .onDemand)
+      switch route {
+      case .unhandled:
+        deliver([])
+      case .dispatch:
+        self.dispatchSearch(source: source, query: query, trace: trace, completion: deliver)
+      case .wait:
+        self.enqueueDeferredSearch(
+          source: source, query: query, trace: trace, completion: deliver)
+      case .waitAndActivate:
+        self.enqueueDeferredSearch(
+          source: source, query: query, trace: trace, completion: deliver)
+        self.applyLifecycle(.activate)
+      }
+    }
+  }
+
+  private func dispatchSearch(
+    source: String, query: String, trace: Trace.ID?,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    let sourceID = "plugin:\(manifest.id)"
+    sendRequest(
+      method: "search",
+      params: ["source": source, "query": query],
+      timeout: .milliseconds(Self.searchDeadlineMs),
+      trace: trace
+    ) { [weak self] response in
+      let rows = PluginWireCodec.searchRows(from: response, source: source, sourceID: sourceID)
+      if rows == nil, PluginWireCodec.okPayload(response) != nil, let self {
+        FlashLog.plugin(
+          .warn, pluginID: self.manifest.id,
+          message: "[plugin] rejected malformed or oversized search reply",
+          fields: ["source": source])
+      }
+      completion(rows ?? [])
+    }
+  }
+
+  private func enqueueDeferredSearch(
+    source: String, query: String, trace: Trace.ID?,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    deferredSearchID += 1
+    let id = deferredSearchID
+    // The user typed past the one that waited: it answers nothing.
+    deferredSearches.updateValue(
+      DeferredSearch(id: id, query: query, trace: trace, completion: completion),
+      forKey: source)?.completion([])
+    Self.deadlineQueue.asyncAfter(deadline: .now() + Self.startupTimeout) { [weak self] in
+      self?.queue.async { [weak self] in
+        guard let self, self.deferredSearches[source]?.id == id else { return }
+        self.deferredSearches.removeValue(forKey: source)?.completion([])
+      }
+    }
+  }
+
+  /// Runs on `queue`. Answers every search still waiting for a child that
+  /// will not run (park, rest, unload) — never on a plain restart, whose
+  /// searches stay queued for the relaunch.
+  private func settleDeferredSearches() {
+    let searches = deferredSearches
+    deferredSearches.removeAll()
+    for source in searches.keys.sorted() { searches[source]?.completion([]) }
   }
 
   // MARK: - Perform (the single effect method)
@@ -1867,7 +1991,8 @@ final class PluginProcess {
       // along so the byte quota is read off them, never re-encoded.
       let startedAt = DispatchTime.now()
       let sourceID = "plugin:\(manifest.id)"
-      let allowedSources = Set(manifest.candidateSources)
+      // A live source's rows are pulled, never published.
+      let allowedSources = Set(manifest.pushedSources)
       catalogQueue.async { [weak self] in
         guard let self else { return }
         guard self.isTransportActive(generation) else {

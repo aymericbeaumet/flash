@@ -62,12 +62,15 @@ The lines describe one plugin and one moment:
   `USB Audio` (`usb-1`), the same two as inputs; the output at 38%, not
   muted. A step of two ticks lands on 50%.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
+- Searching the live source `example.live` for `ro` answers two rows; any
+  other query answers none. The corpus pins frames, so its one plugin answers
+  for pushed and live sources alike, which no manifest may declare together.
 - Command `tab next --index=3` succeeds in the focused app, `example decline`
   is unhandled, `example break` fails and `example repeat` answers its count.
 
 Request ids are fixed per method (`initialize` 1, `ping` 2, `evaluate` 3,
-`hints` 4, `text_grid` 5, `perform` 6); every `host.*` call is id 1, the first
-call of a fresh plugin.
+`hints` 4, `text_grid` 5, `perform` 6, `search` 7); every `host.*` call is
+id 1, the first call of a fresh plugin.
 
 ## Changing the wire
 

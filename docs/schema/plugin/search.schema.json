@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/search.schema.json",
+  "title": "search",
+  "description": "Host to plugin: pull one live source for the flashlight query scoped to it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params",
+    "deadline_ms"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "search"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "query"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "A manifest sources[].name that declares live."
+        },
+        "query": {
+          "type": "string",
+          "description": "The text typed after the scope; always empty for a per_scope source."
+        }
+      }
+    },
+    "deadline_ms": {
+      "$ref": "definitions.schema.json#/definitions/deadline_ms"
+    },
+    "trace": {
+      "$ref": "definitions.schema.json#/definitions/trace"
+    }
+  }
+}

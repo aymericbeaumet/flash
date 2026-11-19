@@ -47,8 +47,11 @@ fn main() {
 ```
 
 `plugin!` generates a `FlashPlugin` trait whose *required* methods follow the
-manifest: `sources` ⇒ `on_start` (runs AFTER the immediate initialize
-reply; build the catalog and `ctx.publish(...)` when ready), `query` ⇒ a
+manifest: pushed `sources` ⇒ `on_start` (runs AFTER the immediate initialize
+reply; build the catalog and `ctx.publish(...)` when ready), live `sources`
+(`"live": "per_query"` or `"per_scope"`) ⇒ `on_search` (a `SearchRequest`
+naming the `source` and the `query` typed after its scope, answered with
+`SearchResponse::rows(...)`; publish nothing for a live source), `query` ⇒ a
 synchronous `evaluate`, `commands` / `bangs` ⇒ `on_command`, which also
 receives the core commands the manifest declares under Flash's topics (a
 `CommandRequest` whose `context` is then the focused app; match on
@@ -68,7 +71,9 @@ for stdin to close; the host keeps the catalog and spawns the plugin again
 only when its settings, a `watch_settings` file or its plugin definition
 change, or you run `plugins reload`. The macro rejects
 that lifecycle beside any surface a live child serves, as the host does
-([process model](plugin-protocol.md#process-model-and-lifecycle)). The
+([process model](plugin-protocol.md#process-model-and-lifecycle)), and holds
+`live` to the host's rules: one of its two values, the same on every source
+of the manifest or on none, never on a `locations` source. The
 `emojis` and `snippets` plugins are the examples. On the wire,
 resolve/command/navigate all arrive as the single `perform` method —
 the SDK routes kinds to your handlers, and every one of them answers with the
@@ -254,8 +259,9 @@ Handed to every handler; cheap to clone. Key surface:
   as `PreviewTooLarge`, and `status` then logs a content-free warning
   (segment name and encoded size only) and publishes the visible text alone
   rather than losing the segment.
-- Deadlines: an `on_hints` / `on_text_grid` handler still running a tenth
-  of the request's `deadline_ms` (at most 50 ms) before it is dropped, with
+- Deadlines: an `on_hints` / `on_text_grid` / `on_search` handler still
+  running a tenth of the request's `deadline_ms` (at most 50 ms) before it is
+  dropped, with
   the subprocesses and host calls it awaits, and the request answers
   `deadline exceeded`. Bound inner waits below that budget (for host calls,
   `call_host_timeout`) to answer partially instead.

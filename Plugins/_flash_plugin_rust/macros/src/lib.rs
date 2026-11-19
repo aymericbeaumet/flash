@@ -5,9 +5,10 @@
 //!
 //! `manifest.json` is the single source of truth. The macro inspects the
 //! declared surfaces to decide which handler methods are *required*:
-//! `sources` require `on_start`, a `query` evaluator requires the
-//! synchronous `evaluate` hook, `hints` requires `on_hints` (`on_text_grid`
-//! stays optional with an empty default), and the perform surfaces map one
+//! pushed `sources` require `on_start`, live ones (`sources[].live`) require
+//! `on_search`, a `query` evaluator requires the synchronous `evaluate` hook,
+//! `hints` requires `on_hints` (`on_text_grid` stays optional with an empty
+//! default), and the perform surfaces map one
 //! handler per kind — `commands`/`bangs` require `on_command`, which also
 //! receives the core commands a manifest declares under one of Flash's
 //! topics, and `navigation` requires `on_navigate`.
@@ -34,6 +35,12 @@ pub fn plugin(input: TokenStream) -> TokenStream {
         "flash_plugin::plugin!: manifest.json {}",
         type_errors.join("; ")
     );
+    let live_errors = source_live_errors(&manifest);
+    assert!(
+        live_errors.is_empty(),
+        "flash_plugin::plugin!: manifest.json {}",
+        live_errors.join("; ")
+    );
     let lifecycle_errors = lifecycle_errors(&manifest);
     assert!(
         lifecycle_errors.is_empty(),
@@ -45,13 +52,15 @@ pub fn plugin(input: TokenStream) -> TokenStream {
     let on_start_decl = on_start_decl(manifest_has_warm_sources(&manifest));
     let evaluate_decl = evaluate_decl(manifest_has_query_evaluator(&manifest));
     let on_hints_decl = on_hints_decl(manifest_has_hints(&manifest));
+    let on_search_decl = on_search_decl(manifest_has_live_sources(&manifest));
     let on_command_decl = on_command_decl(manifest_has_command_surface(&manifest));
     let on_navigate_decl = on_navigate_decl(manifest_has_navigation(&manifest));
     let expanded = quote! {
         /// The plugin contract for this crate, specialized to its
-        /// `manifest.json`. Implement the required methods (`sources` make
-        /// `on_start` required; `query` makes the synchronous `evaluate`
-        /// hook required; `hints` makes `on_hints` required;
+        /// `manifest.json`. Implement the required methods (pushed
+        /// `sources` make `on_start` required and live ones `on_search`;
+        /// `query` makes the synchronous `evaluate` hook required; `hints`
+        /// makes `on_hints` required;
         /// `commands`/`bangs` make `on_command` required; `navigation`
         /// makes `on_navigate` required); override any remaining defaulted
         /// handler the plugin serves.
@@ -85,6 +94,8 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 let _ = (ctx, request);
                 async { ::flash_plugin::TextGridResponse::default() }
             }
+
+            #on_search_decl
 
             #on_command_decl
 
@@ -153,6 +164,15 @@ pub fn plugin(input: TokenStream) -> TokenStream {
             ) -> impl ::core::future::Future<Output = ::flash_plugin::TextGridResponse> + ::core::marker::Send
             {
                 <Self as FlashPlugin>::on_text_grid(self, ctx, request)
+            }
+
+            fn on_search(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::SearchRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::SearchResponse> + ::core::marker::Send
+            {
+                <Self as FlashPlugin>::on_search(self, ctx, request)
             }
 
             fn perform(
@@ -293,11 +313,69 @@ fn source_type_errors(manifest: &Value) -> Vec<String> {
     errors
 }
 
-/// Sources are push-published catalogs, so any makes `on_start` required:
+/// Whether a `sources[]` entry declares `live`: the host pulls it with
+/// `search` instead of reading a published catalog.
+fn is_live(source: &Value) -> bool {
+    source.get("live").is_some()
+}
+
+/// A pushed source is a published catalog, so any makes `on_start` required:
 /// the hook runs after the initialize reply and publishes the initial catalog
 /// when ready.
 fn manifest_has_warm_sources(manifest: &Value) -> bool {
-    !sources(manifest).is_empty()
+    sources(manifest).iter().any(|source| !is_live(source))
+}
+
+/// A live source is pulled with `search`, so any makes `on_search` required.
+fn manifest_has_live_sources(manifest: &Value) -> bool {
+    sources(manifest).iter().any(is_live)
+}
+
+/// The `sources[].live` rules the host applies at load (`protocol.json`
+/// `source_live`): one of the contract's values, the same on every source of
+/// the manifest or on none, and never on a `locations` source.
+fn source_live_errors(manifest: &Value) -> Vec<String> {
+    let protocol: Value = serde_json::from_str(include_str!("../../protocol.json"))
+        .expect("protocol.json is valid JSON");
+    let values: Vec<&str> = protocol["source_live"]["values"]
+        .as_array()
+        .map(|values| values.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let mut errors = Vec::new();
+    let mut declared = Vec::new();
+    for source in sources(manifest) {
+        let name = source.get("name").and_then(Value::as_str).unwrap_or("?");
+        let Some(live) = source.get("live") else {
+            declared.push(None);
+            continue;
+        };
+        let Some(live) = live.as_str().filter(|live| values.contains(live)) else {
+            errors.push(format!(
+                "source {name} live must be {} (or absent: a pushed catalog)",
+                values
+                    .iter()
+                    .map(|value| format!("\"{value}\""))
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            ));
+            continue;
+        };
+        declared.push(Some(live));
+        if source.get("kind").and_then(Value::as_str) == Some("locations") {
+            errors.push(format!(
+                "source {name} is live and kind locations: location rows belong to the default \
+                 pool, which reads pushed catalogs"
+            ));
+        }
+    }
+    if errors.is_empty() && declared.windows(2).any(|pair| pair[0] != pair[1]) {
+        errors.push(
+            "sources all declare the same live, or none does: split pushed and live sources \
+             into two plugins"
+                .to_string(),
+        );
+    }
+    errors
 }
 
 /// The manifest `lifecycle` table of `protocol.json`.
@@ -334,8 +412,13 @@ fn lifecycle_errors(manifest: &Value) -> Vec<String> {
                 .join(" or ")
         )];
     };
-    if !manifest_has_warm_sources(manifest) {
+    if sources(manifest).is_empty() {
         return vec![format!("lifecycle {lifecycle} needs sources")];
+    }
+    if manifest_has_live_sources(manifest) {
+        return vec![format!(
+            "lifecycle {lifecycle} publishes its catalog and exits: its sources cannot be live"
+        )];
     }
     let declared_surfaces: Vec<&str> = contract[lifecycle]["forbids"]
         .as_array()
@@ -456,6 +539,26 @@ fn on_hints_decl(required: bool) -> TokenStream2 {
     )
 }
 
+fn on_search_decl(required: bool) -> TokenStream2 {
+    declare(
+        quote! {
+            /// The rows of one live source (`sources[].live`) for one
+            /// flashlight query (`search`). Always live: the host asks
+            /// while a query is scoped to the source and keeps nothing.
+            fn on_search(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::SearchRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::SearchResponse> + ::core::marker::Send
+        },
+        quote! {
+            let _ = (ctx, request);
+            async { ::flash_plugin::SearchResponse::default() }
+        },
+        required,
+    )
+}
+
 fn on_command_decl(required: bool) -> TokenStream2 {
     declare(
         quote! {
@@ -534,6 +637,62 @@ mod tests {
         assert!(!manifest_has_warm_sources(&json!({})));
     }
 
+    /// A live source is pulled, never published: it requires `on_search`
+    /// and leaves `on_start` optional.
+    #[test]
+    fn live_sources_require_the_search_hook_and_not_the_startup_one() {
+        let live = json!({ "sources": [
+            { "name": "example.actions", "type": "actions", "live": "per_scope" }
+        ] });
+        assert!(manifest_has_live_sources(&live));
+        assert!(!manifest_has_warm_sources(&live));
+        assert_eq!(source_live_errors(&live), Vec::<String>::new());
+
+        let pushed = json!({ "sources": [{ "name": "example.items", "type": "items" }] });
+        assert!(!manifest_has_live_sources(&pushed));
+        assert_eq!(source_live_errors(&pushed), Vec::<String>::new());
+        assert!(!manifest_has_live_sources(&json!({})));
+    }
+
+    #[test]
+    fn live_declarations_follow_the_protocol_rules() {
+        let first = |manifest: Value| source_live_errors(&manifest).remove(0);
+        for live in [json!("always"), json!(true), json!(null), json!("")] {
+            let error = first(json!({ "sources": [
+                { "name": "a.items", "type": "items", "live": live }
+            ] }));
+            assert!(
+                error.contains("live must be \"per_query\" or \"per_scope\""),
+                "{error}"
+            );
+        }
+        assert!(
+            first(json!({ "sources": [
+                { "name": "a.items", "type": "items", "live": "per_query" },
+                { "name": "a.things", "type": "things" },
+            ] }))
+            .contains("all declare the same live")
+        );
+        assert!(
+            first(json!({ "sources": [
+                { "name": "a.items", "type": "items", "live": "per_query" },
+                { "name": "a.things", "type": "things", "live": "per_scope" },
+            ] }))
+            .contains("all declare the same live")
+        );
+        assert!(
+            first(json!({ "sources": [
+                { "name": "a.tabs", "type": "tabs", "kind": "locations", "live": "per_query" }
+            ] }))
+            .contains("live and kind locations")
+        );
+        let both = json!({ "sources": [
+            { "name": "a.items", "type": "items", "live": "per_scope" },
+            { "name": "a.things", "type": "things", "live": "per_scope" },
+        ] });
+        assert_eq!(source_live_errors(&both), Vec::<String>::new());
+    }
+
     #[test]
     fn query_and_hints_sections_require_their_handlers() {
         assert!(manifest_has_query_evaluator(&json!({ "query": {} })));
@@ -594,6 +753,13 @@ mod tests {
         assert!(
             first(json!({ "exec": ["./x"], "lifecycle": "publish_then_exit" }))
                 .contains("needs sources")
+        );
+        assert!(
+            first(json!({
+                "exec": ["./x"], "lifecycle": "publish_then_exit",
+                "sources": [{ "name": "a.items", "type": "items", "live": "per_scope" }],
+            }))
+            .contains("its sources cannot be live")
         );
         for surface in [
             json!({ "hints": {} }),

@@ -1,6 +1,6 @@
 //! Request deadlines. The host names how long it will wait for a request's
 //! reply (`deadline_ms` on the envelope). A read-only handler (`hints`,
-//! `text_grid`) still running just before then is dropped — its subprocesses
+//! `text_grid`, `search`) still running just before then is dropped — its subprocesses
 //! and host calls with it — and the request answers `deadline exceeded` while
 //! the host still listens, instead of a reply it would discard.
 

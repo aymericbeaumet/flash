@@ -5,9 +5,11 @@ import Foundation
 
 /// Thin `FlashSource` adapter over one plugin: candidates are a synchronous
 /// read of the host-owned catalog store (first paint never waits on a
-/// plugin); evaluate/hints/text_grid/perform pass straight through to the
-/// process. No pre-flight, no availability bookkeeping — a stopped plugin's
-/// requests settle empty inside `PluginProcess`.
+/// plugin), or, for a plugin whose sources are live, a `search` per source
+/// while a query is scoped to it; evaluate/hints/text_grid/perform pass
+/// straight through to the process. No pre-flight, no availability
+/// bookkeeping — a stopped plugin's requests settle empty inside
+/// `PluginProcess`.
 final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintProvider {
   private let plugin: PluginProcess
   private let store: PluginCatalogStore
@@ -119,7 +121,7 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintPro
 
   /// Warm candidates are a synchronous host-memory read of the push-based
   /// catalog store — the plugin published them earlier (or hasn't, and the
-  /// read is an authoritative empty).
+  /// read is an authoritative empty). A live plugin keeps none.
   func candidates(
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
@@ -127,6 +129,40 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintPro
     _ = environment
     _ = scope
     return store.rows(for: plugin.identifier)
+  }
+
+  /// A manifest's sources are live or pushed as a whole (`sources[].live`).
+  var servesLiveCandidates: Bool { plugin.manifest.liveSources != nil }
+  /// A `per_scope` plugin answers every query with the same rows: pulled
+  /// once per scope, with no text.
+  var liveCandidatesDependOnText: Bool { plugin.manifest.liveSources == .perQuery }
+
+  /// One `search` per declared source, merged in manifest order once every
+  /// one answered; the flashlight keeps the rows its scope names. A source
+  /// that times out or answers a malformed reply contributes none.
+  func liveCandidates(
+    matching text: String,
+    in environment: FlashSourceEnvironment,
+    scope: CandidateScope,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    _ = environment
+    _ = scope
+    let sources = plugin.manifest.sources.filter { $0.live != nil }.map(\.name)
+    guard !sources.isEmpty else {
+      DispatchQueue.main.async { completion([]) }
+      return
+    }
+    let query = liveCandidatesDependOnText ? text : ""
+    // Every reply lands on main, which alone touches `answered`.
+    var answered: [String: [Candidate]] = [:]
+    for source in sources {
+      plugin.search(source: source, query: query) { rows in
+        answered[source] = rows
+        guard answered.count == sources.count else { return }
+        completion(sources.flatMap { answered[$0] ?? [] })
+      }
+    }
   }
 
   func evaluateQuery(

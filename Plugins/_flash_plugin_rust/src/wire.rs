@@ -536,6 +536,19 @@ mod tests {
         assert_eq!(quotas["alert_value_bytes"], MAX_ALERT_VALUE_BYTES as u64);
     }
 
+    /// The `search` request has its own deadline, and the two `live`
+    /// values are the ones the macro reads from the contract.
+    #[test]
+    fn live_sources_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["source_live"]["values"],
+            serde_json::json!(["per_query", "per_scope"])
+        );
+        assert_eq!(contract["deadlines_ms"]["search"], 1000);
+        assert!(contract["methods"]["host_to_plugin"]["search"].is_string());
+    }
+
     /// The one manifest `lifecycle` value, and what a plugin declaring it
     /// may carry, come from the contract the macro reads too.
     #[test]

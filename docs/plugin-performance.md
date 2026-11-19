@@ -118,6 +118,32 @@ plugin, from launch instead of from first use. Its one-time startup work,
 such as a status monitor's first sample, also moves to launch. Remove the
 mapping, or disable the plugin, to give that back.
 
+## Live sources
+
+A pushed source costs a resident child and a catalog in host memory, which
+is what makes the flashlight's first paint a memory read. A source nobody
+sees until they ask for it by type does not need either. Declared `live`
+([manifest `sources`](plugin-protocol.md#manifest)), it is pulled with
+`search` only while a query is scoped to it, and a plugin whose sources are
+all live is on demand: no process at launch and no catalog.
+
+- **The first scoped query spawns the child.** Typing `@<type>` (or a bang
+  bound to the source) sends the first `search`, which starts the plugin
+  like a first `perform` does. The search then waits for the child, up to the
+  `startup` deadline, and its own 1 s deadline starts when the request is
+  written. A cold start slower than a second still answers the query that
+  asked, and the rows appear when the reply lands. While the child starts,
+  only the newest query of a source waits; the ones typed past answer
+  nothing. A mapping that runs one of the plugin's commands keeps it warm
+  like any on-demand plugin, and the query then finds it running.
+- **`per_scope` is one request per scope.** The host asks once, with no
+  text, keeps the rows on screen and filters them itself as the user types,
+  so the ranker's caches stay warm. Use it for a short fixed list.
+  `per_query` asks again on every change of the text; the flashlight drops
+  the reply to a query the user has typed past.
+- **The child stays up afterwards**, as after a first command: the next
+  query costs a round trip, not a spawn.
+
 ## Publish-then-exit plugins
 
 A plugin that only provides data has no reason to stay resident. With

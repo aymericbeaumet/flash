@@ -23,6 +23,9 @@
       "$ref": "text_grid.schema.json"
     },
     {
+      "$ref": "search.schema.json"
+    },
+    {
       "$ref": "perform.schema.json"
     },
     {

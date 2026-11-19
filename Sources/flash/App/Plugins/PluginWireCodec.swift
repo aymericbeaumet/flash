@@ -3,7 +3,7 @@ import FlashCore
 import Foundation
 
 /// Wire-payload validation and (de)serialization for the plugin protocol:
-/// the protocol version handshake checks, the strict catalog/answer/hint
+/// the protocol version handshake checks, the strict catalog/search/answer/hint
 /// decoders that reject a whole payload on the first malformed row, and the
 /// `perform` reply trichotomy. Pure functions over `[String: Any]` frames —
 /// no process state. Quotas live in `PluginProtocol` (parity-tested against
@@ -462,6 +462,27 @@ enum PluginWireCodec {
       return nil
     }
     return Candidate(title: title, url: url, metadata: metadata, effect: effect)
+  }
+
+  private static let searchReplyKeys: Set<String> = ["ok", "rows"]
+
+  /// Decode a `search` reply: exactly `{"ok": true, "rows": [...]}`, each
+  /// row of the publish row shape and carrying `source`, under the catalog
+  /// row and byte quotas (the bytes counted from the compact encoding of
+  /// `rows`). Atomic, like a publish: one malformed row, a row of another
+  /// source or an over-quota reply rejects it whole (`nil`), and the caller
+  /// serves no rows.
+  static func searchRows(
+    from response: [String: Any]?, source: String, sourceID: String
+  ) -> [Candidate]? {
+    guard let payload = okPayload(response), Set(payload.keys) == searchReplyKeys,
+      let raw = payload["rows"] as? [[String: Any]]
+    else { return nil }
+    return decodeArray(
+      raw, countLimit: PluginProtocol.maxCatalogRows, byteLimit: PluginProtocol.maxCatalogBytes
+    ) {
+      decodedCatalogRow(from: $0, sourceID: sourceID, allowedSources: [source])
+    }?.values
   }
 
   static func queryAnswers(

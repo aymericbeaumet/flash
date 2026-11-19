@@ -840,6 +840,86 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(listening.activation(statusObserved: false), .resident)
   }
 
+  /// `sources[].live` makes a source pulled instead of published: the
+  /// plugin is then on demand, every source of the manifest declares the
+  /// same mode, and a location source is never live.
+  func testLiveSourcesArePulledOnDemandAndDeclaredAlike() throws {
+    func manifest(_ sources: String, _ extra: String = "") throws -> PluginManifest {
+      try decodedManifest(
+        """
+        {
+          "id": "live",
+          "name": "Live",
+          "version": "1.0.0",
+          "description": "fixture",
+          "exec": ["/usr/bin/true"],
+          "sources": [\(sources)]\(extra)
+        }
+        """
+      )
+    }
+    func failure(_ sources: String, _ extra: String = "") -> String {
+      do {
+        _ = try manifest(sources, extra)
+        return ""
+      } catch {
+        return String(describing: error)
+      }
+    }
+    let pushed = try manifest(#"{"name": "a.items", "type": "items"}"#)
+    XCTAssertNil(pushed.liveSources)
+    XCTAssertEqual(pushed.pushedSources, ["a.items"])
+    XCTAssertEqual(pushed.activation, .resident)
+
+    let perScope = try manifest(#"{"name": "a.items", "type": "items", "live": "per_scope"}"#)
+    XCTAssertEqual(perScope.liveSources, .perScope)
+    XCTAssertEqual(perScope.pushedSources, [], "a live source is never published")
+    XCTAssertEqual(perScope.activation, .onDemand, "nothing runs until a query is scoped to it")
+    XCTAssertEqual(perScope.sources.map(\.live), [.perScope])
+    let perQuery = try manifest(
+      #"{"name": "a.items", "type": "items", "live": "per_query"}, "#
+        + #"{"name": "a.things", "type": "things", "live": "per_query"}"#)
+    XCTAssertEqual(perQuery.liveSources, .perQuery)
+
+    // Beside a status segment the plugin stays status-bound: it runs while
+    // a surface shows the segment, and otherwise for a search or a perform.
+    let bound = try manifest(
+      #"{"name": "a.items", "type": "items", "live": "per_scope"}"#, #", "status": ["state"]"#)
+    XCTAssertTrue(bound.isStatusBound)
+    XCTAssertEqual(bound.activation(statusObserved: false), .onDemand)
+    XCTAssertEqual(bound.activation(statusObserved: true), .resident)
+
+    for live in [#""always""#, "true", "null", #""""#, "1"] {
+      let error = failure(#"{"name": "a.items", "type": "items", "live": \#(live)}"#)
+      XCTAssertEqual(
+        error,
+        "manifest.json source a.items live must be \"per_query\" or \"per_scope\" "
+          + "(or absent: a pushed catalog)", live)
+    }
+    for mixed in [
+      #"{"name": "a.items", "type": "items", "live": "per_query"}, {"name": "a.things", "type": "things"}"#,
+      #"{"name": "a.items", "type": "items", "live": "per_query"}, "#
+        + #"{"name": "a.things", "type": "things", "live": "per_scope"}"#,
+    ] {
+      XCTAssertTrue(
+        failure(mixed).contains("manifest.json sources all declare the same live, or none does"),
+        mixed)
+    }
+    XCTAssertTrue(
+      failure(#"{"name": "a.tabs", "type": "tabs", "kind": "locations", "live": "per_query"}"#)
+        .contains("plugin source a.tabs is live and kind locations"))
+    XCTAssertTrue(
+      failure(
+        #"{"name": "a.items", "type": "items", "live": "per_scope"}"#,
+        #", "lifecycle": "publish_then_exit""#
+      ).contains("its sources cannot be live"))
+    // A bang may list a live source's rows, as it may a pushed one's.
+    XCTAssertNoThrow(
+      try manifest(
+        #"{"name": "a.items", "type": "items", "live": "per_query"}"#,
+        #", "bangs": [{"token": "ai", "source": "a.items"}]"#))
+  }
+
   /// `lifecycle: publish_then_exit` declares a catalog-only plugin: `exec`
   /// and `sources`, nothing that needs a live child. `watch_settings` names
   /// the settings whose file the host watches to run it again, and belongs
@@ -1125,9 +1205,10 @@ final class PluginSystemTests: XCTestCase {
         #""sources": [{ "name": "demo.items", "type": "items", "mode": "live" }]"#,
         "manifest.json sources[0] unknown field mode"
       ),
+      // `live` names one of its two modes; a boolean is no mode.
       (
         #""sources": [{ "name": "demo.items", "type": "items", "live": true }]"#,
-        "manifest.json sources[0] unknown field live"
+        "manifest.json source demo.items live must be \"per_query\" or \"per_scope\""
       ),
       (
         #""help": { "topics": [{ "name": "demo", "title": "Demo", "summray": "typo" }] }"#,

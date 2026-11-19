@@ -348,7 +348,9 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   requests and shutdown. A publish is proportional to the change: volatile and
   static rows are separate sources, each published alone (`publish_source`);
   the host counts catalog bytes from the frame it holds and decodes catalogs on
-  a per-plugin queue carrying no replies. Third-party GitHub refs require a
+  a per-plugin queue carrying no replies. A manifest's sources are all pushed
+  or all live (`sources[].live`): live rows are pulled with `search` while a
+  query is scoped to them and never enter the catalog store. Third-party GitHub refs require a
   full pinned commit. Capabilities default-deny sensitive surfaces; explicit
   plugin settings carry credentials, never inherited ambient secrets or
   inspector-visible values. Packaged official plugins come only from the app

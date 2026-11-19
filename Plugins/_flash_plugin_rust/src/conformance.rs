@@ -20,7 +20,8 @@ use crate::testing::{Harness, WireHarness};
 use crate::{
     AppleScriptOperation, AudioDirection, Candidate, Context, EvaluateRequest, EvaluateResponse,
     Frame, HintsRequest, HintsResponse, JumpTarget, Perform, PerformResponse, Plugin, PollPriority,
-    Priority, QueryAnswer, TextGridLine, TextGridRequest, TextGridResponse,
+    Priority, QueryAnswer, SearchRequest, SearchResponse, TextGridLine, TextGridRequest,
+    TextGridResponse,
 };
 
 const HOST_FRAMES: &str = include_str!("../conformance/host-frames.ndjson");
@@ -172,6 +173,19 @@ impl Plugin for Fixture {
         })
     }
 
+    async fn on_search(&self, _: Context, request: SearchRequest) -> SearchResponse {
+        self.ran("search");
+        if request.source != "example.live" || request.query != "ro" {
+            return SearchResponse::default();
+        }
+        SearchResponse::rows(vec![
+            Candidate::new("example.live", "Live row")
+                .url("https://example.com/a")
+                .subtitle("First"),
+            Candidate::new("example.live", "Open the site").open_url_effect("https://example.com/"),
+        ])
+    }
+
     async fn perform(&self, ctx: Context, request: Perform) -> PerformResponse {
         self.ran("perform");
         match request {
@@ -260,6 +274,7 @@ async fn the_sdk_answers_each_host_request_as_the_corpus_says() {
             "evaluate" if line.accept => &["evaluate"],
             "hints" if line.accept => &["hints"],
             "text_grid" if line.accept => &["text_grid"],
+            "search" if line.accept => &["search"],
             "perform" if line.accept => &["perform"],
             _ => &[],
         };
