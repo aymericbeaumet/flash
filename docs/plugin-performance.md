@@ -50,12 +50,21 @@ bundled today, seven of them resident by default
 ([what starts at launch](architecture.md#what-starts-at-launch)), so the 28
 and 33 resident children above no longer exist as such. The figures also
 predate status-bound activation. A status-only plugin such as
-`feed` now spawns only while the enabled status bar shows one of its
+`feed` now spawns only while the enabled status bar reads one of its
 segments, so with the bar off (the default) it does not run until its command
 does, unless a mapping keeps it warm (see
 [warm plugins](#process-creation-and-warm-plugins)). `sysinfo` publishes the
 `network.addresses` catalog, so it stays resident, but each of its domains
 samples only while a surface shows one of that domain's segments.
+
+Running and sampling are decided apart. A status-bound child runs while the
+configuration reads one of its segments, a text popup's included, open or
+not: an idle Rust child is 2–4 MiB and no wake-up, and opening a popup never
+waits on a spawn. It samples only while a surface shows a segment now
+([status observation](plugin-protocol.md#status-observation)): the bar, a
+visible widget, a monitor, an open popup. A popup-only value therefore costs
+its plugin's registrations for as long as the popup is up, and one
+`core:status.observed` frame each way.
 
 Use these regression budgets when changing the runtime or an official plugin:
 

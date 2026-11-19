@@ -846,28 +846,41 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(replies(quiet), [refused, granted])
     XCTAssertEqual(calendar.asks, 1)
 
-    // The enabled bar shows one of its segments: its startup request asks.
-    let shown = try fixture("mgrshown", surface: #""status": ["next"]"#)
-    defer { shown.cleanup() }
-    let observing = PluginManager(baseDataDir: shown.baseDataDir)
-    defer { observing.stop() }
-    let observedCalendar = CalendarEventStub(access: .undetermined, grants: false)
-    observing.hostRPC.calendarEvents = HostCalendarEvents(
-      provider: observedCalendar, scheduler: PollScheduler(), changed: {})
-    var config = testConfig(thirdParty: ["file:\(shown.root.path)"])
-    config.statusBar.template = FlashStatusBarTemplate(
-      template: "#{flash.plugin.mgrshown.next}",
-      variables: [
-        FlashStatusBarTemplateVariable(
-          id: "statusbar.template.flash.plugin.mgrshown.next",
-          token: "flash.plugin.mgrshown.next",
-          source: .plugin(.statusSegment(pluginID: "mgrshown", name: "next")))
-      ])
-    config.statusBar.enabled = true
-    observing.start(config: config)
-    waitUntilTrue("the observed startup request was answered") { replies(shown).count == 1 }
-    XCTAssertEqual(replies(shown), [["ok": true, "access": "denied"] as NSDictionary])
-    XCTAssertEqual(observedCalendar.asks, 1)
+    // The configuration reads one of its segments, on the enabled bar or
+    // in a text popup: that runs the plugin, and is not yet anyone looking.
+    // Its startup request asks only once a surface shows the segment.
+    func bar(_ id: String, _ root: URL) -> Config {
+      var config = testConfig(thirdParty: ["file:\(root.path)"])
+      config.statusBar.template = FlashStatusBarTemplate(
+        template: "#{flash.plugin.\(id).next}",
+        variables: [
+          FlashStatusBarTemplateVariable(
+            id: "statusbar.template.flash.plugin.\(id).next",
+            token: "flash.plugin.\(id).next",
+            source: .plugin(.statusSegment(pluginID: id, name: "next")))
+        ])
+      config.statusBar.enabled = true
+      return config
+    }
+    for (id, isShown) in [("mgrread", false), ("mgrshown", true)] {
+      let fixture = try fixture(id, surface: #""status": ["next"]"#)
+      defer { fixture.cleanup() }
+      let observing = PluginManager(baseDataDir: fixture.baseDataDir)
+      defer { observing.stop() }
+      let observedCalendar = CalendarEventStub(access: .undetermined, grants: false)
+      observing.hostRPC.calendarEvents = HostCalendarEvents(
+        provider: observedCalendar, scheduler: PollScheduler(), changed: {})
+      // What the status controller reports: nothing while only a closed
+      // popup or a covered widget reads the segment.
+      observing.setShownStatusSegments(isShown ? ["\(id).next"] : [])
+      observing.start(config: bar(id, fixture.root))
+      waitUntilTrue("\(id): the startup request was answered") { replies(fixture).count == 1 }
+      XCTAssertEqual(status(observing, id)?.activation, "resident", id)
+      XCTAssertEqual(
+        replies(fixture), [isShown ? ["ok": true, "access": "denied"] as NSDictionary : refused],
+        id)
+      XCTAssertEqual(observedCalendar.asks, isShown ? 1 : 0, id)
+    }
   }
 
   /// A flashlight query scoped to a live source is the user using the

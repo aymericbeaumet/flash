@@ -48,8 +48,11 @@ final class BundledCalendarPluginTests: XCTestCase {
 
   /// Start the plugin set under `toml` over `calendar`, wired before any
   /// plugin starts and observed as the resident observes it for a
-  /// listening plugin.
-  private func start(_ toml: String = "", calendar: CalendarEventStub) throws {
+  /// listening plugin. `shown` is what a surface has on screen: every value
+  /// the configuration reads, unless a test says otherwise.
+  private func start(
+    _ toml: String = "", calendar: CalendarEventStub, shown: Set<String>? = nil
+  ) throws {
     let config = try Self.config(toml)
     self.calendar = calendar
     dataDir = FileManager.default.temporaryDirectory
@@ -60,6 +63,11 @@ final class BundledCalendarPluginTests: XCTestCase {
       provider: calendar, scheduler: PollScheduler(),
       changed: { [weak manager] in manager?.emit(PluginEvent(.calendarChanged)) })
     manager.hostRPC.calendarEvents = events
+    if let shown {
+      manager.setShownStatusSegments(shown)
+    } else {
+      manager.showEverySegment(readBy: config)
+    }
     manager.start(config: config)
     waitUntilTrue("calendar loaded") { self.status != nil }
     XCTAssertTrue(manager.hasListener(for: .calendarChanged), "it holds the capability")
@@ -181,6 +189,40 @@ final class BundledCalendarPluginTests: XCTestCase {
     XCTAssertEqual(
       run("next").message?.hasPrefix("Standup in 13m · "), true, "a command reads without asking")
     XCTAssertEqual(calendar.asks, 1)
+  }
+
+  /// A value only a text popup reads keeps the plugin running, and is not
+  /// shown until the popup opens: nothing is read, and macOS is not asked,
+  /// at launch. Opening the popup is the user's own use: it asks, once, and
+  /// the value follows; closing it clears the value.
+  func testAValueOnlyAClosedPopupReadsAsksNothingUntilThePopupOpens() throws {
+    let calendar = CalendarEventStub(
+      access: .undetermined, events: [Self.event("Standup", in: 12)])
+    try start(
+      """
+      [statusbar]
+      enabled = true
+      template = "#[popup=agenda]agenda#[nopopup]"
+
+      [popup.agenda]
+      text = "#{flash.plugin.calendar.next}"
+      """, calendar: calendar, shown: [])
+    XCTAssertEqual(status?.activation, "resident", "the configuration refers to its value")
+    waitUntilTrue("the plugin runs") { self.status?.state == "running" }
+    settleRunLoop(0.5)
+    XCTAssertEqual(calendar.asks, 0, "no prompt at launch")
+    XCTAssertEqual(calendar.reads, 0)
+    XCTAssertEqual(segment("next"), "")
+
+    manager.setShownStatusSegments(["calendar.next"])
+    waitUntilTrue("opening the popup asks, reads and publishes") {
+      self.segment("next") == "Standup in 13m"
+    }
+    XCTAssertEqual(calendar.asks, 1)
+    let pid = status?.pid
+    manager.setShownStatusSegments([])
+    waitUntilTrue("closing it clears the value") { self.segment("next") == "" }
+    XCTAssertEqual(status?.pid, pid, "and stops nothing")
   }
 
   func testNextAnswersWithTheAlertAndAsksFromACommand() throws {

@@ -227,7 +227,7 @@ final class MonitorTests: XCTestCase {
       uniqueKeysWithValues: try SourceCommandFallbackTests.officialManifests().map {
         ($0.id, Set($0.status))
       })
-    let read = ConfigLoader.parse("").observedStatusSegments()
+    let read = ConfigLoader.parse("").statusSegmentsRead()
     XCTAssertEqual(
       read, ["sysinfo": ["disks_percent", "memory_pressure", "power_percent", "power_state"]])
     for (plugin, names) in read {
@@ -259,7 +259,7 @@ final class MonitorTests: XCTestCase {
       warning = 90
       """)
     XCTAssertFalse(config.statusBar.enabled)
-    let observed = config.observedStatusSegments()
+    let observed = config.statusSegmentsRead()
     XCTAssertEqual(Set(observed.keys), ["sysinfo"])
     XCTAssertEqual(
       observed["sysinfo"],
@@ -270,9 +270,9 @@ final class MonitorTests: XCTestCase {
       "a disabled monitor observes nothing")
     config.monitors["mine"]?.enabled = false
     XCTAssertEqual(
-      config.observedStatusSegments()["sysinfo"], ["disks_percent", "memory_pressure"])
+      config.statusSegmentsRead()["sysinfo"], ["disks_percent", "memory_pressure"])
     config.monitors["memory"]?.enabled = false
-    XCTAssertEqual(config.observedStatusSegments()["sysinfo"], ["disks_percent"])
+    XCTAssertEqual(config.statusSegmentsRead()["sysinfo"], ["disks_percent"])
   }
 
   // MARK: - Evaluation beside the bar

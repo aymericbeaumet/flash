@@ -199,6 +199,16 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   ([refresh and cost](docs/widgets.md#refresh-and-cost)). Monitors run at
   `low` priority and alert only on transitions (`MonitorTracker`), through
   `StatusAlert`.
+- Which plugin segments are observed (`core:status.observed`, and
+  `servesUser`) is what a surface shows now: the controller's one required
+  set (`requiredPluginSegments`, reported through `pluginSegmentsSink` to
+  `PluginManager.setShownStatusSegments`), in which a closed text popup and
+  an occluded widget count for nothing. Never derive it from the
+  configuration again. Whether a status-bound plugin runs stays
+  `Config.statusSegmentsRead`, so a popup opening spawns nothing. A focused
+  or standalone text popup follows its document only while it awaits values
+  its opening made observed (`StatusPopupController.awaitValues`)
+  ([status observation](docs/plugin-protocol.md#status-observation)).
 - A system window in front of the focused app is what `f` walks
   (`AppMonitor.coveringInteractionWindow`); an authentication prompt
   (SecurityAgent, LocalAuthentication) refuses hints and is never walked or

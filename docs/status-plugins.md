@@ -151,6 +151,18 @@ user watches change, `normal` for ordinary sampling and settles, `low` for
 remote pulls, retries and backoffs. Cadences behind a segment register only
 while a surface shows it.
 
+A segment is shown, and its plugin told so with `core:status.observed`,
+while something displays it now: the enabled bar, a desktop widget one of
+whose windows is visible, an enabled monitor, and a text popup only while it
+is open, hovered, pinned or standalone
+([status observation](plugin-protocol.md#status-observation)). Flash's
+status controller reports that set from the same evaluation that decides
+which sources and jobs run, so a covered widget and a closed popup cost no
+sampling. Whether a status plugin's process runs is the configuration's
+alone: a value that only a closed popup reads keeps the plugin up and idle,
+so opening the popup spawns nothing. Opening it tells the plugin at once;
+closing it releases the registrations, and the plugin clears the value.
+
 | Plugin · registration | Cadence or deadline | Priority | Why |
 | --- | --- | --- | --- |
 | `sysinfo` · CPU sample | 1 s while a `cpu_` segment is observed | high | A one-second figure ticks visibly |
@@ -235,7 +247,15 @@ through libproc (`Plugins/processes/src/sys.rs`): its manifest declares the
 its sandbox profile. It listens to `core:status.observed` and registers each
 cadence only while one of its values is observed, on the host's clock (the
 [scheduling](#scheduling) table); a value that stops being observed is
-cleared. `focused_app_details` follows `core:focus.changed`, and asks
+cleared. A text popup whose text is
+`#{flash.plugin.processes.focused_app_details}` therefore costs nothing
+while it is closed: no ten-second read and none on a focus change. When it
+opens, the plugin publishes the app's identity over `Collecting metrics…`
+2 to 5 ms later and the figures after its first read, 155 ms later when no
+table was being sampled and at once when one was (measured from the host
+telling the plugin to the value landing, Apple M4 Pro, macOS 26.6.2); each
+reaches the screen with the next evaluation of the bar, which follows a
+plugin's status change by 0.1 to 0.2 s. `focused_app_details` follows `core:focus.changed`, and asks
 `host.normal_mode_target` (the `app_control` capability) for the focused app
 when the process started after it took focus.
 
@@ -265,7 +285,8 @@ registers one deadline on the host's clock for the instant a value next
 changes (the [scheduling](#scheduling) table): nothing polls, and a value
 that stops being observed is cleared. Only the read a newly shown value or a
 command starts may ask macOS for access; a read the calendar or the clock
-started never does. Which event is next, the countdown and the meeting link
+started never does. A value only a text popup reads is shown when that popup
+opens, so its prompt comes up then, never at launch. Which event is next, the countdown and the meeting link
 among an event's URL, location and the links of its notes are decided in the
 plugin (`Plugins/calendar/src/agenda.rs`, `links.rs`); the notes themselves
 never reach it. `calendar join` hands the link to `host.open`, the app's own

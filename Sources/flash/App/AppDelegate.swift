@@ -711,6 +711,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           name, title: alert.title, body: alert.value ?? "", error: alert.style == .error)
       },
       monitorTriggerSink: { [weak self] name, level in self?.emitMonitorTriggered(name, level) },
+      // Called on the controller's queue; the manager applies it on its own.
+      pluginSegmentsSink: { [pluginManager] segments in
+        pluginManager.setShownStatusSegments(segments)
+      },
+      popupAwaitsValuesSink: { [weak self] names in
+        self?.overlay.statusPopupController.awaitValues(names)
+      },
       telemetry: telemetry.store)
     launchStages.add("statusbar", since: statusBarStartedAt)
     telemetry.wire(
