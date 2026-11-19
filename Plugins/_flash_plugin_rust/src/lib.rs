@@ -7,6 +7,7 @@
 //! typed host RPC client. Everything a plugin touches is a typed value.
 
 mod applescript;
+mod audio;
 #[cfg(test)]
 mod conformance;
 mod context;
@@ -52,3 +53,4 @@ pub use types::{
 };
 
 pub use applescript::AppleScriptOperation;
+pub use audio::{AudioDevice, AudioDirection, MAX_VOLUME_TICKS, OutputVolume};

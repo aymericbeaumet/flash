@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.audio_devices.reply.schema.json",
+  "title": "host.audio_devices reply",
+  "description": "Host to plugin: the devices of a list, nothing for a selection, the percent after a volume step, the mute state after a toggle, both for a read, or why CoreAudio refused.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "devices"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "devices": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "uid",
+                  "name",
+                  "default"
+                ],
+                "properties": {
+                  "uid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "default": {
+                    "type": "boolean",
+                    "description": "Whether it is the direction's default device."
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/ok"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "percent"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "percent": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "The level the volume bezel shows."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "muted"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "muted": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "percent",
+            "muted"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "percent": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "The level the volume bezel shows."
+            },
+            "muted": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

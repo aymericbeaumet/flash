@@ -47,6 +47,9 @@
       "$ref": "host.applescript.schema.json"
     },
     {
+      "$ref": "host.audio_devices.schema.json"
+    },
+    {
       "$ref": "host.normal_mode_target.schema.json"
     },
     {

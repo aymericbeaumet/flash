@@ -41,6 +41,10 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// sandbox (macOS refuses Apple Events from a sandboxed sender), and macOS
   /// attributes the Automation request to Flash.
   case appleEvents = "apple_events"
+  /// List the audio devices, select the default input or output, step the
+  /// output volume and toggle its mute through the host
+  /// (`host.audio_devices`). CoreAudio stays in the resident.
+  case audioDevices = "audio_devices"
 }
 
 /// A macOS privacy grant a plugin's work depends on, declared in its

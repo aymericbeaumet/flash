@@ -646,7 +646,8 @@ manifest; the full method↔capability table lives in `protocol.json`):
 (which also reports the focused window's WindowServer `window_id`, so a plugin
 can name a window without asking the user to pick one) +
 `host.activate` (`app_control`), `host.open` (`open`),
-`host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`), `host.post_keys` + `host.ax_snapshot` /
+`host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`),
+`host.audio_devices` (`audio_devices`), `host.post_keys` + `host.ax_snapshot` /
 `host.ax_perform` / `host.ax_set` / `host.ax_select_child`
 (`accessibility`). A denied call answers `{"ok": false, "error": "missing
 <capability> capability"}`. `host.ping` needs no capability and answers
@@ -691,6 +692,21 @@ starting the prompt; callers retry after authorization instead of holding an
 RPC open. The method returns
 `{"ok": true, "present": true, "ssid": "…"}` for an associated network or
 `{"ok": true, "present": false}` when Wi-Fi information is unavailable.
+`host.audio_devices` is CoreAudio, which stays in the resident. It takes an
+`operation` and exactly the fields that operation names:
+`{"operation": "list", "direction": "input" | "output"}` answers `{"ok":
+true, "devices": [{"uid", "name", "default"}]}`, sorted by name, `default`
+marking the direction's default device; `{"operation": "select",
+"direction", "uid"}` makes the device with that UID the default;
+`{"operation": "step_volume", "ticks": N}` moves the default output `N`
+macOS volume-key ticks (a sixteenth each, up when positive, down when
+negative, never zero, at most 16 either way), clears its mute and answers
+`{"ok": true, "percent"}`, the percent the bezel would show;
+`{"operation": "toggle_mute"}` answers `{"ok": true, "muted"}`; and
+`{"operation": "volume"}` reads `{"ok": true, "percent", "muted"}`. A
+CoreAudio failure, an unknown UID or a device without the control answers
+`{"ok": false, "error"}`. The calls of every plugin run one at a time, off
+the main thread.
 `host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL
@@ -725,7 +741,9 @@ returns the body of a 2xx response alone. A redirect is followed only to a
 URL the allowlist admits. `open` hands URLs/bundle ids to LaunchServices
 host-side.
 `wifi_info` exposes only the current SSID after host-owned Location
-authorization. Omitted capabilities are default-denied. The registry is
+authorization. `audio_devices` lists the audio devices and changes the
+default device, the output volume and its mute. Omitted capabilities are
+default-denied. The registry is
 frozen: additions are allowed, renames never.
 
 **SDK `call_host` convention:** `call_host` never

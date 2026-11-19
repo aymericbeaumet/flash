@@ -170,6 +170,25 @@
 {"name": "host.activate", "expect": "accept", "frame": {"id":1,"method":"host.activate","params":{"pid":512}}}
 {"name": "host.activate.pid-zero", "expect": "reject", "reply": "host.activate.reply.invalid-params", "frame": {"id":1,"method":"host.activate","params":{"pid":0}}}
 {"name": "host.activate.without-a-pid", "expect": "reject", "reply": "host.activate.reply.invalid-params", "frame": {"id":1,"method":"host.activate","params":{}}}
+{"name": "host.audio_devices.list", "expect": "accept", "reply": "host.audio_devices.reply.list", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"list","direction":"output"}}}
+{"name": "host.audio_devices.select", "expect": "accept", "reply": "host.audio_devices.reply", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"select","direction":"input","uid":"usb-1"}}}
+{"name": "host.audio_devices.step-volume", "expect": "accept", "reply": "host.audio_devices.reply.percent", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"step_volume","ticks":2}}}
+{"name": "host.audio_devices.toggle-mute", "expect": "accept", "reply": "host.audio_devices.reply.muted", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"toggle_mute"}}}
+{"name": "host.audio_devices.volume", "expect": "accept", "reply": "host.audio_devices.reply.volume", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"volume"}}}
+{"name": "host.audio_devices.select-unknown-device", "expect": "accept", "reply": "host.audio_devices.reply.unavailable", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"select","direction":"output","uid":"gone"}}}
+{"name": "host.audio_devices.without-an-operation", "expect": "reject", "reply": "host.audio_devices.reply.without-an-operation", "frame": {"id":1,"method":"host.audio_devices","params":{"direction":"output"}}}
+{"name": "host.audio_devices.unknown-operation", "expect": "reject", "reply": "host.audio_devices.reply.without-an-operation", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"set_volume"}}}
+{"name": "host.audio_devices.list-without-a-direction", "expect": "reject", "reply": "host.audio_devices.reply.without-a-direction", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"list"}}}
+{"name": "host.audio_devices.unknown-direction", "expect": "reject", "reply": "host.audio_devices.reply.without-a-direction", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"list","direction":"both"}}}
+{"name": "host.audio_devices.select-without-a-uid", "expect": "reject", "reply": "host.audio_devices.reply.without-a-uid", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"select","direction":"output"}}}
+{"name": "host.audio_devices.select-empty-uid", "expect": "reject", "reply": "host.audio_devices.reply.without-a-uid", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"select","direction":"output","uid":""}}}
+{"name": "host.audio_devices.step-of-no-ticks", "expect": "reject", "reply": "host.audio_devices.reply.invalid-ticks", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"step_volume","ticks":0}}}
+{"name": "host.audio_devices.step-over-the-scale", "expect": "reject", "reply": "host.audio_devices.reply.invalid-ticks", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"step_volume","ticks":17}}}
+{"name": "host.audio_devices.step-without-ticks", "expect": "reject", "reply": "host.audio_devices.reply.invalid-ticks", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"step_volume"}}}
+{"name": "host.audio_devices.ticks-not-an-integer", "expect": "reject", "reply": "host.audio_devices.reply.invalid-ticks", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"step_volume","ticks":"2"}}}
+{"name": "host.audio_devices.volume-with-a-direction", "expect": "reject", "reply": "host.audio_devices.reply.params-refused", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"volume","direction":"output"}}}
+{"name": "host.audio_devices.list-with-a-uid", "expect": "reject", "reply": "host.audio_devices.reply.params-refused", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"list","direction":"output","uid":"usb-1"}}}
+{"name": "host.audio_devices.unknown-param", "expect": "reject", "reply": "host.audio_devices.reply.params-refused", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"toggle_mute","device":"usb-1"}}}
 {"name": "host.open.url", "expect": "accept", "reply": "host.open.reply", "frame": {"id":1,"method":"host.open","params":{"url":"https://example.com/a"}}}
 {"name": "host.open.app", "expect": "accept", "reply": "host.open.reply.app", "frame": {"id":1,"method":"host.open","params":{"bundle_id":"com.example.app"}}}
 {"name": "host.open.local-file", "expect": "reject", "reply": "host.open.reply.local-file", "frame": {"id":1,"method":"host.open","params":{"url":"file:///Applications/Notes.app"}}}

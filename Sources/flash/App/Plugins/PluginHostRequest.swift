@@ -18,6 +18,7 @@ enum PluginHostRequest {
   case wifiInfo(requestAuthorization: Bool)
   case open(OpenTarget)
   case appleScript([String: Any])
+  case audio(Audio)
   case ax(AX)
 
   typealias Chord = (key: CGKeyCode, flags: CGEventFlags)
@@ -27,6 +28,26 @@ enum PluginHostRequest {
     case url(URL)
     case app(bundleID: String)
   }
+
+  /// One `host.audio_devices` operation (`protocol.json` `audio_devices`).
+  enum Audio: Equatable {
+    case list(AudioDeviceDirection)
+    case select(AudioDeviceDirection, uid: String)
+    /// Never zero, at most `maxVolumeTicks` either way.
+    case stepVolume(ticks: Int)
+    case toggleMute
+    case volume
+
+    /// The operation names, in contract order, each with the params it
+    /// takes besides `operation`.
+    static let operations: [(name: String, params: Set<String>)] = [
+      ("list", ["direction"]), ("select", ["direction", "uid"]), ("step_volume", ["ticks"]),
+      ("toggle_mute", []), ("volume", []),
+    ]
+  }
+
+  /// The most ticks one `step_volume` moves: the whole scale.
+  static let maxVolumeTicks = CoreAudioDevices.volumeTicks
 
   /// The Accessibility broker's calls. Handles are the broker's own.
   enum AX: Equatable {
@@ -45,6 +66,7 @@ enum PluginHostRequest {
     case fetch = "host.fetch"
     case wifiInfo = "host.wifi_info"
     case appleScript = "host.applescript"
+    case audioDevices = "host.audio_devices"
     case normalModeTarget = "host.normal_mode_target"
     case activate = "host.activate"
     case open = "host.open"
@@ -62,6 +84,7 @@ enum PluginHostRequest {
       case .fetch: return .networkFetch
       case .wifiInfo: return .wifiInfo
       case .appleScript: return .appleEvents
+      case .audioDevices: return .audioDevices
       case .normalModeTarget, .activate: return .appControl
       case .open: return .open
       case .postKeys, .axSnapshot, .axPerform, .axSet, .axSelectChild: return .accessibility
@@ -76,6 +99,7 @@ enum PluginHostRequest {
       case .fetch: return ["url"]
       case .wifiInfo: return ["request_authorization"]
       case .appleScript: return nil
+      case .audioDevices: return ["operation", "direction", "uid", "ticks"]
       case .activate: return ["pid"]
       case .open: return ["url", "bundle_id"]
       case .postKeys: return ["pid", "keys", "interval_ms"]
@@ -120,6 +144,8 @@ enum PluginHostRequest {
       self = .normalModeTarget
     case .appleScript:
       self = .appleScript(params)
+    case .audioDevices:
+      self = .audio(try Self.audio(params, malformed: malformed))
     case .activate:
       guard let pid = PluginJSON.pid(params["pid"]) else {
         throw Refusal(message: "host.activate requires pid")
@@ -171,6 +197,50 @@ enum PluginHostRequest {
         throw Refusal(message: "host.ax_select_child requires parent and child")
       }
       self = .ax(.selectChild(parent: parent, child: child))
+    }
+  }
+
+  /// `host.audio_devices`: a known operation with exactly its own params.
+  private static func audio(
+    _ params: [String: Any], malformed: Refusal
+  ) throws(Refusal) -> Audio {
+    guard let name = params["operation"] as? String,
+      let operation = Audio.operations.first(where: { $0.name == name })
+    else { throw Refusal(message: "host.audio_devices requires a supported operation") }
+    guard Set(params.keys).isSubset(of: operation.params.union(["operation"])) else {
+      throw malformed
+    }
+    func direction() throws(Refusal) -> AudioDeviceDirection {
+      guard let raw = params["direction"] as? String,
+        let direction = AudioDeviceDirection(rawValue: raw)
+      else {
+        throw Refusal(message: "host.audio_devices requires an input or output direction")
+      }
+      return direction
+    }
+    switch name {
+    case "list":
+      return .list(try direction())
+    case "select":
+      let direction = try direction()
+      guard let uid = params["uid"] as? String, !uid.isEmpty else {
+        throw Refusal(message: "host.audio_devices select requires a non-empty uid")
+      }
+      return .select(direction, uid: uid)
+    case "step_volume":
+      guard let ticks = PluginJSON.integer(params["ticks"]), ticks != 0,
+        abs(ticks) <= maxVolumeTicks
+      else {
+        throw Refusal(
+          message:
+            "host.audio_devices step_volume requires non-zero ticks from "
+            + "-\(maxVolumeTicks) to \(maxVolumeTicks)")
+      }
+      return .stepVolume(ticks: ticks)
+    case "toggle_mute":
+      return .toggleMute
+    default:
+      return .volume
     }
   }
 

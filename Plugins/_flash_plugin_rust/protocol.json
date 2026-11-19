@@ -33,6 +33,7 @@
       "host.fetch": "network_fetch",
       "host.wifi_info": "wifi_info",
       "host.applescript": "apple_events",
+      "host.audio_devices": "audio_devices",
       "host.normal_mode_target": "app_control",
       "host.activate": "app_control",
       "host.open": "open",
@@ -127,6 +128,21 @@
     "max_seconds": 86400,
     "max_registrations": 64,
     "max_name_bytes": 64
+  },
+  "audio_devices": {
+    "$comment": "host.audio_devices: CoreAudio stays in the host. Requests carry operation and exactly the fields it takes; any other key refuses the call. list {direction} -> {ok, devices: [{uid, name, default}]}, sorted by name, default marking the direction's default device. select {direction, uid} -> {ok} makes the device whose UID is uid the default. step_volume {ticks} -> {ok, percent} moves the default output that many macOS volume-key ticks (a sixteenth each, up when positive, down when negative, never zero, at most max_ticks either way), clears its mute and answers the percent the bezel would show. toggle_mute {} -> {ok, muted} mutes or unmutes the default output. volume {} -> {ok, percent, muted} reads it. percent is 0 to 100. A CoreAudio failure answers {ok:false, error}.",
+    "operations": [
+      "list",
+      "select",
+      "step_volume",
+      "toggle_mute",
+      "volume"
+    ],
+    "directions": [
+      "input",
+      "output"
+    ],
+    "max_ticks": 16
   },
   "applescript": {
     "$comment": "Typed host-owned AppleScript templates; no source code, script field, raw terminology or evaluated strings are accepted. Requests carry operation, timeout_ms and the operation-specific data fields. All strings enter templates only as escaped literals. Supported browser IDs use fixed Chromium/Safari dialects. Every operation checks its actual target against manifest apple_events_targets; shortcuts use com.apple.shortcuts.events and chat_submit uses com.apple.systemevents. The plugin needs apple_events. script_bytes bounds generated source; result_bytes bounds the UTF-8 result; deadlines and per-plugin concurrency include queue admission. The host returns {ok:true,result} or {ok:false,error,status?}; source/results never enter diagnostics.",
@@ -341,6 +357,7 @@
     "accessibility",
     "app_control",
     "apple_events",
+    "audio_devices",
     "network",
     "network_fetch",
     "open",

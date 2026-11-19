@@ -361,6 +361,7 @@ final class PluginSchemaTests: XCTestCase {
     rpc.onNormalModeTargetRequested = { (pid: 512, bundleID: "com.example.app", windowID: 4021) }
     rpc.onSyntheticKeysRequested = { _, _, _ in }
     rpc.wifiInfoProvider = wifi
+    rpc.audioDevices = AudioDeviceStub()
     rpc.appleScriptRunner = { _, _ in
       AppleScriptOutput(status: 0, stdout: "Focus\nRest\n", stderr: "")
     }
@@ -406,7 +407,6 @@ final class PluginSchemaTests: XCTestCase {
     PluginHostRPC.urlOpener = { _ in true }
     PluginHostRPC.urlHandler = { _ in "com.apple.Safari" }
     PluginHostRPC.appOpener = { _, done in done(nil) }
-    let rpc = fixtureDispatcher()
     let replies = Dictionary(uniqueKeysWithValues: hostFrames.map { ($0.name, $0) })
     var answered: Set<String> = []
     for line in pluginFrames where line.method?.hasPrefix("host.") == true {
@@ -416,7 +416,9 @@ final class PluginSchemaTests: XCTestCase {
       }
       answered.insert(line.method ?? "")
       let expected = try XCTUnwrap(replies[name]?.result, name)
-      let reply = hostReply(rpc, line)
+      // Each line meets the fixture as the corpus describes it, not as an
+      // earlier line left it.
+      let reply = hostReply(fixtureDispatcher(), line)
       XCTAssertTrue(
         JSONSchemaValidator.equal(reply, expected), "\(line.name): \(reply) is not \(name)")
       if !line.accepted {

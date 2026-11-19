@@ -203,6 +203,13 @@ Handed to every handler; cheap to clone. Key surface:
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.
+  The `audio_devices` capability has its own typed calls, each a `Result`
+  whose `Err` is the host's error: `audio_devices(AudioDirection::Output)`
+  lists `AudioDevice { uid, name, is_default }`, `select_audio_device(direction,
+  uid)` changes the default, `step_output_volume(ticks)` moves the output
+  that many volume-key ticks (clamped to `MAX_VOLUME_TICKS` either way) and
+  answers the percent, `toggle_output_mute()` answers whether it is muted,
+  and `output_volume()` reads `OutputVolume { percent, muted }`.
 - Host clock: a plugin never arms a timer or sleeps to schedule work.
   `ctx.interval(period, priority, callback)` registers a cadence with the
   host, which drives every poller in Flash — core watchers included — from one

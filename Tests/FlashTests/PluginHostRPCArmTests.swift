@@ -67,7 +67,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 12, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 13, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -81,7 +81,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 11, "11 gated + host.ping ungated")
+    XCTAssertEqual(gated, 12, "12 gated + host.ping ungated")
     // The ungated arm answers without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
   }
@@ -222,6 +222,120 @@ final class PluginHostRPCArmTests: XCTestCase {
         "host.wifi_info requires a boolean request_authorization param",
         "\(String(describing: invalid))")
     }
+  }
+
+  // MARK: - host.audio_devices (CoreAudio seam)
+
+  private func audioReply(
+    _ rpc: PluginHostRPC, _ params: [String: Any]
+  ) -> NSDictionary {
+    hostReply(rpc, "host.audio_devices", params, capabilities: [.audioDevices]) as NSDictionary
+  }
+
+  func testAudioDevicesListsSelectsStepsMutesAndReads() {
+    let rpc = PluginHostRPC()
+    let devices = AudioDeviceStub()
+    rpc.audioDevices = devices
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "list", "direction": "output"]),
+      [
+        "ok": true,
+        "devices": [
+          ["uid": "built-in", "name": "MacBook Pro Speakers", "default": true],
+          ["uid": "usb-1", "name": "USB Audio", "default": false],
+        ],
+      ] as NSDictionary)
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "select", "direction": "input", "uid": "usb-1"]),
+      ["ok": true] as NSDictionary)
+    XCTAssertEqual(devices.devices[.input]?.first { $0.isDefault }?.uid, "usb-1")
+    XCTAssertEqual(devices.devices[.output]?.first { $0.isDefault }?.uid, "built-in")
+    // 38% is the sixth of sixteen ticks; three more is the ninth.
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "step_volume", "ticks": 3]),
+      ["ok": true, "percent": 56] as NSDictionary)
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "step_volume", "ticks": -16]),
+      ["ok": true, "percent": 0] as NSDictionary)
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "toggle_mute"]), ["ok": true, "muted": true] as NSDictionary)
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "volume"]),
+      ["ok": true, "percent": 0, "muted": true] as NSDictionary)
+    XCTAssertEqual(
+      devices.calls,
+      ["list output", "select input usb-1", "step 3", "step -16", "mute", "volume"])
+  }
+
+  func testAudioDevicesReportsACoreAudioFailureAsTheReplysError() {
+    let rpc = PluginHostRPC()
+    let devices = AudioDeviceStub()
+    rpc.audioDevices = devices
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "select", "direction": "output", "uid": "gone"]),
+      ["ok": false, "error": "audio device unavailable: gone"] as NSDictionary)
+    devices.failure = AudioDeviceError.unsupported("output volume")
+    for operation in ["step_volume", "volume"] {
+      var params: [String: Any] = ["operation": operation]
+      if operation == "step_volume" { params["ticks"] = 1 }
+      XCTAssertEqual(
+        audioReply(rpc, params),
+        ["ok": false, "error": "audio device does not support output volume"] as NSDictionary)
+    }
+    devices.failure = AudioDeviceError.system(-50)
+    XCTAssertEqual(
+      audioReply(rpc, ["operation": "list", "direction": "input"]),
+      ["ok": false, "error": "CoreAudio error -50"] as NSDictionary)
+  }
+
+  /// Each operation takes exactly its own params; a refused call reaches no
+  /// device.
+  func testAudioDevicesRefusesWhatItsOperationDoesNotTake() {
+    let rpc = PluginHostRPC()
+    let devices = AudioDeviceStub()
+    rpc.audioDevices = devices
+    let operation = "host.audio_devices requires a supported operation"
+    let direction = "host.audio_devices requires an input or output direction"
+    let uid = "host.audio_devices select requires a non-empty uid"
+    let ticks = "host.audio_devices step_volume requires non-zero ticks from -16 to 16"
+    let closed = "invalid host.audio_devices params"
+    let refusals: [([String: Any], String)] = [
+      ([:], operation),
+      (["operation": "set_volume"], operation),
+      (["operation": 3], operation),
+      (["operation": "list"], direction),
+      (["operation": "list", "direction": "both"], direction),
+      (["operation": "select", "uid": "usb-1"], direction),
+      (["operation": "select", "direction": "output"], uid),
+      (["operation": "select", "direction": "output", "uid": ""], uid),
+      (["operation": "select", "direction": "output", "uid": 7], uid),
+      (["operation": "step_volume"], ticks),
+      (["operation": "step_volume", "ticks": 0], ticks),
+      (["operation": "step_volume", "ticks": 17], ticks),
+      (["operation": "step_volume", "ticks": -17], ticks),
+      (["operation": "step_volume", "ticks": 1.5], ticks),
+      (["operation": "step_volume", "ticks": "2"], ticks),
+      (["operation": "list", "direction": "output", "uid": "usb-1"], closed),
+      (["operation": "volume", "direction": "output"], closed),
+      (["operation": "toggle_mute", "ticks": 1], closed),
+      (["operation": "step_volume", "ticks": 1, "direction": "output"], closed),
+      (["operation": "volume", "percent": 50], closed),
+    ]
+    for (params, error) in refusals {
+      XCTAssertEqual(
+        audioReply(rpc, params), ["ok": false, "error": error] as NSDictionary, "\(params)")
+    }
+    XCTAssertEqual(devices.calls, [])
+  }
+
+  /// The operations, directions and tick bound are the contract's.
+  func testAudioDevicesContractMatchesSpec() throws {
+    let audio = try XCTUnwrap(try protocolSpec()["audio_devices"] as? [String: Any])
+    XCTAssertEqual(
+      audio["operations"] as? [String], PluginHostRequest.Audio.operations.map(\.name))
+    XCTAssertEqual(
+      audio["directions"] as? [String], AudioDeviceDirection.allCases.map(\.rawValue))
+    XCTAssertEqual(audio["max_ticks"] as? Int, PluginHostRequest.maxVolumeTicks)
   }
 
   // MARK: - host.open (urlOpener / appOpener seams)

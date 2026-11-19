@@ -10,7 +10,7 @@ final class MediaCommandTests: XCTestCase {
   private final class StubDevices: AudioDeviceProviding {
     var devices: [AudioDeviceDirection: [AudioDeviceRecord]] = [:]
     var selected: [(uid: String, direction: AudioDeviceDirection)] = []
-    var steps: [Bool] = []
+    var steps: [Int] = []
     var muteToggles = 0
     var percent = 50
     var volume = OutputVolume(percent: 44, muted: false)
@@ -23,13 +23,16 @@ final class MediaCommandTests: XCTestCase {
     func select(uid: String, direction: AudioDeviceDirection) throws {
       selected.append((uid, direction))
     }
-    func stepOutputVolume(up: Bool) throws -> Int {
+    func stepOutputVolume(ticks: Int) throws -> Int {
       if let failure { throw failure }
-      steps.append(up)
-      percent += up ? 6 : -6
+      steps.append(ticks)
+      percent += ticks * 6
       return percent
     }
-    func toggleOutputMute() throws { muteToggles += 1 }
+    func toggleOutputMute() throws -> Bool {
+      muteToggles += 1
+      return muteToggles % 2 == 1
+    }
     func outputVolume() throws -> OutputVolume { volume }
   }
 
@@ -133,7 +136,9 @@ final class MediaCommandTests: XCTestCase {
       devices: devices, runningBundleIDs: { [] }, runScript: { _ in nil })
     XCTAssertEqual(controller.outcome(of: .volumeUp), .volume(56))
     XCTAssertEqual(controller.outcome(of: .volumeDown, repeatCount: 3), .volume(38))
-    XCTAssertEqual(devices.steps, [true, false, false, false])
+    XCTAssertEqual(devices.steps, [1, -3], "a count is one step of that many ticks")
+    XCTAssertEqual(controller.outcome(of: .volumeUp, repeatCount: 40), .volume(134))
+    XCTAssertEqual(devices.steps.last, 16, "the whole scale at most")
     XCTAssertEqual(controller.outcome(of: .volumeMute), .done)
     XCTAssertEqual(devices.muteToggles, 1)
     devices.failure = AudioDeviceError.unsupported("output volume")
@@ -238,6 +243,15 @@ final class MediaCommandTests: XCTestCase {
       CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, direction: 1)), 44)
     XCTAssertEqual(
       CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, direction: -1)), 38)
+    // Several ticks at once land where that many single steps do.
+    XCTAssertEqual(
+      CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.375, ticks: 2)), 50)
+    XCTAssertEqual(
+      CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, ticks: 2)), 50)
+    XCTAssertEqual(
+      CoreAudioDevices.volumePercent(CoreAudioDevices.nativeVolume(0.40, ticks: -2)), 31)
+    XCTAssertEqual(CoreAudioDevices.nativeVolume(0.5, ticks: 99), 1, accuracy: 0.0001)
+    XCTAssertEqual(CoreAudioDevices.nativeVolume(0.5, ticks: -99), 0, accuracy: 0.0001)
   }
 
   /// Play/pause is the keyboard's own NX_KEYTYPE_PLAY, posted as a key down

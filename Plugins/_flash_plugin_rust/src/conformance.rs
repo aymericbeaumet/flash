@@ -18,8 +18,8 @@ use crate::runtime::decode_event;
 use crate::status::{Preview, StatusCarousel, StatusSegment, StatusValue};
 use crate::testing::{Harness, WireHarness};
 use crate::{
-    AppleScriptOperation, Candidate, Context, EvaluateRequest, EvaluateResponse, Frame,
-    HintsRequest, HintsResponse, JumpTarget, Perform, PerformResponse, Plugin, PollPriority,
+    AppleScriptOperation, AudioDirection, Candidate, Context, EvaluateRequest, EvaluateResponse,
+    Frame, HintsRequest, HintsResponse, JumpTarget, Perform, PerformResponse, Plugin, PollPriority,
     Priority, QueryAnswer, TextGridLine, TextGridRequest, TextGridResponse,
 };
 
@@ -559,6 +559,30 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
                 bundle_id: safari(),
             })
             .await,
+        ),
+        (
+            "host.audio_devices.list",
+            request(|ctx| async move { ctx.audio_devices(AudioDirection::Output).await }).await,
+        ),
+        (
+            "host.audio_devices.select",
+            request(|ctx| async move {
+                ctx.select_audio_device(AudioDirection::Input, "usb-1")
+                    .await
+            })
+            .await,
+        ),
+        (
+            "host.audio_devices.step-volume",
+            request(|ctx| async move { ctx.step_output_volume(2).await }).await,
+        ),
+        (
+            "host.audio_devices.toggle-mute",
+            request(|ctx| async move { ctx.toggle_output_mute().await }).await,
+        ),
+        (
+            "host.audio_devices.volume",
+            request(|ctx| async move { ctx.output_volume().await }).await,
         ),
         (
             "host.normal_mode_target",

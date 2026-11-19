@@ -1332,7 +1332,8 @@ mod tests {
         // One permissive reply satisfies every wrapper's result decoder.
         let host_reply = json!({
             "ok": true, "present": true, "ssid": "Atelier", "status": 200, "body": "b",
-            "pid": 7, "bundle_id": "com.example.App"
+            "pid": 7, "bundle_id": "com.example.App", "percent": 38, "muted": false,
+            "devices": [{ "uid": "usb-1", "name": "USB Audio", "default": true }]
         });
         let table: Vec<(&str, Value, Call, Value)> = vec![
             (
@@ -1358,6 +1359,48 @@ mod tests {
                 json!({ "url": "https://example.com/x" }),
                 call!(|ctx| ctx.fetch("https://example.com/x").await.unwrap()),
                 json!("b"),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "operation": "list", "direction": "input" }),
+                call!(|ctx| ctx
+                    .audio_devices(crate::AudioDirection::Input)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|device| (device.uid, device.name, device.is_default))
+                    .collect::<Vec<_>>()),
+                json!([["usb-1", "USB Audio", true]]),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "operation": "select", "direction": "output", "uid": "usb-1" }),
+                call!(|ctx| ctx
+                    .select_audio_device(crate::AudioDirection::Output, "usb-1")
+                    .await
+                    .is_ok()),
+                json!(true),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "operation": "step_volume", "ticks": -2 }),
+                call!(|ctx| ctx.step_output_volume(-2).await.unwrap()),
+                json!(38),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "operation": "toggle_mute" }),
+                call!(|ctx| ctx.toggle_output_mute().await.unwrap()),
+                json!(false),
+            ),
+            (
+                "host.audio_devices",
+                json!({ "operation": "volume" }),
+                call!(|ctx| {
+                    let volume = ctx.output_volume().await.unwrap();
+                    (volume.percent, volume.muted)
+                }),
+                json!([38, false]),
             ),
             (
                 "host.normal_mode_target",

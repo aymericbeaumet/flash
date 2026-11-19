@@ -215,13 +215,11 @@ final class MediaController {
     do {
       switch command {
       case .volumeUp, .volumeDown:
-        var percent = 0
-        for _ in 0..<max(1, repeatCount) {
-          percent = try devices.stepOutputVolume(up: command == .volumeUp)
-        }
-        return .volume(percent)
+        let ticks = min(max(1, repeatCount), CoreAudioDevices.volumeTicks)
+        return .volume(
+          try devices.stepOutputVolume(ticks: command == .volumeUp ? ticks : -ticks))
       case .volumeMute:
-        try devices.toggleOutputMute()
+        _ = try devices.toggleOutputMute()
         return .done
       case .device(let direction, nil):
         return .message(

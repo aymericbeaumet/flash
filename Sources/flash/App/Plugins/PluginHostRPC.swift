@@ -41,6 +41,11 @@ final class PluginHostRPC {
   /// Host-owned Location/CoreWLAN provider for `host.wifi_info`. Set by
   /// AppDelegate so plugins never access either framework directly.
   var wifiInfoProvider: WiFiInfoProviding?
+  /// CoreAudio for `host.audio_devices`: plugins never reach it themselves.
+  var audioDevices: any AudioDeviceProviding = CoreAudioDevices()
+  /// Every CoreAudio call is a synchronous audio-server request, so they
+  /// run here, in order, off the main thread and off the plugin's queue.
+  private let audioQueue = DispatchQueue(label: "flash.plugins.audio", qos: .userInitiated)
 
   // Testability seams for the arms whose production bodies fire
   // irreversible side effects (LaunchServices open). Tests swap these to
@@ -137,6 +142,8 @@ final class PluginHostRPC {
       }
     case .open(let target):
       hostOpen(target, scope: scope, reply: reply)
+    case .audio(let operation):
+      hostAudioDevices(operation, scope: scope, reply: reply)
     case .appleScript(let params):
       PluginHostAppleScript.handle(
         params, targets: appleEventsTargets, browsers: browserEngines(), pluginID: pluginID,
@@ -232,6 +239,40 @@ final class PluginHostRPC {
             reply(["ok": true])
           }
         }
+      }
+    }
+  }
+
+  /// `host.audio_devices`: one CoreAudio operation on the audio queue. A
+  /// CoreAudio failure is the reply's error.
+  private func hostAudioDevices(
+    _ operation: PluginHostRequest.Audio, scope: PluginHostRequestScope,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    let devices = audioDevices
+    scope.enqueue(on: audioQueue) {
+      do {
+        switch operation {
+        case .list(let direction):
+          reply([
+            "ok": true,
+            "devices": try devices.list(direction: direction).map {
+              ["uid": $0.uid, "name": $0.name, "default": $0.isDefault] as [String: Any]
+            },
+          ])
+        case .select(let direction, let uid):
+          try devices.select(uid: uid, direction: direction)
+          reply(["ok": true])
+        case .stepVolume(let ticks):
+          reply(["ok": true, "percent": try devices.stepOutputVolume(ticks: ticks)])
+        case .toggleMute:
+          reply(["ok": true, "muted": try devices.toggleOutputMute()])
+        case .volume:
+          let volume = try devices.outputVolume()
+          reply(["ok": true, "percent": volume.percent, "muted": volume.muted])
+        }
+      } catch {
+        reply(["ok": false, "error": error.localizedDescription])
       }
     }
   }

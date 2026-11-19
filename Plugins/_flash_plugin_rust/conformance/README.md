@@ -58,6 +58,9 @@ The lines describe one plugin and one moment:
   Apple Events targets `com.apple.Safari`, `com.apple.shortcuts.events` and
   `com.apple.systemevents`; `https:` URLs open in `com.apple.Safari`; a script
   prints `Focus\nRest\n`.
+- Output devices `MacBook Pro Speakers` (`built-in`, the default) and
+  `USB Audio` (`usb-1`), the same two as inputs; the output at 38%, not
+  muted. A step of two ticks lands on 50%.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
 - Command `tab next --index=3` succeeds in the focused app, `example decline`
   is unhandled, `example break` fails and `example repeat` answers its count.
