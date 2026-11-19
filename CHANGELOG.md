@@ -398,6 +398,13 @@ monitors read that no plugin publishes any more, with its replacement.
   other key cancels, and the request that follows a `y` says so
   (`confirmed`), as does one wrapped in `alert confirm`
   ([confirmation](docs/plugin-protocol.md#confirmation)).
+- A plugin holding the `accessibility` capability can read the menu bar of
+  the app you are in. `host.ax_snapshot` takes `"root": "menu_bar"` and no
+  `pid`: Flash names the app that owns the menu bar, never itself, and
+  answers that app's `pid` with the bar's elements, each with the handle
+  `host.ax_perform` presses it by. The menu bar has its own queue in Flash,
+  so it neither waits on a browser's window walk nor holds one up
+  ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
 - A plugin holding the new `system_actions` capability asks Flash to lock
   the screen, sleep the Mac or its displays, start the screen saver, toggle
   dark mode, restart, shut down, log out or empty the Trash through

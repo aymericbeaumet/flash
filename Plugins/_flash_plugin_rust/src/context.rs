@@ -627,11 +627,15 @@ impl Context {
         ok(&self.call_host("host.post_keys", params).await)
     }
 
-    /// BFS-walk an app's AX windows through the host broker
-    /// (`host.ax_snapshot`); nodes come back flat with opaque handles.
-    /// `params` is `{"pid": …, "follow"?, "collect"?, "max_nodes"?,
-    /// "prune_roles"?}`; the host refuses any other key. Returns the raw
-    /// result object. Requires the `accessibility` capability.
+    /// BFS-walk an AX tree through the host broker (`host.ax_snapshot`);
+    /// nodes come back flat with opaque handles. `params` is `{"pid": …,
+    /// "follow"?, "collect"?, "max_nodes"?, "prune_roles"?}` for an app's
+    /// windows, or `{"root": "menu_bar", …}` without a `pid` for the menu
+    /// bar of the app that owns it ([`ax_snapshot_roots`](crate::ax_snapshot_roots)):
+    /// the host names that app, and the result carries its `pid` beside
+    /// `nodes`, whose first node is the bar itself. The host refuses any
+    /// other key. Returns the raw result object. Requires the
+    /// `accessibility` capability.
     pub async fn ax_snapshot(&self, params: Value) -> Value {
         self.call_host("host.ax_snapshot", params).await
     }
@@ -1439,6 +1443,18 @@ mod tests {
                 "host.ax_snapshot",
                 json!({ "pid": 7 }),
                 call!(|ctx| ctx.ax_snapshot(json!({ "pid": 7 })).await["ok"].clone()),
+                json!(true),
+            ),
+            (
+                "host.ax_snapshot",
+                json!({ "root": "menu_bar", "collect": ["AXRole"] }),
+                call!(|ctx| ctx
+                    .ax_snapshot(json!({
+                        "root": crate::ax_snapshot_roots::MENU_BAR,
+                        "collect": ["AXRole"],
+                    }))
+                    .await["ok"]
+                    .clone()),
                 json!(true),
             ),
             (

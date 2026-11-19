@@ -169,6 +169,10 @@ mod tests {
                 .map(String::from)
                 .to_vec()
         );
+        assert_eq!(
+            contract["ax_snapshot"]["roots"],
+            serde_json::json!(crate::types::ax_snapshot_roots::ALL)
+        );
     }
 
     /// A burst of payload-free change signals under overload collapses to one

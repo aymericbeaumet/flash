@@ -245,6 +245,10 @@
 {"name": "host.post_keys.interval-a-string", "expect": "reject", "reply": "host.post_keys.reply.invalid-interval", "frame": {"id":1,"method":"host.post_keys","params":{"pid":512,"keys":[{"key_code":36,"modifiers":["command"]}],"interval_ms":"35"}}}
 {"name": "host.ax_snapshot", "expect": "accept", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"follow":["AXChildren"],"collect":["AXRole","AXTitle"],"max_nodes":2000,"prune_roles":["AXMenuBar"]}}}
 {"name": "host.ax_snapshot.defaults", "expect": "accept", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512}}}
+{"name": "host.ax_snapshot.menu-bar", "expect": "accept", "frame": {"id":1,"method":"host.ax_snapshot","params":{"root":"menu_bar","follow":["AXChildren"],"collect":["AXRole","AXTitle","AXEnabled"],"max_nodes":3000}}}
+{"name": "host.ax_snapshot.windows", "expect": "accept", "frame": {"id":1,"method":"host.ax_snapshot","params":{"root":"windows","pid":512}}}
+{"name": "host.ax_snapshot.menu-bar-with-a-pid", "expect": "reject", "reply": "host.ax_snapshot.reply.menu-bar-with-a-pid", "frame": {"id":1,"method":"host.ax_snapshot","params":{"root":"menu_bar","pid":512}}}
+{"name": "host.ax_snapshot.windows-without-a-pid", "expect": "reject", "reply": "host.ax_snapshot.reply.without-a-pid", "frame": {"id":1,"method":"host.ax_snapshot","params":{"root":"windows"}}}
 {"name": "host.ax_snapshot.without-a-pid", "expect": "reject", "reply": "host.ax_snapshot.reply.without-a-pid", "frame": {"id":1,"method":"host.ax_snapshot","params":{"collect":["AXRole"]}}}
 {"name": "host.ax_snapshot.max-nodes-a-string", "expect": "reject", "reply": "host.ax_snapshot.reply.invalid-scalars", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"max_nodes":"2000"}}}
 {"name": "host.ax_perform", "expect": "accept", "frame": {"id":1,"method":"host.ax_perform","params":{"handle":7,"action":"AXPress"}}}
@@ -265,6 +269,8 @@
 {"name": "host.post_keys.unknown-param", "expect": "reject", "reply": "host.post_keys.reply.params-refused", "frame": {"id":1,"method":"host.post_keys","params":{"pid":512,"keys":[{"key_code":36,"modifiers":["command"]}],"repeat":2}}}
 {"name": "host.post_keys.unknown-key-field", "expect": "reject", "reply": "host.post_keys.reply.params-refused", "frame": {"id":1,"method":"host.post_keys","params":{"pid":512,"keys":[{"key_code":36,"modifiers":["command"],"down":true}]}}}
 {"name": "host.ax_snapshot.unknown-param", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"depth":3}}}
+{"name": "host.ax_snapshot.unknown-root", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"root":"dock","pid":512}}}
+{"name": "host.ax_snapshot.root-not-a-string", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"root":["menu_bar"]}}}
 {"name": "host.ax_snapshot.follow-not-an-array", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"follow":"AXChildren"}}}
 {"name": "host.ax_snapshot.collect-item-not-a-string", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"collect":["AXRole",7]}}}
 {"name": "host.ax_snapshot.prune-roles-not-an-array", "expect": "reject", "reply": "host.ax_snapshot.reply.params-refused", "frame": {"id":1,"method":"host.ax_snapshot","params":{"pid":512,"prune_roles":"AXMenuBar"}}}

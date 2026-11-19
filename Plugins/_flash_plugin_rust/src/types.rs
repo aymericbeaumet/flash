@@ -257,6 +257,19 @@ pub mod candidate_metadata {
     pub const PRIORITY: &str = "priority";
 }
 
+/// The trees `host.ax_snapshot` walks, as its `root` param names them
+/// (`protocol.json` `ax_snapshot.roots`).
+pub mod ax_snapshot_roots {
+    /// The windows of the app the snapshot's `pid` names: the default.
+    pub const WINDOWS: &str = "windows";
+    /// The menu bar of the app that owns it. The host names the app, so the
+    /// snapshot takes no `pid` and its reply carries one.
+    pub const MENU_BAR: &str = "menu_bar";
+
+    /// In `protocol.json` order.
+    pub const ALL: [&str; 2] = [WINDOWS, MENU_BAR];
+}
+
 /// Every AX notification `core:ax.changed` reports in
 /// [`Event::notification`] (`protocol.json` `host_events.ax_notifications`):
 /// the host forwards each of these, for every app it observes.

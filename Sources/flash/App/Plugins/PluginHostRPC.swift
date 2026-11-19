@@ -11,8 +11,9 @@ import Foundation
 final class PluginHostRPC {
   /// Owns the single AX (Accessibility) grant and the handle registry that
   /// backs the `host.ax_*` RPCs. Plugins never touch AX directly; they reach
-  /// it through this broker via `handleHostRequest`.
-  private let axBroker = AXBroker()
+  /// it through this broker via `handleHostRequest`. A test substitutes one
+  /// whose trees are fixtures, before any plugin starts.
+  var axBroker = AXBroker()
   var appleScriptRunner: (String, TimeInterval) -> AppleScriptOutput = AppleScriptRunner.run
   /// The browsers `host.applescript` serves: the engines manifests declare.
   var browserEngines: () -> BrowserEngineTable = { BrowserEngines.declared.table }

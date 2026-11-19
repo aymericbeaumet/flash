@@ -245,7 +245,7 @@ struct AXMenuPathPresser: MenuPathPresser {
     guard let barTitle = path.first else { return false }
     let app = AXApp.make(pid: pid)
     guard
-      var element = MenuBarSource.menuBarItems(of: app).first(where: {
+      var element = AXMenuBar.items(of: app).first(where: {
         Self.title(of: $0) == barTitle
       })
     else { return false }

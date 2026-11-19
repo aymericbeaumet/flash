@@ -26,6 +26,10 @@
             "ok": {
               "const": true
             },
+            "pid": {
+              "$ref": "definitions.schema.json#/definitions/pid",
+              "description": "The app a menu_bar snapshot walked. Absent from a windows snapshot, and when no app but Flash owns the menu bar."
+            },
             "nodes": {
               "type": "array",
               "items": {

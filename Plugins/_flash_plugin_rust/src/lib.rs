@@ -52,7 +52,7 @@ pub use types::{
     Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, Perform, PerformAlert,
     PerformResponse, Priority, QueryAnswer, RunningApplication, SearchRequest, SearchResponse,
     TERMINAL_LINK_ROLE, TextGridCell, TextGridLine, TextGridRequest, TextGridResponse,
-    ax_notifications, candidate_metadata, host_events,
+    ax_notifications, ax_snapshot_roots, candidate_metadata, host_events,
 };
 
 pub use applescript::AppleScriptOperation;

@@ -1059,12 +1059,29 @@ final class PluginHostRPCArmTests: XCTestCase {
   // MARK: - host.ax_* routing (validation errors only; real trees are the
   // AX broker suite's business)
 
+  /// The snapshot's roots, its node default and its budget are the
+  /// contract's.
+  func testAXSnapshotContractMatchesSpec() throws {
+    let spec = try XCTUnwrap(try protocolSpec()["ax_snapshot"] as? [String: Any])
+    XCTAssertEqual(spec["roots"] as? [String], PluginHostRequest.AX.SnapshotRoot.names)
+    XCTAssertEqual(spec["default_max_nodes"] as? Int, AXBroker.defaultMaxNodes)
+    XCTAssertEqual(spec["timeout_ms"] as? Int, AXBroker.snapshotTimeoutMs)
+  }
+
   func testAXArmsRouteToTheBrokerAndSurfaceItsValidationErrors() {
     let rpc = PluginHostRPC()
     let caps: Set<PluginCapability> = [.accessibility]
     XCTAssertEqual(
       hostReply(rpc, "host.ax_snapshot", [:], capabilities: caps)["error"] as? String,
       "host.ax_snapshot requires pid")
+    XCTAssertEqual(
+      hostReply(rpc, "host.ax_snapshot", ["root": "menu_bar", "pid": 123], capabilities: caps)[
+        "error"] as? String,
+      "host.ax_snapshot takes no pid with root menu_bar")
+    XCTAssertEqual(
+      hostReply(rpc, "host.ax_snapshot", ["root": "menu_bar"], capabilities: [])["error"]
+        as? String,
+      "missing accessibility capability", "the menu bar is behind the same capability")
     XCTAssertEqual(
       hostReply(rpc, "host.ax_perform", [:], capabilities: caps)["error"] as? String,
       "host.ax_perform requires handle")

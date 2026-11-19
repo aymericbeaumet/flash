@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.ax_snapshot.schema.json",
   "title": "host.ax_snapshot",
-  "description": "Plugin to host: walk one app's accessibility tree and read the attributes it names.",
+  "description": "Plugin to host: walk an app's windows, or the menu bar of the app that owns it, and read the attributes it names.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,40 +18,85 @@
       "const": "host.ax_snapshot"
     },
     "params": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "pid"
-      ],
-      "properties": {
-        "pid": {
-          "$ref": "definitions.schema.json#/definitions/pid"
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pid"
+          ],
+          "properties": {
+            "root": {
+              "const": "windows",
+              "description": "The app's windows: the default."
+            },
+            "pid": {
+              "$ref": "definitions.schema.json#/definitions/pid"
+            },
+            "follow": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The attributes whose elements the walk descends into."
+            },
+            "collect": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The attributes read on every node."
+            },
+            "max_nodes": {
+              "type": "integer"
+            },
+            "prune_roles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The roles the walk does not descend below."
+            }
+          }
         },
-        "follow": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "The attributes whose elements the walk descends into."
-        },
-        "collect": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "The attributes read on every node."
-        },
-        "max_nodes": {
-          "type": "integer"
-        },
-        "prune_roles": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "The roles the walk does not descend below."
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "root"
+          ],
+          "properties": {
+            "root": {
+              "const": "menu_bar",
+              "description": "The menu bar of the app that owns it. The host names the app, so no pid."
+            },
+            "follow": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The attributes whose elements the walk descends into."
+            },
+            "collect": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The attributes read on every node."
+            },
+            "max_nodes": {
+              "type": "integer"
+            },
+            "prune_roles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The roles the walk does not descend below."
+            }
+          }
         }
-      }
+      ]
     }
   }
 }

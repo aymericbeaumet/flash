@@ -57,11 +57,23 @@ enum PluginHostRequest {
   enum AX: Equatable {
     /// An empty `follow` and an absent `maxNodes` take the broker's defaults.
     case snapshot(
-      pid: pid_t, follow: [String], collect: [String], pruneRoles: Set<String>, maxNodes: Int?)
+      root: SnapshotRoot, follow: [String], collect: [String], pruneRoles: Set<String>,
+      maxNodes: Int?)
     /// An absent `action` presses.
     case perform(handle: UInt64, action: String?)
     case set(handle: UInt64, attribute: String, value: Bool)
     case selectChild(parent: UInt64, child: UInt64)
+
+    /// Where a snapshot starts (`protocol.json` `ax_snapshot.roots`).
+    enum SnapshotRoot: Equatable {
+      /// The windows of the app the plugin names.
+      case windows(pid: pid_t)
+      /// The menu bar of the app that owns it, which the host names.
+      case menuBar
+
+      /// The wire names, in contract order; the first is the default.
+      static let names = ["windows", "menu_bar"]
+    }
   }
 
   /// The methods of `protocol.json` `plugin_to_host_rpcs`.
@@ -113,7 +125,7 @@ enum PluginHostRequest {
       case .activate: return ["pid"]
       case .open: return ["url", "bundle_id"]
       case .postKeys: return ["pid", "keys", "interval_ms"]
-      case .axSnapshot: return ["pid", "follow", "collect", "max_nodes", "prune_roles"]
+      case .axSnapshot: return ["root", "pid", "follow", "collect", "max_nodes", "prune_roles"]
       case .axPerform: return ["handle", "action"]
       case .axSet: return ["handle", "attribute", "value"]
       case .axSelectChild: return ["parent", "child"]
@@ -187,8 +199,24 @@ enum PluginHostRequest {
     case .postKeys:
       self = try Self.postKeys(params, malformed: malformed)
     case .axSnapshot:
-      guard let pid = PluginJSON.pid(params["pid"]) else {
-        throw Refusal(message: "host.ax_snapshot requires pid")
+      // An absent root is the first of `SnapshotRoot.names`.
+      guard let name = params["root"].map({ $0 as? String }) ?? "windows" else { throw malformed }
+      let root: AX.SnapshotRoot
+      switch name {
+      case "windows":
+        guard let pid = PluginJSON.pid(params["pid"]) else {
+          throw Refusal(message: "host.ax_snapshot requires pid")
+        }
+        root = .windows(pid: pid)
+      case "menu_bar":
+        // The host names the app: a plugin asking for one app's menus by
+        // pid would be asking for another tree.
+        guard params["pid"] == nil else {
+          throw Refusal(message: "host.ax_snapshot takes no pid with root menu_bar")
+        }
+        root = .menuBar
+      default:
+        throw malformed
       }
       let maxNodes = PluginJSON.integer(params["max_nodes"])
       guard params["max_nodes"] == nil || maxNodes != nil else {
@@ -196,7 +224,7 @@ enum PluginHostRequest {
       }
       self = .ax(
         .snapshot(
-          pid: pid, follow: try strings("follow"), collect: try strings("collect"),
+          root: root, follow: try strings("follow"), collect: try strings("collect"),
           pruneRoles: Set(try strings("prune_roles")), maxNodes: maxNodes))
     case .axPerform:
       guard let handle = handle("handle") else {

@@ -811,8 +811,30 @@ is refused (`host.open does not open local files`): a sandboxed plugin could
 otherwise write a `.command`, a script or an app into its data directory and
 have LaunchServices run it outside the sandbox.
 The AX broker exists because `AXUIElement` cannot
-cross a process boundary: `host.ax_snapshot` BFS-walks an app's windows
-(default cap 3000 nodes) and returns flat nodes with opaque handles.
+cross a process boundary: `host.ax_snapshot` BFS-walks one tree (default cap
+3000 nodes) and returns flat nodes with opaque handles. `root` names the
+tree. `"windows"`, the default, is the windows of the app `pid` names.
+`"menu_bar"` is the menu bar of the app that owns it: the host names that
+app, the one whose menus are installed, so the request takes no `pid` (one
+beside it is refused) and the reply carries the app's `pid` beside `nodes`.
+Its one root is the app's `AXMenuBar`: the first node is the bar, its
+children the bar items in bar order, the Apple menu first, and a boolean
+attribute such as `AXEnabled` arrives as `"1"` or `"0"`. The host never walks
+its own menus: when no app but Flash owns the bar the reply is `{"ok": true,
+"nodes": []}`, without a `pid`. Each element costs one Accessibility round
+trip, which reads `collect` and `follow` together, so name only what you
+read: a menu bar of 2,500 elements, read for its roles, titles, enabled
+flags and children, is a reply of about 310 KB.
+A snapshot supersedes the handles the plugin held for that app, and a
+menu-bar snapshot its menu-bar handles for every app, since one app owns the
+bar at a time; a quit app's handles go with it. A call on a handle that is
+gone answers `stale ax handle` and touches nothing.
+The two trees have separate host queues, and a call on a handle runs on the
+queue of the snapshot that returned it: a menu bar never waits on a
+browser's window walk, nor a hint provider's window snapshot on a menu bar.
+The menu bar is AppKit's own in a Gecko app too, so reading or pressing it
+takes no part in Gecko's process lock.
+`protocol.json` `ax_snapshot` pins the roots, the default cap and the budget.
 Snapshots have a host-side five-second budget including queue admission.
 Expiry, a revoked child, or an unresponsive AX batch fails the whole snapshot;
 it never returns partial nodes or leaves their handles actionable. The budget

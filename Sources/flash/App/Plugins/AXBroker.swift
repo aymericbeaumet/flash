@@ -28,6 +28,11 @@ struct AXElementIdentitySet {
 /// own domain logic (what counts as a "tab") and later acts on a node by its
 /// handle via `host.ax_perform` / `host.ax_set`. The registry keeps the real elements
 /// resident between the snapshot and those follow-up calls.
+///
+/// A snapshot walks one of two trees: an app's windows, or the menu bar of
+/// the app that owns it (`root: "menu_bar"`), which the broker names itself.
+/// Each tree has its own serial queue, and a handle's later calls run on the
+/// queue of the walk that returned it.
 final class AXBroker {
   /// A snapshot must release the tree even after its plugin stopped waiting.
   /// Match the SDK's default host-call budget; queue admission counts too.
@@ -39,6 +44,12 @@ final class AXBroker {
     case cancelled = "accessibility snapshot cancelled"
   }
 
+  /// The tree a snapshot walked, kept on each of its handles.
+  private enum Tree {
+    case windows
+    case menuBar
+  }
+
   private struct Entry {
     /// Owning plugin id. Handles are integers a plugin could guess; scoping
     /// every lookup and purge to the owner keeps two accessibility-capable
@@ -46,41 +57,76 @@ final class AXBroker {
     /// each other's handles.
     let owner: String
     let pid: pid_t
+    let tree: Tree
     let element: AXUIElement
   }
 
-  /// Serial queue guarding the handle registry and serializing AX reads. AX
-  /// attribute calls are thread-safe and the previous in-core sources walked
-  /// trees off the main thread, so the walk stays off-main.
+  /// Serial queue of the window walks and of every call on a handle one of
+  /// them returned. AX attribute calls are thread-safe and the previous
+  /// in-core sources walked trees off the main thread, so the walk stays
+  /// off-main.
   /// `.userInitiated`: a snapshot or a perform answers a plugin's host RPC,
   /// and the plugin's own `perform` or `hints` reply — which a keypress
   /// waits on — waits on that answer.
   private let queue = DispatchQueue(label: "flash.ax.broker", qos: .userInitiated)
+  /// Serial queue of the menu-bar walks and of every call on a handle one of
+  /// them returned. Its own queue, because the two trees must not wait on
+  /// each other: a window walk of a browser takes up to the snapshot budget
+  /// and would hold a flashlight query past its deadline, and a menu bar of
+  /// a few thousand items would take its walk out of the deadline of a
+  /// hint provider's window snapshot. `.userInitiated`: a flashlight query
+  /// and a picked row wait on it.
+  private let menuBarQueue = DispatchQueue(label: "flash.ax.broker.menubar", qos: .userInitiated)
+  /// Guards the registry below, which both queues read and write.
+  private let registryLock = NSLock()
   private var entries: [UInt64: Entry] = [:]
   private var nextHandle: UInt64 = 0
-  /// Apps that quit since an operation last ran; guarded by `terminatedLock`.
-  private let terminatedLock = NSLock()
+  /// Apps that quit since an operation last ran.
   private var terminated: Set<pid_t> = []
-  /// The elements a snapshot walks from: the app's windows. Tests substitute
-  /// the application element itself, which registers without an AX grant.
+  /// The elements a window snapshot walks from: the app's windows. Tests
+  /// substitute the application element itself, which registers without an
+  /// AX grant.
   private let roots: (AXUIElement) -> [AXUIElement]
+  /// The app whose menus are installed, read on the main thread.
+  private let menuBarOwner: () -> pid_t?
+  /// The element a menu-bar snapshot walks from: the app's `AXMenuBar`.
+  private let menuBar: (AXUIElement) -> AXUIElement?
   private let now: () -> DispatchTime
   private let readAttributes: (AXUIElement, [String]) -> (AXError, CFArray?)
+  private let performAction: (AXUIElement, String) -> AXError
 
   init(
     roots: @escaping (AXUIElement) -> [AXUIElement] = AXBroker.windows(of:),
+    menuBarOwner: @escaping () -> pid_t? = AXBroker.menuBarOwner,
+    menuBar: @escaping (AXUIElement) -> AXUIElement? = AXMenuBar.element(of:),
     now: @escaping () -> DispatchTime = DispatchTime.now,
     readAttributes: @escaping (AXUIElement, [String]) -> (AXError, CFArray?) = AXBroker
-      .readAttributes
+      .readAttributes,
+    performAction: @escaping (AXUIElement, String) -> AXError = AXBroker.performAction
   ) {
     self.roots = roots
+    self.menuBarOwner = menuBarOwner
+    self.menuBar = menuBar
     self.now = now
     self.readAttributes = readAttributes
+    self.performAction = performAction
   }
 
-  /// An app's `AXWindows`, where every production snapshot starts.
+  /// An app's `AXWindows`, where a window snapshot starts.
   static func windows(of app: AXUIElement) -> [AXUIElement] {
     elementArray(app, kAXWindowsAttribute as String)
+  }
+
+  /// The app whose menus the menu bar shows. The flashlight may hold
+  /// activation while a plugin asks, so the owner of the installed menus is
+  /// asked for ahead of the frontmost app.
+  static func menuBarOwner() -> pid_t? {
+    (NSWorkspace.shared.menuBarOwningApplication ?? NSWorkspace.shared.frontmostApplication)?
+      .processIdentifier
+  }
+
+  static func performAction(_ element: AXUIElement, _ action: String) -> AXError {
+    AXUIElementPerformAction(element, action as CFString)
   }
 
   /// Child attributes a tree walk descends through by default. Browsers expose
@@ -91,7 +137,7 @@ final class AXBroker {
     "AXChildrenInNavigationOrder",
   ]
   /// The node budget of a snapshot that names none.
-  private static let defaultMaxNodes = 3_000
+  static let defaultMaxNodes = 3_000
 
   func handle(
     _ request: PluginHostRequest.AX,
@@ -100,11 +146,23 @@ final class AXBroker {
     reply: @escaping ([String: Any]) -> Void
   ) {
     switch request {
-    case .snapshot(let pid, let follow, let collect, let pruneRoles, let maxNodes):
-      snapshot(
-        pid: pid, follow: follow.isEmpty ? Self.defaultFollow : follow, collect: collect,
-        pruneRoles: pruneRoles, maxNodes: maxNodes ?? Self.defaultMaxNodes,
-        owner: pluginID, scope: scope, reply: reply)
+    case .snapshot(let root, let follow, let collect, let pruneRoles, let maxNodes):
+      let walk = Walk(
+        follow: follow.isEmpty ? Self.defaultFollow : follow, collect: collect,
+        pruneRoles: pruneRoles, maxNodes: maxNodes ?? Self.defaultMaxNodes, owner: pluginID,
+        deadline: now() + .milliseconds(Self.snapshotTimeoutMs))
+      switch root {
+      case .windows(let pid):
+        scope.enqueue(on: queue) { [weak self] in
+          guard let self else {
+            reply(["ok": false, "error": "broker released"])
+            return
+          }
+          self.snapshot(pid: pid, tree: .windows, walk: walk, scope: scope, reply: reply)
+        }
+      case .menuBar:
+        menuBarSnapshot(walk, scope: scope, reply: reply)
+      }
     case .perform(let handle, let action):
       perform(
         handle: handle, action: action ?? (kAXPressAction as String),
@@ -121,64 +179,101 @@ final class AXBroker {
 
   // MARK: - Snapshot
 
-  private func snapshot(
-    pid: pid_t, follow: [String], collect: [String], pruneRoles: Set<String>, maxNodes: Int,
-    owner: String, scope: PluginHostRequestScope,
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    let deadline = now() + .milliseconds(Self.snapshotTimeoutMs)
+  /// What one snapshot reads, and the budget it started with: queue
+  /// admission counts against the deadline.
+  private struct Walk {
+    let follow: [String]
+    let collect: [String]
+    let pruneRoles: Set<String>
+    let maxNodes: Int
+    let owner: String
+    let deadline: DispatchTime
+  }
 
-    scope.enqueue(on: queue) { [weak self] in
+  /// `root: "menu_bar"`: the menu bar of the app that owns it. The owner is
+  /// read on the main thread, a property read and nothing else; the walk
+  /// runs on the menu-bar queue. Flash's own process is never walked, and no
+  /// owner is an empty tree, not a failure.
+  private func menuBarSnapshot(
+    _ walk: Walk, scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
+  ) {
+    scope.enqueue(on: .main) { [weak self] in
       guard let self else {
         reply(["ok": false, "error": "broker released"])
         return
       }
-      self.dropTerminatedApps()
-      self.purge(owner: owner, pid: pid)
-      let checkCurrent = {
-        guard scope.isCurrent() else { throw SnapshotFailure.cancelled }
-        guard self.now() < deadline else { throw SnapshotFailure.timedOut }
+      guard let pid = self.menuBarOwner(), pid != ProcessInfo.processInfo.processIdentifier
+      else {
+        reply(["ok": true, "nodes": [[String: Any]]()])
+        return
       }
-      do {
-        try checkCurrent()
-        let app = AXApp.make(pid: pid)
-        let response = try self.withAccessibilityTree(pid: pid, app: app) { app -> [String: Any] in
-          // Waiting for Gecko's process lock may have consumed the budget.
-          try checkCurrent()
-          var nodes: [[String: Any]] = []
-          var seen = AXElementIdentitySet()
-          let roots = self.roots(app)
-          try checkCurrent()
-          for (rootIndex, root) in roots.enumerated() {
-            var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
-            var index = 0
-            while index < bfs.count, nodes.count < maxNodes {
-              try checkCurrent()
-              let item = bfs[index]
-              let element = item.element
-              index += 1
-              guard seen.insert(element) else { continue }
-              let (attrs, children) = try self.readNode(
-                element, collect: collect, follow: follow, checkCurrent: checkCurrent)
-              let handle = self.register(owner: owner, pid: pid, element: element)
-              var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
-              if let parent = item.parent { node["parent"] = parent }
-              nodes.append(node)
-              if let role = attrs[kAXRoleAttribute as String], pruneRoles.contains(role) {
-                continue
-              }
-              bfs.append(contentsOf: children.map { ($0, handle) })
-            }
-          }
-          try checkCurrent()
-          return ["ok": true, "nodes": nodes]
+      scope.enqueue(on: self.menuBarQueue) { [weak self] in
+        guard let self else {
+          reply(["ok": false, "error": "broker released"])
+          return
         }
-        reply(response)
-      } catch {
-        self.purge(owner: owner, pid: pid)
-        let failure = error as? SnapshotFailure ?? .failed
-        reply(["ok": false, "error": failure.rawValue])
+        self.snapshot(pid: pid, tree: .menuBar, walk: walk, scope: scope, reply: reply)
       }
+    }
+  }
+
+  /// One breadth-first walk of `pid`'s `tree`. Runs on that tree's queue.
+  private func snapshot(
+    pid: pid_t, tree: Tree, walk: Walk, scope: PluginHostRequestScope,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    let owner = walk.owner
+    purge(owner: owner, pid: pid, tree: tree)
+    let checkCurrent = {
+      guard scope.isCurrent() else { throw SnapshotFailure.cancelled }
+      guard self.now() < walk.deadline else { throw SnapshotFailure.timedOut }
+    }
+    do {
+      try checkCurrent()
+      let app = AXApp.make(pid: pid)
+      var response = try withAccessibilityTree(pid: pid, tree: tree, app: app) {
+        app -> [String: Any] in
+        // Waiting for Gecko's process lock may have consumed the budget.
+        try checkCurrent()
+        var nodes: [[String: Any]] = []
+        var seen = AXElementIdentitySet()
+        let roots: [AXUIElement]
+        switch tree {
+        case .windows: roots = self.roots(app)
+        case .menuBar: roots = self.menuBar(app).map { [$0] } ?? []
+        }
+        try checkCurrent()
+        for (rootIndex, root) in roots.enumerated() {
+          var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
+          var index = 0
+          while index < bfs.count, nodes.count < walk.maxNodes {
+            try checkCurrent()
+            let item = bfs[index]
+            let element = item.element
+            index += 1
+            guard seen.insert(element) else { continue }
+            let (attrs, children) = try self.readNode(
+              element, collect: walk.collect, follow: walk.follow, checkCurrent: checkCurrent)
+            let handle = self.register(owner: owner, pid: pid, tree: tree, element: element)
+            var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
+            if let parent = item.parent { node["parent"] = parent }
+            nodes.append(node)
+            if let role = attrs[kAXRoleAttribute as String], walk.pruneRoles.contains(role) {
+              continue
+            }
+            bfs.append(contentsOf: children.map { ($0, handle) })
+          }
+        }
+        try checkCurrent()
+        return ["ok": true, "nodes": nodes]
+      }
+      // The plugin did not name the app: the reply does.
+      if tree == .menuBar { response["pid"] = Int(pid) }
+      reply(response)
+    } catch {
+      purge(owner: owner, pid: pid, tree: tree)
+      let failure = error as? SnapshotFailure ?? .failed
+      reply(["ok": false, "error": failure.rawValue])
     }
   }
 
@@ -188,14 +283,13 @@ final class AXBroker {
     handle: UInt64, action: String, owner: String, scope: PluginHostRequestScope,
     reply: @escaping ([String: Any]) -> Void
   ) {
-    scope.enqueue(on: queue) { [weak self] in
-      self?.dropTerminatedApps()
-      guard let self, let entry = self.entries[handle], entry.owner == owner else {
+    scope.enqueue(on: queue(of: handle, owner: owner)) { [weak self] in
+      guard let self, let entry = self.entry(handle, owner: owner) else {
         reply(["ok": false, "error": "stale ax handle"])
         return
       }
-      let status = self.withAccessibilityTree(pid: entry.pid) { _ in
-        AXUIElementPerformAction(entry.element, action as CFString)
+      let status = self.withAccessibilityTree(pid: entry.pid, tree: entry.tree) { _ in
+        self.performAction(entry.element, action)
       }
       // Response law: ok:false always carries a non-empty, content-free error.
       reply(status == .success ? ["ok": true] : ["ok": false, "error": "ax action failed"])
@@ -206,14 +300,13 @@ final class AXBroker {
     handle: UInt64, attribute: String, flag: Bool, owner: String,
     scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
-    scope.enqueue(on: queue) { [weak self] in
-      self?.dropTerminatedApps()
-      guard let self, let entry = self.entries[handle], entry.owner == owner else {
+    scope.enqueue(on: queue(of: handle, owner: owner)) { [weak self] in
+      guard let self, let entry = self.entry(handle, owner: owner) else {
         reply(["ok": false, "error": "stale ax handle"])
         return
       }
       let cfValue: CFTypeRef = flag ? kCFBooleanTrue : kCFBooleanFalse
-      let status = self.withAccessibilityTree(pid: entry.pid) { _ in
+      let status = self.withAccessibilityTree(pid: entry.pid, tree: entry.tree) { _ in
         AXUIElementSetAttributeValue(entry.element, attribute as CFString, cfValue)
       }
       // Response law: ok:false always carries a non-empty, content-free error.
@@ -225,11 +318,10 @@ final class AXBroker {
     parentHandle: UInt64, childHandle: UInt64, owner: String,
     scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
-    scope.enqueue(on: queue) { [weak self] in
-      self?.dropTerminatedApps()
+    scope.enqueue(on: queue(of: parentHandle, owner: owner)) { [weak self] in
       guard let self,
-        let parentEntry = self.entries[parentHandle], parentEntry.owner == owner,
-        let childEntry = self.entries[childHandle], childEntry.owner == owner
+        let parentEntry = self.entry(parentHandle, owner: owner),
+        let childEntry = self.entry(childHandle, owner: owner)
       else {
         reply(["ok": false, "error": "stale ax handle"])
         return
@@ -238,7 +330,8 @@ final class AXBroker {
         reply(["ok": false, "error": "ax handles belong to different processes"])
         return
       }
-      let status = self.withAccessibilityTree(pid: parentEntry.pid) { _ in
+      let status = self.withAccessibilityTree(pid: parentEntry.pid, tree: parentEntry.tree) {
+        _ in
         let value = [childEntry.element] as CFArray
         return AXUIElementSetAttributeValue(
           parentEntry.element, kAXSelectedChildrenAttribute as CFString, value)
@@ -250,54 +343,83 @@ final class AXBroker {
 
   // MARK: - Registry
 
+  /// Runs `operation` on `pid`'s tree. A window tree of a Gecko app is read
+  /// under its process lock, with its accessibility mode on. The menu bar is
+  /// AppKit's own in a Gecko app too: reading or pressing it takes no part
+  /// in that lock, so it never waits on a hint walk nor holds one up.
   private func withAccessibilityTree<T>(
     pid: pid_t,
+    tree: Tree,
     app: AXUIElement? = nil,
     _ operation: (AXUIElement) throws -> T
   ) rethrows -> T {
-    try GeckoAccessibility.withTree(
+    guard tree == .windows else { return try operation(app ?? AXApp.make(pid: pid)) }
+    return try GeckoAccessibility.withTree(
       pid: pid,
       bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
       app: app,
       operation)
   }
 
-  /// Registers `element` and returns its handle. Caller runs on `queue`.
-  private func register(owner: String, pid: pid_t, element: AXUIElement) -> UInt64 {
+  /// Registers `element` and returns its handle.
+  private func register(owner: String, pid: pid_t, tree: Tree, element: AXUIElement) -> UInt64 {
+    registryLock.lock()
+    defer { registryLock.unlock() }
     nextHandle += 1
     let handle = nextHandle
-    entries[handle] = Entry(owner: owner, pid: pid, element: element)
+    entries[handle] = Entry(owner: owner, pid: pid, tree: tree, element: element)
     return handle
+  }
+
+  /// The element `handle` names for `owner`, nil once it is stale.
+  private func entry(_ handle: UInt64, owner: String) -> Entry? {
+    registryLock.lock()
+    defer { registryLock.unlock() }
+    dropTerminatedApps()
+    guard let entry = entries[handle], entry.owner == owner else { return nil }
+    return entry
+  }
+
+  /// The queue a call on `handle` runs on: the one its snapshot walked on.
+  /// A handle nobody holds answers stale on either.
+  private func queue(of handle: UInt64, owner: String) -> DispatchQueue {
+    entry(handle, owner: owner)?.tree == .menuBar ? menuBarQueue : queue
   }
 
   /// `pid` quit: its elements are dead, whoever snapshotted them. Without
   /// this they would stay registered until a snapshot of the same app,
   /// which a quit app never gets. Recorded here, from any thread, and
-  /// dropped by the next operation on `queue` (`dropTerminatedApps`), so no
-  /// work reaches the queue outside a request's scope.
+  /// dropped by the next operation (`dropTerminatedApps`): a walk of that
+  /// app still in flight registers nothing that outlives it.
   func appTerminated(pid: pid_t) {
-    terminatedLock.lock()
+    registryLock.lock()
     terminated.insert(pid)
-    terminatedLock.unlock()
+    registryLock.unlock()
   }
 
-  /// Caller runs on `queue`, before anything else an operation does.
+  /// Caller holds `registryLock`, before anything else an operation reads.
   private func dropTerminatedApps() {
-    terminatedLock.lock()
+    guard !terminated.isEmpty else { return }
     let pids = terminated
     terminated.removeAll()
-    terminatedLock.unlock()
-    guard !pids.isEmpty else { return }
     entries = entries.filter { !pids.contains($0.value.pid) }
   }
 
-  /// Drops every handle owned by `pid`. A fresh snapshot supersedes the prior
-  /// one, so the old handles can never be acted on again — this keeps the
-  /// registry from growing without bound. Caller runs on `queue`.
-  private func purge(owner: String, pid: pid_t) {
-    // Scoped to (owner, pid): a fresh snapshot invalidates only the caller's
-    // own handles for that app, never another plugin's.
-    entries = entries.filter { !($0.value.owner == owner && $0.value.pid == pid) }
+  /// Drops the handles a snapshot of `pid`'s `tree` supersedes: the owner's
+  /// earlier ones for that app, and for a menu bar its earlier menu-bar
+  /// handles of every app, since one app owns the bar at a time. A fresh
+  /// snapshot supersedes the prior one, so the old handles can never be
+  /// acted on again — this keeps the registry from growing without bound.
+  private func purge(owner: String, pid: pid_t, tree: Tree) {
+    registryLock.lock()
+    defer { registryLock.unlock() }
+    dropTerminatedApps()
+    // Scoped to the owner: a fresh snapshot invalidates only the caller's
+    // own handles, never another plugin's.
+    entries = entries.filter { _, entry in
+      guard entry.owner == owner else { return true }
+      return !(entry.pid == pid || (tree == .menuBar && entry.tree == .menuBar))
+    }
   }
 
   // MARK: - AX reads

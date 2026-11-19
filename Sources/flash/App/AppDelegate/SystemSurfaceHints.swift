@@ -142,7 +142,7 @@ extension AppDelegate {
     pid: pid_t, bundleIdentifier: String?, screenH: CGFloat, screens: [CGRect]
   ) -> [JumpTarget] {
     let app = AXApp.make(pid: pid)
-    return MenuBarSource.menuBarItems(of: app).enumerated().compactMap { index, item in
+    return AXMenuBar.items(of: app).enumerated().compactMap { index, item in
       guard
         let target = AccessibilityProvider.captureTarget(
           element: item, id: "menu_bar_item_\(pid)_\(index)", pid: pid, screenH: screenH,

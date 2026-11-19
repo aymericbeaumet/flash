@@ -61,6 +61,9 @@ The lines describe one plugin and one moment:
 - Output devices `MacBook Pro Speakers` (`built-in`, the default) and
   `USB Audio` (`usb-1`), the same two as inputs; the output at 38%, not
   muted. A step of two ticks lands on 50%.
+- A menu-bar snapshot (`host.ax_snapshot` with `root: menu_bar`) is pinned
+  as a frame and never answered here: the host would walk the menu bar of
+  whichever app owns it.
 - The host carries out a system action without touching the Mac; no
   confirmed perform is in flight, so a destructive one is refused.
 - No process is signalled: with no confirmed perform in flight, the host

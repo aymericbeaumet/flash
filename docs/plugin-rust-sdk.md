@@ -213,7 +213,12 @@ Handed to every handler; cheap to clone. Key surface:
   `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`, `ping`).
   `post_keys` and `ax_snapshot` take their params as the protocol spells
   them, and so does a bare `call_host`: the host refuses a key the method
-  does not define (`invalid host.post_keys params`).
+  does not define (`invalid host.post_keys params`). A snapshot walks an
+  app's windows (`{"pid": …}`) or, with `"root":
+  ax_snapshot_roots::MENU_BAR` and no `pid`, the menu bar of the app that
+  owns it, whose `pid` the result then carries beside `nodes`. `ax_perform`
+  answers whether the action ran; call `call_host("host.ax_perform", …)`
+  to read why it did not (`stale ax handle`).
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from
   an explicit user action. A newly started permission prompt replies `None`
   immediately, so retry after the user grants access.

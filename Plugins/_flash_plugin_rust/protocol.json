@@ -175,6 +175,15 @@
     ],
     "min_pid": 2
   },
+  "ax_snapshot": {
+    "$comment": "host.ax_snapshot: Accessibility stays in the host. `root` says which tree one snapshot walks; absent, it is the first of `roots`. windows walks the windows of the app `pid` names (required). menu_bar walks the menu bar of the app that owns it, which the host names: a `pid` beside it refuses the call, and the reply carries that app's `pid` beside `nodes`. Its one root is the app's AXMenuBar, so the first node is the bar, its children the bar items in bar order, the Apple menu first. The host never walks its own process: with no owner but Flash the reply is {ok:true, nodes: []} and carries no pid, as when no app owns the bar. Both roots are one breadth-first walk bounded by max_nodes (default_max_nodes when absent), each element read once for `collect` and `follow` together, within timeout_ms including queue admission; a snapshot that fails returns no node and leaves no handle. A snapshot supersedes the plugin's earlier handles for that app, and a menu_bar one its earlier menu_bar handles for every app, since one app owns the bar at a time. The two roots run on separate host queues, and a call on a handle runs on the queue of the snapshot that returned it, so a menu bar never waits on a window walk.",
+    "roots": [
+      "windows",
+      "menu_bar"
+    ],
+    "default_max_nodes": 3000,
+    "timeout_ms": 5000
+  },
   "applescript": {
     "$comment": "Typed host-owned AppleScript templates; no source code, script field, raw terminology or evaluated strings are accepted. Requests carry operation, timeout_ms and the operation-specific data fields. All strings enter templates only as escaped literals. Supported browser IDs use fixed Chromium/Safari dialects. Every operation checks its actual target against manifest apple_events_targets; shortcuts use com.apple.shortcuts.events, chat_submit uses com.apple.systemevents and now_playing uses the bundle_id it names. now_playing {bundle_id, artist} asks one media player (an app whose scripting has player state and current track) what it plays, never launching it: the result is the player state, a line feed and the current track's name, with its artist after an em dash when artist is true; an app that is not running answers an empty result. The plugin needs apple_events. script_bytes bounds generated source; result_bytes bounds the UTF-8 result; deadlines and per-plugin concurrency include queue admission. The host returns {ok:true,result} or {ok:false,error,status?}; source/results never enter diagnostics.",
     "script_bytes": 65536,

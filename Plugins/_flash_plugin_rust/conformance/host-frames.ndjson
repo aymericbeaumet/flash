@@ -125,6 +125,8 @@
 {"name": "host.post_keys.reply.invalid-interval", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"host.post_keys requires an integer interval_ms"}}}
 {"name": "host.ax_snapshot.reply", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":true,"nodes":[{"handle":7,"root":0,"attrs":{"AXRole":"AXWindow","AXTitle":"Example"}},{"handle":8,"root":0,"attrs":{"AXRole":"AXButton"},"parent":7}]}}}
 {"name": "host.ax_snapshot.reply.empty", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":true,"nodes":[]}}}
+{"name": "host.ax_snapshot.reply.menu-bar", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":true,"pid":512,"nodes":[{"handle":7,"root":0,"attrs":{"AXRole":"AXMenuBar"}},{"handle":8,"root":0,"attrs":{"AXRole":"AXMenuBarItem","AXTitle":"File","AXEnabled":"1"},"parent":7}]}}}
+{"name": "host.ax_snapshot.reply.menu-bar-with-a-pid", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_snapshot takes no pid with root menu_bar"}}}
 {"name": "host.ax_snapshot.reply.without-a-pid", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_snapshot requires pid"}}}
 {"name": "host.ax_snapshot.reply.invalid-scalars", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"invalid snapshot scalar params"}}}
 {"name": "host.ax_perform.reply", "expect": "accept", "reply_to": "host.ax_perform", "frame": {"id":1,"result":{"ok":true}}}

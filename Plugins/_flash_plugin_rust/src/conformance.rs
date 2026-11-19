@@ -667,6 +667,10 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
             let walk = params("host.ax_snapshot");
             request(|ctx| async move { ctx.ax_snapshot(walk).await }).await
         }),
+        ("host.ax_snapshot.menu-bar", {
+            let walk = params("host.ax_snapshot.menu-bar");
+            request(|ctx| async move { ctx.ax_snapshot(walk).await }).await
+        }),
         (
             "host.ax_perform",
             request(|ctx| async move { ctx.ax_perform(7, "AXPress").await }).await,

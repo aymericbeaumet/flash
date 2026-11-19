@@ -134,8 +134,8 @@ final class AXBrokerTests: XCTestCase {
       }, now: clock.read,
       readAttributes: { _, _ in (.success, ["AXGroup", []] as CFArray) })
     let snapshot = PluginHostRequest.AX.snapshot(
-      pid: getpid(), follow: ["FlashNoSuchChildren"], collect: ["AXRole"], pruneRoles: [],
-      maxNodes: nil)
+      root: .windows(pid: getpid()), follow: ["FlashNoSuchChildren"], collect: ["AXRole"],
+      pruneRoles: [], maxNodes: nil)
     broker.handle(
       snapshot, pluginID: "a", scope: PluginHostRequestScope(isCurrent: { true })
     ) { _ in firstReply.fulfill() }
@@ -337,6 +337,219 @@ final class AXBrokerTests: XCTestCase {
         ["handle": Int(fresh), "action": "FlashNoSuchAction"], pluginID: "owner-a")["error"]
         as? String,
       "stale ax handle")
+  }
+
+  // MARK: - The menu bar root
+
+  /// File › New Tab, and Edit with nothing under it, behind an Apple menu.
+  private func menuBar() -> MenuBarFixture {
+    let fixture = MenuBarFixture()
+    fixture.set(fixture.bar, "AXMenuBar", nil, enabled: nil, [900_001, 900_002, 900_003])
+    fixture.set(900_001, "AXMenuBarItem", "Apple", [900_010])
+    fixture.set(900_002, "AXMenuBarItem", "File", [900_020])
+    fixture.set(900_003, "AXMenuBarItem", "Edit", enabled: false)
+    fixture.set(900_010, "AXMenu", nil, [900_011])
+    fixture.set(900_011, "AXMenuItem", "About This Mac")
+    fixture.set(900_020, "AXMenu", nil, [900_021])
+    fixture.set(900_021, "AXMenuItem", "New Tab")
+    return fixture
+  }
+
+  private static let menuBarWalk: [String: Any] = [
+    "root": "menu_bar", "follow": ["AXChildren"], "collect": ["AXRole", "AXTitle", "AXEnabled"],
+  ]
+
+  private func handles(_ reply: [String: Any]) throws -> [UInt64] {
+    try XCTUnwrap(reply["nodes"] as? [[String: Any]]).map {
+      try XCTUnwrap(($0["handle"] as? NSNumber)?.uint64Value)
+    }
+  }
+
+  /// One breadth-first walk from the owner's `AXMenuBar`: the reply names
+  /// the app the plugin could not, and every element costs one read.
+  func testMenuBarSnapshotWalksTheMenuBarOfTheAppThatOwnsIt() throws {
+    let fixture = menuBar()
+    let reply = brokerReply(
+      fixture.broker(), "host.ax_snapshot", Self.menuBarWalk, pluginID: "a")
+
+    XCTAssertEqual(reply["ok"] as? Bool, true)
+    XCTAssertEqual(reply["pid"] as? Int, Int(fixture.owner))
+    let nodes = try XCTUnwrap(reply["nodes"] as? [[String: Any]])
+    XCTAssertEqual(
+      nodes.map { ($0["attrs"] as? [String: String])?["AXTitle"] ?? "" },
+      ["", "Apple", "File", "Edit", "", "", "About This Mac", "New Tab"],
+      "breadth first, in menu order")
+    XCTAssertEqual(
+      nodes.map { ($0["attrs"] as? [String: String])?["AXRole"] ?? "" },
+      [
+        "AXMenuBar", "AXMenuBarItem", "AXMenuBarItem", "AXMenuBarItem", "AXMenu", "AXMenu",
+        "AXMenuItem", "AXMenuItem",
+      ])
+    XCTAssertEqual(
+      nodes.map { ($0["attrs"] as? [String: String])?["AXEnabled"] },
+      [nil, "1", "1", "0", "1", "1", "1", "1"], "a flag is 1 or 0, and absent when unsaid")
+    XCTAssertTrue(nodes.allSatisfy { $0["root"] as? Int == 0 }, "one root: the bar")
+    let handles = try handles(reply)
+    XCTAssertNil(nodes[0]["parent"])
+    XCTAssertEqual(
+      nodes.dropFirst().map { ($0["parent"] as? NSNumber)?.uint64Value },
+      [
+        handles[0], handles[0], handles[0], handles[1], handles[2], handles[4], handles[5],
+      ])
+    XCTAssertEqual(
+      fixture.reads,
+      [fixture.bar, 900_001, 900_002, 900_003, 900_010, 900_020, 900_011, 900_021],
+      "one batched read per element")
+  }
+
+  func testMenuBarSnapshotHoldsTheNodeBound() throws {
+    let fixture = menuBar()
+    var walk = Self.menuBarWalk
+    walk["max_nodes"] = 5
+    let reply = brokerReply(fixture.broker(), "host.ax_snapshot", walk, pluginID: "a")
+    XCTAssertEqual(try handles(reply).count, 5)
+    XCTAssertEqual(fixture.reads, [fixture.bar, 900_001, 900_002, 900_003, 900_010])
+  }
+
+  /// Flash's own menus are never walked, and neither an absent owner nor an
+  /// app without a menu bar is a failure: there is nothing to list.
+  func testMenuBarSnapshotOfNoAppOrOfFlashItselfIsEmpty() throws {
+    for owner in [getpid(), nil] {
+      let fixture = menuBar()
+      let reply = brokerReply(
+        fixture.broker(owner: { owner }), "host.ax_snapshot", Self.menuBarWalk, pluginID: "a")
+      XCTAssertEqual(reply["ok"] as? Bool, true)
+      XCTAssertEqual((reply["nodes"] as? [[String: Any]])?.count, 0)
+      XCTAssertNil(reply["pid"], "no app was walked")
+      XCTAssertEqual(fixture.reads, [], "nothing is read")
+    }
+    let fixture = menuBar()
+    let bare = brokerReply(
+      fixture.broker(hasMenuBar: false), "host.ax_snapshot", Self.menuBarWalk, pluginID: "a")
+    XCTAssertEqual(bare["ok"] as? Bool, true)
+    XCTAssertEqual(bare["pid"] as? Int, Int(fixture.owner))
+    XCTAssertEqual((bare["nodes"] as? [[String: Any]])?.count, 0)
+  }
+
+  /// A handle presses the element its snapshot read, for the plugin that
+  /// took the snapshot alone, and a press the app refuses says so.
+  func testAMenuBarHandlePressesItsElement() throws {
+    let fixture = menuBar()
+    let broker = fixture.broker()
+    let handles = try handles(
+      brokerReply(broker, "host.ax_snapshot", Self.menuBarWalk, pluginID: "a"))
+    let newTab = Int(handles[7])
+
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": newTab], pluginID: "b")["error"]
+        as? String, "stale ax handle", "another plugin's handle")
+    XCTAssertEqual(fixture.presses.count, 0)
+
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": newTab], pluginID: "a")["ok"] as? Bool,
+      true)
+    XCTAssertEqual(fixture.presses.map(\.element), [900_021])
+    XCTAssertEqual(fixture.presses.map(\.action), ["AXPress"])
+
+    fixture.answerPresses(with: .cannotComplete)
+    let refused = brokerReply(broker, "host.ax_perform", ["handle": newTab], pluginID: "a")
+    XCTAssertEqual(refused["ok"] as? Bool, false)
+    XCTAssertEqual(refused["error"] as? String, "ax action failed")
+  }
+
+  /// One app owns the menu bar at a time: a menu-bar snapshot supersedes the
+  /// plugin's earlier one whatever app that was of, and leaves its window
+  /// handles of other apps alone. A stale handle presses nothing.
+  func testAMenuBarSnapshotSupersedesThePluginsEarlierOne() throws {
+    let fixture = menuBar()
+    var owner = fixture.owner
+    let broker = fixture.broker(owner: { owner })
+    let window = try snapshotRootHandle(broker, pid: 1, owner: "a")
+    let first = try handles(
+      brokerReply(broker, "host.ax_snapshot", Self.menuBarWalk, pluginID: "a"))
+    let others = try handles(
+      brokerReply(broker, "host.ax_snapshot", Self.menuBarWalk, pluginID: "b"))
+
+    owner = 4_243
+    let second = try handles(
+      brokerReply(broker, "host.ax_snapshot", Self.menuBarWalk, pluginID: "a"))
+    XCTAssertTrue(Set(first).isDisjoint(with: second), "handles are never reused")
+
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": Int(first[7])], pluginID: "a")["error"]
+        as? String, "stale ax handle")
+    XCTAssertEqual(fixture.presses.count, 0, "a stale handle presses nothing")
+    for (handle, plugin) in [(second[7], "a"), (others[7], "b")] {
+      XCTAssertEqual(
+        brokerReply(broker, "host.ax_perform", ["handle": Int(handle)], pluginID: plugin)["ok"]
+          as? Bool, true, plugin)
+    }
+    XCTAssertNotEqual(
+      brokerReply(
+        broker, "host.ax_perform", ["handle": Int(window), "action": "FlashNoSuchAction"],
+        pluginID: "a")["error"] as? String,
+      "stale ax handle", "the window handle of another app outlives a menu-bar snapshot")
+
+    broker.appTerminated(pid: 4_243)
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": Int(second[7])], pluginID: "a")["error"]
+        as? String, "stale ax handle", "the app quit")
+  }
+
+  /// The menu bar has its own queue: a window walk that holds the window
+  /// queue (a browser's, for seconds) delays neither the menu-bar walk nor
+  /// a press on one of its handles.
+  func testTheMenuBarNeverWaitsOnAWindowWalk() throws {
+    let fixture = menuBar()
+    let entered = expectation(description: "window walk entered")
+    let finished = expectation(description: "window walk finished")
+    let release = DispatchSemaphore(value: 0)
+    let broker = fixture.broker(roots: { app in
+      entered.fulfill()
+      _ = release.wait(timeout: .now() + 10)
+      return [app]
+    })
+    broker.handle(
+      .snapshot(
+        root: .windows(pid: 1), follow: ["FlashNoSuchChildren"], collect: [], pruneRoles: [],
+        maxNodes: nil),
+      pluginID: "windows", scope: PluginHostRequestScope(isCurrent: { true })
+    ) { _ in finished.fulfill() }
+    wait(for: [entered], timeout: 2)
+
+    let handles = try handles(
+      brokerReply(broker, "host.ax_snapshot", Self.menuBarWalk, pluginID: "a"))
+    XCTAssertEqual(handles.count, 8, "walked while the window queue was held")
+    XCTAssertEqual(
+      brokerReply(broker, "host.ax_perform", ["handle": Int(handles[7])], pluginID: "a")["ok"]
+        as? Bool, true, "pressed while the window queue was held")
+
+    release.signal()
+    wait(for: [finished], timeout: 2)
+  }
+
+  /// `root` is one of two words. The menu bar's app is the host's to name,
+  /// so a pid beside it is refused; windows still need one.
+  func testSnapshotRootIsWindowsOrMenuBar() {
+    let broker = headlessBroker()
+    func error(_ params: [String: Any]) -> String? {
+      brokerReply(broker, "host.ax_snapshot", params, pluginID: "a")["error"] as? String
+    }
+    XCTAssertEqual(error(["root": "windows"]), "host.ax_snapshot requires pid")
+    XCTAssertEqual(
+      error(["root": "menu_bar", "pid": Int(getpid())]),
+      "host.ax_snapshot takes no pid with root menu_bar")
+    for root: Any in ["dock", "", 1, NSNull(), ["menu_bar"]] {
+      XCTAssertEqual(
+        error(["root": root, "pid": Int(getpid())]), "invalid host.ax_snapshot params",
+        "\(root)")
+    }
+    XCTAssertEqual(
+      brokerReply(
+        broker, "host.ax_snapshot",
+        ["root": "windows", "pid": Int(getpid()), "max_nodes": 1], pluginID: "a")["ok"] as? Bool,
+      true, "the default root, spelled out")
+    XCTAssertEqual(PluginHostRequest.AX.SnapshotRoot.names, ["windows", "menu_bar"])
   }
 
   func testSelectChildRejectsHandlesFromDifferentProcesses() throws {

@@ -102,19 +102,6 @@ final class MenuBarSource: FlashSource {
   ) -> Candidate? { nil }
   func documentURL(in context: AppContext) -> String? { nil }
 
-  /// The app's menu-bar titles in bar order, the Apple menu first: the
-  /// children of its `AXMenuBar`. Shared by `@menus` and `mouse menubar`.
-  static func menuBarItems(of app: AXUIElement) -> [AXUIElement] {
-    var menuBarRaw: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(app, kAXMenuBarAttribute as CFString, &menuBarRaw)
-        == .success,
-      let menuBarValue = menuBarRaw,
-      CFGetTypeID(menuBarValue) == AXUIElementGetTypeID()
-    else { return [] }
-    return AXAttribute.children(menuBarValue as! AXUIElement)
-  }
-
   /// What one batched read of a menu element answers.
   struct MenuElementRead<Element> {
     var role: String?
@@ -132,7 +119,7 @@ final class MenuBarSource: FlashSource {
     pid: pid_t
   ) -> ([Candidate], [String: AXUIElement]) {
     let app = AXApp.make(pid: pid)
-    return walk(pid: pid, barItems: menuBarItems(of: app), read: readMenuElement)
+    return walk(pid: pid, barItems: AXMenuBar.items(of: app), read: readMenuElement)
   }
 
   /// The walk over `read`, which answers each element once: an element's
