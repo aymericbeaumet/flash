@@ -312,6 +312,15 @@
               "$ref": "#/definitions/effect"
             }
           ]
+        },
+        "confirm": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "\\S",
+          "maxLength": 256,
+          "description": "The question the host asks before it acts on the row; never blank, at most 256 bytes."
         }
       },
       "description": "One row: as a plugin publishes it or answers a search with it, and as the host hands it back in perform {kind: resolve}."

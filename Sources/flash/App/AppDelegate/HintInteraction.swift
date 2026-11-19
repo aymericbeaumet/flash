@@ -212,8 +212,7 @@ extension AppDelegate {
       activateMouseBigram(
         command, contextOverride: context.flatMap { monitor.context(for: $0.processID) })
     case .confirm(let confirmation):
-      presentConfirmation(
-        confirmation.prompt, command: confirmation.command, repeatCount: confirmation.repeatCount)
+      presentConfirmation(confirmation)
     case .windowSwitcher:
       presentWindowSwitcher()
     }

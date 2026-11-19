@@ -259,6 +259,14 @@ fn decode_perform(params: Value) -> Result<Perform, String> {
         .unwrap_or_default()
         .to_string();
     match kind.as_str() {
+        // A resolve the user confirmed says so with `true`, never otherwise.
+        "resolve"
+            if params
+                .get("confirmed")
+                .is_some_and(|confirmed| !crate::wire::confirmed(confirmed)) =>
+        {
+            Err("invalid perform params".to_string())
+        }
         "resolve" => params
             .get("row")
             .cloned()
@@ -1712,6 +1720,7 @@ mod tests {
             args,
             context,
             count,
+            confirmed,
         })) = decode_perform(json!({
             "kind": "command", "command": "tmux", "subcommand": "window", "args": ["a b", "c"]
         }))
@@ -1725,6 +1734,18 @@ mod tests {
             "an own command carries no focused-app context"
         );
         assert_eq!(count, 1, "a command without a count runs once");
+        assert!(!confirmed, "a command the user was not asked about");
+        // A resolve says `confirmed: true` or nothing.
+        for (confirmed, decodes) in [
+            (json!(true), true),
+            (json!(false), false),
+            (json!(1), false),
+        ] {
+            let resolve = decode_perform(json!({
+                "kind": "resolve", "row": { "source": "s", "title": "t" }, "confirmed": confirmed
+            }));
+            assert_eq!(resolve.is_ok(), decodes, "{confirmed}");
+        }
 
         let EvaluateRequest { query } =
             decode::<EvaluateRequest>(json!({ "query": "1+1" }), "evaluate").unwrap();

@@ -22,7 +22,7 @@
       "hints": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, targets, context_pid?}; always live",
       "text_grid": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, columns, rows, lines, cell?}; always live; sent to the focused app's hint providers in hint order, first non-empty grid wins; each line is one text_grid_line shape; cell is the text_grid_cell shape, and without it the host divides the window evenly by columns and rows; empty lines = no grid",
       "search": "request {source, query} -> {ok, rows}; always live; source is a manifest sources[].name that declares `live`, query the text typed after the scope (always empty for a per_scope source); each row is one row shape carrying that source, the reply under quotas.catalog_rows and quotas.catalog_bytes; a malformed or over-quota reply is served as no rows, and the rows never enter the catalog",
-      "perform": "request {kind: resolve|command|navigate, ...} -> {ok, target_pid?, navigation_url?, message?, alert?} | {ok:false, unhandled:true} | {ok:false, error}; a command is one perform_command shape: a core command the manifest declares under one of Flash's topics (with context), the plugin's own command or a bang (without); alert is one perform_alert shape"
+      "perform": "request {kind: resolve|command|navigate, ...} -> {ok, target_pid?, navigation_url?, message?, alert?} | {ok:false, unhandled:true} | {ok:false, error}; a command is one perform_command shape: a core command the manifest declares under one of Flash's topics (with context), the plugin's own command or a bang (without); a resolve is {row, confirmed?}; confirmed is the `confirmation` section's; alert is one perform_alert shape"
     },
     "plugin_to_host_notifications": {
       "publish": "{rows, source?} \u2014 the plugin's catalog, host-owned store. Without `source`: a full replacement of every source's rows. With `source` (a manifest sources[].name that every row carries): a replacement of that source's rows alone, the other sources keeping theirs \u2014 a publish stays proportional to the change when volatile and static rows are separate sources. Quotas apply to the whole catalog after the merge; empty rows = authoritative empty (of the catalog, or of that source); transient failure = don't publish (host keeps last-good). The host decodes publishes on a queue that carries no replies, so a publish and a later reply are not ordered host-side; publishes of one plugin keep their order.",
@@ -181,7 +181,7 @@
     }
   },
   "perform_command": {
-    "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words as a mapping writes them (--index=3, --force, or a bang's query words). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang. count is the NORMAL count typed before the key of the plugin's own command (5 then the key is one perform with count 5), an integer from 1 to count_max; absent means 1, and the host leaves it out for 1, for a core command (which it repeats itself) and for a bang.",
+    "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words as a mapping writes them (--index=3, --force, or a bang's query words). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang. count is the NORMAL count typed before the key of the plugin's own command (5 then the key is one perform with count 5), an integer from 1 to count_max; absent means 1, and the host leaves it out for 1, for a core command (which it repeats itself) and for a bang. confirmed is `true` on a command the user confirmed (see `confirmation`), and absent otherwise.",
     "required": [
       "command",
       "subcommand",
@@ -189,13 +189,21 @@
     ],
     "optional": [
       "context",
-      "count"
+      "count",
+      "confirmed"
     ],
     "count_max": 999,
     "context": [
       "bundle_id",
       "pid",
       "front_window_frame"
+    ]
+  },
+  "confirmation": {
+    "$comment": "Confirmed destructive actions. A manifest commands[] entry and a row may carry `confirm`: a non-blank question of at most quotas.confirm_bytes. The host asks it through its one confirmation alert before it dispatches that command's perform, or before it acts on that row (its resolve, or its effect), from a key, the command line and the CLI alike, and sends nothing unless the user answers y; a plugin never asks itself. On an own commands[] entry it gates that one pair (never the `*` wildcard); on a core command the plugin performs it gates the command in the apps the plugin's selector matches. A perform sent after the user answered y, to a declared `confirm` or to an `alert confirm` wrapping the command, carries `confirmed: true`; the key is absent otherwise and never false, and a navigate never carries it. The host remembers a confirmed perform until its reply or its deadline, and a host action that needs the user's consent is honoured only while one is in flight for that plugin: each confirmed perform covers one such action.",
+    "perform_kinds": [
+      "resolve",
+      "command"
     ]
   },
   "perform_alert": {
@@ -209,7 +217,7 @@
     ]
   },
   "row": {
-    "$comment": "Row shape of a publish and of a search reply. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
+    "$comment": "Row shape of a publish and of a search reply. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire. `confirm` is the question the host asks before it acts on the row (see `confirmation`); the row comes back in its resolve as it was sent, `confirm` included.",
     "required": [
       "source",
       "title"
@@ -217,7 +225,8 @@
     "optional": [
       "url",
       "metadata",
-      "effect"
+      "effect",
+      "confirm"
     ]
   },
   "lifecycle": {
@@ -328,7 +337,7 @@
     ]
   },
   "quotas": {
-    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated. catalog_rows and catalog_bytes bound the plugin's whole catalog after a per-source merge. catalog_bytes counts the `rows` array as written on the wire \u2014 each row object's span in the publish frame, one separator byte per row and the two brackets \u2014 measured by the host from the frame it received, never by re-encoding: the compact encoding is the floor, and a plugin pays for whitespace or escaping it adds inside a row (the Rust SDK writes compact rows, so its count is the compact encoding exactly). answers_bytes counts the compact encoding of `answers`. catalog_rows and catalog_bytes bound a `search` reply's rows too, the bytes counted from the compact encoding of `rows`. inline_preview_bytes is the one bound that drops a part, not the payload: it counts the percent-encoded body of a `#[popup=inline:\u2026]` marker in a status segment as written, and a larger body leaves the segment's visible markup without its preview. fetch_response_bytes and fetch_timeout_ms bound a host.fetch response unless the manifest's fetch_limits set others, each at most fetch_response_bytes_max and fetch_timeout_ms_max. alert_title_bytes and alert_value_bytes bound the strings of a perform reply's alert.",
+    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated. catalog_rows and catalog_bytes bound the plugin's whole catalog after a per-source merge. catalog_bytes counts the `rows` array as written on the wire \u2014 each row object's span in the publish frame, one separator byte per row and the two brackets \u2014 measured by the host from the frame it received, never by re-encoding: the compact encoding is the floor, and a plugin pays for whitespace or escaping it adds inside a row (the Rust SDK writes compact rows, so its count is the compact encoding exactly). answers_bytes counts the compact encoding of `answers`. catalog_rows and catalog_bytes bound a `search` reply's rows too, the bytes counted from the compact encoding of `rows`. inline_preview_bytes is the one bound that drops a part, not the payload: it counts the percent-encoded body of a `#[popup=inline:\u2026]` marker in a status segment as written, and a larger body leaves the segment's visible markup without its preview. fetch_response_bytes and fetch_timeout_ms bound a host.fetch response unless the manifest's fetch_limits set others, each at most fetch_response_bytes_max and fetch_timeout_ms_max. alert_title_bytes and alert_value_bytes bound the strings of a perform reply's alert. confirm_bytes bounds a row's `confirm` and a manifest command's.",
     "frame_bytes": 10485760,
     "catalog_rows": 10000,
     "catalog_bytes": 4194304,
@@ -348,7 +357,8 @@
     "text_grid_dimension": 10000,
     "inline_preview_bytes": 16384,
     "alert_title_bytes": 256,
-    "alert_value_bytes": 64
+    "alert_value_bytes": 64,
+    "confirm_bytes": 256
   },
   "errors": {
     "$comment": "Canonical EXACT protocol-level error strings (spec-pinned; domain failures stay free-form and content-free). The response law: every result carries boolean `ok`; ok:false carries a non-empty `error` \u2014 except perform's {ok:false, unhandled:true} (not mine; host MAY fall back). A perform {ok:false, error} means mine-but-broke: the host MUST NOT fall back.",

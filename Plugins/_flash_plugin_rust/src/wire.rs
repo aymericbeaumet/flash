@@ -47,6 +47,30 @@ pub(crate) fn deserialize_count<'de, D: Deserializer<'de>>(input: D) -> Result<u
         .ok_or_else(|| serde::de::Error::custom("invalid command count"))
 }
 
+/// A perform's `confirmed`: `true`, and only that. The host leaves the key
+/// out of a perform the user did not confirm.
+pub(crate) fn confirmed(value: &Value) -> bool {
+    value == &Value::Bool(true)
+}
+
+pub(crate) fn deserialize_confirmed<'de, D: Deserializer<'de>>(input: D) -> Result<bool, D::Error> {
+    if confirmed(&Value::deserialize(input)?) {
+        Ok(true)
+    } else {
+        Err(serde::de::Error::custom("invalid confirmed"))
+    }
+}
+
+/// UTF-8 bytes of a row's `confirm`, and of a manifest command's
+/// (`quotas.confirm_bytes`).
+#[cfg(test)]
+pub(crate) const MAX_CONFIRM_BYTES: usize = 256;
+
+/// Every key of a row (`protocol.json` `row`): `source` and `title` are
+/// required, the rest optional.
+#[cfg(test)]
+pub(crate) const ROW_KEYS: [&str; 6] = ["source", "title", "url", "metadata", "effect", "confirm"];
+
 fn present<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value.get(key).filter(|value| !value.is_null())
 }
@@ -515,8 +539,51 @@ mod tests {
             shape["required"],
             serde_json::json!(["command", "subcommand", "args"])
         );
-        assert_eq!(shape["optional"], serde_json::json!(["context", "count"]));
+        assert_eq!(
+            shape["optional"],
+            serde_json::json!(["context", "count", "confirmed"])
+        );
         assert_eq!(shape["count_max"], MAX_COMMAND_COUNT);
+    }
+
+    /// A row has the contract's keys, its question the contract's bound,
+    /// and a confirmed perform is a resolve or a command.
+    #[test]
+    fn confirmations_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let row = &contract["row"];
+        let keys: Vec<&str> = ["required", "optional"]
+            .iter()
+            .flat_map(|group| row[*group].as_array().unwrap())
+            .map(|key| key.as_str().unwrap())
+            .collect();
+        assert_eq!(keys, ROW_KEYS);
+        let encoded = serde_json::to_value(
+            crate::Candidate::new("s", "t")
+                .url("https://example.com/")
+                .subtitle("sub")
+                .copy_text("t")
+                .confirm("Sure?"),
+        )
+        .unwrap();
+        let mut written: Vec<&str> = encoded
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        written.sort_unstable();
+        let mut expected = ROW_KEYS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(written, expected);
+        assert_eq!(
+            contract["quotas"]["confirm_bytes"],
+            MAX_CONFIRM_BYTES as u64
+        );
+        assert_eq!(
+            contract["confirmation"]["perform_kinds"],
+            serde_json::json!(["resolve", "command"])
+        );
     }
 
     /// The alert a `perform` reply may carry has the contract's keys and

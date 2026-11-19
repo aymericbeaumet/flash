@@ -173,6 +173,10 @@ pub struct Candidate {
     /// row is selected. Evaluation/rendering never executes it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub effect: Option<CandidateEffect>,
+    /// The question the host asks before it acts on this row: its resolve
+    /// is sent, or its effect runs, only once the user answered `y`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confirm: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -411,7 +415,19 @@ impl Candidate {
             url: None,
             metadata: HashMap::new(),
             effect: None,
+            confirm: None,
         }
+    }
+
+    /// Ask `prompt` before the host acts on this row, for a row whose
+    /// selection cannot be undone (`Restart this Mac?`). The host shows it
+    /// as its confirmation alert, sends the resolve only on `y`, and marks
+    /// that perform as confirmed; a plugin never asks itself. A non-blank
+    /// question of at most 256 bytes (`quotas.confirm_bytes`): the host
+    /// rejects the whole publish or search reply otherwise.
+    pub fn confirm(mut self, prompt: impl Into<String>) -> Self {
+        self.confirm = Some(prompt.into());
+        self
     }
 
     fn set(mut self, key: &str, value: impl Into<String>) -> Self {
@@ -713,6 +729,12 @@ pub struct CommandRequest {
         deserialize_with = "crate::wire::deserialize_count"
     )]
     pub count: u32,
+    /// Whether the user answered `y` to a question before this command: the
+    /// `confirm` its manifest entry declares, or an `alert confirm` wrapping
+    /// it. The host honours a host action that needs the user's consent only
+    /// while such a perform is in flight.
+    #[serde(default, deserialize_with = "crate::wire::deserialize_confirmed")]
+    pub confirmed: bool,
 }
 
 impl Default for CommandRequest {
@@ -723,6 +745,7 @@ impl Default for CommandRequest {
             args: Vec::new(),
             context: None,
             count: 1,
+            confirmed: false,
         }
     }
 }
@@ -816,7 +839,9 @@ pub struct SearchRequest {
 /// A decoded `perform` request, one variant per wire `kind`.
 #[derive(Clone, Debug)]
 pub enum Perform {
-    /// `kind: "resolve"` — the host echoes back a row this plugin published.
+    /// `kind: "resolve"` — the host echoes back a row this plugin published
+    /// or answered a search with. A row that carries `confirm` arrives only
+    /// once the user answered its question.
     Resolve(Candidate),
     /// `kind: "command"` — the core commands the plugin performs in its
     /// context (with `context`), its own commands and bangs (without; a bang
@@ -1393,6 +1418,45 @@ mod tests {
         assert_eq!(encoded["source"], "example.items");
         assert_eq!(encoded["metadata"]["subtitle"], "sub");
         assert_eq!(encoded["effect"]["type"], "copy_text");
+    }
+
+    /// A row's question is first-class on the wire and absent without one.
+    #[test]
+    fn a_row_carries_the_question_the_host_asks_first() {
+        let row = Candidate::new("example.items", "Restart").confirm("Restart this Mac?");
+        assert_eq!(
+            serde_json::to_value(&row).unwrap(),
+            json!({ "source": "example.items", "title": "Restart", "confirm": "Restart this Mac?" })
+        );
+        let back: Candidate = serde_json::from_value(serde_json::to_value(&row).unwrap()).unwrap();
+        assert_eq!(back, row);
+        assert_eq!(back.confirm.as_deref(), Some("Restart this Mac?"));
+        let plain: Candidate =
+            serde_json::from_value(json!({ "source": "s", "title": "t", "confirm": null }))
+                .unwrap();
+        assert_eq!(plain.confirm, None);
+    }
+
+    /// `confirmed` is `true` or absent: a command without it was not asked.
+    #[test]
+    fn a_command_says_whether_the_user_confirmed_it() {
+        let command = |extra: serde_json::Value| {
+            let mut params = json!({ "command": "system", "subcommand": "restart", "args": [] });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<CommandRequest>(params)
+        };
+        assert!(!command(json!({})).unwrap().confirmed);
+        assert!(command(json!({ "confirmed": true })).unwrap().confirmed);
+        assert!(!CommandRequest::default().confirmed);
+        for confirmed in [json!(false), json!(null), json!(1), json!("true")] {
+            assert!(
+                command(json!({ "confirmed": confirmed })).is_err(),
+                "{confirmed}"
+            );
+        }
     }
 
     #[test]

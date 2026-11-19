@@ -12,10 +12,12 @@ final class PluginManager {
   }
 
   /// A resolved command target: the owning plugin. `selector` carries the
-  /// plugin root gate, applied at lookup against the focused app.
+  /// plugin root gate, applied at lookup against the focused app; `confirm`
+  /// is the question its registration asks first.
   private struct CommandTarget {
     let plugin: PluginProcess
     let selector: PluginSelectorStack
+    var confirm: String? = nil
 
     func specificity(in context: PluginSelectorContext) -> Int? {
       selector.specificity(in: context)
@@ -302,7 +304,8 @@ final class PluginManager {
       for registration in manifest.pluginCommands {
         let command = registration.command.lowercased()
         let subcommand = registration.subcommand.lowercased()
-        let target = CommandTarget(plugin: plugin, selector: rootSelector)
+        let target = CommandTarget(
+          plugin: plugin, selector: rootSelector, confirm: registration.prompt)
         registrationRows.append(
           CommandRegistrationTarget(
             selector: rootSelector,
@@ -607,13 +610,16 @@ final class PluginManager {
   /// invocation was dispatched (synchronous ownership check). The plugin
   /// runs asynchronously; `onResult` delivers how its `perform` settled.
   /// `count` is the NORMAL count typed before the command's key: the plugin
-  /// gets it in one `perform`, never as that many.
+  /// gets it in one `perform`, never as that many. `confirmed` says the
+  /// user answered a question first; the caller asks
+  /// (`ownCommandConfirmation`), this only dispatches.
   @discardableResult
   func invoke(
     command: String,
     subcommand: String,
     args: [String],
     count: Int = 1,
+    confirmed: Bool = false,
     in context: PluginSelectorContext = PluginSelectorContext(),
     onResult: ((PluginCommandResult) -> Void)? = nil
   ) -> Bool {
@@ -649,8 +655,23 @@ final class PluginManager {
       subcommand: resolved.subcommand,
       args: resolved.args,
       count: count,
+      confirmed: confirmed,
       onResult: onResult)
     return true
+  }
+
+  /// The question a plugin's own command asks first (`confirm` on its
+  /// `commands[]` entry), or nil when the plugin that would run the words
+  /// here declares none. Resolved as `invoke` resolves its target; a `*`
+  /// wildcard never carries one.
+  func ownCommandConfirmation(
+    command: String, subcommand: String,
+    in context: PluginSelectorContext = PluginSelectorContext()
+  ) -> String? {
+    let key = CommandKey(command: command.lowercased(), subcommand: subcommand.lowercased())
+    return Self.bestTarget(
+      readHotSnapshot().commandIndex[key] ?? [], in: context,
+      specificity: { $0.specificity(in: $1) })?.confirm
   }
 
   /// The params of one `perform {kind: "command"}` for a plugin's own
@@ -673,12 +694,14 @@ final class PluginManager {
     subcommand: String,
     args: [String],
     count: Int = 1,
+    confirmed: Bool = false,
     onResult: ((PluginCommandResult) -> Void)?
   ) {
     plugin.perform(
       kind: "command",
       params: Self.commandParams(
-        command: command, subcommand: subcommand, args: args, count: count)
+        command: command, subcommand: subcommand, args: args, count: count),
+      confirmed: confirmed
     ) { outcome in
       switch outcome {
       case .performed(let pid, let navigationURL, let message, let alert):

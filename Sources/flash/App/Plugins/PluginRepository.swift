@@ -219,7 +219,13 @@ struct PluginRepository {
   }
 
   static func defaultDataDir() -> URL {
-    FileManager.default.homeDirectoryForCurrentUser
+    // The test runner gets a directory of its own: a test that boots the
+    // resident's manager never writes into the user's plugin data.
+    guard NSClassFromString("XCTestCase") == nil else { return testDataDir }
+    return FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/Flash/Plugins")
   }
+
+  private static let testDataDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("flash-plugin-data-\(ProcessInfo.processInfo.processIdentifier)")
 }

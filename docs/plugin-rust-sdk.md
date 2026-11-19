@@ -57,7 +57,9 @@ receives the core commands the manifest declares under Flash's topics (a
 `CommandRequest` whose `context` is then the focused app; match on
 `(command.command, command.subcommand)`, read `--index=N` with `index()`,
 a bool flag with `has_flag("force")`, a value with `flag("key")`; an own
-command's `count` is the NORMAL count typed before its key, 1 without one),
+command's `count` is the NORMAL count typed before its key, 1 without one,
+and `confirmed` says the user answered a question before the command: the
+`confirm` its manifest entry declares, or an `alert confirm` around it),
 `navigation` ⇒ `on_navigate`, `hints` ⇒ `on_hints`. Optional: `on_event`,
 `on_resolve`, `on_text_grid` (a hint provider's visible text as a
 `TextGridResponse` of `TextGridLine::text` / `TextGridLine::format` lines,
@@ -93,7 +95,9 @@ Handed to every handler; cheap to clone. Key surface:
 
 - Catalog: `publish(candidates)` pushes the complete replacement row set to
   the host-owned store (rows carry a first-class `source` naming a manifest
-  `sources[].name`); `publish_source(name, candidates)` replaces that one
+  `sources[].name`; `Candidate::confirm("Restart this Mac?")` makes the
+  host ask before it acts on the row, so its `on_resolve` runs only once the
+  user answered `y`, and a plugin never asks itself); `publish_source(name, candidates)` replaces that one
   source's rows and leaves the others as last published, so rows that
   change often and rows that rarely do live in separate sources and a
   publish stays proportional to the change. Publish an authoritative empty

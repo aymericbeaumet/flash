@@ -162,6 +162,8 @@ final class PluginSchemaTests: XCTestCase {
     let definitions = "definitions.schema.json"
     let metadata = node(definitions, "definitions", "row", "properties", "metadata")
     XCTAssertEqual(metadata["maxProperties"] as? Int, PluginProtocol.maxMetadataEntries)
+    let confirm = node(definitions, "definitions", "row", "properties", "confirm")
+    XCTAssertEqual(confirm["maxLength"] as? Int, PluginProtocol.maxConfirmBytes)
     XCTAssertEqual(
       Set(node(definitions, "definitions", "priority")["enum"] as? [String] ?? []),
       Set(FlashPriority.allCases.map(\.rawValue)))
@@ -466,6 +468,30 @@ final class PluginSchemaTests: XCTestCase {
       own["kind"] = "command"
       XCTAssertTrue(JSONSchemaValidator.equal(own, try XCTUnwrap(lines[name]).params), name)
     }
+
+    for (name, confirmed) in [
+      ("perform.command.confirmed", true), ("perform.command.unconfirmed", false),
+    ] {
+      let own = PluginProcess.performParams(
+        kind: "command",
+        params: PluginManager.commandParams(command: "example", subcommand: "confirm", args: []),
+        confirmed: confirmed)
+      XCTAssertTrue(JSONSchemaValidator.equal(own, try XCTUnwrap(lines[name]).params), name)
+    }
+    // A row comes back in its resolve as the plugin wrote it, its question
+    // included, and marked once the user answered it.
+    let asking = Candidate(
+      title: "Restart",
+      metadata: [
+        CandidateMetadataKey.source: "example.items",
+        CandidateMetadataKey.sourceID: "plugin:example",
+      ], confirm: "Restart this Mac?")
+    XCTAssertTrue(
+      JSONSchemaValidator.equal(
+        PluginProcess.performParams(
+          kind: "resolve", params: ["row": PluginWireCodec.candidateJSON(asking)],
+          confirmed: true),
+        try XCTUnwrap(lines["perform.resolve.confirmed"]).params))
 
     let row = Candidate(
       title: "Example row", url: URL(string: "https://example.com/a"),

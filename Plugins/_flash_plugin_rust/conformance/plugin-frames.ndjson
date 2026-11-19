@@ -53,6 +53,7 @@
 {"name": "search.reply", "expect": "accept", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.live","title":"Live row","url":"https://example.com/a","metadata":{"subtitle":"First"}},{"source":"example.live","title":"Open the site","effect":{"type":"open","url":"https://example.com/"}}]}}}
 {"name": "search.reply.empty", "expect": "accept", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[]}}}
 {"name": "search.reply.null-optionals", "expect": "accept", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.live","title":"Bare","url":null,"metadata":null,"effect":null}]}}}
+{"name": "search.reply.confirm", "expect": "accept", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.live","title":"Restart","confirm":"Restart this Mac?"}]}}}
 {"name": "search.reply.invalid-params", "expect": "accept", "reply_to": "search", "frame": {"id":7,"result":{"ok":false,"error":"invalid search params"}}}
 {"name": "search.reply.deadline-exceeded", "expect": "accept", "reply_to": "search", "frame": {"id":7,"result":{"ok":false,"error":"deadline exceeded"}}}
 {"name": "search.reply.unknown-key", "expect": "reject", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[],"more":true}}}
@@ -61,6 +62,7 @@
 {"name": "search.reply.row-of-another-source", "expect": "reject", "reply_to": "search", "schema": "accept", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.items","title":"Bare"}]}}}
 {"name": "search.reply.unknown-row-key", "expect": "reject", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.live","title":"Bare","source_id":"example"}]}}}
 {"name": "search.reply.empty-title", "expect": "reject", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.live","title":""}]}}}
+{"name": "search.reply.blank-confirm", "expect": "reject", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.live","title":"Restart","confirm":""}]}}}
 {"name": "search.reply.local-file-effect", "expect": "reject", "reply_to": "search", "frame": {"id":7,"result":{"ok":true,"rows":[{"source":"example.live","title":"Bare","effect":{"type":"open","url":"file:///Applications/Notes.app"}}]}}}
 {"name": "perform.reply", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true}}}
 {"name": "perform.reply.full", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":512,"navigation_url":"https://example.com/a","message":"Done","alert":{"title":"volume","value":"38%","widest_value":"100%"}}}}
@@ -68,6 +70,8 @@
 {"name": "perform.reply.alert-value", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"caffeinate off","alert":{"title":"caffeinate","value":"off"}}}}
 {"name": "perform.reply.counted", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"5"}}}
 {"name": "perform.reply.uncounted", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"1"}}}
+{"name": "perform.reply.confirmed", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"confirmed"}}}
+{"name": "perform.reply.unconfirmed", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"unconfirmed"}}}
 {"name": "perform.reply.navigated", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"navigation_url":"https://example.com/a"}}}
 {"name": "perform.reply.null-optionals", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":null,"navigation_url":null,"message":null,"alert":null}}}
 {"name": "perform.reply.unhandled", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":false,"unhandled":true}}}
@@ -99,8 +103,9 @@
 {"name": "publish", "expect": "accept", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Example row","url":"https://example.com/a","metadata":{"subtitle":"First"},"effect":{"type":"copy_text","text":"Example row"}},{"source":"example.items","title":"Open the site","effect":{"type":"open","url":"https://example.com/"}},{"source":"example.tabs","title":"Open the app","effect":{"type":"open","bundle_id":"com.example.app"}},{"source":"example.items","title":"Insert","effect":{"type":"insert_text","text":"inserted"}},{"source":"example.items","title":"Bare"}]}}}
 {"name": "publish.empty", "expect": "accept", "frame": {"method":"publish","params":{"rows":[]}}}
 {"name": "publish.source", "expect": "accept", "frame": {"method":"publish","params":{"source":"example.tabs","rows":[{"source":"example.tabs","title":"Tab"}]}}}
-{"name": "publish.null-optionals", "expect": "accept", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Bare","url":null,"metadata":null,"effect":null}],"source":null}}}
+{"name": "publish.null-optionals", "expect": "accept", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Bare","url":null,"metadata":null,"effect":null,"confirm":null}],"source":null}}}
 {"name": "publish.priority", "expect": "accept", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Bare","metadata":{"priority":"important"}}]}}}
+{"name": "publish.confirm", "expect": "accept", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Restart","confirm":"Restart this Mac?"}]}}}
 {"name": "publish.unknown-params-key", "expect": "reject", "frame": {"method":"publish","params":{"rows":[],"replace":true}}}
 {"name": "publish.rows-not-an-array", "expect": "reject", "frame": {"method":"publish","params":{"rows":{}}}}
 {"name": "publish.without-rows", "expect": "reject", "frame": {"method":"publish","params":{}}}
@@ -118,6 +123,9 @@
 {"name": "publish.local-file-effect", "expect": "reject", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Bare","effect":{"type":"open","url":"file:///Applications/Notes.app"}}]}}}
 {"name": "publish.effect-with-two-targets", "expect": "reject", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Bare","effect":{"type":"open","url":"https://example.com/","bundle_id":"com.example.app"}}]}}}
 {"name": "publish.empty-effect-text", "expect": "reject", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Bare","effect":{"type":"copy_text","text":""}}]}}}
+{"name": "publish.blank-confirm", "expect": "reject", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Restart","confirm":" "}]}}}
+{"name": "publish.confirm-not-a-string", "expect": "reject", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Restart","confirm":true}]}}}
+{"name": "publish.confirm-over-the-bound", "expect": "reject", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Restart","confirm":"?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????"}]}}}
 {"name": "status", "expect": "accept", "frame": {"method":"status","params":{"segments":{"summary":"CPU 12%","feed":{"prefix":"News ","lines":["First","Second"],"cycle_seconds":30.0}}}}}
 {"name": "status.preview", "expect": "accept", "frame": {"method":"status","params":{"segments":{"summary":"#[popup=inline:body]CPU#[nopopup]"}}}}
 {"name": "status.clear", "expect": "accept", "frame": {"method":"status","params":{"segments":{"summary":""}}}}

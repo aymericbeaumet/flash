@@ -457,8 +457,8 @@ never asks the host what it supports. See the
 - `perform` — the single effect method. Three kinds:
 
   ```json
-  {"kind": "resolve",  "row": {…}}
-  {"kind": "command",  "command": "…", "subcommand": "…", "args": […], "context"?: {"bundle_id", "pid", "front_window_frame"}, "count"?: 5}
+  {"kind": "resolve",  "row": {…}, "confirmed"?: true}
+  {"kind": "command",  "command": "…", "subcommand": "…", "args": […], "context"?: {"bundle_id", "pid", "front_window_frame"}, "count"?: 5, "confirmed"?: true}
   {"kind": "navigate", "url": "tmux://…"}
   ```
 
@@ -478,6 +478,8 @@ never asks the host what it supports. See the
   five, so the plugin applies it in one step (five volume ticks, one alert).
   It is an integer from 1 to 999, absent means 1, and the host leaves it out
   for 1, for a bang and for a core command, which it repeats itself.
+  `confirmed` is `true` on a resolve or a command the user confirmed (see
+  [confirmation](#confirmation)), and absent otherwise.
   `protocol.json` `perform_command` pins the shape.
 
   Uniform reply, universal trichotomy:
@@ -516,6 +518,36 @@ never asks the host what it supports. See the
   such a command is logged, handed to its caller as the failure's text, and
   shown in the failure alert when it fits an alert title; a longer one
   shows the generic failure alert.
+
+#### Confirmation
+
+A plugin never asks the user a question itself: NORMAL mode's capture would
+swallow the answer. It declares the question, and the host asks it through
+its one confirmation alert (`[y]es / [n]o`), a phase that owns the keyboard
+in every mode. `y` runs what the question gates; any other key closes it and
+nothing is sent.
+
+- A manifest `commands[]` entry carries `confirm`: the host asks before it
+  dispatches that command's `perform`, whether a key, the command line or
+  the CLI ran it (see [`commands`](#manifest)).
+- A row carries `confirm`: the host asks before it acts on the row, which
+  means before it sends the row's resolve, or before it runs its `effect`.
+  A row another key would commit (`<tab>`, `<cmd+cr>`) asks the same way.
+- A mapping wraps any command with `alert confirm`; its `y` counts too.
+
+`confirm` is a non-blank question of at most 256 bytes
+(`quotas.confirm_bytes`). A blank or longer one rejects the manifest, the
+publish or the search reply that carries it.
+
+A `perform` sent after the user answered `y` carries `"confirmed": true`.
+The key is never `false`: a perform the user was not asked about leaves it
+out, and a `navigate` never has it. The host remembers a confirmed perform
+until its reply arrives or its deadline passes, and a host action that needs
+the user's consent is honoured only while one is in flight for that plugin.
+Each confirmed perform covers one such action: asked for twice inside one
+perform, the second is refused. A plugin therefore cannot reach such an
+action from an event, a timer, a search, or a perform the user was not asked
+about. `protocol.json` `confirmation` states the rule.
 
 #### Event coalescing
 
@@ -783,8 +815,11 @@ call override available) all arrive the same way.
 ## Payloads and quotas
 
 Rows (of a `publish` and of a `search` reply) are `{"source", "title", "url"?,
-"metadata"?, "effect"?}` — `source` must name a manifest `sources[].name`,
-a pushed one in a publish and the one asked for in a search reply;
+"metadata"?, "effect"?, "confirm"?}` — `source` must name a manifest
+`sources[].name`, a pushed one in a publish and the one asked for in a search
+reply; `confirm` is the question the host asks before it acts on the row
+(see [confirmation](#confirmation)), and the row comes back in its resolve
+as it was sent, `confirm` included;
 routing `source_id` is always host-stamped and never crosses the wire.
 Catalogs are bounded to 10,000 rows / 4 MiB encoded; titles 4 KiB, URLs
 16 KiB, metadata 64 entries (256-byte keys, 64-KiB values), effect text
@@ -998,21 +1033,25 @@ Section semantics:
     fail the load. Such an entry never registers as a plugin command — a
     topic word is always Flash's — and dispatches as `perform {kind:
     "command"}` with `context`, first in the source chain, before any
-    binding (see **Resolution** under `bindings` below). `confirm` on the
-    entry is the
-    question the host asks before it (`{"command": "tab", "subcommand":
-    "close", "confirm": "Close this tmux window?"}`): in the apps the root
-    selector matches, the host shows the prompt as its confirmation alert
-    (`[y]es / [n]o`, keys in the hint colour) and dispatches the command only
-    on `y`; the plugin then performs it without a prompt of its own, which
-    NORMAL mode's capture would swallow the answer to. Across plugins, a
-    matching selector beats an unscoped one, then the higher `priority`,
-    then the plugin id. An empty prompt, or `confirm` on the plugin's own
-    command, rejects the manifest. The bundled terminals plugin gates `tab
-    close` and `pane close` this way; a mapping gates any command the same
-    way with `["flash", "alert", "confirm", "--prompt=…", "--command=<topic>
-    <action> [--arg=value]"]`. `description` is allowed on a core entry but
-    unused: the host's catalog describes its own commands.
+    binding (see **Resolution** under `bindings` below). `description` is
+    allowed on a core entry but unused: the host's catalog describes its
+    own commands.
+
+  `confirm` on an entry is the question the host asks before the command
+  (`{"command": "tab", "subcommand": "close", "confirm": "Close this tmux
+  window?"}`): the host shows the prompt as its confirmation alert
+  (`[y]es / [n]o`, keys in the hint colour) and dispatches the command only
+  on `y`, marked `confirmed`; the plugin then performs it without a prompt
+  of its own (see [confirmation](#confirmation)). On one of the plugin's
+  own commands it gates that pair wherever it runs, a key, the command line
+  and the CLI alike, and the `*` wildcard cannot carry one. On a core
+  command it gates the command in the apps the root selector matches;
+  across plugins, a matching selector beats an unscoped one, then the higher
+  `priority`, then the plugin id. An empty prompt or one over 256 bytes
+  rejects the manifest. The bundled terminals plugin gates `tab close` and
+  `pane close` this way; a mapping gates any command the same way with
+  `["flash", "alert", "confirm", "--prompt=…", "--command=<topic> <action>
+  [--arg=value]"]`, and a command asked through it is not asked again.
 - **`bangs`** — the list of flashlight bangs, each dispatched as
   `perform {kind: "command"}` with the plugin id as `command` and the typed
   token as `subcommand`, so no `commands` entry is needed. `token: "*"` is

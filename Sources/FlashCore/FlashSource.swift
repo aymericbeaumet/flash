@@ -171,6 +171,10 @@ public struct Candidate: @unchecked Sendable {
   /// effect; the resident validates and performs it when this row is selected.
   /// Merely evaluating or rendering a candidate never executes the effect.
   public var effect: CandidateEffect?
+  /// The question the host asks before it acts on this row: its effect runs,
+  /// or its source resolves it, only once the user answered yes. A plugin
+  /// row declares it for a selection nothing undoes.
+  public var confirm: String?
   // Derived ranking caches populated by `CandidateFinder.prepare`; not part of
   // the public per-candidate contract.
   public var displayTitle: String
@@ -195,6 +199,7 @@ public struct Candidate: @unchecked Sendable {
     url: URL? = nil,
     metadata: [String: String] = [:],
     effect: CandidateEffect? = nil,
+    confirm: String? = nil,
     displayTitle: String = "",
     normalizedSearchText: String = "",
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
@@ -209,6 +214,7 @@ public struct Candidate: @unchecked Sendable {
     self.url = url
     self.metadata = metadata
     self.effect = effect
+    self.confirm = confirm
     self.displayTitle = displayTitle
     self.normalizedSearchText = normalizedSearchText
     self.normalizedScoringFields = normalizedScoringFields
@@ -504,6 +510,14 @@ public protocol FlashSource: AnyObject {
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   )
+  /// Resolve a candidate, saying whether the user answered its `confirm`
+  /// first. Default: the plain resolve, for a source that reads no consent.
+  func resolveCandidate(
+    _ candidate: Candidate,
+    in environment: FlashSourceEnvironment,
+    confirmed: Bool,
+    completion: @escaping (CandidateResolution) -> Void
+  )
   /// Resolve a user-provided target, such as `app open --name=`.
   func candidate(
     matching target: String,
@@ -571,6 +585,14 @@ extension FlashSource {
     completion: @escaping (CandidateResolution) -> Void
   ) {
     MainQueueCompletion(completion).deliver { .unresolved }
+  }
+  public func resolveCandidate(
+    _ candidate: Candidate,
+    in environment: FlashSourceEnvironment,
+    confirmed: Bool,
+    completion: @escaping (CandidateResolution) -> Void
+  ) {
+    resolveCandidate(candidate, in: environment, completion: completion)
   }
   public func candidate(
     matching target: String,

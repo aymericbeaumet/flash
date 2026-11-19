@@ -366,6 +366,14 @@ monitors read that no plugin publishes any more, with its replacement.
   are all live runs no process until the first such query or its first
   command. The Rust SDK's `plugin!` makes `on_search` required for a live
   source ([plugin protocol](docs/plugin-protocol.md#manifest)).
+- A plugin's own command and a flashlight row can ask first. `confirm` on a
+  manifest `commands[]` entry, which only a core command the plugin performs
+  could carry, is the question Flash asks before the plugin's own command
+  too, from a key, the command line and the CLI alike; `confirm` on a row
+  is asked before the row is resolved or its effect runs. `y` runs it, any
+  other key cancels, and the request that follows a `y` says so
+  (`confirmed`), as does one wrapped in `alert confirm`
+  ([confirmation](docs/plugin-protocol.md#confirmation)).
 - `feed` and `searchproviders` no longer open network connections: Flash
   downloads the feed and DuckDuckGo's bang list for them through
   `host.fetch`, and their sandboxes deny the network like every other bundled

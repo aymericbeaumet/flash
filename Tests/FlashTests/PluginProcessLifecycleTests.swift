@@ -1871,6 +1871,121 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertNil(store.entry(for: "livestrict"), "a live plugin publishes nothing")
   }
 
+  // MARK: 10c. Confirmed performs
+
+  /// The consent a confirmed perform carries: handed out once, while that
+  /// perform is in flight, and gone with it.
+  func testConfirmedPerformsHandEachConsentOutOnceWhileInFlight() {
+    var performs = ConfirmedPerforms()
+    XCTAssertFalse(performs.claim(), "nothing confirmed, nothing to claim")
+    let first = performs.begin()
+    XCTAssertTrue(performs.claim())
+    XCTAssertFalse(performs.claim(), "one confirmed perform covers one action")
+    performs.end(first)
+    XCTAssertFalse(performs.claim())
+
+    let second = performs.begin()
+    performs.end(second)
+    XCTAssertFalse(performs.claim(), "an answered perform takes its consent with it")
+
+    let third = performs.begin()
+    let fourth = performs.begin()
+    XCTAssertTrue(performs.claim())
+    performs.end(third)
+    XCTAssertTrue(performs.claim(), "the other confirmed perform is still in flight")
+    XCTAssertFalse(performs.claim())
+    performs.end(fourth)
+    performs.end(fourth)
+    XCTAssertFalse(performs.claim())
+  }
+
+  /// A host call made inside a perform the user confirmed may claim that
+  /// consent, once; one made inside an unconfirmed perform, after the
+  /// confirmed one was answered, or after it timed out, may not. Only the
+  /// confirmed perform says so on the wire.
+  func testOnlyAConfirmedPerformInFlightGrantsItsConsentToAHostCall() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "consent",
+      manifest: PluginFixtureKit.manifest(
+        id: "consent",
+        extra: #""commands": [{ "command": "consent", "subcommand": "go", "description": "x" }]"#),
+      script: PluginFixtureKit.script(
+        onPerform: """
+          printf '%s\\n' "$line" >> "$D/performs"
+          case "$line" in
+          *'"late"'*)
+            sleep 0.6
+            printf '{"id":77,"method":"host.ping","params":{}}\\n'
+            ;;
+          *)
+            printf '{"id":77,"method":"host.ping","params":{}}\\n'
+            while IFS= read -r reply; do
+              case "$reply" in *'"result"'*) break ;; esac
+            done
+            printf '{"id":%s,"result":{"ok":true}}\\n' "$id"
+            ;;
+          esac
+          """))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    let lock = NSLock()
+    var claims: [[Bool]] = []
+    process.onHostRequest = { _, _, _, scope, reply in
+      let asked = [scope.claimConfirmedPerform(), scope.claimConfirmedPerform()]
+      lock.lock()
+      claims.append(asked)
+      lock.unlock()
+      reply(["ok": true])
+    }
+    func claimed() -> [[Bool]] {
+      lock.lock()
+      defer { lock.unlock() }
+      return claims
+    }
+    func perform(confirmed: Bool, args: [String] = [], timeoutMs: Int? = nil)
+      -> PluginPerformOutcome?
+    {
+      let done = expectation(description: "perform")
+      var outcome: PluginPerformOutcome?
+      process.perform(
+        kind: "command", params: ["command": "consent", "subcommand": "go", "args": args],
+        confirmed: confirmed, timeoutMs: timeoutMs
+      ) {
+        outcome = $0
+        done.fulfill()
+      }
+      wait(for: [done], timeout: 8)
+      return outcome
+    }
+    process.start()
+
+    XCTAssertEqual(
+      perform(confirmed: false), .performed(pid: nil, navigationURL: nil, message: nil))
+    XCTAssertEqual(claimed(), [[false, false]], "no question was answered")
+    XCTAssertEqual(perform(confirmed: true), .performed(pid: nil, navigationURL: nil, message: nil))
+    XCTAssertEqual(claimed().last, [true, false], "the consent covers one action")
+    XCTAssertEqual(
+      perform(confirmed: false), .performed(pid: nil, navigationURL: nil, message: nil))
+    XCTAssertEqual(claimed().last, [false, false], "the confirmed perform was answered")
+
+    // A confirmed perform the plugin never answers: its consent ends at its
+    // deadline, before the call the plugin makes afterwards.
+    XCTAssertEqual(
+      perform(confirmed: true, args: ["late"], timeoutMs: 200),
+      .failed("no reply within the perform deadline"))
+    waitUntilTrue("the late host call arrived") { claimed().count == 4 }
+    XCTAssertEqual(claimed().last, [false, false], "the perform is no longer in flight")
+
+    let sent = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("performs"), encoding: .utf8
+    ).split(separator: "\n").map(String.init)
+    XCTAssertEqual(sent.count, 4)
+    XCTAssertEqual(
+      sent.map { $0.contains(#""confirmed":true"#) }, [false, true, false, true])
+    XCTAssertFalse(sent[0].contains("confirmed"), "the key is absent, never false: \(sent[0])")
+  }
+
   func testRequestsCarryWhatIsLeftOfTheirDeadline() throws {
     let fixture = try PluginFixtureKit.make(
       id: "deadline",

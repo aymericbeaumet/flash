@@ -183,13 +183,24 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintPro
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   ) {
+    resolveCandidate(candidate, in: environment, confirmed: false, completion: completion)
+  }
+
+  /// `confirmed`: the user answered the row's `confirm` first.
+  func resolveCandidate(
+    _ candidate: Candidate,
+    in environment: FlashSourceEnvironment,
+    confirmed: Bool,
+    completion: @escaping (CandidateResolution) -> Void
+  ) {
     _ = environment
     // The plugin owns the location-changing side effect. The host raises the
     // returned target pid after a successful resolve; pre-activating here
     // makes failed resolves look like successful app-only opens.
     plugin.perform(
       kind: "resolve",
-      params: ["row": PluginWireCodec.candidateJSON(candidate)]
+      params: ["row": PluginWireCodec.candidateJSON(candidate)],
+      confirmed: confirmed
     ) { outcome in
       switch outcome {
       case .performed(let pid, let navigationURL, _, _):

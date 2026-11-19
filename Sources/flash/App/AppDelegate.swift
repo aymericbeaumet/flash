@@ -1102,19 +1102,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Run a plugin's own command. `count` is the NORMAL count typed before
   /// its key, sent in the one `perform`. Its alert shows wherever it ran;
   /// its output goes to `completion`, or on a banner without one. False when
-  /// no loaded plugin owns the command here.
+  /// no loaded plugin owns the command here. A command whose manifest entry
+  /// declares `confirm` asks first, from a key, the command line and the
+  /// CLI alike, unless the user already said `y` (`confirmed`); the perform
+  /// that follows a `y` says so.
   @discardableResult
   func performPluginCommand(
-    _ cmd: URLCommand, count: Int = 1,
+    _ cmd: URLCommand, count: Int = 1, confirmed: Bool = false,
     completion: ((NormalModeCommandOutcome, String?) -> Void)? = nil
   ) -> Bool {
     guard case .pluginCommand(let command, let subcommand, let args) = cmd else { return false }
+    let context = pluginSelectorContext()
+    if !confirmed,
+      let prompt = pluginManager.ownCommandConfirmation(
+        command: command, subcommand: subcommand, in: context)
+    {
+      // The question is the outcome; the answer runs the command later.
+      presentConfirmation(prompt, command: cmd, repeatCount: count)
+      completion?(.performed, nil)
+      return true
+    }
     let dispatched = pluginManager.invoke(
       command: command,
       subcommand: subcommand,
       args: args,
       count: count,
-      in: pluginSelectorContext()
+      confirmed: confirmed,
+      in: context
     ) { [weak self] result in
       guard result.ok else {
         // The plugin's own reason, when it gave one: shown, and handed to

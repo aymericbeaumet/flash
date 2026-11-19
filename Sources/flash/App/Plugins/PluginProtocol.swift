@@ -65,6 +65,9 @@ enum PluginProtocol {
   /// widest value; a larger one rejects the reply.
   static let maxAlertTitleBytes = 256
   static let maxAlertValueBytes = 64
+  /// UTF-8 bytes of a row's `confirm` and of a manifest command's: the
+  /// question the confirmation alert shows.
+  static let maxConfirmBytes = 256
 
   // MARK: - host.applescript bounds (`applescript` in protocol.json)
 
@@ -141,6 +144,17 @@ enum PluginProtocol {
   /// The largest `count` a `perform` command carries
   /// (`perform_command.count_max`): NORMAL's largest count.
   static let maxCommandCount = RepeatCount.max
+  /// The `perform` kinds that carry `confirmed: true` once the user
+  /// answered a question first (`confirmation.perform_kinds`).
+  static let confirmablePerformKinds = ["resolve", "command"]
+
+  /// A `confirm` as the host asks it: trimmed, or nil when it is blank or
+  /// longer than `maxConfirmBytes`.
+  static func confirmPrompt(_ raw: String) -> String? {
+    let prompt = raw.trimmed
+    guard !prompt.isEmpty, raw.utf8.count <= maxConfirmBytes else { return nil }
+    return prompt
+  }
 
   // MARK: - Canonical error strings (spec-pinned EXACT text)
 

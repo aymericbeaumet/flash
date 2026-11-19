@@ -5,8 +5,9 @@ import XCTest
 @testable import flash
 
 /// `confirm` on a `commands[]` entry: the question a plugin declares before a
-/// core command it performs destructively, its validation, and which plugin's
-/// question the host asks in the focused app.
+/// command that cannot be undone, a core one it performs or one of its own,
+/// its validation, and which plugin's question the host asks in the focused
+/// app.
 final class CommandConfirmationTests: XCTestCase {
   override func setUp() {
     super.setUp()
@@ -28,11 +29,47 @@ final class CommandConfirmationTests: XCTestCase {
     XCTAssertEqual(manifest.pluginCommands, [])
   }
 
+  /// An own command's question rides its registration; the per-app index
+  /// holds only the core commands a plugin performs.
+  func testAnOwnCommandDeclaresItsQuestionToo() throws {
+    let manifest = try load(
+      """
+      "exec": ["./plugin"],
+      "commands": [
+        { "command": "example", "subcommand": "erase", "confirm": " Erase everything? " },
+        { "command": "example", "subcommand": "list" },
+        { "command": "tab", "subcommand": "close", "confirm": "Close this window?" }
+      ]
+      """)
+    XCTAssertEqual(manifest.pluginCommands.map(\.subcommand), ["erase", "list"])
+    XCTAssertEqual(manifest.pluginCommands.map(\.prompt), ["Erase everything?", nil])
+    XCTAssertEqual(manifest.confirmations, [CommandName("tab", "close"): "Close this window?"])
+    // The bound is the alert's: a question of exactly the quota loads.
+    let longest = String(repeating: "?", count: PluginProtocol.maxConfirmBytes)
+    XCTAssertNoThrow(
+      try load(
+        #""exec": ["./p"], "commands": [{ "command": "example", "subcommand": "run", "confirm": "\#(longest)" }]"#
+      ))
+  }
+
   func testMalformedConfirmationsRejectTheManifest() {
+    let tooLong = String(repeating: "?", count: PluginProtocol.maxConfirmBytes + 1)
     let malformed: [(String, String)] = [
       (
-        #""exec": ["./p"], "commands": [{ "command": "example", "subcommand": "run", "confirm": "x" }]"#,
-        "a plugin's own command is never gated by the host"
+        #""exec": ["./p"], "commands": [{ "command": "example", "subcommand": "*", "confirm": "x" }]"#,
+        "a wildcard names nothing a question could gate"
+      ),
+      (
+        #""exec": ["./p"], "commands": [{ "command": "example", "subcommand": "run", "confirm": "" }]"#,
+        "empty prompt on an own command"
+      ),
+      (
+        #""exec": ["./p"], "commands": [{ "command": "example", "subcommand": "run", "confirm": "\#(tooLong)" }]"#,
+        "a prompt over the bound"
+      ),
+      (
+        #""exec": ["./p"], "commands": [{ "command": "tab", "subcommand": "close", "confirm": "\#(tooLong)" }]"#,
+        "a core command's prompt over the bound"
       ),
       (
         #""exec": ["./p"], "commands": [{ "command": "tab", "subcommand": "close", "confirm": " " }]"#,

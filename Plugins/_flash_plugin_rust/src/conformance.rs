@@ -96,6 +96,12 @@ fn fixture_rows() -> Vec<Candidate> {
     ]
 }
 
+/// The row of the `publish.confirm` line, which `perform.resolve.confirmed`
+/// hands back once the user answered its question.
+fn confirming_row() -> Candidate {
+    Candidate::new("example.items", "Restart").confirm("Restart this Mac?")
+}
+
 /// The plugin the corpus describes. A handler answers with the reply the
 /// corpus names only for the request it shows, so a field the SDK decoded
 /// differently surfaces as a different reply.
@@ -189,7 +195,9 @@ impl Plugin for Fixture {
     async fn perform(&self, ctx: Context, request: Perform) -> PerformResponse {
         self.ran("perform");
         match request {
-            Perform::Resolve(row) if row == fixture_rows()[0] => PerformResponse::ok(),
+            Perform::Resolve(row) if row == fixture_rows()[0] || row == confirming_row() => {
+                PerformResponse::ok()
+            }
             Perform::Resolve(_) => PerformResponse::fail("unexpected row"),
             Perform::Navigate(route) => PerformResponse::ok().navigation_url(route.url),
             Perform::Command(command) => match command.name().as_str() {
@@ -213,6 +221,11 @@ impl Plugin for Fixture {
                 "example decline" if command.context.is_none() => PerformResponse::unhandled(),
                 "example break" => PerformResponse::fail("example failed"),
                 "example repeat" => PerformResponse::ok().message(command.count.to_string()),
+                "example confirm" => PerformResponse::ok().message(if command.confirmed {
+                    "confirmed"
+                } else {
+                    "unconfirmed"
+                }),
                 // Call the host RPC the first argument names and hand back
                 // what the SDK made of the host's reply.
                 "example call" => {
@@ -451,6 +464,10 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
                     Candidate::new("example.items", "Bare").priority(Priority::Important),
                 ])
             }),
+        ),
+        (
+            "publish.confirm",
+            notification(|ctx| ctx.publish(vec![confirming_row()])),
         ),
         (
             "status",

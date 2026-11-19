@@ -1472,6 +1472,7 @@ mod tests {
                 front_window_frame: None,
             }),
             count: 1,
+            confirmed: false,
         }
     }
 

@@ -52,6 +52,7 @@ final class PluginProcess {
     let id: Int
     let kind: String
     let params: [String: Any]
+    let confirmed: Bool
     let timeoutMs: Int
     let startedAt: DispatchTime
     let trace: Trace.ID?
@@ -207,6 +208,11 @@ final class PluginProcess {
   private var pendingHostRequests: Set<UInt64> = []
   private var deferredPerforms: [DeferredPerform] = []
   private var deferredPerformID = 0
+  /// The performs the user confirmed that this child has not answered yet.
+  /// Guarded by its own lock: a host RPC claims one from whichever queue
+  /// carries it out.
+  private let confirmedPerformsLock = NSLock()
+  private var confirmedPerforms = ConfirmedPerforms()
   /// The search each live source waits to send, by source name: a newer
   /// query of the same source replaces the one still waiting. Queue-confined.
   private var deferredSearches: [String: DeferredSearch] = [:]
@@ -846,6 +852,7 @@ final class PluginProcess {
       dispatchPerform(
         kind: item.kind,
         params: item.params,
+        confirmed: item.confirmed,
         timeoutMs: max(1, item.timeoutMs - elapsedMs),
         trace: item.trace,
         completion: item.completion)
@@ -1290,10 +1297,14 @@ final class PluginProcess {
   /// queue. Never dispatched to a failed or unspawnable plugin — that
   /// settles `.unhandled` immediately without burning the deadline (nothing
   /// could have started). On-demand plugins lazily spawn here; the perform
-  /// deadline absorbs the startup budget.
+  /// deadline absorbs the startup budget. `confirmed` marks a perform the
+  /// user answered a question for: it carries `confirmed: true`, and until
+  /// it is answered or times out the child may claim it for one host action
+  /// that needs that consent (`PluginHostRequestScope.claimConfirmedPerform`).
   func perform(
     kind: String,
     params: [String: Any],
+    confirmed: Bool = false,
     timeoutMs: Int? = nil,
     completion: @escaping (PluginPerformOutcome) -> Void
   ) {
@@ -1322,18 +1333,18 @@ final class PluginProcess {
         mainCompletion(.unhandled)
       case .dispatch:
         self.dispatchPerform(
-          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
+          kind: kind, params: params, confirmed: confirmed, timeoutMs: timeoutMs, trace: trace,
           completion: mainCompletion)
       case .wait:
         // Not yet started, still starting, or between restarts: dispatch
         // once running; the deferral deadline settles `.unhandled` if that
         // never happens.
         self.enqueueDeferredPerform(
-          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
+          kind: kind, params: params, confirmed: confirmed, timeoutMs: timeoutMs, trace: trace,
           completion: mainCompletion)
       case .waitAndActivate:
         self.enqueueDeferredPerform(
-          kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
+          kind: kind, params: params, confirmed: confirmed, timeoutMs: timeoutMs, trace: trace,
           completion: mainCompletion)
         self.applyLifecycle(.activate)
       }
@@ -1343,25 +1354,57 @@ final class PluginProcess {
   private func dispatchPerform(
     kind: String,
     params: [String: Any],
+    confirmed: Bool,
     timeoutMs: Int,
     trace: Trace.ID?,
     completion: @escaping (PluginPerformOutcome) -> Void
   ) {
-    var wireParams = params
-    wireParams["kind"] = kind
+    // In flight from here to its reply, its deadline or the child's end:
+    // each of them completes the request below, exactly once.
+    var grant: UInt64?
+    if confirmed {
+      confirmedPerformsLock.lock()
+      grant = confirmedPerforms.begin()
+      confirmedPerformsLock.unlock()
+    }
     sendRequest(
       method: "perform",
-      params: wireParams,
+      params: Self.performParams(kind: kind, params: params, confirmed: confirmed),
       timeout: .milliseconds(max(1, timeoutMs)),
       trace: trace
-    ) { response in
+    ) { [weak self, grant] response in
+      if let grant, let self {
+        self.confirmedPerformsLock.lock()
+        self.confirmedPerforms.end(grant)
+        self.confirmedPerformsLock.unlock()
+      }
       completion(PluginWireCodec.performOutcome(from: response))
     }
+  }
+
+  /// The `params` of one `perform` as written: its kind, and `confirmed`
+  /// only on one the user confirmed (never `false`).
+  static func performParams(
+    kind: String, params: [String: Any], confirmed: Bool = false
+  ) -> [String: Any] {
+    var wire = params
+    wire["kind"] = kind
+    if confirmed { wire["confirmed"] = true }
+    return wire
+  }
+
+  /// Whether a perform the user confirmed is in flight and unclaimed; it is
+  /// claimed by the call. Safe from any queue.
+  private func claimConfirmedPerform() -> Bool {
+    confirmedPerformsLock.lock()
+    defer { confirmedPerformsLock.unlock() }
+    return confirmedPerforms.claim()
   }
 
   private func enqueueDeferredPerform(
     kind: String,
     params: [String: Any],
+    confirmed: Bool,
     timeoutMs: Int,
     trace: Trace.ID?,
     completion: @escaping (PluginPerformOutcome) -> Void
@@ -1377,6 +1420,7 @@ final class PluginProcess {
         id: id,
         kind: kind,
         params: params,
+        confirmed: confirmed,
         timeoutMs: timeoutMs,
         startedAt: .now(),
         trace: trace,
@@ -1735,9 +1779,12 @@ final class PluginProcess {
     hostRequestToken &+= 1
     let token = hostRequestToken
     pendingHostRequests.insert(token)
-    let scope = PluginHostRequestScope { [weak self] in
-      self?.isTransportActive(generation) == true
-    }
+    let scope = PluginHostRequestScope(
+      isCurrent: { [weak self] in self?.isTransportActive(generation) == true },
+      claimConfirmedPerform: { [weak self] in
+        guard let self, self.isTransportActive(generation) else { return false }
+        return self.claimConfirmedPerform()
+      })
     onHostRequest(method, params, manifest.id, scope) { [weak self] result in
       self?.sendResponse(id: id, result: result, generation: generation, token: token)
     }

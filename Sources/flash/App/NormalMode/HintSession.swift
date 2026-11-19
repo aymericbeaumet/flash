@@ -77,12 +77,55 @@ struct HintSession {
     var lastMoveAt: Date?
   }
 
-  /// A question gating a command: `y` runs it, any other key closes the
-  /// question. `repeatCount` is the NORMAL count the command was asked with.
+  /// A question gating a command or a flashlight row: `y` runs it, any other
+  /// key closes the question.
   struct Confirmation: Equatable {
+    /// What `y` runs.
+    enum Action: Equatable {
+      /// A command, with the NORMAL count it was asked with.
+      case command(URLCommand, repeatCount: Int)
+      /// A row that asks first (`Candidate.confirm`), as it was selected.
+      case row(RowSelection)
+    }
+
+    /// A selected flashlight row and what its selection carried.
+    struct RowSelection: Equatable {
+      var candidate: Candidate
+      var recordMovement = true
+      var insertionTargetPID: pid_t?
+      var variant: CommandLineSubmitVariant?
+
+      /// Two selections of the same row: what the source wrote, not the
+      /// ranking caches derived from it.
+      static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.candidate.title == rhs.candidate.title && lhs.candidate.url == rhs.candidate.url
+          && lhs.candidate.metadata == rhs.candidate.metadata
+          && lhs.candidate.effect == rhs.candidate.effect
+          && lhs.candidate.confirm == rhs.candidate.confirm
+          && lhs.recordMovement == rhs.recordMovement
+          && lhs.insertionTargetPID == rhs.insertionTargetPID && lhs.variant == rhs.variant
+      }
+    }
+
     var prompt: String
-    var command: URLCommand
-    var repeatCount: Int = 1
+    var action: Action
+
+    init(prompt: String, action: Action) {
+      self.prompt = prompt
+      self.action = action
+    }
+
+    init(prompt: String, command: URLCommand, repeatCount: Int = 1) {
+      self.init(prompt: prompt, action: .command(command, repeatCount: repeatCount))
+    }
+
+    /// What the question gates, for a log line: never a row's text.
+    var diagnosticDescription: String {
+      switch action {
+      case .command(let command, _): return command.diagnosticDescription
+      case .row(let selection): return "row source=\(selection.candidate.sourceID)"
+      }
+    }
   }
 
   /// What keys do in this session. The phases exclude one another — a session

@@ -47,7 +47,11 @@ enum PluginWireCodec {
   static let alertKeys: Set<String> = ["title", "value", "widest_value"]
   private static let hintPayloadKeys: Set<String> = ["ok", "targets", "context_pid"]
   private static let frameKeys: Set<String> = ["x", "y", "width", "height"]
-  private static let catalogRowKeys: Set<String> = ["source", "title", "url", "metadata", "effect"]
+  /// Every key of a row (`protocol.json` `row`): `source` and `title` are
+  /// required.
+  static let catalogRowKeys: Set<String> = [
+    "source", "title", "url", "metadata", "effect", "confirm",
+  ]
 
   /// `object`'s keys all lie in `allowed`, without building a set per frame.
   private static func keys(of object: [String: Any], within allowed: Set<String>) -> Bool {
@@ -452,6 +456,14 @@ enum PluginWireCodec {
     } else {
       effect = nil
     }
+    var confirm: String?
+    if let value = PluginJSON.present(raw["confirm"]) {
+      // Kept as sent: the row goes back in its resolve as the plugin wrote it.
+      guard let text = value as? String, PluginProtocol.confirmPrompt(text) != nil else {
+        return nil
+      }
+      confirm = text
+    }
     // Routing and provenance are always owned by the receiving host.
     metadata[CandidateMetadataKey.source] = source
     metadata[CandidateMetadataKey.sourceID] = sourceID
@@ -461,7 +473,7 @@ enum PluginWireCodec {
     {
       return nil
     }
-    return Candidate(title: title, url: url, metadata: metadata, effect: effect)
+    return Candidate(title: title, url: url, metadata: metadata, effect: effect, confirm: confirm)
   }
 
   private static let searchReplyKeys: Set<String> = ["ok", "rows"]
@@ -689,6 +701,7 @@ enum PluginWireCodec {
     case nil:
       break
     }
+    if let confirm = candidate.confirm { dict["confirm"] = confirm }
     return dict
   }
 

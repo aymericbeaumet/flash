@@ -31,7 +31,8 @@ command or more than one, saying which; `flash --json <words>` prints the
 same reply as one JSON object (`status`, `output`, `message`) with the same
 exit status; the command line shows a one-line output on a banner and a
 longer one in the pager. A command that asks for
-confirmation counts as run once the question is up. Only mappings and config
+confirmation counts as run once the question is up, a plugin command whose
+manifest declares one included. Only mappings and config
 files require exact words. The live [command catalog](/commands) lists every built-in and
 installed plugin command with its arguments; [hints](hints.md) and the
 [mouse grid](mouse-grid.md) walk through the mouse commands, and

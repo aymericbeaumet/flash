@@ -110,6 +110,27 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(quotas["inline_preview_bytes"] as? Int, PluginProtocol.maxInlinePreviewBytes)
     XCTAssertEqual(quotas["alert_title_bytes"] as? Int, PluginProtocol.maxAlertTitleBytes)
     XCTAssertEqual(quotas["alert_value_bytes"] as? Int, PluginProtocol.maxAlertValueBytes)
+    XCTAssertEqual(quotas["confirm_bytes"] as? Int, PluginProtocol.maxConfirmBytes)
+  }
+
+  /// A perform the user confirmed is a resolve or a command, and says so
+  /// with `confirmed: true`: the key is never written otherwise.
+  func testConfirmedPerformsMatchSpec() throws {
+    let confirmation = try XCTUnwrap(try spec()["confirmation"] as? [String: Any])
+    XCTAssertEqual(
+      confirmation["perform_kinds"] as? [String], PluginProtocol.confirmablePerformKinds)
+    for kind in PluginProtocol.confirmablePerformKinds {
+      let confirmed = PluginProcess.performParams(kind: kind, params: [:], confirmed: true)
+      XCTAssertEqual(PluginJSON.boolean(confirmed["confirmed"]), true, kind)
+      let plain = PluginProcess.performParams(kind: kind, params: [:])
+      XCTAssertEqual(Set(plain.keys), ["kind"], kind)
+    }
+    XCTAssertEqual(PluginProtocol.confirmPrompt(" Restart this Mac? "), "Restart this Mac?")
+    XCTAssertNil(PluginProtocol.confirmPrompt(" \n"))
+    XCTAssertNil(
+      PluginProtocol.confirmPrompt(
+        String(repeating: "é", count: PluginProtocol.maxConfirmBytes / 2 + 1)),
+      "the bound counts UTF-8 bytes")
   }
 
   /// The alert a `perform` reply may carry has the contract's keys.
@@ -221,7 +242,7 @@ final class PluginProtocolParityTests: XCTestCase {
   func testPerformCommandShapeMatchesSpec() throws {
     let shape = try XCTUnwrap(try spec()["perform_command"] as? [String: Any])
     XCTAssertEqual(shape["required"] as? [String], ["command", "subcommand", "args"])
-    XCTAssertEqual(shape["optional"] as? [String], ["context", "count"])
+    XCTAssertEqual(shape["optional"] as? [String], ["context", "count", "confirmed"])
     XCTAssertEqual(
       Set(try XCTUnwrap(shape["context"] as? [String])),
       Set(PluginWireCodec.contextJSON(Self.sampleContext).keys))
@@ -263,7 +284,10 @@ final class PluginProtocolParityTests: XCTestCase {
   func testRowShapeMatchesSpec() throws {
     let row = try XCTUnwrap(try spec()["row"] as? [String: Any])
     XCTAssertEqual(row["required"] as? [String], ["source", "title"])
-    XCTAssertEqual(row["optional"] as? [String], ["url", "metadata", "effect"])
+    XCTAssertEqual(row["optional"] as? [String], ["url", "metadata", "effect", "confirm"])
+    XCTAssertEqual(
+      Set((row["required"] as? [String] ?? []) + (row["optional"] as? [String] ?? [])),
+      PluginWireCodec.catalogRowKeys)
   }
 
   func testHostEventsMatchSpec() throws {

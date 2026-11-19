@@ -640,8 +640,10 @@ final class SourceRegistry {
     return candidate(forProcessID: context.processID)
   }
 
+  /// `confirmed`: the user answered the row's `confirm` first.
   func resolveCandidate(
     _ item: Candidate,
+    confirmed: Bool = false,
     completion: @escaping (CandidateResolution) -> Void
   ) {
     let env = environment
@@ -649,7 +651,7 @@ final class SourceRegistry {
       DispatchQueue.main.async { completion(.unresolved) }
       return
     }
-    source.resolveCandidate(item, in: env, completion: completion)
+    source.resolveCandidate(item, in: env, confirmed: confirmed, completion: completion)
   }
 
   func documentURL(in context: AppContext) -> String? {

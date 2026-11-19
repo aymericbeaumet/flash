@@ -148,6 +148,7 @@ final class PluginCatalogStore {
         && left.url == right.url
         && left.metadata == right.metadata
         && left.effect == right.effect
+        && left.confirm == right.confirm
     }
   }
 

@@ -1499,16 +1499,32 @@ extension AppDelegate {
   }
 
   /// `variant` is the modified Return that chose the row, which only a
-  /// clipboard row reads (``ClipboardRowDelivery``).
+  /// clipboard row reads (``ClipboardRowDelivery``). A row that carries
+  /// `confirm` asks first: nothing of it runs, its effect included, until
+  /// the user answers `y`, which comes back here with `confirmed`.
   func openSourceItem(
     _ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true,
     insertionTargetPID: pid_t? = nil, movementGeneration: UInt64? = nil,
-    variant: CommandLineSubmitVariant? = nil
+    variant: CommandLineSubmitVariant? = nil, confirmed: Bool = false
   ) {
     if candidate.sourceID == ClipboardFlashlight.sourceID {
       // A copy is no place: no movement history, no frecency.
       deliverClipboardRow(
         candidate, ClipboardRowDelivery(variant), targetPID: insertionTargetPID)
+      return
+    }
+    if !confirmed, let prompt = candidate.confirm.flatMap(PluginProtocol.confirmPrompt) {
+      // The flashlight settles first; the question then owns the keyboard.
+      overlay.hide()
+      resetCommandLineState()
+      applyModeOverlay(captureOverride: true)
+      presentConfirmation(
+        HintSession.Confirmation(
+          prompt: prompt,
+          action: .row(
+            .init(
+              candidate: candidate, recordMovement: shouldRecordMovement,
+              insertionTargetPID: insertionTargetPID, variant: variant))))
       return
     }
     switch candidate.effect {
@@ -1560,7 +1576,7 @@ extension AppDelegate {
     resetCommandLineState()
     applyModeOverlay(captureOverride: true)
 
-    registry.resolveCandidate(candidate) { [weak self] result in
+    registry.resolveCandidate(candidate, confirmed: confirmed) { [weak self] result in
       guard let self else { return }
       if let movementGeneration {
         guard movementGeneration == self.movementLocationResolutionGeneration else { return }

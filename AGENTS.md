@@ -418,10 +418,13 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   in sync.
 - Every centred alert is one `StatusAlert` drawn by `displayAlert`: a message,
   a title over a value, or a confirmation. A destructive command asks through
-  it — `alert confirm` wraps a command line, and a core command a plugin
-  performs destructively declares `confirm` on its `commands[]` entry — as a
-  hint-session phase that owns the keyboard in every mode. Plugins never post
-  their own prompt: NORMAL capture would swallow the answer.
+  it — `alert confirm` wraps a command line, and a plugin declares `confirm`
+  on a `commands[]` entry (its own command, or a core one it performs) or on
+  a row — as a hint-session phase that owns the keyboard in every mode.
+  Plugins never post their own prompt: NORMAL capture would swallow the
+  answer. Only a `y` marks a perform `confirmed`, and a host action that
+  needs consent claims it through `PluginHostRequestScope`
+  ([confirmation](docs/plugin-protocol.md#confirmation)).
 - Telemetry ([telemetry](docs/telemetry.md)): the receiver decodes off main
   into the bounded, memory-only `TelemetryStore`; `#{flash.otel…}` values wake
   only the surfaces reading that metric. Instrument through `FlashTelemetry`

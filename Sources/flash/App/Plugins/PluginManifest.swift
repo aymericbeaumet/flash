@@ -217,8 +217,8 @@ struct PluginSelectorStack: Hashable, Equatable {
 /// `spotify`) with one of its **subcommands** (e.g. `play`): the
 /// denormalized pair the command-line completion engine and the dispatch
 /// index are built from. Under one of Flash's topics (`tab close`) it is a
-/// core command the plugin performs where its selector matches; `confirm`
-/// is the question the host asks first when that is destructive.
+/// core command the plugin performs where its selector matches. `confirm`
+/// is the question the host asks first when either is destructive.
 struct PluginCommandRegistration: Decodable, Hashable {
   var command: String
   var subcommand: String
@@ -247,6 +247,9 @@ struct PluginCommandRegistration: Decodable, Hashable {
   /// Whether this entry declares a core command (a Flash topic) rather than
   /// one of the plugin's own.
   var isCoreCommand: Bool { URLEventHandler.isTopic(command) }
+
+  /// `confirm` as the host asks it, or nil without one.
+  var prompt: String? { confirm.flatMap(PluginProtocol.confirmPrompt) }
 
   var name: CommandName { CommandName(command, subcommand) }
 }
@@ -629,12 +632,11 @@ struct PluginManifest: Decodable, Equatable {
   /// destructively (`confirm` on the entry): command → prompt. The host
   /// shows it as a confirmation in the apps the plugin's selector matches,
   /// and dispatches the command only on `y`; the plugin then performs it
-  /// without a prompt of its own.
+  /// without a prompt of its own. An own command's question rides its
+  /// registration (`PluginManager.ownCommandConfirmation`).
   var confirmations: [CommandName: String] {
     commands.reduce(into: [:]) { table, entry in
-      guard entry.isCoreCommand, let prompt = entry.confirm?.trimmed, !prompt.isEmpty else {
-        return
-      }
+      guard entry.isCoreCommand, let prompt = entry.prompt else { return }
       table[entry.name] = prompt
     }
   }
@@ -1312,17 +1314,16 @@ struct PluginManifest: Decodable, Equatable {
             "plugin \(id) failed to load: flash \(command.command) \(subcommand) is not a command "
               + "Flash asks of the focused app")
         }
-        if let confirm = command.confirm, confirm.trimmed.isEmpty {
-          throw PluginError.failure(
-            "manifest.json commands \(command.command) \(subcommand) confirm needs a non-empty "
-              + "prompt")
-        }
-      } else if command.confirm != nil {
-        // The host gates only what it dispatches itself: a plugin's own
-        // command asks nothing through Flash.
+      } else if command.confirm != nil, subcommand == "*" {
+        // The question names what it gates: one command, not whatever
+        // words follow the wildcard.
         throw PluginError.failure(
-          "manifest.json commands \(command.command) \(subcommand): confirm belongs to a core "
-            + "command the plugin performs, not to its own command")
+          "manifest.json commands \(command.command) *: confirm needs a named subcommand")
+      }
+      if let confirm = command.confirm, PluginProtocol.confirmPrompt(confirm) == nil {
+        throw PluginError.failure(
+          "manifest.json commands \(command.command) \(subcommand) confirm needs a non-empty "
+            + "prompt of at most \(PluginProtocol.maxConfirmBytes) bytes")
       }
     }
     if let conflict = Self.commandClaimFailures([self])[id] {

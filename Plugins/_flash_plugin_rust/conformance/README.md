@@ -66,7 +66,10 @@ The lines describe one plugin and one moment:
   other query answers none. The corpus pins frames, so its one plugin answers
   for pushed and live sources alike, which no manifest may declare together.
 - Command `tab next --index=3` succeeds in the focused app, `example decline`
-  is unhandled, `example break` fails and `example repeat` answers its count.
+  is unhandled, `example break` fails, `example repeat` answers its count and
+  `example confirm` answers whether the user confirmed it.
+- The row `Restart` of `example.items` asks `Restart this Mac?` before it is
+  resolved.
 
 Request ids are fixed per method (`initialize` 1, `ping` 2, `evaluate` 3,
 `hints` 4, `text_grid` 5, `perform` 6, `search` 7); every `host.*` call is

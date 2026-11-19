@@ -1551,9 +1551,11 @@ extension AppDelegate {
     case .pluginCommand:
       completesLater = true
       if let completion {
-        performPluginCommand(command, count: repeatCount) { outcome, _ in completion(outcome) }
+        performPluginCommand(command, count: repeatCount, confirmed: confirmed) { outcome, _ in
+          completion(outcome)
+        }
       } else {
-        performPluginCommand(command, count: repeatCount)
+        performPluginCommand(command, count: repeatCount, confirmed: confirmed)
       }
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .clipboardHistory,
       .clipboardRestore,
