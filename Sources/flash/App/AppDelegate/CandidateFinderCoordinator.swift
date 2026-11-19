@@ -1103,7 +1103,7 @@ extension AppDelegate {
   /// `[statusbar.click]` action map — tmux's status-line mouse model: the
   /// span names the action, the binding lives in config. URLs open
   /// activating; action arrays run through the mapping-command dispatcher
-  /// (same power as a keybinding, e.g. ["flash", "volume", "down"]).
+  /// (same power as a keybinding, e.g. ["flash", "screen", "lock"]).
   func performStatusBarClickAction(named name: String) {
     guard let action = config.statusBar.clickActions[name] else {
       FlashLog.warn(

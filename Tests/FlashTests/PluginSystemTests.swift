@@ -1855,10 +1855,12 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(providers, ["terminals"])
   }
 
-  /// powerd's power-source service is the one mach allowance in the bundled
-  /// tree: inside the sandbox IOPowerSources silently lists no battery
-  /// without it, and no other bundled plugin reads a mach service.
-  func testSysinfoIsTheOnlyBundledPluginWithAMachAllowance() throws {
+  /// powerd's control service is the one mach allowance in the bundled tree,
+  /// held by the two plugins that talk to power management: inside the
+  /// sandbox IOPowerSources silently lists no battery without it (`sysinfo`)
+  /// and a power assertion is refused (`caffeinate`). No other bundled
+  /// plugin reaches a mach service.
+  func testPowerManagementIsTheOnlyMachAllowanceInTheBundledTree() throws {
     var allowances: [String: [String]] = [:]
     for root in try officialPluginRoots() {
       let manifest = try PluginManifest.load(from: root)
@@ -1866,7 +1868,12 @@ final class PluginSystemTests: XCTestCase {
         allowances[manifest.id] = mach
       }
     }
-    XCTAssertEqual(allowances, ["sysinfo": ["com.apple.PowerManagement.control"]])
+    XCTAssertEqual(
+      allowances,
+      [
+        "caffeinate": ["com.apple.PowerManagement.control"],
+        "sysinfo": ["com.apple.PowerManagement.control"],
+      ])
   }
 
   /// docs/privacy.md lists the bundled plugins that run unsandboxed; every

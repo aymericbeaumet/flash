@@ -38,6 +38,36 @@ final class BundledPluginCommandTests: XCTestCase {
     XCTAssertEqual(PluginManifest.commandClaimFailures(manifests), [:])
   }
 
+  /// Keep-awake is the `caffeinate` plugin's: its four commands and the
+  /// `state` segment a status format reads. `flash.caffeinate` names nothing.
+  func testTheCaffeinatePluginOwnsItsWordsAndItsStateSegment() throws {
+    XCTAssertEqual(
+      try bundledCommands()["caffeinate"]?.sorted(), ["off", "on", "status", "toggle"])
+    XCTAssertFalse(URLEventHandler.isTopic("caffeinate"))
+    XCTAssertEqual(try owner(of: "caffeinate"), ["caffeinate"])
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "caffeinate", "toggle", "--minutes=60"]),
+      .flashCommand(
+        .pluginCommand(command: "caffeinate", subcommand: "toggle", args: ["--minutes=60"])))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "caffeinate"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "caffeinate", "nap"]))
+
+    func bar(_ value: String) -> Config {
+      ConfigLoader.parse(
+        """
+        [statusbar]
+        enabled = true
+        template = "#[align=right]#{?\(value),AWAKE,} %H:%M"
+        """)
+    }
+    let config = bar("flash.plugin.caffeinate.state")
+    XCTAssertEqual(config.loadingDiagnostics.map(\.message), [])
+    XCTAssertEqual(config.observedStatusSegments()["caffeinate"], ["state"])
+    let retired = bar("flash.caffeinate").loadingDiagnostics.map(\.message)
+    XCTAssertTrue(
+      retired.contains { $0.contains("unknown Flash value flash.caffeinate") }, "\(retired)")
+  }
+
   /// A mapping keeps its words: `["flash", "volume", "up"]` binds the
   /// plugin's command, arguments included.
   func testMappingsBindTheWordsAndKeepTheirArguments() {

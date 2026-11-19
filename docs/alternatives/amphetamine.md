@@ -13,7 +13,7 @@ in-app purchases and no paid tier. Version 5.3.2, from November 2023,
 is the latest in its version history; the listing gives macOS 10.13 or later.
 
 Flash's part is smaller: `caffeinate on`, `off` and `toggle`, optionally for
-`--minutes`, a `#{flash.caffeinate}` value for the bar, and event monitors
+`--minutes`, a `#{flash.plugin.caffeinate.state}` value for the bar, and event monitors
 you can turn into triggers.
 
 | | Amphetamine | Flash |
@@ -24,7 +24,7 @@ you can turn into triggers.
 | Sessions | Indefinite, for a duration, until a time, while a file downloads, while an app runs; extend a running one | `caffeinate on`, for `--minutes=<n>` or until `caffeinate off` |
 | Triggers | Fifteen built in, combined in its window | [Event and value monitors](../monitors.md#runs-and-events) that run `caffeinate on` and `off` |
 | What stays awake | The system, and the display unless you let it sleep; the screen saver if allowed; a closed lid; drives | The system, idle sleep, the disk and the display, as `caffeinate -dimsu`; no closed-lid mode |
-| Status | Its menu-bar icon, time remaining in the menu | `#{flash.caffeinate}` is `on` while held; no time remaining |
+| Status | Its menu-bar icon, time remaining in the menu | `#{flash.plugin.caffeinate.state}` is `on` while held; no time remaining |
 | Configuration | Preferences window, hot keys, AppleScript | One TOML file, live reload, `flash config check`; `flash caffeinate …` from a shell |
 | Maintenance | 5.3.2, November 2023 | 1.1.0, October 2026 |
 
@@ -62,7 +62,7 @@ you can turn into triggers.
 
 ## Flash features you might like
 
-- `#{?flash.caffeinate,#[label]AWAKE#[default] ,}` in the bar, and a
+- `#{?flash.plugin.caffeinate.state,#[label]AWAKE#[default] ,}` in the bar, and a
   `#[range=user|<name>]` span with a `[statusbar.click]` action that toggles
   it, as a click on Amphetamine's menu-bar icon does.
 - An away monitor (`event = "core:user.idle"`, `idle = 600`) that pauses the

@@ -129,7 +129,6 @@ enum FlashStatusBarSDKValue: Equatable {
   case focusedAppBundleID
   case modeLabel
   case secureInput
-  case caffeinate
   /// `flash.workspace` and `flash.workspaces`: the focused tiling workspace
   /// and every listed one, while `[tiling]` is on.
   case workspace
@@ -335,8 +334,6 @@ struct FlashStatusBarContext {
   var modeLabel: String
   /// Secure input was on when Flash last looked (`noteSecureInput`).
   var secureInput: Bool
-  /// `caffeinate on` holds the Mac awake (`CaffeinateController`).
-  var caffeinate: Bool
   /// The focused tiling workspace; empty while `[tiling]` is off.
   var workspace: String = ""
   /// Every listed tiling workspace, space separated.
@@ -355,7 +352,6 @@ struct FlashStatusBarContext {
     focusedAppBundleID: String = "",
     modeLabel: String = "INSERT",
     secureInput: Bool = false,
-    caffeinate: Bool = false,
     now: Date = Date(),
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX"),
@@ -369,7 +365,6 @@ struct FlashStatusBarContext {
     self.focusedAppBundleID = focusedAppBundleID
     self.modeLabel = modeLabel
     self.secureInput = secureInput
-    self.caffeinate = caffeinate
     self.now = now
     self.calendar = calendar
     self.locale = locale
@@ -754,7 +749,6 @@ enum FlashStatusBarTemplateEngine {
     switch token {
     case "flash.mode": return .modeLabel
     case "flash.secure_input": return .secureInput
-    case "flash.caffeinate": return .caffeinate
     case "flash.workspace": return .workspace
     case "flash.workspaces": return .workspaces
     case "flash.focused_app_name": return .focusedAppName
@@ -783,7 +777,6 @@ enum FlashStatusBarTemplateEngine {
     native.values = [
       "flash.mode": context.modeLabel.trimmed,
       "flash.secure_input": context.secureInput ? "1" : "",
-      "flash.caffeinate": context.caffeinate ? "on" : "",
       "flash.workspace": context.workspace,
       "flash.workspaces": context.workspaces,
       // An app names itself: text, never a style, a link or a click range.

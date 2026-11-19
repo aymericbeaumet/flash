@@ -3,9 +3,9 @@ import QuartzCore
 
 /// The one centred alert: a title, optionally over a monospaced value line,
 /// in a rounded box. Every alert Flash shows — `alert show`, a plugin
-/// command's alert, a caffeinate toggle, a confirmation question, a monitor
-/// crossing a threshold — is one of these, so there is a single layout to
-/// style and a single surface to test.
+/// command's alert, a confirmation question, a monitor crossing a threshold
+/// — is one of these, so there is a single layout to style and a single
+/// surface to test.
 struct StatusAlert: Equatable {
   enum Style: String, Hashable {
     case standard
@@ -39,10 +39,6 @@ struct StatusAlert: Equatable {
     -> Self
   {
     Self(title: text, style: style, duration: duration)
-  }
-
-  static func caffeinate(on: Bool) -> Self {
-    Self(title: "caffeinate", value: on ? "on" : "off", valueAnchor: "off")
   }
 
   /// The question a confirmation session asks. It stays up until the session

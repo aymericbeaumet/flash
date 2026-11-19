@@ -295,10 +295,6 @@ indirect enum URLCommand: Hashable, Sendable {
   /// `workspace …`: emulated workspaces over the displays. See
   /// `TilingWorkspaces`.
   case workspace(WorkspaceCommand)
-  /// The resident's keep-awake power assertions: `caffeinate on`,
-  /// `caffeinate off`, `caffeinate toggle` and `caffeinate status`. See
-  /// `CaffeinateController`.
-  case caffeinate(CaffeinateRequest)
   /// `status set` / `status clear`: a value pushed into a declared
   /// `[statusbar.sources.<name>]`, as if its command had printed it.
   case statusPush(StatusPush)

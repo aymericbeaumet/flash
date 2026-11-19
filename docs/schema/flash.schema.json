@@ -1633,6 +1633,17 @@
           },
           "type" : "object"
         },
+        "caffeinate" : {
+          "additionalProperties" : false,
+          "description" : "The caffeinate plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "defaults" : {
           "additionalProperties" : false,
           "description" : "The defaults plugin's settings.",

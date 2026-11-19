@@ -128,8 +128,9 @@ Keep the ownership boundaries intact:
 - Core owns the process values (`flash.top_cpu`, `flash.top_mem`,
   `flash.focused_app_details`) and the system commands (`screen lock`,
   `system sleep`, …); no plugin samples the process table or signals pids.
-- Core owns the keep-awake power assertions (`caffeinate on`,
-  `#{flash.caffeinate}`); no plugin holds the Mac awake.
+- The `caffeinate` plugin owns the keep-awake power assertions
+  (`caffeinate on`, `#{flash.plugin.caffeinate.state}`): they belong to its
+  process, so they end with it. No other plugin holds the Mac awake.
 - Core owns date/time rendering; `answers` provides timezone lookup.
 - Weather remains separate because it requires an explicit network/location
   policy.
@@ -162,6 +163,7 @@ while a surface shows it.
 | `aiproviders` · quotas | 60 s while a quota segment is shown; Codex and Grok fetch at most every 2 min, 5 min after a failure | low | A file read and remote pulls |
 | `browsers` · settles | 300 ms–1 s windows, AX bursts up to 10 s | normal | Catalogs nobody watches refresh |
 | `browsers` · Firefox tab selection beats | 120–250 ms inside one selection | high | The user waits on the switch |
+| `caffeinate` · bound | A bounded hold's `--minutes`, a day at a time, armed only while it lasts | low | powerd ends the assertions at the bound itself; the tick releases them and clears `state` |
 
 ## Raw numeric segments
 

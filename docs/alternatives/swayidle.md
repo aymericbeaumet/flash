@@ -52,7 +52,7 @@ screen saver belong to macOS; Flash adds the hooks around them, as event
 ## Flash features you might like
 
 - `caffeinate on --minutes=90` (or `caffeinate toggle`) is the idle
-  inhibitor for a talk or a download; `#{flash.caffeinate}` shows it in
+  inhibitor for a talk or a download; `#{flash.plugin.caffeinate.state}` shows it in
   the bar.
 - `screen lock`, `display sleep`, `system sleep` and `screensaver start`
   are commands for keys and scripts, `loginctl lock-session` included.

@@ -1,8 +1,7 @@
 import AppKit
 import FlashCore
 
-/// The resident itself: its pages, plugins, logs, configuration, updates and
-/// `caffeinate`.
+/// The resident itself: its pages, plugins, logs, configuration and updates.
 extension URLEventHandler {
   static let flashCommands: [String: CommandDefinition] = [
     "help show": .init(
@@ -85,16 +84,6 @@ extension URLEventHandler {
       "Re-read the configuration file now", parse: { _ in .configReload }),
     "config edit": .init(
       "Open the configuration file in its default app", parse: { _ in .configEdit }),
-    "caffeinate on": .init(
-      "Keep the Mac awake, for --minutes or until caffeinate off", [.integer("minutes")],
-      parse: { a in caffeinateMinutes(a).map { .caffeinate(.on(minutes: $0)) } }),
-    "caffeinate off": .init(
-      "Let the Mac sleep again", parse: { _ in .caffeinate(.off) }),
-    "caffeinate toggle": .init(
-      "Keep the Mac awake, or let it sleep again", [.integer("minutes")],
-      parse: { a in caffeinateMinutes(a).map { .caffeinate(.toggle(minutes: $0)) } }),
-    "caffeinate status": .init(
-      "Show whether the Mac is kept awake", parse: { _ in .caffeinate(.status) }),
     "updates check": .init(
       UpdatesCommand.check.summary, parse: { a in a.args.isEmpty ? .updates(.check) : nil }),
     "updates install": .init(
@@ -102,15 +91,4 @@ extension URLEventHandler {
     "startup run": .init(
       StartupCommand.run.summary, parse: { a in a.args.isEmpty ? .startup(.run) : nil }),
   ]
-
-  /// The optional `--minutes` bound of a keep-awake: `.some(nil)` without one,
-  /// nil (a parse failure) beyond `CaffeinateRequest.maximumMinutes`. The command
-  /// table already rejects zero, negatives and non-numbers.
-  static func caffeinateMinutes(_ a: CommandArgs) -> Int?? {
-    guard a.value("minutes") != nil else { return .some(nil) }
-    guard let minutes = a.int("minutes"), minutes <= CaffeinateRequest.maximumMinutes else {
-      return nil
-    }
-    return .some(minutes)
-  }
 }

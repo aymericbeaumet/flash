@@ -21,7 +21,7 @@ should care:
 | --- | --- | --- |
 | `error` | Flash could not do what was asked for a reason other than the user's input (an I/O or system API failure, a broken install), or a feature stopped working until someone acts | a store that cannot write, a plugin parked after its restart loop, an update that could not install |
 | `warn` | Degraded but handled: a retry, a fallback, a slow path, or a user configuration problem Flash worked around | `[plugin] slow request`, `[window] unconverged`, a config key it ignored |
-| `info` | Rare state changes a user would recognize, and input Flash rejected | a plugin launched, caffeinate on, `[command] unsupported` |
+| `info` | Rare state changes a user would recognize, and input Flash rejected | a plugin launched, tiling started, `[command] unsupported` |
 | `debug` | Developer diagnostics at modest volume: one line per user command or background job | `[mappings] action=`, `[discover] pipeline` |
 | `trace` | Per key, per frame, per plugin request: the detail of one interaction | `[latency] tap_to_route`, `[plugin] request done`, `[statusbar] render` |
 
@@ -44,7 +44,7 @@ holds the sources and this table to the same set.
 | --- | --- |
 | Modes and keys | `mode`, `normal`, `visual`, `pointer`, `input`, `keyboard`, `tap`, `mappings`, `command`, `history`, `macro`, `confirm`, `cursor`, `text`, `move`, `movement`, `marks`, `frecency` |
 | Hints and the pointer | `activation`, `discover`, `ax`, `overlay`, `commit`, `click`, `drag`, `multi`, `words`, `screen`, `scroll`, `bigram`, `search`, `gesture`, `warp`, `step`, `repeat`, `button`, `positions`, `screens`, `dock`, `menubar`, `notifications`, `menus`, `menu`, `focus`, `capture`, `latency` |
-| Apps, windows and sources | `app`, `window`, `placement`, `switcher`, `tiling`, `navigation`, `source`, `query`, `flashlight`, `files`, `apple`, `calendar`, `clipboard`, `url`, `processes`, `system`, `missioncontrol`, `surfaces`, `caffeinate` |
+| Apps, windows and sources | `app`, `window`, `placement`, `switcher`, `tiling`, `navigation`, `source`, `query`, `flashlight`, `files`, `apple`, `calendar`, `clipboard`, `url`, `processes`, `system`, `missioncontrol`, `surfaces` |
 | Status, popups and events | `statusbar`, `widgets`, `popup`, `monitors`, `notify`, `telemetry`, `events`, `ipc` |
 | Plugins | `plugin`, `plugins` |
 | The resident | `resident`, `startup`, `config`, `autolaunch`, `updates`, `doctor`, `about`, `debug`, `trace`, `watchdog`, `poll` |

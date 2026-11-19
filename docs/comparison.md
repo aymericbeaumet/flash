@@ -114,7 +114,7 @@ on Apple Silicon daily; reports from macOS 13, 14, 15 and Intel are welcome.
 lines on stdin and stdout, run under a deny-by-default macOS sandbox profile
 built from its manifest: no `~/.ssh`, `~/.aws`, `~/.config/gh`, Keychains or
 other plugins' data, writes only to its own data directory, no network
-unless declared. Nine of the thirteen bundled plugins run that way and one
+unless declared. Ten of the fourteen bundled plugins run that way and one
 is data alone; the three that opt out (tmux and `screencapture` helpers, the
 AI-quota CLIs) are listed with their reasons under
 [plugin isolation](privacy.md#plugin-isolation). Third-party plugins must

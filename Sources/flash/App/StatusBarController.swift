@@ -271,7 +271,6 @@ final class FlashStatusBarController {
   private var focusedAppBundleID = ""
   private var modeLabel = "INSERT"
   private var secureInput = false
-  private var caffeinate = false
   private var workspace = ""
   private var workspaces = ""
   private(set) var lastPublishedModel: FlashStatusBarModel?
@@ -567,15 +566,6 @@ final class FlashStatusBarController {
     }
   }
 
-  /// `#{flash.caffeinate}`: "on" while `caffeinate on` holds the Mac awake.
-  func updateCaffeinate(_ enabled: Bool) {
-    queue.async { [weak self] in
-      guard let self, self.caffeinate != enabled else { return }
-      self.caffeinate = enabled
-      self.publishCurrentModel()
-    }
-  }
-
   func updateFocusedApplication(_ app: NSRunningApplication?) {
     let name = app?.localizedName ?? ""
     let bundle = app?.bundleIdentifier ?? ""
@@ -760,7 +750,7 @@ final class FlashStatusBarController {
     let calendar = localCalendar
     var context = FlashStatusBarContext(
       focusedAppName: focusedAppName, focusedAppBundleID: focusedAppBundleID,
-      modeLabel: modeLabel, secureInput: secureInput, caffeinate: caffeinate,
+      modeLabel: modeLabel, secureInput: secureInput,
       now: wallClock(), calendar: calendar,
       pluginStatuses: resolvedPluginStatuses(now: now))
     context.workspace = workspace

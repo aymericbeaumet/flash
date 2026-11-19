@@ -515,7 +515,10 @@ attributes Automation prompts to Flash. `media` reaches no audio device
 itself either: Flash lists the devices, selects the default input or output
 and changes the output volume for it through CoreAudio, behind the
 `audio_devices` capability its manifest declares, and the plugin stores
-nothing. The RPC accepts only named operations with fixed host templates and escaped
+nothing. `caffeinate` is sandboxed too: its profile adds the one mach service
+of macOS power management (`com.apple.PowerManagement.control`), through
+which its own process takes the keep-awake assertions that
+`pmset -g assertions` lists under its name; it reads and stores nothing. The RPC accepts only named operations with fixed host templates and escaped
 string values; it accepts no script source, shell command or file operation.
 Each operation checks its target against the declared app IDs. Chat submission
 can send Return only to a supported browser that is still frontmost. Credentials for

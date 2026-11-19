@@ -4,7 +4,6 @@
   "app": "tabs",
   "appearance": "system",
   "appwindows": "windows",
-  "caffeinate": "system",
   "calendar": "other",
   "cli": "other",
   "clipboard": "other",

@@ -1194,15 +1194,14 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(panel.toast?.layer.sublayers?.count, 2, "a value is its own line")
     panel.displayAlert(volume(100))
     let volumeWide = try XCTUnwrap(panel.toast?.layer.frame.width)
+    func caffeinate(_ state: String) -> StatusAlert {
+      PluginAlert(title: "caffeinate", value: state, widestValue: "off").statusAlert
+    }
     XCTAssertEqual(
-      StatusAlert.caffeinate(on: true),
-      StatusAlert(title: "caffeinate", value: "on", valueAnchor: "off"))
-    XCTAssertEqual(
-      StatusAlert.caffeinate(on: false),
-      StatusAlert(title: "caffeinate", value: "off", valueAnchor: "off"))
-    panel.displayAlert(StatusAlert.caffeinate(on: true))
+      caffeinate("on"), StatusAlert(title: "caffeinate", value: "on", valueAnchor: "off"))
+    panel.displayAlert(caffeinate("on"))
     let caffeinateOn = try XCTUnwrap(panel.toast?.layer.frame.width)
-    panel.displayAlert(StatusAlert.caffeinate(on: false))
+    panel.displayAlert(caffeinate("off"))
     let caffeinateOff = try XCTUnwrap(panel.toast?.layer.frame.width)
     XCTAssertEqual(volumeNarrow, volumeWide)
     XCTAssertEqual(caffeinateOn, caffeinateOff)

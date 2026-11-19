@@ -435,7 +435,7 @@ link_schemes = []
 # aliases, #(...) jobs, styles, and strftime codes (%H:%M, written directly in
 # the template) use tmux semantics. Missing tmux session/window/pane context is
 # empty.
-# Flash supplies flash.mode, flash.date, flash.caffeinate,
+# Flash supplies flash.mode, flash.date,
 # flash.focused_app_name, flash.focused_app_bundle_id, flash.top_cpu,
 # flash.top_mem, flash.focused_app_details, flash.calendar (a three-month
 # calendar), flash.calendar.next ("Standup in 12m", see [calendar]) and its

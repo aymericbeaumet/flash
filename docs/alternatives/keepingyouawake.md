@@ -11,14 +11,14 @@ commits continue into August 2026, and the changelog's next version raises
 the floor to macOS 12.
 
 Flash's `caffeinate` commands do the same job from a key, the command line or
-a monitor, and `#{flash.caffeinate}` shows it in Flash's bar.
+a monitor, and `#{flash.plugin.caffeinate.state}` shows it in Flash's bar.
 
 | | KeepingYouAwake | Flash |
 | --- | --- | --- |
 | License, price | MIT, free | MIT, free |
 | Platforms | macOS 10.13+ (1.6.8) | macOS 13+ |
 | Permissions | None documented | Accessibility; nothing more to keep the Mac awake |
-| How | Runs Apple's `caffeinate` | Power assertions in the resident, as `caffeinate -dimsu` |
+| How | Runs Apple's `caffeinate` | Power assertions in the `caffeinate` plugin's process, as `caffeinate -dimsu` |
 | Durations | Indefinite, or preset durations you customise; a default for a click | `--minutes=<n>` on `caffeinate on` or `toggle`, or until `caffeinate off` |
 | Automatic | Activate at launch or when an external display connects; deactivate below a battery level or in Low Power Mode | Monitors on any event or value Flash has: displays, battery, apps, idle, times of day |
 | Display | Can allow the display to sleep | Keeps it awake |
@@ -49,7 +49,7 @@ a monitor, and `#{flash.caffeinate}` shows it in Flash's bar.
   external display, and stops at a battery level or in Low Power Mode.
   Flash's monitors start or stop a hold on app launches, a USB device, idle
   time, a time of day, the battery, or any number a command prints.
-- **The state in your bar.** `#{flash.caffeinate}` sits beside the clock and
+- **The state in your bar.** `#{flash.plugin.caffeinate.state}` sits beside the clock and
   the battery in one template, and a click on it can toggle the hold.
 - **No extra process.** The hold belongs to the resident Flash already runs.
 
@@ -69,7 +69,7 @@ a monitor, and `#{flash.caffeinate}` shows it in Flash's bar.
 | Click the cup | `caffeinate toggle`, on a key or a bar click |
 | Activate for a duration | `caffeinate on --minutes=<n>` |
 | Default duration for a click | The `--minutes` you put in that mapping |
-| The cup shows the state | `#{?flash.caffeinate,…,…}` in `[statusbar] template` |
+| The cup shows the state | `#{?flash.plugin.caffeinate.state,…,…}` in `[statusbar] template` |
 | `keepingyouawake:///activate?minutes=5` | `flash caffeinate on --minutes=5` |
 | `keepingyouawake:///deactivate`, `toggle` | `flash caffeinate off`, `flash caffeinate toggle` |
 | Deactivate below a battery level | `run = ["flash", "caffeinate", "off"]` on the built-in `[monitors.battery]`; `warning` sets the level |
@@ -82,7 +82,7 @@ a monitor, and `#{flash.caffeinate}` shows it in Flash's bar.
 ```toml
 [statusbar]
 enabled = true
-template = "#[align=right]#[range=user|awake]#{?flash.caffeinate,#[label]AWAKE#[default],zz}#[norange] %H:%M"
+template = "#[align=right]#[range=user|awake]#{?flash.plugin.caffeinate.state,#[label]AWAKE#[default],zz}#[norange] %H:%M"
 
 [statusbar.click]
 awake = ["flash", "caffeinate", "toggle"]

@@ -1,0 +1,39 @@
+{
+  "id": "caffeinate",
+  "name": "Caffeinate",
+  "version": "0.1.0",
+  "description": "Keep the Mac awake with the power assertions `caffeinate -dimsu` takes: `caffeinate on [--minutes=N]`, `caffeinate off`, `caffeinate toggle [--minutes=N]` and `caffeinate status`, with a `state` status segment that reads `on` while the hold lasts.",
+  "sandbox": {
+    "mach": [
+      "com.apple.PowerManagement.control"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-caffeinate"
+  ],
+  "commands": [
+    {
+      "command": "caffeinate",
+      "subcommand": "on",
+      "description": "Keep the Mac awake, for --minutes=<n> or until caffeinate off"
+    },
+    {
+      "command": "caffeinate",
+      "subcommand": "off",
+      "description": "Let the Mac sleep again"
+    },
+    {
+      "command": "caffeinate",
+      "subcommand": "toggle",
+      "description": "Keep the Mac awake, for --minutes=<n> or until toggled again, or let it sleep again"
+    },
+    {
+      "command": "caffeinate",
+      "subcommand": "status",
+      "description": "Show whether the Mac is kept awake"
+    }
+  ],
+  "status": [
+    "state"
+  ]
+}

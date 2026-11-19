@@ -54,7 +54,7 @@ sets up becomes a lock setting plus a few Flash event
 ## Flash features you might like
 
 - `caffeinate toggle` keeps the Mac and its displays awake during a
-  presentation, what `xset s off` did, and `#{flash.caffeinate}` shows it.
+  presentation, what `xset s off` did, and `#{flash.plugin.caffeinate.state}` shows it.
 - A `core:clock.minute` monitor with `at` and `days` locks or sleeps the
   Mac at a time of day.
 - The [privacy page](../privacy.md#data-read-from-other-apps) says what

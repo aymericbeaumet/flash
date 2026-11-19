@@ -13,7 +13,7 @@ final class LogAreaTests: XCTestCase {
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
   static let areas: Set<String> = [
-    "about", "activation", "app", "apple", "autolaunch", "ax", "bigram", "button", "caffeinate",
+    "about", "activation", "app", "apple", "autolaunch", "ax", "bigram", "button",
     "calendar", "capture", "click", "clipboard", "command", "commit", "config", "confirm",
     "cursor", "debug", "discover", "dock", "doctor", "drag", "events", "files", "flashlight",
     "focus", "frecency", "gesture", "history", "input", "ipc", "keyboard", "latency",

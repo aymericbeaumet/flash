@@ -12,8 +12,9 @@ final class StartupTests: XCTestCase {
   private static let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-  private static let caffeinate = URLEventHandler.parse(
-    words: ["caffeinate", "on", "--minutes=60"])!
+  /// A bundled plugin's command, bound word for word.
+  private static let caffeinate = URLCommand.pluginCommand(
+    command: "caffeinate", subcommand: "on", args: ["--minutes=60"])
 
   // MARK: Configuration
 

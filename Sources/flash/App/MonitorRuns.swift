@@ -389,7 +389,7 @@ final class MonitorRunner {
     didChange()
   }
 
-  /// A step as written: `bonsai clean --all --force`, `flash caffeinate off`.
+  /// A step as written: `bonsai clean --all --force`, `flash screen lock`.
   static func describe(_ step: MappingCommand) -> String {
     step.argv.joined(separator: " ")
   }

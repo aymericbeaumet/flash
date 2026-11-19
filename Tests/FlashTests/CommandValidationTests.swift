@@ -61,7 +61,7 @@ final class CommandValidationTests: XCTestCase {
       ["mode", "leave", "typo"], ["mode", "terminal", "--name="], ["screenshot"],
       ["screenshot", "not-a-subcommand"], ["screenshot_window"],
       // Every command is two words: the one-word forms are gone.
-      ["mode_leave"], ["mode"], ["media", "volumedown"], ["caffeinate", "on", "--minutes=0"],
+      ["mode_leave"], ["mode"], ["media", "volumedown"], ["caffeinate"],
       // A mark's letter is a `--letter=` argument of one ASCII letter or digit.
       ["mark", "set", "a"], ["mark", "set"], ["mark", "set", "--letter=ab"],
       ["mark", "jump", "--letter=é"],

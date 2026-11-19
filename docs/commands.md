@@ -93,10 +93,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `appwindows hide` | Close App Exposé |
 | `appwindows show` | Show the focused app's windows (App Exposé) |
 | `appwindows toggle` | Show the focused app's windows, or close App Exposé |
-| `caffeinate off` | Let the Mac sleep again |
-| `caffeinate on [--minutes=<n>]` | Keep the Mac awake, for --minutes or until caffeinate off |
-| `caffeinate status` | Show whether the Mac is kept awake |
-| `caffeinate toggle [--minutes=<n>]` | Keep the Mac awake, or let it sleep again |
 | `calendar join` | Open the meeting link of the next or current calendar event |
 | `calendar next` | Show the next calendar event |
 | `clipboard copy` | Copy with the focused app's copy command |
@@ -576,7 +572,7 @@ flash launchpad toggle                       # the Apps view on macOS 26, Launch
 flash notificationcenter show                # open Notification Center (controlcenter show opens Control Center)
 flash system restart                         # asks first; y restarts (system shutdown, system logout, trash empty too)
 flash process kill --pid=4242                # asks, then sends SIGTERM to one process
-flash caffeinate toggle                      # keep the Mac awake, or let it sleep; #{flash.caffeinate} shows it
+flash caffeinate toggle                      # keep the Mac awake, or let it sleep; #{flash.plugin.caffeinate.state} is on meanwhile
 flash caffeinate on --minutes=30             # keep the Mac awake for 30 minutes (caffeinate off ends it early)
 flash notes refresh                          # relist @notes now (reminders refresh, contacts refresh)
 flash contacts open                          # open Contacts (notes open, reminders open)
@@ -866,15 +862,29 @@ process you may signal; it refuses pids 0 and 1 and a pid it cannot find.
 In the flashlight, `@system` and `@processes` list
 the same actions and every process ([flashlight](flashlight.md)).
 
-`caffeinate on` keeps the Mac awake as `caffeinate -dimsu` does: the display,
-idle and system sleep and the disk stay awake, and a sleeping display wakes.
-`--minutes=N` bounds the hold; `caffeinate toggle` accepts the same bound, and
-`caffeinate off` ends it early. The hold belongs to the resident, so
-`flash resident quit` ends it too. Each of these commands shows a
-`caffeinate on` or `caffeinate off` alert and prints the same words in a
-terminal; `flash caffeinate status` only prints them, and shows the alert
-when a mapping runs it. `#{flash.caffeinate}` is `on` in a status format
-while the hold lasts.
+`caffeinate on`, `off`, `toggle` and `status` are the commands of the bundled
+`caffeinate` plugin, so the reference table above, which lists Flash's own,
+leaves them out. `caffeinate on` keeps the Mac awake as `caffeinate -dimsu`
+does: the display, idle and system sleep and the disk stay awake, and a
+sleeping display wakes. `--minutes=N` bounds the hold; `caffeinate toggle`
+accepts the same bound, and `caffeinate off` ends it early. Each of these
+commands shows a `caffeinate` alert with `on` or `off` under it and prints
+`caffeinate on` or `caffeinate off` in a terminal; `flash caffeinate status`
+only prints the state, and shows it on a banner when a mapping runs it.
+`--minutes=N`, a whole number from 1, is the only argument: anything else
+fails with the command's usage. `#{flash.plugin.caffeinate.state}` is `on` in
+a status format while the hold lasts.
+
+The plugin takes the power assertions in its own sandboxed process. That
+process starts with the first `caffeinate` command, a mapping bound to one
+or a surface that shows the segment, and once it has run a command it stays:
+a bar that stops showing the segment or a mapping that goes never stops a
+process that may be holding the Mac awake. The hold ends with
+`caffeinate off`, its bound, `flash resident quit`, `plugins reload`, a
+change to the plugin's files or `[plugins] disabled = ["caffeinate"]`; macOS
+drops the assertions with the process however it ends.
+`pmset -g assertions` lists them under `flash-plugin-caffeinate`, named
+`Flash caffeinate`.
 
 ## System surfaces
 

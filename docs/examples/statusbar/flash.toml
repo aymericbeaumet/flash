@@ -7,10 +7,10 @@ template = """
 #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.aymericbeaumet.com]#[label]aggr#[default]#[nolink]#[nopopup] #[popup=feed-article]#{flash.plugin.feed.label}#[nopopup]
 # The centre lane is the notch: a housing at the middle of the bar.
 #[align=centre]#[popup=active-app]#[shrink]#{flash.focused_app_name}#[noshrink]#[nopopup]
-#[align=right]#{?flash.caffeinate,#[label]AWAKE#[default] ,}
+#[align=right]#{?flash.plugin.caffeinate.state,#[label]AWAKE#[default] ,}
 #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.plugin.aiproviders.claude}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.plugin.aiproviders.codex}#[nolink] #[link=https://grok.com/?_s=usage]#[label]Grk#[default] #{flash.plugin.aiproviders.grok}#[nolink]#[nopopup]
 #[fg=colour245] · #[popup=cpu]#[label]CPU#[default] #{p-3:flash.plugin.sysinfo.cpu_label}#[nopopup] #[popup=memory]#[label]MEM#[default] #{p-3:flash.plugin.sysinfo.memory_label}#[nopopup] #[popup=disks]#[label]DSK#[default] #{p-3:flash.plugin.sysinfo.disks_label}#[nopopup] #[popup=network]#[label]NET#[default] #{p-4:flash.plugin.sysinfo.network_label}#[nopopup] #[popup=battery]#[label]BAT#[default] #{flash.plugin.sysinfo.power_label}#[nopopup]
-#[fg=colour245] · #[popup=date]#{?flash.caffeinate,,%a %b %-d }#[default]%H:%M#[nopopup]
+#[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 """
 
 # The names and colours above are the template's. The bundled aiproviders

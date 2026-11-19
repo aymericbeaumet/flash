@@ -160,7 +160,8 @@ one on the Dock, so `missioncontrol show` and `hide` know which view is up;
 the keyboard tap that decides which keys Flash swallows; the private socket
 the `flash` command and your scripts reach it through, idle until one
 connects ([IPC protocol](docs/ipc-protocol.md)); the plugins that
-feed hints and search (browsers, terminals and the other catalog sources),
+feed hints and search (browsers, terminals and the other catalog sources)
+and `media`, which follows which media apps run,
 from 2 MB to about 30 MB each ([footprint](docs/performance.md#footprint));
 and, until you disable them, the
 built-in [monitors](docs/monitors.md), which keep the `sysinfo` plugin's

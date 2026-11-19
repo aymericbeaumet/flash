@@ -253,7 +253,7 @@ final class CommandGrammarTests: XCTestCase {
 
   private static let topicKinds: [String: TopicKind] = [
     "about": .one, "alert": .one, "app": .one, "appearance": .one, "appwindows": .many,
-    "caffeinate": .verb, "calendar": .one, "cli": .one, "clipboard": .one,
+    "calendar": .one, "cli": .one, "clipboard": .one,
     "commands": .many, "config": .one, "contacts": .many, "controlcenter": .one,
     "cursor": .one, "desktop": .one, "display": .one, "document": .one, "events": .many,
     "help": .one, "hints": .many, "history": .one, "input": .one, "key": .one,

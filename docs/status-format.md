@@ -117,7 +117,7 @@ native case to the corpus and inspect the corresponding pinned parser branch.
 ## Context supplied by Flash
 
 Flash supplies `flash.mode`, `flash.date`, `flash.focused_app_name`,
-`flash.focused_app_bundle_id`, `flash.secure_input`, `flash.caffeinate`,
+`flash.focused_app_bundle_id`, `flash.secure_input`,
 the [tiling](tiling.md#the-bar-and-plugins) `flash.workspace` and
 `flash.workspaces`, the
 [process values](#process-values) `flash.top_cpu`, `flash.top_mem` and
@@ -151,10 +151,13 @@ plugin it started; both are empty until a plugin has started.
 `flash.plugin.errors` names the plugins `flash.plugin.error_count` counts,
 sorted and comma-separated.
 
-`flash.caffeinate` is `on` while `caffeinate on` (or `caffeinate toggle`)
-keeps the Mac awake and empty otherwise:
-`#{?flash.caffeinate,#[label]AWAKE#[default] ,}`. A bounded hold clears it
-when its `--minutes` run out.
+`flash.plugin.caffeinate.state`, a segment of the bundled `caffeinate` plugin,
+is `on` while `caffeinate on` (or `caffeinate toggle`) keeps the Mac awake and
+empty otherwise:
+`#{?flash.plugin.caffeinate.state,#[label]AWAKE#[default] ,}`. A bounded hold
+clears it when its `--minutes` run out. A bar, popup or widget that shows it
+keeps the plugin's process running; without one the process starts with the
+first `caffeinate` command.
 
 `flash.calendar.next` reads `Standup in 12m`, then `Standup now`, and every
 `flash.calendar.next…` value is empty while no event is next:

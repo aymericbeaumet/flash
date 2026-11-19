@@ -59,7 +59,7 @@ matters most.
 
 ## Flash features you might like
 
-- `#{?flash.caffeinate,AWAKE,}` with a click range on `caffeinate toggle`
+- `#{?flash.plugin.caffeinate.state,AWAKE,}` with a click range on `caffeinate toggle`
   is Waybar's `idle_inhibitor`.
 - A text popup with `text = "#{flash.calendar}"` is the clock's calendar
   tooltip, and stays readable in a pager.
@@ -84,7 +84,7 @@ matters most.
 | `clock` with `"tooltip-format": "<tt>{calendar}</tt>"` | `%H:%M` and a `[popup.calendar]` with `text = "#{flash.calendar}"` |
 | `cpu`, `memory`, `disk`, `battery`, `network` | `#{flash.plugin.sysinfo.cpu_percent}`, `memory_percent`, `disks_percent`, `power_percent`, `network_address` |
 | `sway/workspaces`, `hyprland/workspaces` | `#{flash.workspaces}` with `[tiling]` on |
-| `idle_inhibitor` | `#{flash.caffeinate}` and `caffeinate toggle` |
+| `idle_inhibitor` | `#{flash.plugin.caffeinate.state}` and `caffeinate toggle` |
 | `style.css` `#custom-updates { color: … }` | `#[fg=…]…#[default]` around the value |
 | `tray`, `temperature`, `on-scroll-up` | Not available |
 
@@ -95,7 +95,7 @@ template = """
 #[align=left]#[pill]#{flash.mode}#[nopill] #{flash.workspaces}
 #[align=centre]#[shrink]#{flash.focused_app_name}#[noshrink]
 #[align=right]#[range=user|updates]#{flash.source.updates}#[norange]
- · #[range=user|awake]#{?flash.caffeinate,AWAKE,idle}#[norange]
+ · #[range=user|awake]#{?flash.plugin.caffeinate.state,AWAKE,idle}#[norange]
  · #[popup=calendar]%a %d %b %H:%M#[nopopup]
 """
 

@@ -18,7 +18,7 @@ enum StartupCommand: String, Hashable, CaseIterable {
 
 /// How one `[startup] run` command ended.
 struct StartupOutcome: Equatable {
-  /// The command as written: `killall Dock`, `flash caffeinate on`.
+  /// The command as written: `killall Dock`, `flash appearance toggle`.
   var command: String
   var result: MonitorStepResult
   /// The tail of what it wrote, stdout and stderr together.

@@ -7,10 +7,10 @@ final class StatusBarBlankContentTests: XCTestCase {
     template: """
       #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #{flash.plugin.feed.summary}
       #[align=notch]#[popup=active-app]#[shrink]#{flash.focused_app_name}#[noshrink]#[nopopup]
-      #[align=right]#{?flash.caffeinate,#[fg=#EBCB8B]AWAKE#[default] ,}
+      #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
       #[popup=quota]#{flash.plugin.quota.label}#[nopopup]
       #[fg=colour245] · #{flash.plugin.sysinfo.cpu_label} #{flash.plugin.sysinfo.memory_label}
-      #[fg=colour245] · #{?flash.caffeinate,,%a %b %-d }#[default]%H:%M
+      #[fg=colour245] · #{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M
       """)
 
   func testDynamicOverflowAndNotchReservationsKeepVisibleModeText() {

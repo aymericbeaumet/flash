@@ -55,14 +55,24 @@ that your configuration still uses is reported with its file position. Then
 run `flash resident doctor`: it names each plugin value your bar, widgets or
 monitors read that no plugin publishes any more, with its replacement.
 
+- **`#{flash.caffeinate}` is `#{flash.plugin.caffeinate.state}`.** Keep-awake
+  is the bundled `caffeinate` plugin, and its state is that plugin's segment:
+  replace `flash.caffeinate` with `flash.plugin.caffeinate.state` in
+  `[statusbar] template`, popups, widgets and monitors
+  (`#{?flash.plugin.caffeinate.state,AWAKE,}`). `flash config check` reports
+  the old name as an unknown Flash value. The `caffeinate` commands keep
+  their words; `flash caffeinate status` run from a key shows its answer on
+  a banner where it showed the centred alert, and the hold ends with the
+  plugin's process, so `plugins reload` ends it as quitting Flash does.
 - **`:media` alone runs nothing.** The audio commands belong to the bundled
   `media` plugin, and a plugin's command word typed alone waits for its
   subcommand: type `:media status` (or `:media s`) where `:media` used to
-  show what is playing. `volume`, `audio` and `media` commands keep their
-  words everywhere else; with `media` in `[plugins] disabled` they do
-  nothing. An argument these commands do not take (`volume up --steps=2`) is
-  refused when the command runs, with its usage, where `flash config check`
-  used to report it.
+  show what is playing. `volume`, `audio`, `media` and `caffeinate` commands
+  keep their words everywhere else; with their plugin in
+  `[plugins] disabled` they do nothing. An argument these commands do not
+  take (`volume up --steps=2`, `caffeinate on 5`, `--minutes=0`) is refused
+  when the command runs, with its usage, where `flash config check` used to
+  report it.
 - **A status link opens only `http`, `https` and `mailto` URLs.** A
   `#[link=…]` on the bar, hinted or clicked, or a hyperlink in a popup, is
   text a plugin, a source or a program wrote, so any other scheme is now
@@ -328,15 +338,19 @@ monitors read that no plugin publishes any more, with its replacement.
 
 ### New
 
-- The volume, audio-device and now-playing commands are a bundled plugin,
-  `media`: `volume up`, `volume down`, `volume mute`, `audio input`,
-  `audio output [--device=…]` and `media status` keep their words in
-  mappings, the CLI and the command line, and
-  `[plugins] disabled = ["media"]` removes them. The plugin is sandboxed and
-  holds no audio access: Flash keeps CoreAudio and the players' AppleScript
-  and serves them through `host.audio_devices` (the new `audio_devices`
-  capability) and the `host.applescript` operation `now_playing`. Two
-  additions any plugin command can use came with it: a `perform` reply's
+- Keep-awake and the audio commands are two bundled plugins, `caffeinate`
+  and `media`: `caffeinate on|off|toggle|status [--minutes=N]`, `volume up`,
+  `volume down`, `volume mute`, `audio input`, `audio output [--device=…]`
+  and `media status` keep their words in mappings, the CLI and the command
+  line, and `[plugins] disabled = ["caffeinate", "media"]` removes them.
+  Both are sandboxed. `caffeinate` takes the power assertions in its own
+  process, which starts with the first `caffeinate` command and macOS frees
+  of them however it ends; `pmset -g assertions` lists them under
+  `flash-plugin-caffeinate`. `media` holds no audio access: Flash keeps
+  CoreAudio and the players' AppleScript and serves them through
+  `host.audio_devices` (the new `audio_devices` capability) and the
+  `host.applescript` operation `now_playing`. Two additions any plugin
+  command can use came with them: a `perform` reply's
   `alert` shows Flash's centred alert, a one-line message or a title over a
   value (`volume` over `38%`), wherever the command ran; and a count before
   a plugin command's key reaches the plugin in its one request (`count`),

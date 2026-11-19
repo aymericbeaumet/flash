@@ -875,8 +875,10 @@ Section semantics:
   unsandboxed plugin declaring it fails to load, since it has no profile to
   widen. `"sandbox": false` runs the plugin unsandboxed for external or
   credentialed helpers, as `screenshot`, `terminals` and `aiproviders` require.
-  `browsers` and `shortcuts` keep the default sandbox: their fixed AppleScript
-  operations run in the host through `apple_events`. Any other sandbox value
+  `browsers`, `shortcuts` and `media` keep the default sandbox: their fixed
+  AppleScript operations run in the host through `apple_events`. `sysinfo`
+  and `caffeinate` name powerd's `com.apple.PowerManagement.control`, the one
+  mach service a bundled plugin reaches. Any other sandbox value
   is rejected, and a
   manifest-only plugin cannot declare `sandbox`.
   `[plugins.<id>] sandbox = false` is the user's per-plugin fail-open kill

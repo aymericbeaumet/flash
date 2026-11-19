@@ -276,8 +276,6 @@ extension URLCommand {
       return named("window focus", [kv("direction", cycle.rawValue)])
     case .focusWindow(.app(let cycle)):
       return named("window \(cycle.rawValue)")
-    case .caffeinate(let request):
-      return named(request.name.description, request.argTokens)
     case .statusPush(let push):
       return named(push.name.description, push.argTokens)
     case .statusRefresh(let source):

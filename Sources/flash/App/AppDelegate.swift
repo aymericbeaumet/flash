@@ -337,8 +337,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var pasteboardLoanSerial: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
-  /// `caffeinate_*`, made by the first one; see `performCaffeinate`.
-  var caffeinateController: CaffeinateController?
   /// `desktop`, `missioncontrol`, `appwindows`, `launchpad`,
   /// `notificationcenter` and `controlcenter`; see `performSystemSurface`.
   /// Lazy, so a delegate that never launches (a test) observes no Dock.
@@ -1010,11 +1008,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       windowLayoutManager.performWorkspace(command) { [weak self] outcome in
         self?.finishTiling(outcome, completion: completion)
       }
-    case .caffeinate(let request):
-      completesLater = true
-      performCaffeinate(request, presents: completion == nil) { outcome, output in
-        completion?(outcome, output)
-      }
     case .systemSurface(let command):
       if let completion {
         completesLater = true
@@ -1198,6 +1191,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           source: source, definition: config.statusBar.sources[source], shown: false))
     }
     controller.refresh(source: source, completion: completion)
+  }
+
+  /// A core command that did not run, with why: logged, and shown in the
+  /// centred alert.
+  func displayCommandFailure(_ name: CommandName, reason: String) {
+    FlashLog.warn(
+      "[command] failed", fields: ["command": "\(name)", "reason": reason], source: "core:Command")
+    overlay.displayAlert(.message(reason, style: .error))
   }
 
   private func displayCommandWarning(_ message: String) {
@@ -1913,7 +1914,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // Windows parked for hidden workspaces come back before Flash goes.
     windowLayoutManager.releaseTiling()
     secureInputFixer.stop()
-    caffeinateController?.shutdown()
     activationLifecycle.invalidate()
     clearHintSessionState()
     releaseHeldMouseButton(reason: "quit")

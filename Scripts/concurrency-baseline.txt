@@ -2,7 +2,7 @@
 # Written by `mise run check:concurrency -- --write`; never edited by hand.
 15	Sources/flash/App/ActionDispatcher.swift
 8	Sources/flash/App/AppActivation.swift
-71	Sources/flash/App/AppDelegate.swift
+72	Sources/flash/App/AppDelegate.swift
 16	Sources/flash/App/AppDelegate/Activation.swift
 1	Sources/flash/App/AppDelegate/AppleCatalogCommands.swift
 6	Sources/flash/App/AppDelegate/BigramActivation.swift
@@ -20,7 +20,6 @@
 8	Sources/flash/App/AppDelegate/MacroCommands.swift
 4	Sources/flash/App/AppDelegate/MappingRefresh.swift
 7	Sources/flash/App/AppDelegate/Marks.swift
-2	Sources/flash/App/AppDelegate/MediaCommands.swift
 6	Sources/flash/App/AppDelegate/MenuCommands.swift
 9	Sources/flash/App/AppDelegate/MissionControlHints.swift
 1	Sources/flash/App/AppDelegate/MonitorAlerts.swift
@@ -57,7 +56,6 @@
 4	Sources/flash/App/ApplicationLauncher.swift
 9	Sources/flash/App/ApplicationSource.swift
 9	Sources/flash/App/BigramSearch.swift
-7	Sources/flash/App/Caffeinate.swift
 5	Sources/flash/App/CandidateFinder.swift
 7	Sources/flash/App/ClipboardFlashlight.swift
 28	Sources/flash/App/ClipboardHistoryStore.swift
@@ -119,7 +117,7 @@
 36	Sources/flash/App/SourceRegistry.swift
 9	Sources/flash/App/StartupRunner.swift
 2	Sources/flash/App/StatusBar.swift
-53	Sources/flash/App/StatusBarController.swift
+52	Sources/flash/App/StatusBarController.swift
 8	Sources/flash/App/StatusBarMarkup.swift
 1	Sources/flash/App/StatusFormat/StatusFormatDocumentCache.swift
 2	Sources/flash/App/StatusFormat/StatusFormatProgram.swift

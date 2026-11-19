@@ -255,11 +255,16 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
 - App-scoped mappings select by the focused app's exact bundle ID. Refresh the
   effective mapping table on focus changes; defer Carbon registration work off
   the key event path.
-- The `caffeinate` power assertions and the Notes, Reminders, Contacts and
-  Calendar reads run on their owners' serial queues (`CaffeinateController`,
-  `AppleCatalogs`, `CalendarEvents`), never on main, and ask macOS for access
-  only when a query, command, surface or monitor uses them
+- The Notes, Reminders, Contacts and Calendar reads run on their owners'
+  serial queues (`AppleCatalogs`, `CalendarEvents`), never on main, and ask
+  macOS for access only when a query, command, surface or monitor uses them
   ([boundaries](docs/architecture.md#boundaries)).
+- The keep-awake power assertions belong to the `caffeinate` plugin's
+  process, never the resident's. A status-bound child that has run a
+  `perform` stays up when its surfaces or mappings go: only a reload, a
+  change to its files or settings, being disabled or a quit stops a process
+  that may hold something
+  ([activation](docs/plugin-protocol.md#process-model-and-lifecycle)).
 - CoreAudio is the host's (`CoreAudioDevices`): a plugin reaches the audio
   devices only through `host.audio_devices`, behind its declared
   `audio_devices` capability, on the host's audio queue, never on main.

@@ -377,8 +377,6 @@ extension URLCommand {
       return command.explanation
     case .workspace(let command):
       return command.explanation
-    case .caffeinate(let request):
-      return caffeinateExplanation(request)
     case .statusPush(let push):
       return push.explanation
     case .statusRefresh(let source):
@@ -644,18 +642,6 @@ private func windowStateExplanation(_ action: WindowStateAction) -> String {
     case .on: return "Enters full screen for the focused window."
     case .off: return "Leaves full screen for the focused window."
     }
-  }
-}
-
-private func caffeinateExplanation(_ request: CaffeinateRequest) -> String {
-  func bound(_ minutes: Int?) -> String {
-    minutes.map { " for \($0) minute\($0 == 1 ? "" : "s")" } ?? ""
-  }
-  switch request {
-  case .on(let minutes): return "Keeps the Mac awake\(bound(minutes))."
-  case .off: return "Lets the Mac sleep again."
-  case .toggle(let minutes): return "Keeps the Mac awake\(bound(minutes)), or lets it sleep again."
-  case .status: return "Shows whether the Mac is kept awake."
   }
 }
 

@@ -1372,8 +1372,6 @@ extension AppDelegate {
       performSystemAction(action, confirmed: confirmed)
     case .processKill(let pid):
       performProcessKill(pid, confirmed: confirmed)
-    case .caffeinate(let request):
-      performCaffeinate(request)
     case .macro(let command):
       completesLater = true
       performMacroCommand(command, repeatCount: repeatCount) { outcome, _ in

@@ -19,10 +19,10 @@ final class StatusBarInlineTemplateTests: XCTestCase {
 
     """,
     "@right": """
-    #{?flash.caffeinate,#[fg=#EBCB8B]AWAKE#[default] ,}
+    #{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
     #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.source.cld}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.source.cdx}#[nolink]#[nopopup]
     #[fg=colour245] · #[popup=btop]#[label]CPU#[default] #{p-3:flash.plugin.sysinfo.cpu_label} #[label]MEM#[default] #{p-3:flash.plugin.sysinfo.memory_label} #[label]DSK#[default] #{p-3:flash.plugin.sysinfo.disks_label} #[label]NET#[default] #{p-4:flash.plugin.sysinfo.network_label} #[label]BAT#[default] #{flash.plugin.sysinfo.power_label}#[nopopup]
-    #[fg=colour245] · #[popup=date]#{?flash.caffeinate,,%a %b %-d }#[default]%H:%M#[nopopup]
+    #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
 
     """,
   ]
@@ -34,10 +34,10 @@ final class StatusBarInlineTemplateTests: XCTestCase {
     template = """
     #[align=left]#[pill]#{flash.mode}#[nopill]#[fg=colour245] · #[popup=feed]#[link=https://aggr.example]#[label]aggr#[default] #{flash.plugin.feed.label}#[nolink]#[nopopup]
     #[align=notch]#[popup=active-app]#{=/23/…:flash.focused_app_name}#[nopopup]
-    #[align=right]#{?flash.caffeinate,#[fg=#EBCB8B]AWAKE#[default] ,}
+    #[align=right]#{?flash.plugin.caffeinate.state,#[fg=#EBCB8B]AWAKE#[default] ,}
     #[popup=ai-usage]#[link=https://claude.ai/settings/usage]#[label]Cld#[default] #{flash.source.cld}#[nolink] #[link=https://chatgpt.com/codex/settings/usage]#[label]Cdx#[default] #{flash.source.cdx}#[nolink]#[nopopup]
     #[fg=colour245] · #[popup=btop]#[label]CPU#[default] #{p-3:flash.plugin.sysinfo.cpu_label} #[label]MEM#[default] #{p-3:flash.plugin.sysinfo.memory_label} #[label]DSK#[default] #{p-3:flash.plugin.sysinfo.disks_label} #[label]NET#[default] #{p-4:flash.plugin.sysinfo.network_label} #[label]BAT#[default] #{flash.plugin.sysinfo.power_label}#[nopopup]
-    #[fg=colour245] · #[popup=date]#{?flash.caffeinate,,%a %b %-d }#[default]%H:%M#[nopopup]
+    #[fg=colour245] · #[popup=date]#{?flash.plugin.caffeinate.state,,%a %b %-d }#[default]%H:%M#[nopopup]
     """
 
     [statusbar.sources.cld]
@@ -84,7 +84,7 @@ final class StatusBarInlineTemplateTests: XCTestCase {
         "flash.source.cdx": "7%↻1d",
         "flash.plugin.sysinfo.cpu_label": "3%", "flash.plugin.sysinfo.memory_label": "61%",
         "flash.plugin.sysinfo.disks_label": "40%", "flash.plugin.sysinfo.network_label": "1.2k",
-        "flash.plugin.sysinfo.power_label": "80%", "flash.caffeinate": "on",
+        "flash.plugin.sysinfo.power_label": "80%", "flash.plugin.caffeinate.state": "on",
       ],
     ]
     for app in apps {
