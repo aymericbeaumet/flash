@@ -9,6 +9,15 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Fixes
 
+- The command line lists a command's arguments once its two words are
+  typed: each `--name=` it still takes, each `--flag`, and the values an
+  argument enumerates, for Flash's own commands and for a plugin's, whose
+  manifest declares them. Completing `process kill` leaves the line open
+  for its `--pid=`. The command catalog shows a plugin command with its
+  arguments (`:process kill --pid=<n>`), a mapping to one is explained by
+  what the command does, `flash cli completion` and the man page list the
+  bundled plugins' commands with their options again, and
+  [commands](docs/commands.md#bundled-plugin-commands) has a table of them.
 - A status plugin that ran a command keeps its process when the bar stops
   showing its segments, or when the mapping that kept it warm goes: only a
   child a command had started used to stay, so one a surface or a mapping
