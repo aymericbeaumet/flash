@@ -361,35 +361,64 @@ final class CommandGrammarTests: XCTestCase {
       "Inspector/src/lib/topic-categories.json is stale: run mise run build:schema")
   }
 
+  /// The rows of the table under `header` in `lines`: where its first row
+  /// starts and where the table ends.
+  private static func table(_ header: String, in lines: [String]) throws -> Range<Int> {
+    let head = try XCTUnwrap(lines.firstIndex(of: header), "no table under \(header)")
+    let first = head + 2
+    let end = lines[first...].firstIndex { !$0.hasPrefix("| ") } ?? lines.endIndex
+    return first..<end
+  }
+
+  /// The bundled plugins' own commands as `docs/commands.md` lists them:
+  /// each with the arguments its manifest entry declares, its plugin and
+  /// its description. A `*` wildcard names no command to list.
+  private static func bundledPluginCommandRows() throws -> [String] {
+    var rows: [(name: String, row: String)] = []
+    for root in PluginRepository.officialPluginRoots() {
+      let manifest = try PluginManifest.load(from: root)
+      for command in manifest.pluginCommands {
+        guard let arguments = command.arguments else { continue }
+        let name = "\(command.command) \(command.subcommand)"
+        let syntax = arguments.syntax.isEmpty ? name : "\(name) \(arguments.syntax)"
+        rows.append((name, "| `\(syntax)` | `\(manifest.id)` | \(command.description) |"))
+      }
+    }
+    return rows.sorted { $0.name < $1.name }.map(\.row)
+  }
+
   /// `docs/commands.md` carries the full command table: one row per
-  /// command, in order, with its syntax and summary.
+  /// command, in order, with its syntax and summary, and under it the
+  /// bundled plugins' commands with the arguments they declare.
   /// `FLASH_WRITE_SCHEMA=1 swift test --filter CommandGrammarTests` (or
-  /// `mise run build:schema`) rewrites the rows of the committed table.
+  /// `mise run build:schema`) rewrites the rows of the committed tables.
   func testTheCommandManualListsEveryCommand() throws {
     let url = Self.root.appendingPathComponent("docs/commands.md")
+    let coreHeader = "| Command | What it does |"
+    let pluginHeader = "| Plugin command | Plugin | What it does |"
     let expected = URLEventHandler.commandNames.map { name in
       "| `\(URLEventHandler.syntax(for: name, prefix: "") ?? "")` | "
         + "\(URLEventHandler.summary(of: name) ?? "") |"
     }
+    let expectedPlugins = try Self.bundledPluginCommandRows()
     if ProcessInfo.processInfo.environment["FLASH_WRITE_SCHEMA"] == "1" {
-      let lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
-      let header = try XCTUnwrap(lines.firstIndex(of: "| Command | What it does |"))
-      let first = header + 2
-      let end = lines[first...].firstIndex { !$0.hasPrefix("| ") } ?? lines.endIndex
-      try (lines[..<first] + expected + lines[end...]).joined(separator: "\n")
-        .write(to: url, atomically: true, encoding: .utf8)
+      var lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
+      lines.replaceSubrange(try Self.table(coreHeader, in: lines), with: expected)
+      lines.replaceSubrange(try Self.table(pluginHeader, in: lines), with: expectedPlugins)
+      try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
     }
     let manual = try String(contentsOf: url, encoding: .utf8)
-    let rows = manual.split(separator: "\n").map(String.init).filter {
-      $0.hasPrefix("| `")
-        && CommandName(
-          $0.dropFirst(3).split(separator: " ").prefix(2).joined(separator: " ")
-            .replacingOccurrences(of: "`", with: "")) != nil
-    }
+    let lines = manual.components(separatedBy: "\n")
+    let rows = Array(lines[try Self.table(coreHeader, in: lines)])
     XCTAssertEqual(rows, expected, "docs/commands.md's table drifted from the command table")
     for (row, line) in zip(rows, expected) where row != line {
       XCTFail("expected \(line)\n     got \(row)")
     }
+    let pluginRows = Array(lines[try Self.table(pluginHeader, in: lines)])
+    XCTAssertEqual(
+      pluginRows, expectedPlugins,
+      "docs/commands.md's plugin table drifted from the bundled manifests: "
+        + "run mise run build:schema")
     for query in FlashQuery.allCases {
       XCTAssertTrue(manual.contains("flash \(query.name)"), "\(query.name)")
     }

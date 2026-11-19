@@ -297,4 +297,183 @@ final class PluginCommandArgumentsTests: XCTestCase {
       error(#"{ "command": "tab", "subcommand": "close", "args": [] }"#), "loaded",
       "no arguments declared is no declaration")
   }
+
+  // MARK: - Completion and help
+
+  /// The command line offers a plugin command's declared arguments, and
+  /// keeps the line open for one it requires.
+  func testTheCommandLineOffersTheDeclaredArguments() throws {
+    let (delegate, _) = try resident()
+    let inventory = delegate.makeCommandLineInventory()
+    func completions(_ line: String) -> NormalModeDispatcher.CommandLineCompletionContext? {
+      NormalModeDispatcher.commandLineCompletions(line, inventory: inventory)
+    }
+    // `process kill` needs its pid: Enter on the row leaves the line open.
+    let kill = try XCTUnwrap(completions(":process ")?.items.first { $0.label == "kill" })
+    XCTAssertEqual(kill.insertion, "kill ")
+    XCTAssertEqual(kill.kind, .acceptsArgs)
+    // `caffeinate on` runs as it is; its bound is optional.
+    let on = try XCTUnwrap(completions(":caffeinate ")?.items.first { $0.label == "on" })
+    XCTAssertEqual(on.insertion, "on")
+    XCTAssertEqual(on.kind, .pluginSubcommand)
+
+    let pid = try XCTUnwrap(completions(":process kill "))
+    XCTAssertEqual(pid.prefix, ":process kill ")
+    XCTAssertEqual(pid.query, "")
+    XCTAssertEqual(pid.items.map(\.label), ["--pid="])
+    XCTAssertEqual(pid.items.map(\.insertion), ["--pid="])
+    XCTAssertEqual(pid.items.map(\.kind), [.acceptsArgs])
+    XCTAssertEqual(pid.items.map(\.detail), ["The process to terminate"])
+    XCTAssertNil(pid.selectedLabel, "nothing typed selects nothing")
+
+    let minutes = try XCTUnwrap(completions(":caffeinate on --m"))
+    XCTAssertEqual(minutes.prefix, ":caffeinate on ")
+    XCTAssertEqual(minutes.query, "--m")
+    XCTAssertEqual(minutes.items.map(\.label), ["--minutes="])
+    XCTAssertEqual(minutes.selectedLabel, "--minutes=", "the typed prefix names it")
+    // Prefixes resolve as dispatch resolves them.
+    XCTAssertEqual(completions(":caff tog ")?.items.map(\.label), ["--minutes="])
+    // A value the manifest cannot know, an argument already given and a
+    // command without arguments list nothing.
+    XCTAssertNil(completions(":process kill --pid="))
+    XCTAssertNil(completions(":process kill --pid=42 "))
+    XCTAssertNil(completions(":caffeinate off "))
+    XCTAssertNil(completions(":screen lock "))
+  }
+
+  /// The shell completions and the man page list the bundled plugins'
+  /// commands with their arguments, as they list Flash's own.
+  func testTheShellCompletionsAndTheManPageListTheDeclaredArguments() {
+    let zsh = CLIReference.completion(for: .zsh)
+    XCTAssertTrue(zsh.contains("'process kill')"), "process kill has options")
+    XCTAssertTrue(zsh.contains("'--pid=:--pid=<n>'"), "its pid is one")
+    XCTAssertTrue(zsh.contains("'caffeinate on')"))
+    XCTAssertTrue(zsh.contains("'--minutes=:[--minutes=<n>]'"))
+    XCTAssertTrue(zsh.contains("'--device=:[--device=<device>]'"))
+    let bash = CLIReference.completion(for: .bash)
+    XCTAssertTrue(bash.contains("\"process kill\") options=\"--pid=\" ;;"))
+    XCTAssertTrue(bash.contains("\"audio output\") options=\"--device=\" ;;"))
+    let fish = CLIReference.completion(for: .fish)
+    XCTAssertTrue(fish.contains("'__flash_at_command caffeinate toggle' -l minutes"))
+    let man = CLIReference.manPage()
+    XCTAssertTrue(man.contains("\\fBflash process kill\\fR \\-\\-pid=<n>"))
+    XCTAssertTrue(man.contains("\\fBflash tmux session\\fR <name>"))
+    XCTAssertTrue(man.contains("\\fBflash screen lock\\fR\n"))
+  }
+
+  /// A mapping to a plugin command is explained by what the command does,
+  /// with the arguments it was given.
+  func testAMappingIsExplainedByItsCommandsDescription() {
+    XCTAssertEqual(
+      URLCommand.pluginCommand(command: "screen", subcommand: "lock", args: []).explanation,
+      "Lock the screen.")
+    XCTAssertEqual(
+      URLCommand.pluginCommand(
+        command: "caffeinate", subcommand: "on", args: ["--minutes=30"]
+      ).explanation,
+      "Keep the Mac awake, for --minutes or until caffeinate off (--minutes=30).")
+    XCTAssertEqual(
+      URLCommand.pluginCommand(
+        command: "process", subcommand: "kill", args: ["--pid=4242"]
+      ).explanation,
+      "Terminate one process, after asking (--pid=4242).")
+  }
+
+  /// The rows survive the list's ranking, and a typed prefix highlights
+  /// the one row it names.
+  func testTheArgumentRowsRankAndHighlightInTheList() throws {
+    let inventory = NormalModeDispatcher.CommandLineInventory.core(
+      pluginCommands: ["example": ["run"]],
+      pluginArguments: [
+        "example run": DeclaredArguments(parameters: [
+          CommandParameter(name: "target", kind: .text("target"), required: true, positional: true),
+          CommandParameter(
+            name: "pid", kind: .integer(min: 2, max: nil), required: true, summary: "The process"),
+          CommandParameter(name: "mode", kind: .choice(["fast", "slow", "safe"]), required: false),
+          CommandParameter(name: "dry_run", kind: .flag, required: false),
+        ])
+      ])
+    func completions(_ line: String) -> NormalModeDispatcher.CommandLineCompletionContext? {
+      NormalModeDispatcher.commandLineCompletions(line, inventory: inventory)
+    }
+    // The positional is a bare word: nothing lists it, and typing it lists
+    // nothing.
+    let all = try XCTUnwrap(completions(":example run "))
+    XCTAssertEqual(all.items.map(\.label), ["--pid=", "--mode=", "--dry-run"])
+    XCTAssertEqual(all.items.map(\.kind), [.acceptsArgs, .acceptsArgs, .terminal])
+    XCTAssertEqual(all.items.map(\.detail), ["The process", nil, nil])
+    XCTAssertNil(completions(":example run ma"))
+    var list = CommandLineCompletionList()
+    list.update(context: all, boost: { _ in 0 })
+    XCTAssertEqual(
+      list.matches.map(\.completion.label).sorted(), ["--dry-run", "--mode=", "--pid="])
+    XCTAssertNil(list.selected, "the empty word highlights no row")
+
+    // Arguments already given are not offered again, `_` or `-`.
+    let rest = try XCTUnwrap(completions(":example run main --pid=4 --dry_run --"))
+    XCTAssertEqual(rest.prefix, ":example run main --pid=4 --dry_run ")
+    XCTAssertEqual(rest.items.map(\.label), ["--mode="])
+    list.update(context: rest, boost: { _ in 0 })
+    XCTAssertEqual(list.selected?.label, "--mode=")
+    XCTAssertEqual(
+      list.buffer(inserting: try XCTUnwrap(list.selected)),
+      ":example run main --pid=4 --dry_run --mode=")
+
+    // After `--mode=`, the values it enumerates.
+    let values = try XCTUnwrap(completions(":example run main --mode="))
+    XCTAssertEqual(values.prefix, ":example run main --mode=")
+    XCTAssertEqual(values.query, "")
+    XCTAssertEqual(values.items.map(\.label), ["fast", "slow", "safe"])
+    XCTAssertTrue(values.items.allSatisfy { $0.kind == .terminal })
+    XCTAssertNil(values.selectedLabel)
+    let typed = try XCTUnwrap(completions(":example run main --mode=s"))
+    XCTAssertEqual(typed.items.map(\.label), ["slow", "safe"])
+    XCTAssertTrue(typed.ambiguous, "two values share the prefix")
+    let one = try XCTUnwrap(completions(":example run main --mode=sl"))
+    XCTAssertEqual(one.selectedLabel, "slow")
+    list.update(context: one, boost: { _ in 0 })
+    XCTAssertEqual(
+      list.buffer(inserting: try XCTUnwrap(list.selected)), ":example run main --mode=slow")
+    XCTAssertNil(completions(":example run main --mode=x"))
+    XCTAssertNil(completions(":example run main --mode=slow"), "a whole value")
+    XCTAssertNil(completions(":example run main --dry-run"), "a whole flag")
+    XCTAssertNil(completions(":example run main --pid="), "a number has no list")
+    XCTAssertNil(completions(":example run main --color="), "not an argument")
+    XCTAssertNil(completions(":example nope "), "no such subcommand")
+  }
+
+  /// Flash's own commands list their arguments the same way, from the
+  /// command table; an ex command takes none.
+  func testFlashsOwnCommandsOfferTheirArgumentsToo() throws {
+    let inventory = NormalModeDispatcher.CommandLineInventory.core()
+    func labels(_ line: String) -> [String]? {
+      NormalModeDispatcher.commandLineCompletions(line, inventory: inventory)?.items.map(\.label)
+    }
+    XCTAssertEqual(labels(":app open "), ["--name="])
+    XCTAssertEqual(labels(":app quit --"), ["--force"])
+    XCTAssertEqual(labels(":app qui "), ["--force"], "the action resolves by its prefix")
+    XCTAssertEqual(labels(":mouse warp --area="), ["window", "screen"])
+    XCTAssertEqual(labels(":config check "), ["--file="], "a query's options")
+    XCTAssertEqual(labels(":cli completion --shell="), ["zsh", "bash", "fish"])
+    XCTAssertNil(labels(":app open --name=Saf"), "free text")
+    XCTAssertNil(labels(":tab next "), "no argument to offer")
+    XCTAssertNil(labels(":tabn 3 "), "an ex command")
+    XCTAssertNil(labels(":open -a "), "open forwards its words")
+  }
+
+  /// The catalog shows a plugin command with the arguments it declares, as
+  /// it shows Flash's own.
+  func testTheCatalogSyntaxOfABundledCommandIsItsDeclaration() throws {
+    func syntax(_ command: String, _ subcommand: String) -> String? {
+      PluginRepository.declaredCommand(command, subcommand: subcommand)?.arguments?.syntax
+    }
+    XCTAssertEqual(syntax("process", "kill"), "--pid=<n>")
+    XCTAssertEqual(syntax("caffeinate", "on"), "[--minutes=<n>]")
+    XCTAssertEqual(syntax("caffeinate", "toggle"), "[--minutes=<n>]")
+    XCTAssertEqual(syntax("audio", "input"), "[--device=<device>]")
+    XCTAssertEqual(syntax("audio", "output"), "[--device=<device>]")
+    XCTAssertEqual(syntax("tmux", "session"), "<name>")
+    XCTAssertEqual(syntax("tmux", "window"), "<target>")
+    XCTAssertEqual(syntax("screen", "lock"), "")
+  }
 }

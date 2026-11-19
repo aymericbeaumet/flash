@@ -31,7 +31,7 @@ no mode at all while [advanced mode](modes.md#advanced-mode) is off.
 | Key | Does |
 | --- | --- |
 | Return | Run the line, or the highlighted row of the list under it |
-| Tab | Insert the highlighted completion: the topic, then its action |
+| Tab | Insert the highlighted completion: the topic, its action, then each `--argument=` the command takes and the values it enumerates |
 | Shift-Tab, Up, Down | Move through the list |
 | Up, Down, Control-P, Control-N on an empty prompt | Recall earlier commands, newest first, only those that start with what you had typed (`:tab` then Up skips `:q`); Down past the newest returns what you had typed |
 | Control-W | Delete the word before the caret, as Vim's |
@@ -59,6 +59,17 @@ waits for `dismiss`), and `:display` is Vim's `:di`, the registers. A one-line
 answer shows on a banner and a longer one in the pager; `#` before a command
 also copies its output (`:#aws whoami`). `@:` in NORMAL runs the last line
 again.
+
+Past a command's two words the list under the line is its arguments:
+each `--name=` it has not been given yet, each `--flag`, and after
+`--name=` the values that argument enumerates (`:mouse warp --area=` lists
+`window` and `screen`). Flash's own commands list theirs from the command
+table and a plugin's command the ones its manifest declares, with their
+descriptions (`:process kill ` lists `--pid=`, `The process to terminate`).
+A value nothing enumerates, a name, a number or a path, lists nothing.
+Completing an action that requires an argument (`:process kill`, `:app
+open`) leaves the line open for it. With nothing typed after the last
+space no row is highlighted and Return runs the line as it stands.
 
 ## Keys while it is open
 

@@ -897,6 +897,11 @@ extension NormalModeDispatcher {
   /// `kind` only governs what `<CR>` does once the value is inserted:
   /// `acceptsArgs` leaves the line open for arguments, while `terminal`
   /// and `pluginSubcommand` submit immediately.
+  ///
+  /// Past a command's two words the list is its arguments: each `--name=`
+  /// it has not been given yet (`acceptsArgs`, the value is still to type),
+  /// each `--flag` (`terminal`), and after `--name=` the values that
+  /// argument enumerates (`terminal`).
   struct CommandLineCompletion: Equatable {
     enum Kind: Equatable {
       case terminal
@@ -975,7 +980,9 @@ extension NormalModeDispatcher {
     guard parts.count == 2 else { return nil }
     let first = String(parts[0])
     let rest = String(parts[1])
-    guard rest.first(where: { $0.isWhitespace }) == nil else { return nil }
+    guard rest.first(where: { $0.isWhitespace }) == nil else {
+      return argumentCompletions(body: body, first: first, rest: rest, inventory: inventory)
+    }
 
     // The first word resolves as dispatch resolves it: an ex command
     // (only `h[elp]` takes a word, the help topics), a topic's actions, a
@@ -1010,14 +1017,89 @@ extension NormalModeDispatcher {
     if let subcommands = inventory.pluginCommands[word] {
       let declared = subcommands.filter { !$0.isEmpty && $0 != "*" }
       guard !declared.isEmpty else { return nil }
+      // One that requires an argument keeps the line open for it, as a
+      // core action does.
       let items = declared.map { name in
-        CommandLineCompletion(label: name, insertion: name, kind: .pluginSubcommand)
+        inventory.arguments(ofPlugin: word, name).requiresArguments
+          ? CommandLineCompletion(label: name, insertion: "\(name) ", kind: .acceptsArgs)
+          : CommandLineCompletion(label: name, insertion: name, kind: .pluginSubcommand)
       }
       return context(
         prefix: ":\(word) ", query: rest, items: items,
         match: matchCommandLineWord(rest, among: declared))
     }
     return nil
+  }
+
+  /// The list past a command's two words: the arguments it still takes, or
+  /// the values of the one being typed. `body` is the line without its
+  /// colon, `first` its first word and `rest` what follows, which holds the
+  /// second word and at least one space. The two words resolve as dispatch
+  /// resolves them (`:caff tog --m`). Nil when the command takes no
+  /// argument here: none declared, all given, a value no declaration
+  /// enumerates (a device name, a pid), a bare word being typed, or a word
+  /// that is already a whole flag or value.
+  private static func argumentCompletions(
+    body: String, first: String, rest: String, inventory: CommandLineInventory
+  ) -> CommandLineCompletionContext? {
+    // An ex command takes words of its own (`:tabn 3`), never `--name=value`.
+    if let spec = commandLineSpecs.first(where: { $0.matches(first) }),
+      !spec.yieldsWords(to: inventory)
+    {
+      return nil
+    }
+    guard let word = matchCommandLineWord(first, among: inventory.firstWords).word else {
+      return nil
+    }
+    let words = rest.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+    guard let second = words.first, !second.isEmpty, let current = words.last else { return nil }
+    let options: [CLIReference.Option]
+    if let actions = inventory.topics[word] {
+      guard let action = matchCommandLineWord(second, among: actions).word else { return nil }
+      options = CLIReference.options(topic: word, action: action)
+    } else if let subcommands = inventory.pluginCommands[word] {
+      let declared = subcommands.filter { !$0.isEmpty && $0 != "*" }
+      guard let subcommand = matchCommandLineWord(second, among: declared).word else {
+        return nil
+      }
+      options = CLIReference.options(inventory.arguments(ofPlugin: word, subcommand).parameters)
+    } else {
+      return nil
+    }
+    /// `--name` of an argument word, with `_` as the `-` an option is listed under.
+    func optionName(_ word: String) -> String {
+      word.prefix { $0 != "=" }.replacingOccurrences(of: "_", with: "-")
+    }
+    let head = ":" + body.dropLast(current.count)
+    if current.hasPrefix("--"), let equals = current.firstIndex(of: "=") {
+      let typed = String(current[current.index(after: equals)...])
+      guard let values = options.first(where: { $0.name == optionName(current) })?.values else {
+        return nil
+      }
+      let matching = values.filter { $0.hasPrefix(typed) }
+      guard !matching.isEmpty, !matching.contains(typed) else { return nil }
+      return context(
+        prefix: head + current.dropLast(typed.count), query: typed,
+        items: matching.map {
+          CommandLineCompletion(label: $0, insertion: $0, kind: .terminal)
+        },
+        match: typed.isEmpty ? .none : matchCommandLineWord(typed, among: matching))
+    }
+    guard current.isEmpty || current.hasPrefix("-") else { return nil }
+    let given = Set(words.dropFirst().dropLast().filter { $0.hasPrefix("--") }.map(optionName))
+    let items: [CommandLineCompletion] = options.compactMap { option in
+      guard !given.contains(option.name) else { return nil }
+      let label = option.values == nil ? option.name : option.name + "="
+      guard label.hasPrefix(current) else { return nil }
+      return CommandLineCompletion(
+        label: label, insertion: label, kind: option.values == nil ? .terminal : .acceptsArgs,
+        detail: option.summary.isEmpty ? nil : option.summary)
+    }
+    guard !items.isEmpty, !items.contains(where: { $0.label == current }) else { return nil }
+    // Nothing typed selects nothing: Enter runs the line as it stands.
+    return context(
+      prefix: head, query: current, items: items,
+      match: current.isEmpty ? .none : matchCommandLineWord(current, among: items.map(\.label)))
   }
 
   private static func context(

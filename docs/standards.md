@@ -36,7 +36,7 @@ review.
 | Exit status 0 / 1 / 2 | Adopted | Ran / failed / not a command, as POSIX utilities use 2 for usage errors. [sysexits](https://man.freebsd.org/cgi/man.cgi?sysexits) is rejected: scripts need three outcomes, not fifteen. |
 | [`NO_COLOR`](https://no-color.org) | Holds by construction | The CLI writes no escape sequences, so there is nothing to turn off. Any future color must honor `NO_COLOR` and a non-terminal stdout. |
 | Machine-readable output | Adopted where it reports | `--json` on `resident status` and `resident doctor`; `config schema` is JSON. Commands that act report through the exit status and one line of text. |
-| Shell completions (zsh, bash, fish) | Adopted | Generated from the command table (`flash cli completion --shell=`), installed by the Homebrew cask. PowerShell is rejected: not a macOS shell. |
+| Shell completions (zsh, bash, fish) | Adopted | Generated from the command table and the bundled plugins' declared commands (`flash cli completion --shell=`), installed by the Homebrew cask. PowerShell is rejected: not a macOS shell. |
 | Man page (`man 1 flash`) | Adopted | Generated from the same table (`flash cli manpage`), installed by the cask. |
 
 ## Observability

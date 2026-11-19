@@ -468,9 +468,12 @@ extension AppDelegate {
     var commands = Self.inspectorCoreCommands
     for status in statuses {
       for command in status.commands {
+        // The arguments its manifest entry declares, as a core command's.
+        let arguments = command.arguments?.syntax ?? ""
         commands.append([
           "name": ":\(command.command) \(command.subcommand)",
-          "syntax": ":\(command.command) \(command.subcommand)",
+          "syntax": ":\(command.command) \(command.subcommand)"
+            + (arguments.isEmpty ? "" : " " + arguments),
           "command": command.command,
           "subcommand": command.subcommand,
           "description": command.description,

@@ -49,7 +49,8 @@ as it holds its own commands to theirs: `flash config check` reports a
 mapping whose arguments the command does not take, the command line and the
 CLI answer `unknown command or invalid arguments` (exit 2), and a command
 that asks first asks only once its arguments passed. A command that declares
-none takes none. On the command line the words after an argument continue
+none takes none; the [bundled plugin commands](#bundled-plugin-commands)
+table lists what each takes. On the command line the words after an argument continue
 its value (`:tmux session Daft Punk`, `:audio output --device=Studio
 Speakers`); in a mapping each argument is one element of the array. They
 share the topic namespace: a plugin may own several command words (`media`
@@ -335,6 +336,56 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `workspace previous` | Show the previous workspace on the focused display |
 | `workspace switch --name=<workspace>` | Show a workspace and focus it; created on demand |
 
+### Bundled plugin commands
+
+The commands the bundled plugins add, each with the arguments its plugin
+declares: Flash holds a mapping, the command line and the CLI to them as it
+holds the commands above to theirs. A plugin in `[plugins] disabled` takes
+its commands with it.
+
+| Plugin command | Plugin | What it does |
+| --- | --- | --- |
+| `appearance toggle` | `system` | Switch between light and dark appearance |
+| `audio input [--device=<device>]` | `media` | List the audio inputs, or select one with --device |
+| `audio output [--device=<device>]` | `media` | List the audio outputs, or select one with --device |
+| `caffeinate off` | `caffeinate` | Let the Mac sleep again |
+| `caffeinate on [--minutes=<n>]` | `caffeinate` | Keep the Mac awake, for --minutes or until caffeinate off |
+| `caffeinate status` | `caffeinate` | Show whether the Mac is kept awake |
+| `caffeinate toggle [--minutes=<n>]` | `caffeinate` | Keep the Mac awake, for --minutes or until toggled again, or let it sleep again |
+| `calendar join` | `calendar` | Open the meeting link of the next or current calendar event |
+| `calendar next` | `calendar` | Show the next calendar event |
+| `contacts open` | `contacts` | Open Contacts |
+| `contacts refresh` | `contacts` | Relist your contacts in @contacts now |
+| `display sleep` | `system` | Turn the displays off |
+| `media status` | `media` | Show what the media apps are playing and the volume |
+| `notes open` | `notes` | Open Notes |
+| `notes refresh` | `notes` | Relist your notes in @notes now |
+| `process kill --pid=<n>` | `processes` | Terminate one process, after asking |
+| `reminders open` | `reminders` | Open Reminders |
+| `reminders refresh` | `reminders` | Relist your open reminders in @reminders now |
+| `screen lock` | `system` | Lock the screen |
+| `screensaver start` | `system` | Start the screen saver |
+| `screenshot screen` | `screenshot` | Copy a capture of every display to the clipboard |
+| `screenshot window` | `screenshot` | Copy a capture of the focused window to the clipboard |
+| `shortcuts open` | `shortcuts` | Open Shortcuts.app |
+| `shortcuts refresh` | `shortcuts` | Refresh the cached shortcut list |
+| `sysinfo cpu` | `sysinfo` | Show the latest CPU and GPU snapshot |
+| `sysinfo disks` | `sysinfo` | Show current disk capacity and activity |
+| `sysinfo memory` | `sysinfo` | Show the latest memory snapshot |
+| `sysinfo network` | `sysinfo` | Show current network traffic and addresses |
+| `sysinfo power` | `sysinfo` | Show current battery and power details |
+| `sysinfo refresh` | `sysinfo` | Refresh every system figure: CPU, memory, disks, network (Wi-Fi, routes, addresses) and power |
+| `system logout` | `system` | Log out, after asking |
+| `system restart` | `system` | Restart the Mac, after asking |
+| `system shutdown` | `system` | Shut the Mac down, after asking |
+| `system sleep` | `system` | Sleep the Mac |
+| `tmux session <name>` | `terminals` | Switch the active tmux client to a session by name and raise its terminal. |
+| `tmux window <target>` | `terminals` | Switch the active tmux client to a session:window target and raise its terminal. |
+| `trash empty` | `system` | Empty the Trash, after asking |
+| `volume down` | `media` | Lower the output volume one step |
+| `volume mute` | `media` | Mute or unmute the output |
+| `volume up` | `media` | Raise the output volume one step |
+
 ## Command-line abbreviations
 
 In the command line, each word may be cut to any prefix that is unambiguous
@@ -604,7 +655,10 @@ file the CLI's environment and directory name and needs no resident;
 editors that validate and complete TOML ([configuration](configuration.md#editor-support)).
 `flash cli completion --shell=zsh` (or `bash`, `fish`) and `flash cli manpage`
 print the completion script and the `flash(1)` man page, generated from the
-command table, so they list exactly what this version resolves.
+command table and the bundled plugins' manifests, so they list exactly what
+this version resolves, a plugin command's declared arguments included
+(`flash process kill --pid=`). A third-party plugin's commands depend on
+what is installed and are not in them.
 
 ```bash
 flash resident status        # mode, key capture, input source, config, plugins, hint timings
@@ -837,15 +891,16 @@ hidden and on other Spaces included, and focuses the one you pick; `:ls`
 opens it from the command line. See [window navigation and placement](windows.md#switch-to-any-window)
 for the switcher and for automatic placement rules. `flash audio input` and `flash audio output`
 list or select the default device; they, `volume` and `media status` are the
-bundled `media` plugin's commands, so the reference table above, which lists
-Flash's own, leaves them to [audio devices](audio.md).
+bundled `media` plugin's commands, listed under
+[bundled plugin commands](#bundled-plugin-commands) and described in
+[audio devices](audio.md).
 
 ## System and processes
 
 `screen lock`, `system sleep`, `display sleep`, `system restart`,
 `system shutdown`, `system logout`, `trash empty`, `appearance toggle` and
-`screensaver start` are the commands of the bundled `system` plugin, so the
-reference table above, which lists Flash's own, leaves them out. `screen
+`screensaver start` are the commands of the bundled `system` plugin
+([bundled plugin commands](#bundled-plugin-commands)). `screen
 lock`, `system sleep`, `display sleep`, `screensaver start` and
 `appearance toggle` act at once. `system restart`, `system shutdown`,
 `system logout` and `trash empty` cannot be undone, so each asks first in
@@ -869,7 +924,7 @@ answered yet` and the action goes on. With `system` in `[plugins] disabled`
 these commands do nothing.
 
 `process kill --pid=<pid>` is the command of the bundled `processes`
-plugin, so the reference table leaves it out too. It asks first (`Kill this
+plugin. It asks first (`Kill this
 process?`), then sends SIGTERM to that process: the plugin asks Flash, and
 Flash signals only for a request you just answered `y` to. `--pid`, a whole
 number from 2, is its one argument and is required: Flash refuses anything
@@ -882,8 +937,7 @@ Operation not permitted` for another user's process). With `processes` in
 list the same actions and every process ([flashlight](flashlight.md)).
 
 `caffeinate on`, `off`, `toggle` and `status` are the commands of the bundled
-`caffeinate` plugin, so the reference table above, which lists Flash's own,
-leaves them out. `caffeinate on` keeps the Mac awake as `caffeinate -dimsu`
+`caffeinate` plugin. `caffeinate on` keeps the Mac awake as `caffeinate -dimsu`
 does: the display, idle and system sleep and the disk stay awake, and a
 sleeping display wakes. `--minutes=N` bounds the hold; `caffeinate toggle`
 accepts the same bound, and `caffeinate off` ends it early. Each of these
@@ -981,8 +1035,7 @@ write). The topic is plural because `:up[date]` is vim's save. See
 ## Notes, Reminders and Contacts
 
 `notes`, `reminders` and `contacts` are the command words of the bundled
-plugins of those names, so the reference table above, which lists Flash's
-own, leaves them out. `notes refresh`, `reminders refresh` and `contacts
+plugins of those names. `notes refresh`, `reminders refresh` and `contacts
 refresh` relist the flashlight's `@notes`, `@reminders` or `@contacts` now
 and answer `notes refreshed`, on a banner from a key; the lists are
 otherwise kept fresh by events ([flashlight](flashlight.md)). A refresh
@@ -1000,8 +1053,7 @@ unaffected.
 ## Calendar
 
 `calendar join` and `calendar next` are the commands of the bundled
-`calendar` plugin, so the reference table above, which lists Flash's own,
-leaves them out. `calendar join` opens the meeting link of the event about
+`calendar` plugin. `calendar join` opens the meeting link of the event about
 to start or just started, else of the meeting in progress, else of the next
 event: Zoom, Google Meet, Microsoft Teams, Webex, Around, Whereby, FaceTime,
 Slack huddles and other links found in the event's URL, location or notes.

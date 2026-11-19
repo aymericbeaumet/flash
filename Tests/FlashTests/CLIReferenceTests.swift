@@ -41,8 +41,12 @@ final class CLIReferenceTests: XCTestCase {
 
   func testEveryCommandAndOptionIsCompletedInEveryShell() {
     let entries = CLIReference.entries
+    // Flash's commands and queries, and the bundled plugins' named commands.
+    let bundled = PluginRepository.declaredCommands.values.filter { $0.arguments != nil }
+    XCTAssertFalse(bundled.isEmpty)
     XCTAssertEqual(
-      entries.count, URLEventHandler.commandNames.count + FlashQuery.allCases.count)
+      entries.count,
+      URLEventHandler.commandNames.count + FlashQuery.allCases.count + bundled.count)
     for shell in CLIReference.Shell.allCases {
       let script = CLIReference.completion(for: shell)
       for entry in entries {

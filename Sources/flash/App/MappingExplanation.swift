@@ -348,6 +348,14 @@ extension URLCommand {
     case .openApp(let name):
       return "Activates \(name)."
     case .pluginCommand(let command, let subcommand, let args):
+      // A bundled plugin's command says what it does in its manifest entry.
+      let description =
+        PluginRepository.declaredCommand(command, subcommand: subcommand)?.description.trimmed
+        ?? ""
+      if !description.isEmpty {
+        let sentence = description.hasSuffix(".") ? String(description.dropLast()) : description
+        return args.isEmpty ? sentence + "." : "\(sentence) (\(args.joined(separator: " ")))."
+      }
       if args.isEmpty { return "Runs the \(command) \(subcommand) command." }
       return "Runs the \(command) \(subcommand) command with \(args.joined(separator: " "))."
     case .moveWindow(let params):

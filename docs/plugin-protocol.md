@@ -1276,8 +1276,11 @@ Section semantics:
   process. The plugin receives `args` in declaration order and one spelling:
   the positional as a bare word, `--name=value` with a number in plain
   decimal, `--name` for a flag that is on. What only the plugin knows (a pid
-  that is gone) stays its own check. `protocol.json` `command_args` pins the
-  rules, and the SDK's `plugin!` applies them at build time.
+  that is gone) stays its own check. Command-line completion, the command
+  catalog and mapping explanations read the declaration, and so do
+  `flash cli completion` and the man page for a bundled plugin.
+  `protocol.json` `command_args` pins the rules, and the SDK's `plugin!`
+  applies them at build time.
 
   `confirm` on an entry is the question the host asks before the command
   (`{"command": "tab", "subcommand": "close", "confirm": "Close this tmux
