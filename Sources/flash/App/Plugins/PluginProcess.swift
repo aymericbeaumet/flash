@@ -1207,6 +1207,8 @@ final class PluginProcess {
   /// waiting. Nothing here reaches the catalog store.
   func search(source: String, query: String, completion: @escaping ([Candidate]) -> Void) {
     let trace = Trace.current
+    // Runs on main alone: `deliver` hops there before calling it.
+    nonisolated(unsafe) let completion = completion
     // Called once, by whichever queue settles the search; it only hands
     // the rows to main.
     nonisolated(unsafe) let deliver: ([Candidate]) -> Void = { rows in

@@ -1,0 +1,70 @@
+{
+  "id": "system",
+  "name": "System",
+  "version": "0.1.0",
+  "description": "Lock the screen, sleep the Mac or its displays, restart, shut down, log out, empty the Trash, toggle dark mode and start the screen saver: `screen lock`, `system sleep`, `display sleep`, `system restart`, `system shutdown`, `system logout`, `trash empty`, `appearance toggle` and `screensaver start`, and the same actions as `@system` rows in the flashlight.",
+  "exec": [
+    "./flash-plugin-system"
+  ],
+  "commands": [
+    {
+      "command": "screen",
+      "subcommand": "lock",
+      "description": "Lock the screen"
+    },
+    {
+      "command": "system",
+      "subcommand": "sleep",
+      "description": "Sleep the Mac"
+    },
+    {
+      "command": "display",
+      "subcommand": "sleep",
+      "description": "Turn the displays off"
+    },
+    {
+      "command": "system",
+      "subcommand": "restart",
+      "description": "Restart the Mac, after asking",
+      "confirm": "Restart this Mac?"
+    },
+    {
+      "command": "system",
+      "subcommand": "shutdown",
+      "description": "Shut the Mac down, after asking",
+      "confirm": "Shut down this Mac?"
+    },
+    {
+      "command": "system",
+      "subcommand": "logout",
+      "description": "Log out, after asking",
+      "confirm": "Log out of macOS?"
+    },
+    {
+      "command": "trash",
+      "subcommand": "empty",
+      "description": "Empty the Trash, after asking",
+      "confirm": "Empty the Trash?"
+    },
+    {
+      "command": "appearance",
+      "subcommand": "toggle",
+      "description": "Switch between light and dark appearance"
+    },
+    {
+      "command": "screensaver",
+      "subcommand": "start",
+      "description": "Start the screen saver"
+    }
+  ],
+  "sources": [
+    {
+      "name": "system.actions",
+      "type": "system",
+      "live": "per_scope"
+    }
+  ],
+  "capabilities": [
+    "system_actions"
+  ]
+}

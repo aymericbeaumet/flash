@@ -336,10 +336,6 @@ indirect enum URLCommand: Hashable, Sendable {
   /// `notificationcenter` and `controlcenter`, each `show`, `hide` or
   /// `toggle`. See `SystemSurfaceController`.
   case systemSurface(SystemSurfaceCommand)
-  /// `screen lock`, `system sleep`, `system restart`, …: a machine or session
-  /// action Flash performs itself. Restart, shut down, log out and emptying
-  /// the Trash ask first.
-  case systemAction(SystemAction)
   /// `process kill --pid=<pid>`: SIGTERM one process, after asking.
   case processKill(pid: pid_t)
   /// A plain F1–F20 keystroke, with no modifiers.
@@ -353,8 +349,8 @@ indirect enum URLCommand: Hashable, Sendable {
 extension URLCommand {
   /// Whether a topic typed alone may run this, the one action of its that
   /// does (`:mappings`, `flash logs`): a command that only shows a page or
-  /// a surface and changes nothing. Any other, `display sleep` or
-  /// `screen lock` above all, runs only when its action is typed.
+  /// a surface and changes nothing. Any other, `process kill` or
+  /// `resident quit` above all, runs only when its action is typed.
   var impliedByItsTopic: Bool {
     switch self {
     case .showMappings, .showLogs, .showCommands, .showMonitors, .showTelemetry, .showAbout,

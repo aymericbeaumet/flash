@@ -15,7 +15,19 @@ plugins.
    focused window. Command-only plugins are on-demand: the host spawns them
    at first use rather than at startup, or shortly after launch when a
    configured mapping runs one of their commands.
-2. **Event-refreshed catalog + commands + host RPC — `Plugins/shortcuts`
+2. **Live source + confirmed commands + host action — `Plugins/system`
+   (~190 LOC + unit tests).** Nine fixed actions as commands and as
+   `@system` rows. The source is `"live": "per_scope"`, so nothing is
+   published and no process runs until a query names the type or a command
+   runs: `on_search` answers the rows. The four actions nothing undoes
+   declare `confirm`, on their `commands[]` entry and on their row
+   (`Candidate::confirm`), and the plugin never asks anything itself: the
+   host shows the question, and `ctx.system_action(SystemAction::Restart)`
+   (the `system_actions` capability) is honoured only inside the perform the
+   user confirmed. The mechanisms stay in the host, so the plugin runs in the
+   default sandbox with no allowance; a failure is the command's words and
+   the host's reason, which the host shows.
+3. **Event-refreshed catalog + commands + host RPC — `Plugins/shortcuts`
    (~290 LOC + unit tests).** A `sources` plugin that lists every macOS
    shortcut through `AppleScriptOperation::ShortcutsList` in the host (the
    faceless Shortcuts Events service), pushes the rows with `publish` only
@@ -30,7 +42,7 @@ plugins.
    permits only fixed host templates; `ShortcutRun` takes the picked name as
    literal data.
 
-3. **Push catalog from configuration — `Plugins/snippets` (~220 LOC +
+4. **Push catalog from configuration — `Plugins/snippets` (~220 LOC +
    tests).** A `sources` plugin reading the snippets file its
    `[plugins.snippets] file` setting names, building its complete row set with
    `insert_text` effects and pushing it with `publish` from `on_start`. It
@@ -41,7 +53,7 @@ plugins.
    child stays resident for data that rarely changes. No readiness dance:
    initialize replies immediately and the catalog lands when ready; a broken
    file publishes an authoritative empty catalog, warned.
-4. **Event-driven catalog + core commands + navigation — `Plugins/browsers`
+5. **Event-driven catalog + core commands + navigation — `Plugins/browsers`
    (~2,500 LOC).** Browser tabs behind one per-bundle engine table: a shared
    AppleScript skeleton with per-dialect phrases for Chromium-family browsers
    and Safari, and for Firefox the host Accessibility broker
@@ -53,7 +65,7 @@ plugins.
    trichotomy, what the plugin leaves unhandled falls back to its
    `bindings`, and every row's `navigation_url` route restores through
    `on_navigate`.
-5. **Query evaluator with background refresh — `Plugins/answers`
+6. **Query evaluator with background refresh — `Plugins/answers`
    (~1270 LOC).** Three synchronous, CPU-only answer engines (calculator,
    colors, timezones) behind one `evaluate` via an ordered engine table;
    the ECB snapshot loads from disk in `on_start` and refreshes in the
@@ -98,7 +110,7 @@ both match, raise `priority`. A plugin with a process goes one step further
 by performing a command itself: a `commands[]` entry under Flash's topic
 (`{"command": "tab", "subcommand": "close"}`) puts it in the source chain
 ahead of every binding, with `confirm` on the entry when the command is
-destructive. The inspector's Mappings page ("How commands resolve in <App>")
+destructive, as on one of the plugin's own commands. The inspector's Mappings page ("How commands resolve in <App>")
 shows which source or binding won and which plugin declared it.
 
 ## The loop

@@ -70,12 +70,9 @@ final class SourceRegistry {
         SourceDescriptor(identifier: "core.menus", activationPolicy: .always) {
           MenuBarSource()
         },
-        // Their rows run verbs, which ask first for what nothing undoes.
+        // Its rows run a verb, which asks first.
         SourceDescriptor(identifier: "core.processes", activationPolicy: .always) {
           ProcessListSource(perform: perform)
-        },
-        SourceDescriptor(identifier: "core.system", activationPolicy: .always) {
-          SystemActionSource(perform: perform)
         },
         SourceDescriptor(identifier: FileSearchSource.sourceID, activationPolicy: .always) {
           FileSearchSource()

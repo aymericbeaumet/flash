@@ -1498,6 +1498,14 @@ extension AppDelegate {
     }
   }
 
+  /// The flashlight settles before a chosen row acts: the bar hides, the
+  /// command line resets and the mode's capture returns.
+  private func settleFlashlightForRow() {
+    overlay.hide()
+    resetCommandLineState()
+    applyModeOverlay(captureOverride: true)
+  }
+
   /// `variant` is the modified Return that chose the row, which only a
   /// clipboard row reads (``ClipboardRowDelivery``). A row that carries
   /// `confirm` asks first: nothing of it runs, its effect included, until
@@ -1515,9 +1523,7 @@ extension AppDelegate {
     }
     if !confirmed, let prompt = candidate.confirm.flatMap(PluginProtocol.confirmPrompt) {
       // The flashlight settles first; the question then owns the keyboard.
-      overlay.hide()
-      resetCommandLineState()
-      applyModeOverlay(captureOverride: true)
+      settleFlashlightForRow()
       presentConfirmation(
         HintSession.Confirmation(
           prompt: prompt,
@@ -1529,9 +1535,7 @@ extension AppDelegate {
     }
     switch candidate.effect {
     case .copyText(let text):
-      overlay.hide()
-      resetCommandLineState()
-      applyModeOverlay(captureOverride: true)
+      settleFlashlightForRow()
       NormalModeDispatcher.copy(text)
       return
     case .insertText(let text):
@@ -1540,9 +1544,7 @@ extension AppDelegate {
         targetPID: insertionTargetPID)
       return
     case .openURL(let raw):
-      overlay.hide()
-      resetCommandLineState()
-      applyModeOverlay(captureOverride: true)
+      settleFlashlightForRow()
       if let url = URLParsing.url(raw), url.scheme != nil {
         // Async: the synchronous variant is a LaunchServices round trip on main.
         NSWorkspace.shared.open(
@@ -1550,9 +1552,7 @@ extension AppDelegate {
       }
       return
     case .openApplication(let bundleID):
-      overlay.hide()
-      resetCommandLineState()
-      applyModeOverlay(captureOverride: true)
+      settleFlashlightForRow()
       if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
         NSWorkspace.shared.openApplication(
           at: appURL, configuration: NSWorkspace.OpenConfiguration())
@@ -1572,9 +1572,7 @@ extension AppDelegate {
         frecencyStore?.recordOpen(itemKey: key)
       }
     }
-    overlay.hide()
-    resetCommandLineState()
-    applyModeOverlay(captureOverride: true)
+    settleFlashlightForRow()
 
     registry.resolveCandidate(candidate, confirmed: confirmed) { [weak self] result in
       guard let self else { return }
@@ -1601,6 +1599,14 @@ extension AppDelegate {
         FlashLog.warn(
           "[flashlight] unresolved candidate source=\(candidate.sourceID) kind=\(candidate.kind)"
         )
+        // A row the user picked says why it failed, in its source's words,
+        // while they fit an alert; a history step back to a row that is
+        // gone stays silent.
+        if movementGeneration == nil, let reason = result.failureReason,
+          reason.utf8.count <= PluginProtocol.maxAlertTitleBytes
+        {
+          self.overlay.displayAlert(.message(reason, style: .error))
+        }
       }
       if shouldRecordMovement, let navigationURL = result.navigationURL {
         self.movementHistory.refine(

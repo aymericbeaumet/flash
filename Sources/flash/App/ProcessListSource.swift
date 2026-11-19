@@ -94,6 +94,15 @@ final class ProcessListSource: FlashSource {
   }
 }
 
+/// One gated command's next step.
+enum ConfirmationStep: Equatable {
+  /// Show the question; `y` runs the command, confirmed.
+  case ask(String)
+  case run
+  /// Nothing to run, for this reason.
+  case refuse(String)
+}
+
 /// `process kill --pid=<pid>`: SIGTERM one process, after asking.
 enum ProcessKill {
   static func prompt(name: String, pid: pid_t) -> String {

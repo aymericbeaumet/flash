@@ -1,40 +1,14 @@
 import AppKit
 import FlashCore
 
-/// The machine, session and process verbs Flash performs itself. One that
-/// nothing undoes asks first through the confirmation alert; `y` runs it
-/// again, confirmed. No path here blocks main: power requests and Apple
-/// Events run on `HostSystemActions.queue`, process reads on
-/// `processCommandQueue`.
+/// The system-surface and process verbs Flash performs itself, and the lock
+/// chord it posts for `host.system_action`. `process kill` asks first
+/// through the confirmation alert; `y` runs it again, confirmed. No path
+/// here blocks main: the surfaces run on their controller's queue, process
+/// reads on `processCommandQueue`.
 extension AppDelegate {
   static let processCommandQueue = DispatchQueue(
     label: "flash.process-commands", qos: .userInitiated)
-
-  func performSystemAction(_ action: SystemAction, confirmed: Bool) {
-    let command = URLCommand.systemAction(action)
-    switch action.step(confirmed: confirmed) {
-    case .ask(let prompt):
-      presentConfirmation(prompt, command: command)
-    case .refuse(let reason):
-      FlashLog.warn("[system] \(action.rawValue) refused: \(reason)")
-    case .run:
-      FlashLog.debug("[system] run \(action.rawValue)")
-      // The mechanisms are the ones `host.system_action` serves a plugin.
-      guard let mechanisms = pluginManager.hostRPC.systemActions else {
-        warnCommandFailure(command.diagnosticDescription)
-        return
-      }
-      let execution = action.execution
-      HostSystemActions.queue(for: execution).async { [weak self] in
-        let failure = mechanisms.perform(execution)
-        DispatchQueue.main.async {
-          guard let failure else { return }
-          FlashLog.warn("[system] \(action.rawValue) failed: \(failure)")
-          self?.warnCommandFailure(command.diagnosticDescription)
-        }
-      }
-    }
-  }
 
   /// `<surface> show|hide|toggle`, the trackpad gestures for the same
   /// surfaces and Hyper+3: `SystemSurfaceController` runs them off main, one

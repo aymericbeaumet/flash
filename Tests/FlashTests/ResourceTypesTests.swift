@@ -128,7 +128,6 @@ final class ResourceTypesTests: XCTestCase {
     let core: [FlashSource] = [
       WindowListSource(rows: { ([], nil) }, focus: { _ in }),
       FileSearchSource(), ProcessListSource(read: { [] }, perform: { _ in }), MenuBarSource(),
-      SystemActionSource(perform: { _ in }),
       ClipboardFlashlightSource(flashlight: ClipboardFlashlight { [] }),
     ]
     for source in core {

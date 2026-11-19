@@ -122,7 +122,15 @@ final class VimParityTests: XCTestCase {
   /// still runs an action that only shows a page or a surface, in one
   /// Enter (`:logs`, `flash logs`), and never one that changes anything.
   func testALoneTopicRunsOnlyAShowingActionAndDiShowsTheRegisters() throws {
-    let inventory = NormalModeDispatcher.CommandLineInventory.core()
+    // `display`, `screen` and their neighbours are a bundled plugin's
+    // command words.
+    var bundled: [String: [String]] = [:]
+    for manifest in try SourceCommandFallbackTests.officialManifests() {
+      for command in manifest.pluginCommands {
+        bundled[command.command, default: []].append(command.subcommand)
+      }
+    }
+    let inventory = NormalModeDispatcher.CommandLineInventory.core(pluginCommands: bundled)
     func resolve(_ line: String) -> NormalModeDispatcher.CommandLineResolution {
       NormalModeDispatcher.resolveCommandLine(line, inventory: inventory)
     }
@@ -130,12 +138,19 @@ final class VimParityTests: XCTestCase {
     XCTAssertEqual(resolve(":di"), .commands([registers]), "vim's :di[splay] is :reg")
     XCTAssertEqual(resolve(":display"), .commands([registers]))
     XCTAssertEqual(resolve(":reg"), .commands([registers]))
-    let sleep = try XCTUnwrap(URLEventHandler.parse(words: ["display", "sleep"]))
-    XCTAssertEqual(resolve(":display sleep"), .commands([sleep]), "the full command still runs")
-    XCTAssertEqual(resolve(":disp sleep"), .commands([sleep]), "words after it are the topic's")
-    for topic in ["screen", "screensaver", "trash", "appearance", "hints", "input"] {
-      XCTAssertEqual(resolve(":\(topic)"), .incomplete(topic), "\(topic) changes something")
+    let sleep = NormalModeDispatcher.CommandLineResolution.plugin(
+      command: "display", subcommand: "sleep", args: [])
+    XCTAssertEqual(resolve(":display sleep"), sleep, "the full command still runs")
+    XCTAssertEqual(resolve(":disp sleep"), sleep, "words after it are the command's")
+    XCTAssertEqual(
+      NormalModeDispatcher.resolveCommandWords(["display", "sleep"], inventory: inventory), sleep,
+      "flash display sleep")
+    for word in ["screen", "screensaver", "trash", "appearance", "system", "hints", "input"] {
+      XCTAssertEqual(resolve(":\(word)"), .incomplete(word), "\(word) changes something")
     }
+    // Without the plugin that owns `display`, the alias takes no words.
+    XCTAssertEqual(
+      NormalModeDispatcher.resolveCommandLine(":display sleep", inventory: .core()), .unknown)
     XCTAssertEqual(resolve(":mappings"), .commands([.showMappings]))
     XCTAssertEqual(resolve(":logs"), .commands([.showLogs]))
     XCTAssertEqual(resolve(":about"), .commands([.showAbout]))
@@ -168,8 +183,8 @@ final class VimParityTests: XCTestCase {
         "monitors show", "telemetry show",
       ])
     for words in [
-      ["display", "sleep"], ["screen", "lock"], ["screensaver", "start"], ["trash", "empty"],
-      ["appearance", "toggle"], ["hints", "dismiss"], ["input", "focus"], ["resident", "quit"],
+      ["hints", "dismiss"], ["input", "focus"], ["resident", "quit"],
+      ["process", "kill", "--pid=77"],
       ["app", "quit"], ["tab", "close"], ["window", "close"],
     ] {
       let command = try XCTUnwrap(URLEventHandler.parse(words: words), words.joined())

@@ -45,7 +45,7 @@ which took the same start from 29 MiB. Those figures predate the move of its
 list download to `host.fetch`, which removed its HTTP and TLS stack; the
 footprint has not been measured again since.
 
-Those counts describe the plugin set of their dates. Fourteen plugins are
+Those counts describe the plugin set of their dates. Fifteen plugins are
 bundled today, seven of them resident by default
 ([what starts at launch](architecture.md#what-starts-at-launch)), so the 28
 and 33 resident children above no longer exist as such. The figures also
@@ -143,6 +143,9 @@ all live is on demand: no process at launch and no catalog.
   the reply to a query the user has typed past.
 - **The child stays up afterwards**, as after a first command: the next
   query costs a round trip, not a spawn.
+
+The bundled `system` plugin is the example: nine fixed rows behind
+`@system` and nine commands, no process until the first of either.
 
 ## Publish-then-exit plugins
 

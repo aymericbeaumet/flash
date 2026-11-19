@@ -297,8 +297,7 @@
       "contacts",
       "files",
       "processes",
-      "menus",
-      "system"
+      "menus"
     ],
     "shared": {
       "tabs": "locations",
@@ -309,7 +308,8 @@
       "snippets": "default",
       "shortcuts": "default",
       "terminals": "locations",
-      "network": "default"
+      "network": "default",
+      "system": "default"
     }
   },
   "hint_target": {

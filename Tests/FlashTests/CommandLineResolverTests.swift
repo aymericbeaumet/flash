@@ -13,6 +13,8 @@ final class CommandLineResolverTests: XCTestCase {
   private let inventory = NormalModeDispatcher.CommandLineInventory.core(
     pluginCommands: [
       "screenshot": ["window", "screen", "selection"],
+      "screen": ["lock"],
+      "screensaver": ["start"],
       "tmux": ["session", "window"],
       "calc": ["*"],
     ],
@@ -110,7 +112,7 @@ final class CommandLineResolverTests: XCTestCase {
 
   /// A topic alone runs its only action when that action only shows a page
   /// or a surface (`impliedByItsTopic`); one that changes anything, as
-  /// `screen lock` does, waits for its action to be typed.
+  /// `hints dismiss` does, waits for its action to be typed.
   func testATopicAloneIsIncompleteUnlessItsOneActionOnlyShows() {
     XCTAssertEqual(resolve(":tab"), .incomplete("tab"))
     XCTAssertEqual(resolve(":ta"), .incomplete("tab"))
@@ -120,7 +122,7 @@ final class CommandLineResolverTests: XCTestCase {
     XCTAssertEqual(resolve(":monitors"), .commands([.showMonitors]))
     XCTAssertEqual(resolve(":logs"), .commands([.showLogs]))
     XCTAssertEqual(resolve(":commands"), .commands([.showCommands]))
-    XCTAssertEqual(resolve(":screen"), .incomplete("screen"), "screen lock changes something")
+    XCTAssertEqual(resolve(":hints"), .incomplete("hints"), "hints dismiss changes something")
     XCTAssertEqual(resolve(":mappings s"), .commands([.showMappings]))
     XCTAssertEqual(resolve(":cl"), .ambiguous(["cli", "clipboard"]), "`cl` is not `close`")
     XCTAssertEqual(resolve(":cli"), .incomplete("cli"), "completion and manpage")
@@ -305,28 +307,35 @@ final class CommandLineResolverTests: XCTestCase {
   /// are spelled like a topic: `h[elp]`, which runs that topic's only
   /// command, `help show`, and forwards its word to `--topic`, and vim's
   /// `di[splay]`, the registers, which leaves the words after it to the
-  /// `display` topic. An exact `help show` or `display sleep` still wins.
+  /// bundled `display` command. An exact `help show` or `display sleep` still
+  /// wins.
   func testAliasNamesCollideWithNoTopicPluginOrEachOther() throws {
-    let plugins = try SourceCommandFallbackTests.officialManifests().flatMap { manifest in
-      manifest.commands.map(\.command)
+    var bundled: [String: [String]] = [:]
+    for manifest in try SourceCommandFallbackTests.officialManifests() {
+      for command in manifest.pluginCommands {
+        bundled[command.command, default: []].append(command.subcommand)
+      }
     }
+    let plugins = Set(bundled.keys)
+    let withPlugins = NormalModeDispatcher.CommandLineInventory.core(pluginCommands: bundled)
     let builtins = NormalModeDispatcher.commandLineBuiltinWords
     var claimed: [String: String] = [:]
     for alias in NormalModeDispatcher.commandLineSpecs {
       for name in alias.names {
         let full = name.full
         if URLEventHandler.isTopic(full) {
-          // `h[elp]` runs its topic's only command; `di[splay]`, vim's
-          // registers, leaves the words after it to its topic.
-          XCTAssertTrue(["help", "display"].contains(full), "\(full) hides the \(full) topic")
-          if full == "help" {
-            XCTAssertEqual(alias.commands, [.showUsage(topic: nil)])
-            XCTAssertEqual(alias.trailing, .helpTopic)
-          } else {
-            XCTAssertTrue(alias.yieldsWordsToTopic, full)
-          }
+          // `h[elp]` runs its topic's only command.
+          XCTAssertEqual(full, "help", "\(full) hides the \(full) topic")
+          XCTAssertEqual(alias.commands, [.showUsage(topic: nil)])
+          XCTAssertEqual(alias.trailing, .helpTopic)
         }
-        XCTAssertFalse(plugins.contains(full), "\(full) hides a plugin command")
+        if plugins.contains(full) {
+          // `di[splay]`, vim's registers, leaves the words after it to the
+          // plugin command of that name, and only while a plugin has one.
+          XCTAssertEqual(full, "display", "\(full) hides a plugin command")
+          XCTAssertTrue(alias.yieldsWords(to: withPlugins), full)
+          XCTAssertFalse(alias.yieldsWords(to: .core()), "no plugin, no command to yield to")
+        }
         XCTAssertFalse(builtins.contains(full), "\(full) hides a command-line builtin")
         XCTAssertFalse(full.contains("["), name.documented)
         for length in name.minimumLength...full.count {

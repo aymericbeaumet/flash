@@ -27,7 +27,7 @@
 162	Sources/flash/App/AppDelegate/NormalModeCoordinator.swift
 6	Sources/flash/App/AppDelegate/NormalModeScroll.swift
 21	Sources/flash/App/AppDelegate/NormalModeWindowBorder.swift
-78	Sources/flash/App/AppDelegate/OverlayCoordinatorImpl.swift
+76	Sources/flash/App/AppDelegate/OverlayCoordinatorImpl.swift
 12	Sources/flash/App/AppDelegate/PointerMode.swift
 4	Sources/flash/App/AppDelegate/PointerWarps.swift
 4	Sources/flash/App/AppDelegate/PositionHints.swift
@@ -107,7 +107,7 @@
 8	Sources/flash/App/Plugins/PluginInstallJob.swift
 4	Sources/flash/App/Plugins/PluginLivenessSweep.swift
 21	Sources/flash/App/Plugins/PluginManager.swift
-63	Sources/flash/App/Plugins/PluginProcess.swift
+67	Sources/flash/App/Plugins/PluginProcess.swift
 1	Sources/flash/App/Plugins/PluginRepository.swift
 16	Sources/flash/App/PollScheduler.swift
 7	Sources/flash/App/ProcessListSource.swift
@@ -129,7 +129,6 @@
 66	Sources/flash/App/StatusPopupSurface.swift
 1	Sources/flash/App/StatusTerminalRegistry.swift
 4	Sources/flash/App/SyntheticEventSources.swift
-8	Sources/flash/App/SystemActions.swift
 2	Sources/flash/App/SystemChangeMonitors.swift
 1	Sources/flash/App/SystemKeyboard.swift
 2	Sources/flash/App/SystemSurfaceAccess.swift

@@ -67,9 +67,6 @@ enum ResourceTypes {
       name: "menus", owner: .core, kind: .standard,
       rows: "a menu item of the frontmost app; selecting it presses it"),
     Contract(
-      name: "system", owner: .core, kind: .standard,
-      rows: "a system action (lock, sleep, restart…); selecting it runs it"),
-    Contract(
       name: "tabs", owner: .shared, kind: .locations,
       rows: "an open browser tab, with its URL; selecting it switches to the tab"),
     Contract(
@@ -96,6 +93,10 @@ enum ResourceTypes {
     Contract(
       name: "network", owner: .shared, kind: .standard,
       rows: "a network address of this Mac; selecting it copies it"),
+    Contract(
+      name: "system", owner: .shared, kind: .standard,
+      rows: "a system action (lock, sleep, restart…); selecting it runs it, after asking when "
+        + "nothing undoes it"),
   ]
 
   static let byName: [String: Contract] = Dictionary(

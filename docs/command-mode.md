@@ -54,8 +54,8 @@ The line takes every command, cut to a unique prefix
 `:open <args>` and `:flashlight <query>`. `:42` and `:$` go to line 42 and
 the last line of the field you engaged in NORMAL, which the command line
 keeps engaged. A topic alone runs its only action when that action just
-shows something (`:logs`), never one that changes something (`:screen`
-waits for `lock`), and `:display` is Vim's `:di`, the registers. A one-line
+shows something (`:logs`), never one that changes something (`:hints`
+waits for `dismiss`), and `:display` is Vim's `:di`, the registers. A one-line
 answer shows on a banner and a longer one in the pager; `#` before a command
 also copies its output (`:#aws whoami`). `@:` in NORMAL runs the last line
 again.

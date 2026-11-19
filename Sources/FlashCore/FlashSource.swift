@@ -296,14 +296,24 @@ public struct CandidateResolution: Sendable {
   public let targetPID: pid_t?
   public let didResolve: Bool
   public let navigationURL: URL?
+  /// Why the source could not resolve a row it owns, in its own words; nil
+  /// for a row that resolved, and for one it does not own.
+  public let failureReason: String?
 
-  public init(targetPID: pid_t?, didResolve: Bool, navigationURL: URL? = nil) {
+  public init(
+    targetPID: pid_t?, didResolve: Bool, navigationURL: URL? = nil, failureReason: String? = nil
+  ) {
     self.targetPID = targetPID
     self.didResolve = didResolve
     self.navigationURL = navigationURL
+    self.failureReason = failureReason
   }
 
   public static let unresolved = CandidateResolution(targetPID: nil, didResolve: false)
+  /// The row is the source's and acting on it failed, for this reason.
+  public static func failed(reason: String) -> CandidateResolution {
+    CandidateResolution(targetPID: nil, didResolve: false, failureReason: reason)
+  }
   public static func resolved(pid: pid_t?, navigationURL: URL? = nil) -> CandidateResolution {
     CandidateResolution(targetPID: pid, didResolve: true, navigationURL: navigationURL)
   }

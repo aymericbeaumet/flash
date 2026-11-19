@@ -197,11 +197,27 @@ final class PluginSandboxExecTests: XCTestCase {
     XCTAssertEqual(
       reply?["protocol_version"] as? Int, PluginProtocol.version,
       "\(manifest.id): \(driver.stderrText())")
-    if !manifest.sources.isEmpty {
+    if !manifest.pushedSources.isEmpty {
       XCTAssertTrue(
         driver.waitForNotification(method: "publish", timeout: 10),
         """
         \(manifest.id): warm sources must publish under the profile — \
+        logs: \(driver.logText()) stderr: \(driver.stderrText())
+        """)
+    }
+    // A live source publishes nothing: it answers a search with its rows.
+    for (offset, source) in manifest.sources.filter({ $0.live != nil }).enumerated() {
+      let id = 100 + offset
+      driver.send([
+        "id": id, "method": "search", "params": ["source": source.name, "query": ""],
+        "deadline_ms": PluginProtocol.searchDeadlineMs,
+      ])
+      let found = driver.waitForResponse(id: id, timeout: 10)
+      XCTAssertNotNil(
+        PluginWireCodec.searchRows(
+          from: found, source: source.name, sourceID: "plugin:\(manifest.id)"),
+        """
+        \(manifest.id): live source \(source.name) must answer a search under the profile — \
         logs: \(driver.logText()) stderr: \(driver.stderrText())
         """)
     }

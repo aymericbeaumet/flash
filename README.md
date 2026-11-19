@@ -220,8 +220,10 @@ prompt, request and file is listed on the [privacy page](docs/privacy.md).
   command you configure yourself, such as a calendar CLI in a widget, triggers
   its own prompt, attributed to Flash. Releasing a stuck secure-input flag can
   also request Automation of its holding app or System Events. Restarting,
-  shutting down, logging out or toggling dark mode from Flash asks for
-  Automation of System Events, and emptying the Trash for Finder.
+  shutting down, logging out or toggling dark mode through the `system`
+  plugin asks for Automation of System Events, and emptying the Trash for
+  Finder; Flash sends those requests itself, and the four that cannot be
+  undone only after you confirm them.
 - **macOS settings.** Flash changes none beyond the menu bar's auto-hide
   while its status bar is on. The [startup commands](docs/startup.md) you
   list (`defaults write`, `killall Dock`) run once at each launch, as you,

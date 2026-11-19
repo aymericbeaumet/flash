@@ -1,7 +1,7 @@
 import AppKit
 import FlashCore
 
-/// macOS: Apple's catalogs, system surfaces, power, appearance and processes.
+/// macOS: Apple's catalogs, system surfaces and processes.
 extension URLEventHandler {
   static let systemCommands: [String: CommandDefinition] = [
     "notes open": .init(
@@ -39,37 +39,6 @@ extension URLEventHandler {
     "controlcenter show": surface(.controlCenter, .show),
     "controlcenter hide": surface(.controlCenter, .hide),
     "controlcenter toggle": surface(.controlCenter, .toggle),
-    "screen lock": .init(
-      "Lock the screen", parse: { a in a.args.isEmpty ? .systemAction(.screenLock) : nil }),
-    "system sleep": .init(
-      "Sleep the Mac", parse: { a in a.args.isEmpty ? .systemAction(.systemSleep) : nil }),
-    "display sleep": .init(
-      "Turn the displays off", parse: { a in a.args.isEmpty ? .systemAction(.displaySleep) : nil }),
-    "system restart": .init(
-      "Restart the Mac, after asking",
-      parse: { a in
-        a.args.isEmpty ? .systemAction(.systemRestart) : nil
-      }),
-    "system shutdown": .init(
-      "Shut the Mac down, after asking",
-      parse: { a in
-        a.args.isEmpty ? .systemAction(.systemShutdown) : nil
-      }),
-    "system logout": .init(
-      "Log out, after asking", parse: { a in a.args.isEmpty ? .systemAction(.systemLogout) : nil }),
-    "trash empty": .init(
-      "Empty the Trash, after asking",
-      parse: { a in a.args.isEmpty ? .systemAction(.trashEmpty) : nil }),
-    "appearance toggle": .init(
-      "Switch between light and dark appearance",
-      parse: { a in
-        a.args.isEmpty ? .systemAction(.darkModeToggle) : nil
-      }),
-    "screensaver start": .init(
-      "Start the screen saver",
-      parse: { a in
-        a.args.isEmpty ? .systemAction(.screensaverStart) : nil
-      }),
     "process kill": .init(
       "Terminate one process, after asking", [.integer("pid", required: true)],
       parse: { a in

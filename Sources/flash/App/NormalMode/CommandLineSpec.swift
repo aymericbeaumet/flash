@@ -147,10 +147,15 @@ extension NormalModeDispatcher {
         separator: ", then ")
     }
 
-    /// An alias spelled like one of Flash's topics (`di[splay]`) that takes no
-    /// words: followed by some, the line is the topic's (`:disp sleep`).
-    var yieldsWordsToTopic: Bool {
-      trailing == .rejected && names.contains { URLEventHandler.isTopic($0.full) }
+    /// An alias that takes no words and is spelled like a word a line may
+    /// start with, one of Flash's topics or a loaded plugin's command
+    /// (`di[splay]`): followed by some, the line is that command's
+    /// (`:disp sleep`).
+    func yieldsWords(to inventory: CommandLineInventory) -> Bool {
+      trailing == .rejected
+        && names.contains {
+          inventory.topics[$0.full] != nil || inventory.pluginCommands[$0.full] != nil
+        }
     }
 
     /// `:q[uit]`; the `!` form is listed only where it does something more.
@@ -177,7 +182,7 @@ extension NormalModeDispatcher {
   /// page of the manual. No name may equal a topic or a plugin command,
   /// except `help`, which runs that topic's only command, and `display`,
   /// vim's `:di` for the registers, which alone shows them and leaves the
-  /// words after it to the `display` topic (`:disp sleep`).
+  /// words after it to the command of that name (`:disp sleep`).
   static let commandLineSpecs: [CommandLineSpec] = [
     CommandLineSpec(names: ["q[uit]"], commands: [.appClose], bangPolicy: .accepted),
     CommandLineSpec(
@@ -395,7 +400,7 @@ extension NormalModeDispatcher {
       name.removeLast()
     }
     if let spec = commandLineSpecs.first(where: { $0.matches(name) }),
-      bang || rest.isEmpty || !spec.yieldsWordsToTopic
+      bang || rest.isEmpty || !spec.yieldsWords(to: inventory)
     {
       return resolve(spec, bang: bang, trailing: rest, inventory: inventory)
     }
@@ -429,7 +434,7 @@ extension NormalModeDispatcher {
     guard let second = rest.first else {
       // A topic alone runs the one of its actions that only shows (`:logs`
       // is `logs show`, never `logs write`) or reports (a query); one that
-      // changes anything (`display sleep`, `screen lock`) waits for its
+      // changes anything (`hints dismiss`, `process kill`) waits for its
       // action, and so does a topic with two that show or report (`:cli`).
       let implied = actions.filter { action in
         if FlashQuery(topic: topic, action: action) != nil { return true }
@@ -953,7 +958,9 @@ extension NormalModeDispatcher {
     // The first word resolves as dispatch resolves it: an ex command
     // (only `h[elp]` takes a word, the help topics), a topic's actions, a
     // plugin's declared subcommands.
-    if let spec = commandLineSpecs.first(where: { $0.matches(first) }) {
+    if let spec = commandLineSpecs.first(where: { $0.matches(first) }),
+      !spec.yieldsWords(to: inventory)
+    {
       guard spec.trailing == .helpTopic else { return nil }
       let topics = inventory.helpTopics.sorted()
       let items = topics.map { topic in

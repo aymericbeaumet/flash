@@ -1368,8 +1368,6 @@ extension AppDelegate {
       scrollNormalMode(kind, repeatCount: repeatCount)
     case .systemKey(let key):
       for _ in 0..<repeatCount { SystemKeyboard.perform(key) }
-    case .systemAction(let action):
-      performSystemAction(action, confirmed: confirmed)
     case .processKill(let pid):
       performProcessKill(pid, confirmed: confirmed)
     case .macro(let command):

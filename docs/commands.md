@@ -90,7 +90,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `app zoom_in` | Zoom in with the focused app's own zoom |
 | `app zoom_out` | Zoom out with the focused app's own zoom |
 | `app zoom_reset` | Reset the focused app's zoom to actual size |
-| `appearance toggle` | Switch between light and dark appearance |
 | `appwindows hide` | Close App Exposé |
 | `appwindows show` | Show the focused app's windows (App Exposé) |
 | `appwindows toggle` | Show the focused app's windows, or close App Exposé |
@@ -147,7 +146,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `desktop hide` | Bring the windows back over the desktop |
 | `desktop show` | Show the desktop, moving every window aside |
 | `desktop toggle` | Show the desktop, or bring the windows back |
-| `display sleep` | Turn the displays off |
 | `document duplicate` | Duplicate the focused document |
 | `document export_pdf` | Export the focused document as a PDF |
 | `document open` | Open a document in the focused app |
@@ -264,8 +262,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `resource archive` | Archive the current item in the focused app |
 | `resource next` | Go to the next item in the focused app |
 | `resource previous` | Go to the previous item in the focused app |
-| `screen lock` | Lock the screen |
-| `screensaver start` | Start the screen saver |
 | `scroll bottom` | Scroll to the bottom |
 | `scroll cursor_bottom` | Scroll the focused text so the cursor's line sits at the bottom (zb) |
 | `scroll cursor_middle` | Scroll the focused text so the cursor's line sits in the middle (zz) |
@@ -289,10 +285,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `status clear --name=<source>` | Clear the value pushed into a [statusbar.sources] source |
 | `status refresh --name=<source>` | Run a [statusbar.sources] source's command now instead of at its interval |
 | `status set --name=<source> --value=<text>` | Push a value into a [statusbar.sources] source from a script or hook |
-| `system logout` | Log out, after asking |
-| `system restart` | Restart the Mac, after asking |
-| `system shutdown` | Shut the Mac down, after asking |
-| `system sleep` | Sleep the Mac |
 | `tab close` | Close the current tab |
 | `tab detach` | Move the current tab to a new window |
 | `tab duplicate` | Duplicate the current tab |
@@ -317,7 +309,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `tile move --direction=<left|right|up|down>` | Move the focused tiled window in a direction in its workspace's tree |
 | `tile resize --dimension=<width|height|smart> --amount=<points>` | Grow or shrink the focused tiled window by points |
 | `tile swap --direction=<left|right|up|down>` | Swap the focused tiled window with its neighbor in a direction |
-| `trash empty` | Empty the Trash, after asking |
 | `updates check` | Check GitHub for a newer Flash and say what installing it means |
 | `updates install` | Download, verify and install the newest Flash, then restart it |
 | `url bookmark` | Bookmark the focused page |
@@ -425,7 +416,7 @@ they run, and in the [command catalog](/commands).
 | `winc[md] {c}` | the `ctrl+w {c}` window command (`h` `j` `k` `l` `w` `W` `q` `c` `n` `H` `J` `K` `L` `o` `=` `s` `v`) |
 | `up[date]` | `app save` |
 | `y[ank] [x]`, `pu[t] [x]` | `register yank` / `register paste`, into or from register `x` |
-| `reg[isters]`, `di[splay]` | `clipboard show` (with words after it, `:disp` is the `display` topic: `:disp sleep`) |
+| `reg[isters]`, `di[splay]` | `clipboard show` (with words after it, `:disp` is the `display` command: `:disp sleep`) |
 | `so[urce]` | `config reload` |
 | `ve[rsion]` | `about show` |
 | `star[tinsert]`, `stopi[nsert]` | `mode insert` / `mode normal` |
@@ -439,15 +430,17 @@ The table is `commandLineSpecs` in `Sources/flash/App/NormalMode/CommandLineSpec
 a test keeps every name clear of Flash's topics, the bundled plugins'
 commands and every other alias. An alias still wins over a topic it
 prefixes: `:p` and `:pr` print, as vim's `:p[rint]`, so `process` is
-`:proc` or longer. Two names are a topic's too: `h[elp]`, which runs
+`:proc` or longer. Two names are a command word's too: `h[elp]`, which runs
 `help show` with its words as the topic, and Vim's `di[splay]`, the
-registers, which leaves the words after it to the `display` topic. Beside
+registers, which leaves the words after it to the `system` plugin's
+`display` command. Beside
 them, the grammar keeps one word of its own: `doctor` is `resident doctor`.
 A topic alone runs the one of its actions that only shows a page or a
 surface (`:logs` is `logs show`, never `logs write`; `:commands` is
 `commands show`) or is a query; an action that
-changes anything never runs implied, so `:screen` runs nothing where
-`screen lock` would lock the screen, and `:display` is the registers, never
+changes anything never runs implied, and a plugin's command word alone
+waits for its subcommand, so `:screen` runs nothing where `screen lock`
+would lock the screen, and `:display` is the registers, never
 `display sleep`. A topic with one action still takes its arguments right
 away (`:metrics --name=… --value=…`).
 
@@ -849,19 +842,36 @@ Flash's own, leaves them to [audio devices](audio.md).
 
 ## System and processes
 
-`screen lock`, `system sleep`, `display sleep`, `screensaver start` and
+`screen lock`, `system sleep`, `display sleep`, `system restart`,
+`system shutdown`, `system logout`, `trash empty`, `appearance toggle` and
+`screensaver start` are the commands of the bundled `system` plugin, so the
+reference table above, which lists Flash's own, leaves them out. `screen
+lock`, `system sleep`, `display sleep`, `screensaver start` and
 `appearance toggle` act at once. `system restart`, `system shutdown`,
-`system logout`, `trash empty` and `process kill --pid=<pid>` cannot be
-undone, so each asks first in the centred alert: `y` runs it, any other key
-cancels. `screen lock` posts macOS's Lock Screen shortcut
+`system logout`, `trash empty` and Flash's own `process kill --pid=<pid>`
+cannot be undone, so each asks first in the centred alert: `y` runs it, any
+other key cancels. None of the plugin's commands takes an argument: one
+given any fails with its usage (`usage: screen lock`).
+
+The plugin holds no power over the Mac: it asks Flash for each action, and
+Flash carries it out. `screen lock` posts macOS's Lock Screen shortcut
 (Control-Command-Q); `system sleep` and `display sleep` ask IOKit power
 management directly; `screensaver start` opens ScreenSaverEngine. Restart,
 shut down, log out and dark mode are scripted through System Events, and
 emptying the Trash through Finder, off the keyboard path; the first use can
-ask for Automation ([privacy](privacy.md)). `process kill` sends SIGTERM to a
-process you may signal; it refuses pids 0 and 1 and a pid it cannot find.
-In the flashlight, `@system` and `@processes` list
-the same actions and every process ([flashlight](flashlight.md)).
+ask for Automation ([privacy](privacy.md)). Flash runs restart, shut down,
+log out and empty Trash only for a request you just answered `y` to, so a
+plugin cannot run one unprompted. A command that fails says why in the
+centred alert, and `flash <command>` prints the same line and exits 1. When
+macOS has not answered after eight seconds (Finder emptying a full Trash,
+an Automation prompt still open) the command answers `macOS has not
+answered yet` and the action goes on. With `system` in `[plugins] disabled`
+these commands do nothing.
+
+`process kill` sends SIGTERM to a process you may signal; it refuses pids 0
+and 1 and a pid it cannot find. In the flashlight, `@system` and
+`@processes` list the same actions and every process
+([flashlight](flashlight.md)).
 
 `caffeinate on`, `off`, `toggle` and `status` are the commands of the bundled
 `caffeinate` plugin, so the reference table above, which lists Flash's own,

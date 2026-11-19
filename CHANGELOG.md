@@ -73,6 +73,15 @@ monitors read that no plugin publishes any more, with its replacement.
   take (`volume up --steps=2`, `caffeinate on 5`, `--minutes=0`) is refused
   when the command runs, with its usage, where `flash config check` used to
   report it.
+- **The system commands are the `system` plugin's.** `screen lock`,
+  `system sleep`, `system restart`, `system shutdown`, `system logout`,
+  `display sleep`, `trash empty`, `appearance toggle` and `screensaver start`
+  keep their words in mappings, the CLI and the command line, the four that
+  cannot be undone still ask first, and `@system` still lists them. With
+  `system` in `[plugins] disabled` they do nothing and `@system` is empty.
+  An argument these commands do not take (`screen lock --now`) is refused
+  when the command runs, with its usage, where `flash config check` used to
+  report it.
 - **A status link opens only `http`, `https` and `mailto` URLs.** A
   `#[link=…]` on the bar, hinted or clicked, or a hyperlink in a popup, is
   text a plugin, a source or a program wrote, so any other scheme is now
@@ -142,8 +151,10 @@ monitors read that no plugin publishes any more, with its replacement.
   `terminals` (`#{flash.plugin.terminals.session}`, `[plugins.terminals]
   ssh_hosts`); history is part of `browsers`; reference is `emojis`; search
   bangs are `searchproviders` (source `searchproviders.bangs`). apple,
-  caffeinate, files, marks, media, processes and system are built in: drop
-  them from `[plugins] disabled`. The busiest-process tables are
+  files, marks and processes are built in: drop them from
+  `[plugins] disabled`. caffeinate, media and system are bundled plugins
+  under the same ids, so an entry for one of them still turns its commands
+  off. The busiest-process tables are
   `#{flash.top_cpu}` and `#{flash.top_mem}`, sized by `[statusbar] top_count`.
 - **Removed plugins:** github, kitty, spotify, windows and vscode, and the
   HTTP status code catalog.
@@ -380,6 +391,19 @@ monitors read that no plugin publishes any more, with its replacement.
   `host.system_action`. Restart, shut down, log out and emptying the Trash
   are honoured only inside a request the user confirmed, once per
   confirmation; anywhere else Flash refuses them.
+- Lock, sleep, restart, shut down, log out, empty the Trash, dark mode and
+  the screen saver are a bundled plugin, `system`. It is sandboxed and holds
+  no power over the Mac: it asks Flash for each action, and Flash restarts,
+  shuts down, logs out or empties the Trash only for a request you just
+  answered `y` to. No process runs until the first of its commands or the
+  first `@system` query. A command that fails says why (`system sleep
+  failed: …`) in the alert and on the CLI, where it said only that the
+  command failed, and so does a `@system` row; one macOS has not answered
+  after eight seconds (a full Trash, an Automation prompt left open) answers
+  `macOS has not answered yet` while the action goes on. The mappings page
+  describes a key bound to one of them as running that command.
+- A flashlight row a plugin fails to act on says why in the centred alert,
+  in the plugin's words, where it failed silently.
 - `feed` and `searchproviders` no longer open network connections: Flash
   downloads the feed and DuckDuckGo's bang list for them through
   `host.fetch`, and their sandboxes deny the network like every other bundled

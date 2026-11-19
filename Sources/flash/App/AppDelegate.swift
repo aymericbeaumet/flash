@@ -894,7 +894,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .appStop, .appDownloads, .developerTools, .windowCloseAll, .windowZoom, .urlBookmark,
       .urlEdit, .historyShow, .tabDuplicate, .tabPin, .tabMute, .tabDetach, .appVisibility,
       .menuPress,
-      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow, .systemAction, .processKill:
+      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow, .processKill:
       if let completion {
         completesLater = true
         performMappedCommand(cmd, completion: { completion($0, nil) })

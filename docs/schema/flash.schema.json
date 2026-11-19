@@ -1781,6 +1781,17 @@
           },
           "type" : "object"
         },
+        "system" : {
+          "additionalProperties" : false,
+          "description" : "The system plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "terminals" : {
           "additionalProperties" : false,
           "description" : "The terminals plugin's settings.",

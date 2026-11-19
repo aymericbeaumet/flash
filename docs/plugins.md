@@ -45,7 +45,7 @@ in the [plugin protocol](plugin-protocol.md). Start with the
 [cookbook](plugin-cookbook.md) or the [Rust SDK](plugin-rust-sdk.md); the
 authoring guides sit together under Advanced in the navigation. Each
 plugin is a directory with a `manifest.json` declaring what it serves:
-`sources` (push-published flashlight catalogs), `query` (inline answers),
+`sources` (flashlight catalogs, published or pulled live), `query` (inline answers),
 `hints`, `status` segments, `listen` event patterns, `commands`
 (`flash <command> <subcommand>`, two words like every Flash command: the
 plugin's own, or one of Flash's own commands the plugin performs), `bangs`
@@ -55,10 +55,11 @@ process, which runs under a deny-default sandbox unless the manifest declares
 `"sandbox": false`; a manifest without `exec` is manifest-only (mappings,
 help, and bindings served by the host alone).
 
-A plugin declaring `sources`, `query`, `hints`, `status`, or `listen` is
-resident (spawned at startup); one declaring only commands, bangs, or
-navigation stays stopped until its first dispatch, or until startup has
-settled when a configured mapping runs its command. Official bundled plugins
+A plugin declaring published `sources`, `query`, `hints`, `status`, or
+`listen` is resident (spawned at startup); one declaring only commands,
+bangs, navigation or live sources stays stopped until its first dispatch or
+the first flashlight query scoped to it, or until startup has settled when
+a configured mapping runs its command. Official bundled plugins
 are enabled unless their id appears in `[plugins] disabled`. Third-party
 plugins are listed in `[plugins] third_party` as
 `github:user/project@<40-char commit sha>` or `file:<path>`; only third-party
@@ -73,7 +74,9 @@ Flash starts plugin processes with a scrubbed environment plus:
   over their defaults, as JSON)
 
 Catalogs are push-based: the plugin sends a `publish` notification whenever
-its rows change and the host serves the flashlight from its own store. Status
+its rows change and the host serves the flashlight from its own store. A
+source declared `live` is pulled instead, with a `search` request, only
+while a query names its type (`@system`). Status
 segments arrive via the `status` notification and render as
 `#{flash.plugin.<id>.<segment>}` in `[statusbar].template`. Structured logs go
 through the `log` notification and are recorded with `source = "plugin:<id>"`.

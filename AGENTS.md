@@ -275,7 +275,9 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   destructive action claims a perform the user confirmed
   (`claimConfirmedPerform`) or is refused; never add another path to one.
   The resident alone wires `LiveSystemActions`, at launch: tests inject
-  `SystemActionPerforming` and never reach the mechanisms.
+  `SystemActionPerforming` and never reach the mechanisms. The command
+  words, the `@system` rows, their questions and wording belong to the
+  plugin (`system`).
 - Read the window list only through `WindowSnapshot.windowList`
   (guardrail-enforced), and never make main wait on a queue that calls it
   ([the deadlock](docs/input-internals.md#input-capture-and-latency)).

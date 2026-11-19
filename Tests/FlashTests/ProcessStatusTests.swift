@@ -1,4 +1,3 @@
-import Carbon.HIToolbox
 import FlashCore
 import XCTest
 
@@ -479,41 +478,7 @@ final class ProcessStatusTests: XCTestCase {
     XCTAssertEqual(performed, [.processKill(pid: 77)])
   }
 
-  func testSystemRowsRunTheirCommands() throws {
-    let rows = SystemActionSource.rows
-    XCTAssertEqual(rows.count, SystemAction.allCases.count)
-    XCTAssertTrue(rows.allSatisfy { $0.source == "system.actions" && $0.finishesCommand })
-    let restart = try XCTUnwrap(rows.first { $0.sourcePayload == "system restart" })
-    XCTAssertEqual(restart.title, "Restart Mac")
-    XCTAssertEqual(restart.kind, .plugin("system_action"))
-    XCTAssertTrue(restart.searchAliases.contains("reboot"))
-
-    var performed: [URLCommand] = []
-    let source = SystemActionSource(perform: { performed.append($0) })
-    let resolved = expectation(description: "resolved")
-    source.resolveCandidate(restart, in: FlashSourceEnvironment(runningApplications: [])) { _ in
-      resolved.fulfill()
-    }
-    wait(for: [resolved], timeout: 2)
-    XCTAssertEqual(performed, [.systemAction(.systemRestart)])
-  }
-
   // MARK: - Commands
-
-  func testSystemCommandsParseRoundTripAndAskOnlyForWhatNothingUndoes() {
-    for action in SystemAction.allCases {
-      let name = action.name
-      let command = URLEventHandler.parse(topic: name.topic, action: name.action, args: [:])
-      XCTAssertEqual(command, .systemAction(action), action.rawValue)
-      XCTAssertEqual(command?.argv, ["flash", name.topic, name.action])
-      XCTAssertNil(
-        URLEventHandler.parse(topic: name.topic, action: name.action, args: ["now": "1"]))
-    }
-    let asking = SystemAction.allCases.filter { $0.step(confirmed: false) != .run }
-    XCTAssertEqual(asking, [.systemRestart, .systemShutdown, .systemLogout, .trashEmpty])
-    XCTAssertEqual(SystemAction.systemRestart.step(confirmed: false), .ask("Restart this Mac?"))
-    XCTAssertTrue(SystemAction.allCases.allSatisfy { $0.step(confirmed: true) == .run })
-  }
 
   func testProcessKillParsesAPidAboveOne() {
     XCTAssertEqual(
@@ -525,24 +490,5 @@ final class ProcessStatusTests: XCTestCase {
       XCTAssertNil(URLEventHandler.parse(topic: "process", action: "kill", args: ["pid": pid]), pid)
     }
     XCTAssertNil(URLEventHandler.parse(topic: "process", action: "kill", args: [:]))
-  }
-
-  func testSystemActionsUseInProcessAPIsAndTheLockShortcut() throws {
-    XCTAssertEqual(SystemAction.screenLock.execution, .lockScreenChord)
-    let chord = try XCTUnwrap(HotkeySyntax.parse(hotkey: SystemActionExecution.lockScreenShortcut))
-    XCTAssertEqual(chord.virtualKey, UInt32(kVK_ANSI_Q))
-    XCTAssertEqual(chord.eventFlags, [.maskControl, .maskCommand])
-    XCTAssertEqual(SystemAction.systemSleep.execution, .sleepSystem)
-    XCTAssertEqual(SystemAction.displaySleep.execution, .sleepDisplays)
-    XCTAssertEqual(SystemAction.screensaverStart.execution, .startScreensaver)
-    XCTAssertEqual(
-      SystemAction.trashEmpty.execution,
-      .appleScript("tell application \"Finder\" to empty trash", timeout: 30))
-    for action in [SystemAction.systemRestart, .systemShutdown, .systemLogout, .darkModeToggle] {
-      guard case .appleScript(let source, _) = action.execution else {
-        return XCTFail("\(action) is not an Apple Event")
-      }
-      XCTAssertTrue(source.hasPrefix("tell application \"System Events\""), source)
-    }
   }
 }

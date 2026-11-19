@@ -38,7 +38,15 @@ final class PluginConfirmationFlowTests: XCTestCase {
           "sources": [{ "name": "danger.rows", "type": "dangers", "live": "per_scope" }]
           """),
       script: PluginFixtureKit.script(
-        onPerform: #"printf '%s\n' "$line" >> "$D/performs"; "# + PluginFixtureKit.performOK))
+        onPerform: """
+          printf '%s\\n' "$line" >> "$D/performs"
+          case "$line" in
+          *'"title":"Broken"'*)
+            printf '{"id":%s,"result":{"ok":false,"error":"the row broke"}}\\n' "$id" ;;
+          *)
+            \(PluginFixtureKit.performOK) ;;
+          esac
+          """))
     dataDir = PluginRepository.defaultDataDir().appendingPathComponent("danger")
     XCTAssertTrue(
       dataDir.path.hasPrefix(FileManager.default.temporaryDirectory.path),
@@ -218,6 +226,33 @@ final class PluginConfirmationFlowTests: XCTestCase {
     XCTAssertEqual(both[1]["kind"] as? String, "resolve")
     XCTAssertNil(both[1]["confirmed"])
     XCTAssertNil((both[1]["row"] as? [String: Any])?["confirm"])
+  }
+
+  /// A row the user picked whose resolve fails says why, in its plugin's
+  /// words, as a command does.
+  func testARowThatFailsShowsItsPluginsReason() throws {
+    let broken = CandidateFinder.prepare(
+      Candidate(
+        title: "Broken",
+        metadata: [
+          CandidateMetadataKey.source: "danger.rows",
+          CandidateMetadataKey.sourceID: "plugin:danger",
+        ]))
+    let resolved = expectation(description: "resolved")
+    var resolution = CandidateResolution.unresolved
+    delegate.registry.resolveCandidate(broken) {
+      resolution = $0
+      resolved.fulfill()
+    }
+    wait(for: [resolved], timeout: 15)
+    XCTAssertFalse(resolution.didResolve)
+    XCTAssertEqual(resolution.failureReason, "the row broke")
+
+    XCTAssertNil(delegate.overlay.toast)
+    delegate.openSourceItem(broken, recordMovement: false)
+    waitUntilTrue("the failure alert shows") {
+      self.delegate.overlay.toast?.outlivesTeardown == true
+    }
   }
 
   /// A row's question gates its host effect too: nothing is copied until

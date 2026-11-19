@@ -409,8 +409,6 @@ extension URLCommand {
       return systemKeyExplanation(key)
     case .systemSurface(let command):
       return command.explanation
-    case .systemAction(let action):
-      return action.explanation
     case .processKill(let pid):
       return "Asks before terminating process \(pid)."
     case .functionKey(let index):

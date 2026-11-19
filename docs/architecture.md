@@ -31,8 +31,9 @@ touched per `host.audio_devices` request of a plugin holding the
 System Events and Finder scripts per `host.system_action` request of one
 holding `system_actions`. A
 plugin whose manifest declares only `status` runs while a visible surface
-reads one of its segments; a plugin with only commands starts on its first
-`perform`; a manifest without `exec` never spawns. A mapping that runs a
+reads one of its segments; a plugin with only commands and live sources
+(`system`) starts on its first `perform` or `search`; a manifest without
+`exec` never spawns. A mapping that runs a
 plugin command asks for that plugin: ten seconds after each reconcile it is
 spawned if still idle, and it outlives its status surfaces
 ([warm plugins](plugin-performance.md#process-creation-and-warm-plugins)).

@@ -456,12 +456,24 @@ PY
       fi
     fi
     [[ -f "$plugin_dir/src/main.rs" ]] || continue
-    # Plugin sources are warm: each pushes its complete catalog, whole or
-    # source by source, from whichever module of the crate owns it.
-    if search_paths -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest" &&
-      ! search_paths -q 'publish(_source)?[[:space:]]*\(' "$plugin_dir/src"; then
-      echo "GUARDRAIL FAILED: sources plugin must push-publish its catalog: $plugin_dir" >&2
-      fail=1
+    # A plugin's sources are pushed or live as a whole. Pushed: it publishes
+    # its complete catalog, whole or source by source, from whichever module
+    # of the crate owns it. Live (`"live"` on the entries): the host pulls
+    # them with `search`, so it answers `on_search` and publishes nothing.
+    if search_paths -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then
+      if search_paths -q '^[[:space:]]*"live"[[:space:]]*:' "$manifest"; then
+        if ! search_paths -q 'fn on_search[[:space:]]*\(' "$plugin_dir/src"; then
+          echo "GUARDRAIL FAILED: live sources plugin must answer search: $plugin_dir" >&2
+          fail=1
+        fi
+        if search_paths -q 'publish(_source)?[[:space:]]*\(' "$plugin_dir/src"; then
+          echo "GUARDRAIL FAILED: live sources plugin must not publish a catalog: $plugin_dir" >&2
+          fail=1
+        fi
+      elif ! search_paths -q 'publish(_source)?[[:space:]]*\(' "$plugin_dir/src"; then
+        echo "GUARDRAIL FAILED: sources plugin must push-publish its catalog: $plugin_dir" >&2
+        fail=1
+      fi
     fi
   done
 

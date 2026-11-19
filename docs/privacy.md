@@ -85,7 +85,7 @@ running plugins with `:plugins show`.
 | Accessibility | Flash | First launch. Required. |
 | Automation: Safari, Chrome, and other Chromium browsers | Flash, for `browsers` | The first time it lists tabs while that browser runs. |
 | Automation: the app holding a stuck secure-input flag, and System Events | Flash | The first time a stuck hold is released by blurring a browser or sending its address-bar shortcut. A real password field does not ask. |
-| Automation: System Events, Finder | Flash | The first `system restart`, `system shutdown`, `system logout` or `appearance toggle` (System Events), or `trash empty` (Finder). |
+| Automation: System Events, Finder | Flash, for `system` | The first `system restart`, `system shutdown`, `system logout` or `appearance toggle` (System Events), or `trash empty` (Finder), from a command or a `@system` row. |
 | Automation: Shortcuts Events | Flash, for `shortcuts` | The first listing or invocation of a shortcut. |
 | Automation: Notes | Flash | The first `@notes` search or `notes refresh` while Notes runs. |
 | Reminders | Flash | The first `@reminders` search or `reminders refresh` while Reminders runs. |
@@ -518,7 +518,16 @@ and changes the output volume for it through CoreAudio, behind the
 nothing. `caffeinate` is sandboxed too: its profile adds the one mach service
 of macOS power management (`com.apple.PowerManagement.control`), through
 which its own process takes the keep-awake assertions that
-`pmset -g assertions` lists under its name; it reads and stores nothing. The RPC accepts only named operations with fixed host templates and escaped
+`pmset -g assertions` lists under its name; it reads and stores nothing.
+`system` is sandboxed with no allowance at all and holds no power over the
+Mac: for each of its actions it asks Flash, behind the `system_actions`
+capability its manifest declares, and Flash posts the Lock Screen shortcut,
+asks IOKit to sleep the Mac or its displays, opens the screen saver, or sends
+one fixed script to System Events or Finder. Flash restarts, shuts down, logs
+out or empties the Trash only for a request you just answered `y` to in its
+confirmation alert, one action per answer; the same request from the plugin
+at any other moment is refused, so a faulty plugin cannot run one unprompted.
+The plugin reads and stores nothing. The AppleScript RPC accepts only named operations with fixed host templates and escaped
 string values; it accepts no script source, shell command or file operation.
 Each operation checks its target against the declared app IDs. Chat submission
 can send Return only to a supported browser that is still frontmost. Credentials for

@@ -150,6 +150,8 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintPro
     _ = scope
     let sources = plugin.manifest.sources.filter { $0.live != nil }.map(\.name)
     guard !sources.isEmpty else {
+      // Runs on main alone: the hop is what confines it.
+      nonisolated(unsafe) let completion = completion
       DispatchQueue.main.async { completion([]) }
       return
     }
@@ -205,8 +207,11 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintPro
       switch outcome {
       case .performed(let pid, let navigationURL, _, _):
         completion(.resolved(pid: pid, navigationURL: navigationURL))
-      case .unhandled, .failed:
+      case .unhandled:
         completion(.unresolved)
+      case .failed(let reason):
+        // The plugin's own words reach whoever picked the row.
+        completion(.failed(reason: reason))
       }
     }
   }

@@ -164,7 +164,8 @@ final class CommandGrammarTests: XCTestCase {
 
   /// Bundled plugin commands are two words of `[a-z][a-z0-9_]*`. An entry
   /// under one of Flash's topics is a core command the plugin performs, so it
-  /// names a source command; any other entry is the plugin's own.
+  /// names a source command; any other entry is the plugin's own, and the
+  /// ones that ask first are the `system` plugin's four that nothing undoes.
   func testBundledPluginCommandsShareTheShapeAndCoreTopicsNameSourceCommands() throws {
     let plugins = Self.root.appendingPathComponent("Plugins")
     var commands: [(plugin: String, command: String, subcommand: String, confirm: String?)] = []
@@ -182,6 +183,7 @@ final class CommandGrammarTests: XCTestCase {
     }
     XCTAssertFalse(commands.isEmpty)
     var core: [String: [String]] = [:]
+    var asking: [String] = []
     for (plugin, command, subcommand, confirm) in commands {
       XCTAssertNotNil(
         CommandName("\(command) \(subcommand)"),
@@ -191,10 +193,16 @@ final class CommandGrammarTests: XCTestCase {
           URLEventHandler.sourceCommandNames.contains(CommandName(command, subcommand)),
           "\(plugin): flash \(command) \(subcommand) is not a command Flash asks of the app")
         core[plugin, default: []].append("\(command) \(subcommand)" + (confirm == nil ? "" : "?"))
-      } else {
-        XCTAssertNil(confirm, "\(plugin): only a core command is gated by the host")
+      } else if confirm != nil {
+        asking.append("\(plugin): \(command) \(subcommand)")
       }
     }
+    XCTAssertEqual(
+      asking,
+      [
+        "system: system restart", "system: system shutdown", "system: system logout",
+        "system: trash empty",
+      ])
     XCTAssertEqual(
       core["browsers"],
       [
@@ -252,20 +260,20 @@ final class CommandGrammarTests: XCTestCase {
   enum TopicKind { case one, many, verb }
 
   private static let topicKinds: [String: TopicKind] = [
-    "about": .one, "alert": .one, "app": .one, "appearance": .one, "appwindows": .many,
+    "about": .one, "alert": .one, "app": .one, "appwindows": .many,
     "calendar": .one, "cli": .one, "clipboard": .one,
     "commands": .many, "config": .one, "contacts": .many, "controlcenter": .one,
-    "cursor": .one, "desktop": .one, "display": .one, "document": .one, "events": .many,
+    "cursor": .one, "desktop": .one, "document": .one, "events": .many,
     "help": .one, "hints": .many, "history": .one, "input": .one, "key": .one,
     "launchpad": .one, "logs": .many, "macro": .one, "mappings": .many,
     "mark": .one, "menu": .one, "metrics": .many, "missioncontrol": .one,
     "mode": .one, "monitors": .many, "mouse": .one, "move": .verb, "movement": .one,
     "notes": .many, "notificationcenter": .one, "notify": .verb, "pane": .one,
     "plugins": .many, "popup": .one, "process": .one, "register": .one, "reminders": .many,
-    "resident": .one, "resource": .one, "screen": .one, "screensaver": .one, "scroll": .verb,
-    "selection": .one, "startup": .one, "status": .one, "system": .one, "tab": .one,
+    "resident": .one, "resource": .one, "scroll": .verb,
+    "selection": .one, "startup": .one, "status": .one, "tab": .one,
     "telemetry": .one,
-    "tile": .verb, "trash": .one, "updates": .many, "url": .one,
+    "tile": .verb, "updates": .many, "url": .one,
     "window": .one, "workspace": .one,
   ]
 
