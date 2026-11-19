@@ -213,6 +213,11 @@ final class PluginProcess {
   /// carries it out.
   private let confirmedPerformsLock = NSLock()
   private var confirmedPerforms = ConfirmedPerforms()
+  /// The performs written to the child and not yet answered, confirmed or
+  /// not: the user is using the plugin while one is in flight
+  /// (`PluginHostRequestScope.servesUser`). Guarded by
+  /// `confirmedPerformsLock`.
+  private var performsInFlight = 0
   /// The search each live source waits to send, by source name: a newer
   /// query of the same source replaces the one still waiting. Queue-confined.
   private var deferredSearches: [String: DeferredSearch] = [:]
@@ -958,9 +963,12 @@ final class PluginProcess {
 
   // MARK: - Events
 
-  /// Whether the manifest's `listen` globs admit `name`.
+  /// Whether the manifest's `listen` globs admit `name`, and the plugin
+  /// holds the capability the event asks for, if it asks for one.
   func listens(to name: String) -> Bool {
-    listenPatterns.contains(where: { $0.matches(name) })
+    guard listenPatterns.contains(where: { $0.matches(name) }) else { return false }
+    guard let capability = HostEvent(rawValue: name)?.requiredCapability else { return true }
+    return manifest.capabilities.contains(capability)
   }
 
   func sendEvent(_ event: PluginEvent) {
@@ -1364,20 +1372,20 @@ final class PluginProcess {
     // In flight from here to its reply, its deadline or the child's end:
     // each of them completes the request below, exactly once.
     var grant: UInt64?
-    if confirmed {
-      confirmedPerformsLock.lock()
-      grant = confirmedPerforms.begin()
-      confirmedPerformsLock.unlock()
-    }
+    confirmedPerformsLock.lock()
+    performsInFlight += 1
+    if confirmed { grant = confirmedPerforms.begin() }
+    confirmedPerformsLock.unlock()
     sendRequest(
       method: "perform",
       params: Self.performParams(kind: kind, params: params, confirmed: confirmed),
       timeout: .milliseconds(max(1, timeoutMs)),
       trace: trace
     ) { [weak self, grant] response in
-      if let grant, let self {
+      if let self {
         self.confirmedPerformsLock.lock()
-        self.confirmedPerforms.end(grant)
+        self.performsInFlight -= 1
+        if let grant { self.confirmedPerforms.end(grant) }
         self.confirmedPerformsLock.unlock()
       }
       completion(PluginWireCodec.performOutcome(from: response))
@@ -1401,6 +1409,19 @@ final class PluginProcess {
     confirmedPerformsLock.lock()
     defer { confirmedPerformsLock.unlock() }
     return confirmedPerforms.claim()
+  }
+
+  /// Whether the user is using the plugin now: one of its performs is in
+  /// flight, or a status surface shows one of its segments. Safe from any
+  /// queue.
+  private func servesUser() -> Bool {
+    confirmedPerformsLock.lock()
+    let performing = performsInFlight > 0
+    confirmedPerformsLock.unlock()
+    if performing { return true }
+    lock.lock()
+    defer { lock.unlock() }
+    return !observedStatusSegments.isEmpty
   }
 
   private func enqueueDeferredPerform(
@@ -1786,6 +1807,10 @@ final class PluginProcess {
       claimConfirmedPerform: { [weak self] in
         guard let self, self.isTransportActive(generation) else { return false }
         return self.claimConfirmedPerform()
+      },
+      servesUser: { [weak self] in
+        guard let self, self.isTransportActive(generation) else { return false }
+        return self.servesUser()
       })
     onHostRequest(method, params, manifest.id, scope) { [weak self] result in
       self?.sendResponse(id: id, result: result, generation: generation, token: token)

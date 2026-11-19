@@ -284,6 +284,16 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   resident, launchd or a group. The resident alone wires
   `LiveProcessSignals`; a test injects `ProcessSignalling` and may only
   signal a child it spawned.
+- EventKit's event store is the host's (`HostCalendarEvents.swift`), behind
+  `host.calendar_events` and the `calendar_events` capability, on the
+  calendar queue, never on main. Only `request_access` asks macOS, and only
+  while `PluginHostRequestScope.servesUser` says the user is using the
+  plugin (a perform in flight, a surface showing one of its segments). An
+  event's notes never cross the wire, only their link-shaped runs.
+  `core:calendar.changed` reaches plugins holding the capability alone
+  (`HostEvent.requiredCapability`). The resident alone wires
+  `LiveCalendarEvents`, inert under XCTest; a test injects
+  `CalendarEventProviding` and never reads a real calendar or shows a prompt.
 - The process table belongs to the `processes` plugin
   (`Plugins/processes/src/sys.rs`, libproc under `process_info`), never the
   resident: the top tables, the focused app's summary, `@processes` and

@@ -207,7 +207,9 @@ Handed to every handler; cheap to clone. Key surface:
   capability NAKs, timeouts, and host death. Typed wrappers exist for the
   full `host.*` surface (`fetch`, `open_url` (`Ok` names the app the URL
   went to, when the host can tell; `Err` carries the host's error),
-  `open_app`, `activate`,
+  `open_url_if_handled` (the same, but a URL no application is registered
+  for opens nothing and is an `Err`: try an app's own link before the web
+  one), `open_app`, `activate`,
   `normal_mode_target` (pid, bundle id and the focused window's id),
   `wifi_ssid(request_authorization)`, `post_keys`,
   `ax_snapshot`/`ax_perform`/`ax_set`/`ax_select_child`, `ping`).
@@ -246,6 +248,24 @@ Handed to every handler; cheap to clone. Key surface:
   `Operation not permitted`) or the host's refusal. Every signal needs a
   perform the user confirmed, once, like a destructive system action, and
   the host never signals itself, launchd or a process group.
+  The `calendar_events` capability reads the user's calendar through the
+  host, which keeps EventKit and the Calendars grant: `calendar_access()`
+  answers `CalendarAccess::Granted`, `Denied` or `Undetermined` without
+  asking; `request_calendar_access(timeout)` asks macOS first when Flash
+  never asked, and the host shows that prompt only while the user is using
+  the plugin (a perform in flight, or a surface showing one of its
+  segments), answering `USER_REQUEST_REQUIRED_ERROR` anywhere else: call it
+  from `on_command`, or when `core:status.observed` first lists a segment.
+  `calendar_events(start, end, &calendars)` lists the occurrences of a
+  window of whole Unix seconds, at most `MAX_CALENDAR_WINDOW_SECONDS` (14
+  days) long, in the calendars titled so (none: every calendar), and never
+  asks: it answers `CalendarListing::NoAccess(access)` without the grant,
+  else `Events { events, truncated }` in start order. A `CalendarEvent`
+  carries its id, title, `start` and `end` in Unix seconds, `all_day`, its
+  calendar's title, `declined`, `canceled`, its `url` and `location`, and
+  `links`, the link-shaped runs of its notes: the notes themselves never
+  reach a plugin. Listen for `host_events::CALENDAR_CHANGED` to read again
+  when the database changes or the user answers the prompt.
 - Host clock: a plugin never arms a timer or sleeps to schedule work.
   `ctx.interval(period, priority, callback)` registers a cadence with the
   host, which drives every poller in Flash — core watchers included — from one

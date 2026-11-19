@@ -5,18 +5,24 @@ import FlashCore
 /// whose manifest `listen` admits it, the `[monitors]` whose `event` does,
 /// and the socket clients subscribed to it (`IPCEventHub`). One catalog
 /// (`PluginProtocol.hostEvents`), one fan-out, so a hook in the
-/// configuration and a script hear exactly what a plugin hears.
+/// configuration and a script hear exactly what a plugin hears. An event
+/// that asks for a capability (`HostEvent.requiredCapability`) is the one
+/// exception: it reaches the plugins holding it and nobody else.
 extension AppDelegate {
   func emitHostEvent(_ event: PluginEvent) {
     pluginManager.emit(event)
+    guard HostEvent(rawValue: event.name)?.requiredCapability == nil else { return }
     fireEventMonitors(event)
     ipcEvents.publish(event)
   }
 
   /// Whether a plugin, an event monitor or a socket client subscribes to
-  /// `name`: what keeps the OS source behind a host event running.
+  /// `name`: what keeps the OS source behind a host event running. Only a
+  /// plugin holding its capability subscribes to an event that asks for one.
   func hostEventHasSubscriber(_ name: String) -> Bool {
-    pluginManager.hasListener(for: name) || ipcEvents.hasSubscriber(for: name)
+    if pluginManager.hasListener(for: name) { return true }
+    guard HostEvent(rawValue: name)?.requiredCapability == nil else { return false }
+    return ipcEvents.hasSubscriber(for: name)
       || eventMonitors.values.contains { $0.listens(to: name) }
   }
 

@@ -374,8 +374,8 @@ final class HostEventTests: XCTestCase {
       [
         "core:apps.changed", "core:focus.changed", "core:window.focus.changed", "core:ax.changed",
         "core:config.changed", "core:power.changed", "core:network.changed",
-        "core:volumes.changed", "core:status.observed", "core:space.changed",
-        "core:workspace.changed", "core:mode.changed",
+        "core:volumes.changed", "core:calendar.changed", "core:status.observed",
+        "core:space.changed", "core:workspace.changed", "core:mode.changed",
       ])
     let event = PluginEvent(.powerChanged)
     XCTAssertEqual(event.name, "core:power.changed")

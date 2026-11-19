@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.calendar_events.reply.schema.json",
+  "title": "host.calendar_events reply",
+  "description": "Host to plugin: the access alone (for access, request_access, and a list without the grant), the events of a granted list in start order, or why the host could not answer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "access"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "access": {
+              "enum": [
+                "granted",
+                "denied",
+                "undetermined"
+              ],
+              "description": "What macOS answers about Flash's Calendars grant, without asking."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "access",
+            "events"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "access": {
+              "const": "granted"
+            },
+            "events": {
+              "type": "array",
+              "maxItems": 1000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "title",
+                  "start",
+                  "end",
+                  "all_day",
+                  "calendar",
+                  "declined",
+                  "canceled"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "The event's identifier and this occurrence's start."
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "start": {
+                    "type": "number",
+                    "description": "Unix seconds."
+                  },
+                  "end": {
+                    "type": "number",
+                    "description": "Unix seconds."
+                  },
+                  "all_day": {
+                    "type": "boolean"
+                  },
+                  "calendar": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "The title of the calendar it belongs to."
+                  },
+                  "declined": {
+                    "type": "boolean",
+                    "description": "The user is an attendee who declined it."
+                  },
+                  "canceled": {
+                    "type": "boolean"
+                  },
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16384,
+                    "description": "The event's URL field."
+                  },
+                  "location": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16384
+                  },
+                  "links": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 16384
+                    },
+                    "description": "The link-shaped runs of the event's notes, in order. The notes themselves never cross the wire."
+                  }
+                }
+              }
+            },
+            "truncated": {
+              "const": true,
+              "description": "Later events were left out: the reply holds at most 1000 events and 1048576 bytes of them."
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

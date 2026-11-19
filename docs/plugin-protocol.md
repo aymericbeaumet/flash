@@ -349,7 +349,9 @@ never asks the host what it supports. See the
   debouncing every change alike),
   `core:config.changed`, `core:power.changed`, `core:network.changed`
   (interfaces, addresses, routes or DNS changed), `core:volumes.changed` (a
-  volume mounted, unmounted or was renamed),
+  volume mounted, unmounted or was renamed), `core:calendar.changed` (the
+  calendar database changed, or the user answered macOS's Calendars prompt;
+  only for a plugin holding `calendar_events`),
   `core:status.observed` (which of the plugin's own status segments a
   surface shows; see [Status observation](#status-observation)), and
   `core:session.opened` (the flashlight opened; advisory — eager plugins may
@@ -379,14 +381,20 @@ never asks the host what it supports. See the
   `host_events` pins the list. The same events drive the user's event
   [monitors](monitors.md#runs-and-events) and reach the resident's socket
   clients ([IPC protocol](ipc-protocol.md#events)), all but the plugin
-  plumbing (`core:apps.changed`, `core:ax.changed`, `core:session.opened`,
-  `core:status.observed`): one catalog, one fan-out.
+  plumbing (`core:apps.changed`, `core:ax.changed`, `core:calendar.changed`,
+  `core:session.opened`, `core:status.observed`): one catalog, one fan-out.
   `core:network.changed` and `core:volumes.changed` carry an empty payload —
   no interface, address, network name or volume — and coalesce a burst of OS
   notifications into one event within 500 ms; re-read what you show instead
   of polling for it. The host observes the network (System Configuration's
   dynamic store) and volume mounts (workspace notifications) only while at
-  least one plugin's `listen` matches the event.
+  least one plugin's `listen` matches the event. `core:calendar.changed` is
+  the same kind of signal for the calendar database, one per burst within
+  500 ms, and it also follows the user's answer to macOS's Calendars prompt.
+  It reaches a plugin only when its manifest holds `calendar_events`,
+  whatever its `listen` says, and never an event monitor or a socket client;
+  the host observes the database only while such a plugin listens and macOS
+  has granted Flash access.
 - `evaluate` — `{query}` → `{"ok": true, "answers": [...]}`.
   The per-input evaluator: synchronous, CPU-only over state prepared earlier
   — no I/O. Unclaimed input answers `{"ok": true, "answers": []}` —
@@ -705,6 +713,7 @@ can name a window without asking the user to pick one) +
 `host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`),
 `host.audio_devices` (`audio_devices`), `host.system_action`
 (`system_actions`), `host.process_signal` (`process_signal`),
+`host.calendar_events` (`calendar_events`),
 `host.post_keys` + `host.ax_snapshot` /
 `host.ax_perform` / `host.ax_set` / `host.ax_select_child`
 (`accessibility`). A denied call answers `{"ok": false, "error": "missing
@@ -804,12 +813,57 @@ signal, or `{"ok": false, "error"}` with the kernel's reason (`No such
 process`, `Operation not permitted` for another user's process). The
 plugin's sandbox gains nothing. `protocol.json` `process_signals` lists the
 signals.
+`host.calendar_events` reads the user's calendar: EventKit and the Calendars
+grant stay in the resident, and macOS names Flash in its prompt. A request
+carries `operation` and exactly the fields it takes. Every success carries
+`access`, what macOS answers without asking: `"granted"`, `"denied"`
+(refused, restricted or write-only) or `"undetermined"` (Flash never asked).
+`{"operation": "access"}` reads it. `{"operation": "request_access"}` reads
+it too and, when it is undetermined, asks macOS first and answers once the
+user did. The host shows that prompt only while the user is using the
+plugin: one of its performs is in flight, or a status surface shows one of
+its segments. Anywhere else an undetermined access answers `{"ok": false,
+"error": "requires the user to be using the plugin"}` and nothing is shown,
+so a plugin never raises a prompt from a background refresh. Requests made
+while the prompt is open share its answer, and the host sends
+`core:calendar.changed` once the user answered, so a caller that stopped
+waiting still hears of it.
+`{"operation": "list", "start", "end", "calendars"?}` reads the occurrences
+overlapping `start..<end`, both whole Unix seconds, `start` before `end` and
+at most 1,209,600 seconds (14 days) apart. `calendars` is at most 64
+calendar titles as Calendar shows them; absent or empty, every event
+calendar is read. A list never asks: without the grant its reply is the
+`access` alone. With it, `events` holds the occurrences in start order:
+
+```json
+{"id": "8C1F…@1800000720", "title": "Standup", "start": 1800000720,
+ "end": 1800002520, "all_day": false, "calendar": "Work", "declined": false,
+ "canceled": false, "url": "https://example.com/standup",
+ "location": "Room 4", "links": ["https://zoom.us/j/123?pwd=abc"]}
+```
+
+`id` is the event's identifier and the occurrence's start, `declined` says
+the user is an attendee who declined it, and `url` and `location` are present
+only when the event has them. The event's notes never cross the wire:
+`links` holds the link-shaped runs found in them, in order (a URL scheme,
+`:/` and the characters up to the next whitespace, quote or bracket), at
+most 32, and is absent when there is none. Which of them is a meeting link
+is the plugin's to decide. A title is cut at a character boundary to 4 KiB;
+a URL, a location or a link over 16 KiB is left out whole, never cut. A
+reply holds at most 1,000 events and 1 MiB of them; later ones are left out
+and `truncated` is `true`. An EventKit failure answers `{"ok": false,
+"error"}`. `protocol.json` `calendar_events` and `calendar_event` pin the
+operations, the bounds and the shape.
 `host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL
 is refused (`host.open does not open local files`): a sandboxed plugin could
 otherwise write a `.command`, a script or an app into its data directory and
-have LaunchServices run it outside the sandbox.
+have LaunchServices run it outside the sandbox. `{"url", "if_handled": true}`
+opens the URL only when an application is registered for it, and otherwise
+hands LaunchServices nothing and answers `{"ok": false, "error": "no
+application opens the URL"}`: a plugin tries an app's own link (`zoommtg:`)
+before the web one.
 The AX broker exists because `AXUIElement` cannot
 cross a process boundary: `host.ax_snapshot` BFS-walks one tree (default cap
 3000 nodes) and returns flat nodes with opaque handles. `root` names the
@@ -867,8 +921,11 @@ default device, the output volume and its mute. `system_actions` locks the
 screen, sleeps the Mac or its displays, starts the screen saver, toggles
 dark mode and, inside a perform the user confirmed, restarts, shuts down,
 logs out or empties the Trash. `process_signal` sends SIGTERM to one
-process, only inside a perform the user confirmed. `process_info` grants no
-host RPC: like
+process, only inside a perform the user confirmed. `calendar_events` reads
+the access macOS grants Flash to the user's calendars, asks for it while the
+user is using the plugin, lists the events of a window of at most 14 days
+without their notes, and delivers `core:calendar.changed`. `process_info`
+grants no host RPC: like
 `network` it only composes the sandbox profile, so only a sandboxed plugin
 declares it. The profile lets a plugin ask the kernel about its own process
 alone and denies it the pid list; with `process_info` it may list pids and
@@ -1406,6 +1463,7 @@ content, or config values.
 | `host_call_capacity` | `host call capacity exceeded` | More concurrent host RPCs than the bound allows |
 | `deadline_exceeded` | `deadline exceeded` | A `hints`, `text_grid` or `search` handler dropped before its deadline |
 | `confirmation_required` | `requires a perform the user confirmed` | A destructive `host.system_action` or a `host.process_signal` asked outside a confirmed perform |
+| `user_request_required` | `requires the user to be using the plugin` | A `host.calendar_events` `request_access` that would show macOS's prompt while none of the plugin's performs is in flight and no surface shows its segments |
 
 ## Limits and deadlines
 

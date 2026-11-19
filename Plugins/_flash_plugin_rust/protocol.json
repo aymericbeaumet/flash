@@ -38,6 +38,7 @@
       "host.audio_devices": "audio_devices",
       "host.system_action": "system_actions",
       "host.process_signal": "process_signal",
+      "host.calendar_events": "calendar_events",
       "host.normal_mode_target": "app_control",
       "host.activate": "app_control",
       "host.open": "open",
@@ -49,7 +50,7 @@
     }
   },
   "host_events": {
-    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen`. `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each key. core:apps.changed (payload {running_applications: [{bundle_id, pid, localized_name}]}) carries the complete snapshot of running regular apps. core:window.focus.changed (payload {pid, bundle_id}) names the app whose focused or main window changed. core:ax.changed (payload {pid, notification, bundle_id?}; both pid and a non-empty notification are required) reports one AX notification an observed app posted, one of `ax_notifications`: the value change of each keystroke is AXValueChanged, so match the notification instead of debouncing every change alike. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need. core:system.slept and core:system.woke bracket a system sleep, core:displays.slept and core:displays.woke a display sleep, core:screen.locked and core:screen.unlocked the lock screen; all payload {}. core:displays.changed (payload {added: [name], removed: [name], displays: [name]}) reports a display connected or removed. core:space.changed (payload {}) follows the active Space. core:user.idle (payload {seconds}) reports that nobody touched the keyboard, mouse or trackpad for one of the subscribers' idle thresholds (300 s for a plugin), once per away episode and threshold; core:user.active (payload {idle_seconds}) follows when input comes back after an announced episode. core:usb.attached and core:usb.detached (payload {vendor_id?, product_id?, name?}, never a serial number) report a USB device connected or removed; devices already connected are not announced. core:clock.minute (payload {time: \"HH:MM\", weekday: \"mon\"\u2026\"sun\", date: \"YYYY-MM-DD\", late_seconds}, in the local time zone) reports that a wall-clock minute began; a plugin listener hears every minute. After a sleep or a locked screen it hears only the current minute, with how late it is. core:workspace.changed (payload {workspace, previous?, workspaces: [name]}) follows the focused tiling workspace while [tiling] is on. core:mode.changed (payload {mode, previous, layer?}: normal, insert, command, terminal, hyper, hold, visual, layer or disabled; layer names the active layer) follows Flash's mode. core:hints.shown (payload {surface, targets}) reports a hint session's first labels on screen, core:hints.committed (payload {surface}) each target it commits and core:hints.cancelled (payload {surface}) a session that ended without committing; never which target, its text or its label. core:monitor.triggered (payload {monitor, level: warning|error}) reports a value monitor rising into warning or error; never the value. Every event but core:apps.changed, core:ax.changed, core:session.opened and core:status.observed, the plugin plumbing, also reaches the clients of the resident's socket that subscribe to it (docs/ipc-protocol.md).",
+    "$comment": "Every `core:*` event the host delivers through `event`, gated by manifest `listen`. `replacement` kinds are state signals: each supersedes the earlier ones with the same coalescing key, the event name plus, for core:ax.changed, the payload pid and notification. While a replacement frame waits unsent in the host's outbound queue, a newer one with the same key drops it and joins the tail, so a child reads a subsequence of the emitted events in emission order; requests, responses and other events stay FIFO under the transport budget. Under backlog the plugin likewise keeps only the latest of each key. core:apps.changed (payload {running_applications: [{bundle_id, pid, localized_name}]}) carries the complete snapshot of running regular apps. core:window.focus.changed (payload {pid, bundle_id}) names the app whose focused or main window changed. core:ax.changed (payload {pid, notification, bundle_id?}; both pid and a non-empty notification are required) reports one AX notification an observed app posted, one of `ax_notifications`: the value change of each keystroke is AXValueChanged, so match the notification instead of debouncing every change alike. core:network.changed (network interfaces, addresses, routes or DNS changed; payload {}) and core:volumes.changed (a volume mounted, unmounted or was renamed; payload {}) are payload-free, coalesced signals whose monitors run only while a plugin listens: re-read what you need. core:calendar.changed (payload {}) is the same kind of signal for the calendar database, and for the user answering macOS's Calendars prompt; it reaches only a plugin that holds the calendar_events capability, never an event monitor or a socket client, and the host observes the database only while such a plugin listens and macOS has granted Flash access. core:system.slept and core:system.woke bracket a system sleep, core:displays.slept and core:displays.woke a display sleep, core:screen.locked and core:screen.unlocked the lock screen; all payload {}. core:displays.changed (payload {added: [name], removed: [name], displays: [name]}) reports a display connected or removed. core:space.changed (payload {}) follows the active Space. core:user.idle (payload {seconds}) reports that nobody touched the keyboard, mouse or trackpad for one of the subscribers' idle thresholds (300 s for a plugin), once per away episode and threshold; core:user.active (payload {idle_seconds}) follows when input comes back after an announced episode. core:usb.attached and core:usb.detached (payload {vendor_id?, product_id?, name?}, never a serial number) report a USB device connected or removed; devices already connected are not announced. core:clock.minute (payload {time: \"HH:MM\", weekday: \"mon\"\u2026\"sun\", date: \"YYYY-MM-DD\", late_seconds}, in the local time zone) reports that a wall-clock minute began; a plugin listener hears every minute. After a sleep or a locked screen it hears only the current minute, with how late it is. core:workspace.changed (payload {workspace, previous?, workspaces: [name]}) follows the focused tiling workspace while [tiling] is on. core:mode.changed (payload {mode, previous, layer?}: normal, insert, command, terminal, hyper, hold, visual, layer or disabled; layer names the active layer) follows Flash's mode. core:hints.shown (payload {surface, targets}) reports a hint session's first labels on screen, core:hints.committed (payload {surface}) each target it commits and core:hints.cancelled (payload {surface}) a session that ended without committing; never which target, its text or its label. core:monitor.triggered (payload {monitor, level: warning|error}) reports a value monitor rising into warning or error; never the value. Every event but core:apps.changed, core:ax.changed, core:calendar.changed, core:session.opened and core:status.observed, the plugin plumbing, also reaches the clients of the resident's socket that subscribe to it (docs/ipc-protocol.md).",
     "names": [
       "core:apps.changed",
       "core:apps.launched",
@@ -61,6 +62,7 @@
       "core:power.changed",
       "core:network.changed",
       "core:volumes.changed",
+      "core:calendar.changed",
       "core:status.observed",
       "core:session.opened",
       "core:system.slept",
@@ -92,6 +94,7 @@
       "core:power.changed",
       "core:network.changed",
       "core:volumes.changed",
+      "core:calendar.changed",
       "core:status.observed",
       "core:space.changed",
       "core:workspace.changed",
@@ -174,6 +177,43 @@
       "term"
     ],
     "min_pid": 2
+  },
+  "calendar_events": {
+    "$comment": "host.calendar_events: EventKit and the Calendars grant stay in the host, and macOS names Flash in its prompt. Requests carry operation and exactly the fields it takes; any other key refuses the call. Every success carries `access`, what macOS answers without asking: granted, denied (refused, restricted or write-only) or undetermined (Flash never asked). access {} -> {ok, access} reads it. request_access {} -> {ok, access} reads it too, and when it is undetermined asks macOS first and answers once the user did (granted or denied). The host asks only while the user is using the plugin, that is while one of its performs is in flight or a status surface shows one of its segments; an undetermined access asked about anywhere else answers errors.user_request_required and shows no prompt. Requests made while the prompt is open share its answer, and once the user answered the host sends core:calendar.changed, so a caller that stopped waiting still hears of it. list {start, end, calendars?} -> {ok, access, events?, truncated?} reads the occurrences overlapping start..<end, both Unix seconds from 0 to max_time, start < end, the window at most max_window_seconds long; calendars is at most max_calendars calendar titles as Calendar shows them, each non-empty and at most quotas.title_bytes, and absent or empty reads every event calendar. It never asks: without the grant it answers the access alone, with no events key. events are in start order (then end, then id), each one calendar_event shape. The reply holds at most max_events events and at most reply_bytes of them, counted from their compact encoding; later events are left out and `truncated` is true, and is absent otherwise. An EventKit failure answers {ok:false, error}.",
+    "operations": [
+      "access",
+      "request_access",
+      "list"
+    ],
+    "access": [
+      "granted",
+      "denied",
+      "undetermined"
+    ],
+    "max_window_seconds": 1209600,
+    "max_time": 253402300799,
+    "max_calendars": 64,
+    "max_events": 1000,
+    "reply_bytes": 1048576,
+    "max_links": 32
+  },
+  "calendar_event": {
+    "$comment": "One occurrence of a host.calendar_events list reply. id is the event's identifier and this occurrence's start (a repeating event's occurrences share the identifier); start and end are Unix seconds; calendar is the title of the calendar it belongs to; declined says the user is an attendee who declined it; canceled is the event's own status. title and calendar are cut at a character boundary to quotas.title_bytes. url is the event's URL field and location its location, each present only when the event has one of at most quotas.url_bytes. The event's notes never cross the wire: links holds the link-shaped runs found in them, in order, each a URL scheme, `:/` and the characters up to the next whitespace, quote or bracket, at most max_links of them and each at most quotas.url_bytes; the key is absent when there is none. Which of these is a meeting link is the plugin's to decide.",
+    "required": [
+      "id",
+      "title",
+      "start",
+      "end",
+      "all_day",
+      "calendar",
+      "declined",
+      "canceled"
+    ],
+    "optional": [
+      "url",
+      "location",
+      "links"
+    ]
   },
   "ax_snapshot": {
     "$comment": "host.ax_snapshot: Accessibility stays in the host. `root` says which tree one snapshot walks; absent, it is the first of `roots`. windows walks the windows of the app `pid` names (required). menu_bar walks the menu bar of the app that owns it, which the host names: a `pid` beside it refuses the call, and the reply carries that app's `pid` beside `nodes`. Its one root is the app's AXMenuBar, so the first node is the bar, its children the bar items in bar order, the Apple menu first. The host never walks its own process: with no owner but Flash the reply is {ok:true, nodes: []} and carries no pid, as when no app owns the bar. Both roots are one breadth-first walk bounded by max_nodes (default_max_nodes when absent), each element read once for `collect` and `follow` together, within timeout_ms including queue admission; a snapshot that fails returns no node and leaves no handle. A snapshot supersedes the plugin's earlier handles for that app, and a menu_bar one its earlier menu_bar handles for every app, since one app owns the bar at a time. The two roots run on separate host queues, and a call on a handle runs on the queue of the snapshot that returned it, so a menu bar never waits on a window walk.",
@@ -410,13 +450,15 @@
     "request_capacity": "plugin request capacity exceeded",
     "host_call_capacity": "host call capacity exceeded",
     "deadline_exceeded": "deadline exceeded",
-    "confirmation_required": "requires a perform the user confirmed"
+    "confirmation_required": "requires a perform the user confirmed",
+    "user_request_required": "requires the user to be using the plugin"
   },
   "capabilities": [
     "accessibility",
     "app_control",
     "apple_events",
     "audio_devices",
+    "calendar_events",
     "network",
     "network_fetch",
     "open",

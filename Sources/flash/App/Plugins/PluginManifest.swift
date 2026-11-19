@@ -63,6 +63,12 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// nothing; every signal runs only inside a perform the user confirmed,
   /// never to Flash itself, launchd or a process group.
   case processSignal = "process_signal"
+  /// Read the access macOS grants Flash to the user's calendars, ask for it,
+  /// and list the events of a bounded window through the host
+  /// (`host.calendar_events`), and hear `core:calendar.changed`. EventKit
+  /// and the grant stay in the resident, macOS names Flash in its prompt,
+  /// and an event's notes never cross the wire.
+  case calendarEvents = "calendar_events"
 }
 
 /// A macOS privacy grant a plugin's work depends on, declared in its

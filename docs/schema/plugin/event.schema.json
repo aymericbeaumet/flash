@@ -36,6 +36,7 @@
                 "core:power.changed",
                 "core:network.changed",
                 "core:volumes.changed",
+                "core:calendar.changed",
                 "core:status.observed",
                 "core:session.opened",
                 "core:system.slept",
@@ -96,6 +97,16 @@
             },
             "payload": {
               "$ref": "#/definitions/status_observed"
+            }
+          }
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "core:calendar.changed"
+            },
+            "payload": {
+              "$ref": "#/definitions/empty"
             }
           }
         },

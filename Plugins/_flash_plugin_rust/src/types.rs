@@ -345,6 +345,9 @@ pub mod host_events {
     pub const NETWORK_CHANGED: &str = "core:network.changed";
     /// A volume mounted, unmounted or was renamed.
     pub const VOLUMES_CHANGED: &str = "core:volumes.changed";
+    /// The calendar database changed, or the user answered macOS's Calendars
+    /// prompt. Only a plugin holding `calendar_events` hears it.
+    pub const CALENDAR_CHANGED: &str = "core:calendar.changed";
     pub const STATUS_OBSERVED: &str = "core:status.observed";
     pub const SESSION_OPENED: &str = "core:session.opened";
     /// The Mac is going to sleep, and woke.
@@ -385,7 +388,7 @@ pub mod host_events {
     pub const MONITOR_TRIGGERED: &str = "core:monitor.triggered";
 
     /// In `protocol.json` order.
-    pub const ALL: [&str; 31] = [
+    pub const ALL: [&str; 32] = [
         APPS_CHANGED,
         APPS_LAUNCHED,
         APPS_TERMINATED,
@@ -396,6 +399,7 @@ pub mod host_events {
         POWER_CHANGED,
         NETWORK_CHANGED,
         VOLUMES_CHANGED,
+        CALENDAR_CHANGED,
         STATUS_OBSERVED,
         SESSION_OPENED,
         SYSTEM_SLEPT,

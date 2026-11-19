@@ -175,6 +175,9 @@ enum PluginProtocol {
   /// A host action that needs the user's consent, asked outside a perform
   /// the user confirmed.
   static let confirmationRequiredError = "requires a perform the user confirmed"
+  /// A host action that shows a macOS privacy prompt, asked while the user
+  /// is not using the plugin.
+  static let userRequestRequiredError = "requires the user to be using the plugin"
   static func capabilityDeniedError(_ capability: String) -> String {
     "missing \(capability) capability"
   }
@@ -200,6 +203,9 @@ enum HostEvent: String, CaseIterable, Sendable {
   case networkChanged = "core:network.changed"
   /// A volume mounted, unmounted or was renamed; payload `{}`.
   case volumesChanged = "core:volumes.changed"
+  /// The calendar database changed, or the user answered macOS's Calendars
+  /// prompt; payload `{}`. Only for plugins holding `calendar_events`.
+  case calendarChanged = "core:calendar.changed"
   case statusObserved = "core:status.observed"
   case sessionOpened = "core:session.opened"
   case systemSlept = "core:system.slept"
@@ -247,8 +253,8 @@ enum HostEvent: String, CaseIterable, Sendable {
   var supersedesEarlier: Bool {
     switch self {
     case .appsChanged, .focusChanged, .windowFocusChanged, .axChanged, .configChanged,
-      .powerChanged, .networkChanged, .volumesChanged, .statusObserved, .spaceChanged,
-      .workspaceChanged, .modeChanged:
+      .powerChanged, .networkChanged, .volumesChanged, .calendarChanged, .statusObserved,
+      .spaceChanged, .workspaceChanged, .modeChanged:
       return true
     case .appsLaunched, .appsTerminated, .sessionOpened, .systemSlept, .systemWoke,
       .displaysSlept, .displaysWoke, .screenLocked, .screenUnlocked, .displaysChanged,
@@ -263,11 +269,12 @@ enum HostEvent: String, CaseIterable, Sendable {
   /// plugin alone hears never leaves the process: the running-apps
   /// snapshot a plugin's catalog keys on (`core:apps.launched` and
   /// `core:apps.terminated` report the changes), an observed app's AX
-  /// notifications (every keystroke posts one), the flashlight opening, and
-  /// which of a plugin's own segments a surface shows.
+  /// notifications (every keystroke posts one), the calendar database
+  /// changing, the flashlight opening, and which of a plugin's own segments
+  /// a surface shows.
   var isStreamed: Bool {
     switch self {
-    case .appsChanged, .axChanged, .sessionOpened, .statusObserved:
+    case .appsChanged, .axChanged, .calendarChanged, .sessionOpened, .statusObserved:
       return false
     case .appsLaunched, .appsTerminated, .focusChanged, .windowFocusChanged,
       .configChanged, .powerChanged, .networkChanged, .volumesChanged, .systemSlept,
@@ -276,6 +283,16 @@ enum HostEvent: String, CaseIterable, Sendable {
       .clockMinute, .workspaceChanged, .modeChanged, .hintsShown, .hintsCommitted,
       .hintsCancelled, .monitorTriggered:
       return true
+    }
+  }
+
+  /// The capability a plugin holds to hear it, whatever its `listen` says;
+  /// nil for an event every listener hears. Such an event reaches plugins
+  /// alone: no event monitor and no socket client.
+  var requiredCapability: PluginCapability? {
+    switch self {
+    case .calendarChanged: return .calendarEvents
+    default: return nil
     }
   }
 }

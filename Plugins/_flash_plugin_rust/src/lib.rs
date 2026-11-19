@@ -8,6 +8,7 @@
 
 mod applescript;
 mod audio;
+mod calendar;
 #[cfg(test)]
 mod conformance;
 mod context;
@@ -57,4 +58,8 @@ pub use types::{
 
 pub use applescript::AppleScriptOperation;
 pub use audio::{AudioDevice, AudioDirection, MAX_VOLUME_TICKS, OutputVolume};
+pub use calendar::{
+    CalendarAccess, CalendarEvent, CalendarListing, MAX_CALENDAR_WINDOW_SECONDS, MAX_CALENDARS,
+    USER_REQUEST_REQUIRED_ERROR,
+};
 pub use system::{CONFIRMATION_REQUIRED_ERROR, SystemAction, SystemActionOutcome};

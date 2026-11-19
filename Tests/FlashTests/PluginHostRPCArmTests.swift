@@ -70,7 +70,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 15, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 16, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -84,7 +84,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 14, "14 gated + host.ping ungated")
+    XCTAssertEqual(gated, 15, "15 gated + host.ping ungated")
     // The ungated arm answers without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
   }
@@ -753,6 +753,49 @@ final class PluginHostRPCArmTests: XCTestCase {
     let neither = hostReply(rpc, "host.open", [:], capabilities: [.open])
     XCTAssertEqual(neither["error"] as? String, "host.open requires url or bundle_id")
     XCTAssertEqual(openedURLs.count, 3, "a rejected call must not reach the opener")
+  }
+
+  /// `if_handled` opens a URL only when an application is registered for it:
+  /// a meeting's own link (`zoommtg:`) is tried before its web link without
+  /// LaunchServices being handed a URL nothing opens.
+  func testHostOpenIfHandledOpensNothingNoApplicationIsRegisteredFor() {
+    let originalURLOpener = PluginHostRPC.urlOpener
+    let originalURLHandler = PluginHostRPC.urlHandler
+    defer {
+      PluginHostRPC.urlOpener = originalURLOpener
+      PluginHostRPC.urlHandler = originalURLHandler
+    }
+    var opened: [URL] = []
+    PluginHostRPC.urlOpener = { url in
+      opened.append(url)
+      return true
+    }
+    PluginHostRPC.urlHandler = { $0.scheme == "msteams" ? nil : "us.zoom.xos" }
+    let rpc = PluginHostRPC()
+    func open(_ params: [String: Any]) -> NSDictionary {
+      hostReply(rpc, "host.open", params, capabilities: [.open]) as NSDictionary
+    }
+    let app = "zoommtg://zoom.us/join?action=join&confno=123"
+    let teams = "msteams://teams.microsoft.com/l/meetup-join/1"
+    XCTAssertEqual(
+      open(["url": app, "if_handled": true]), ["ok": true, "bundle_id": "us.zoom.xos"])
+    XCTAssertEqual(
+      open(["url": teams, "if_handled": true]),
+      ["ok": false, "error": "no application opens the URL"])
+    XCTAssertEqual(opened, [URL(string: app)], "nothing was handed to LaunchServices")
+    // Without the flag, and with it false, the URL is handed over unasked.
+    XCTAssertEqual(open(["url": teams]), ["ok": true])
+    XCTAssertEqual(open(["url": teams, "if_handled": false]), ["ok": true])
+    XCTAssertEqual(opened.count, 3)
+    // The flag goes with a URL, as a boolean.
+    for params: [String: Any] in [
+      ["bundle_id": "us.zoom.xos", "if_handled": true], ["if_handled": true],
+      ["url": app, "if_handled": "yes"], ["url": app, "if_handled": 1],
+    ] {
+      XCTAssertEqual(
+        open(params), ["ok": false, "error": "host.open requires url or bundle_id"], "\(params)")
+    }
+    XCTAssertEqual(opened.count, 3)
   }
 
   /// The regression: `host.open` handed any URL to LaunchServices, so a

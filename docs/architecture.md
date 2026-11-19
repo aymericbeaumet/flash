@@ -29,8 +29,10 @@ the first configuration load and only when it lists some, CoreAudio is
 touched per `host.audio_devices` request of a plugin holding the
 `audio_devices` capability, and the lock chord, power management and the
 System Events and Finder scripts per `host.system_action` request of one
-holding `system_actions`, and `kill(2)` per confirmed `host.process_signal`
-request of one holding `process_signal`. A
+holding `system_actions`, `kill(2)` per confirmed `host.process_signal`
+request of one holding `process_signal`, and EventKit per
+`host.calendar_events` request of one holding `calendar_events`, its database
+observed only while such a plugin listens to `core:calendar.changed`. A
 plugin whose manifest declares only `status` runs while a visible surface
 reads one of its segments; a plugin with only commands and live sources
 (`system`, `menus`) starts on its first `perform` or `search`; a manifest without
@@ -385,6 +387,7 @@ release build.
 | Status controller · `core:status_bar` | The next change of a `#{flash.calendar.next…}` value: the countdown's next minute, an event starting, ending or leaving its first ten minutes | high (low when only monitors read one) | The change on screen is the deadline; a monitor's alert tolerates a second |
 | Calendar · `core:calendar_changed` | 500 ms after `EKEventStoreChanged`, while a value is read | normal | A sync posts bursts of changes; one read follows |
 | Calendar · `core:calendar_horizon` | One look-ahead after a read (5 min after a failed one), while a value is read | low | The look-ahead moving on brings in events hours away |
+| Host calendar · `core:calendar_events_changed` | 500 ms after the first `EKEventStoreChanged` of a burst, while a plugin holding `calendar_events` listens to `core:calendar.changed` | normal | A sync posts bursts of changes; one `core:calendar.changed` follows |
 | Menu-bar reveal probe · `core:menu_bar_reveal` | 80 ms while the pointer is in the band | system | Lowering the bar late hides the native menu |
 | Activation repair · `core:activation_repair:<n>` | Readiness ladder 50–750 ms, or one 150 ms retry | system | The user is waiting on the hints |
 | Mission Control readiness · `core:mission_control_ready` | 50–400 ms steps, about 750 ms in all, while `f` waits on a Mission Control tree the Dock is still building | high | The user is looking at the view and waiting on its labels |

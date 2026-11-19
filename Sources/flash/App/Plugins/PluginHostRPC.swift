@@ -57,13 +57,20 @@ final class PluginHostRPC {
   /// (`LiveProcessSignals`), and nil inside the test runner unless a test
   /// injects one: an unwired host refuses every signal.
   var processSignals: (any ProcessSignalling)?
+  /// EventKit behind `host.calendar_events`: plugins never read the calendar
+  /// themselves, and the Calendars grant stays Flash's. Nil until the
+  /// resident wires its own at launch (over `LiveCalendarEvents`), and nil
+  /// inside the test runner unless a test injects one over a stub: an
+  /// unwired host answers every call with a failure.
+  var calendarEvents: HostCalendarEvents?
 
   // Testability seams for the arms whose production bodies fire
   // irreversible side effects (LaunchServices open). Tests swap these to
   // assert the decoded, capability-checked, validated call without opening
   // browsers or apps; the defaults ARE the production behavior.
   static var urlOpener: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-  /// The bundle id of the app LaunchServices hands `url` to.
+  /// The bundle id of the app LaunchServices hands `url` to; nil when no
+  /// application is registered for it, which is what `if_handled` asks.
   static var urlHandler: (URL) -> String? = { url in
     NSWorkspace.shared.urlForApplication(toOpen: url).flatMap { Bundle(url: $0)?.bundleIdentifier }
   }
@@ -159,6 +166,8 @@ final class PluginHostRPC {
       hostSystemAction(action, pluginID: pluginID, scope: scope, reply: reply)
     case .processSignal(let pid, let signal):
       hostProcessSignal(signal, pid: pid, pluginID: pluginID, scope: scope, reply: reply)
+    case .calendar(let operation):
+      hostCalendarEvents(operation, pluginID: pluginID, scope: scope, reply: reply)
     case .appleScript(let params):
       PluginHostAppleScript.handle(
         params, targets: appleEventsTargets, browsers: browserEngines(), pluginID: pluginID,
@@ -229,14 +238,20 @@ final class PluginHostRPC {
   /// `host.open`: hand a URL or bundle id to LaunchServices host-side, so
   /// plugins never fork `/usr/bin/open` and keep fork-free profiles. A URL
   /// reply names the app that handles it (`bundle_id`), so a plugin can check
-  /// that app still has focus before acting on it.
+  /// that app still has focus before acting on it. With `if_handled`, a URL
+  /// no application is registered for is not handed over at all: a plugin
+  /// tries an app's own link (`zoommtg:`) before the web one.
   private func hostOpen(
     _ target: PluginHostRequest.OpenTarget,
     scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
   ) {
     scope.enqueue(on: .main) {
       switch target {
-      case .url(let url):
+      case .url(let url, let ifHandled):
+        if ifHandled, Self.urlHandler(url) == nil {
+          reply(["ok": false, "error": Self.unhandledURLError])
+          return
+        }
         // Response law: ok:false always carries a non-empty, content-free
         // error (a bare {"ok": false} is a spec violation).
         if Self.urlOpener(url) {
@@ -257,6 +272,8 @@ final class PluginHostRPC {
       }
     }
   }
+
+  static let unhandledURLError = "no application opens the URL"
 
   /// `host.audio_devices`: one CoreAudio operation on the audio queue. A
   /// CoreAudio failure is the reply's error.
@@ -365,6 +382,60 @@ final class PluginHostRPC {
         "[plugin] process signal failed: \(failure)",
         fields: ["plugin": pluginID, "signal": signal.rawValue, "pid": "\(pid)"])
       reply(["ok": false, "error": failure])
+    }
+  }
+
+  /// `host.calendar_events`: the access macOS grants Flash, a request for
+  /// it, or the events of a window, each on the calendar queue. Nothing but
+  /// `request_access` asks macOS, and only while the user is using the
+  /// plugin: a prompt never comes up from a background refresh.
+  private func hostCalendarEvents(
+    _ operation: PluginHostRequest.Calendar, pluginID: String, scope: PluginHostRequestScope,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let calendarEvents else {
+      reply(["ok": false, "error": "calendar events unavailable"])
+      return
+    }
+    scope.enqueue(on: calendarEvents.queue) {
+      switch operation {
+      case .access:
+        reply(["ok": true, "access": calendarEvents.access().wireName])
+      case .requestAccess:
+        let access = calendarEvents.access()
+        guard access == .undetermined else {
+          reply(["ok": true, "access": access.wireName])
+          return
+        }
+        guard scope.servesUser() else {
+          FlashLog.warn(
+            "[plugin] calendar access request refused: the user is not using the plugin",
+            fields: ["plugin": pluginID])
+          reply(["ok": false, "error": PluginProtocol.userRequestRequiredError])
+          return
+        }
+        calendarEvents.requestAccess { access in
+          reply(["ok": true, "access": access.wireName])
+        }
+      case .list(let start, let end, let calendars):
+        switch calendarEvents.list(from: start, to: end, calendars: calendars) {
+        case .events(let events, let truncated):
+          var result: [String: Any] = [
+            "ok": true, "access": AppleCatalogAccess.granted.wireName, "events": events,
+          ]
+          if truncated { result["truncated"] = true }
+          FlashLog.debug(
+            "[plugin] calendar events",
+            fields: [
+              "plugin": pluginID, "events": "\(events.count)", "truncated": "\(truncated)",
+            ])
+          reply(result)
+        case .noAccess(let access):
+          reply(["ok": true, "access": access.wireName])
+        case .failed(let reason):
+          reply(["ok": false, "error": reason])
+        }
+      }
     }
   }
 

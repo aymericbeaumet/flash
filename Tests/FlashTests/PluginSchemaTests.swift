@@ -374,6 +374,8 @@ final class PluginSchemaTests: XCTestCase {
     rpc.audioDevices = AudioDeviceStub()
     rpc.systemActions = SystemActionStub()
     rpc.processSignals = ProcessSignalStub()
+    rpc.calendarEvents = HostCalendarEvents(
+      provider: CalendarEventStub.corpus(), scheduler: PollScheduler(), changed: {})
     rpc.appleScriptRunner = { _, _ in
       AppleScriptOutput(status: 0, stdout: "Focus\nRest\n", stderr: "")
     }
@@ -418,7 +420,8 @@ final class PluginSchemaTests: XCTestCase {
       )
     }
     PluginHostRPC.urlOpener = { _ in true }
-    PluginHostRPC.urlHandler = { _ in "com.apple.Safari" }
+    // Only `https:` links have an application in the fixture.
+    PluginHostRPC.urlHandler = { $0.scheme == "https" ? "com.apple.Safari" : nil }
     PluginHostRPC.appOpener = { _, done in done(nil) }
     let replies = Dictionary(uniqueKeysWithValues: hostFrames.map { ($0.name, $0) })
     var answered: Set<String> = []

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.open.schema.json",
   "title": "host.open",
-  "description": "Plugin to host: open a URL that is not a local file, or an app by bundle id.",
+  "description": "Plugin to host: open a URL that is not a local file, or an app by bundle id. With if_handled, a URL no application is registered for opens nothing and answers a failure.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -30,6 +30,10 @@
               "type": "string",
               "pattern": "^(?![Ff][Ii][Ll][Ee]:)[A-Za-z][A-Za-z0-9+.-]*:",
               "description": "An absolute URL of any scheme but file."
+            },
+            "if_handled": {
+              "type": "boolean",
+              "description": "Open the URL only when an application is registered for it."
             }
           }
         },

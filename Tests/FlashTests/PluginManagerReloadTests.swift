@@ -773,6 +773,103 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(mechanisms.executions.count, 1)
   }
 
+  // MARK: - privacy prompts
+
+  /// What keeps a plugin from raising macOS's Calendars prompt out of
+  /// nowhere, end to end over the wire: the same `request_access` is refused
+  /// when the plugin sends it at startup with nothing of its on a surface,
+  /// and honoured inside one of its performs, or at startup once a status
+  /// surface shows one of its segments. The calendar is a stub; nothing here
+  /// reaches macOS.
+  func testAPrivacyPromptNeedsTheUserToBeUsingThePlugin() throws {
+    let request =
+      #"{"id":%s,"method":"host.calendar_events","params":{"operation":"request_access"}}"#
+    let ask = """
+      printf '\(request)\\n' "$n"
+      n=$((n + 1))
+      while IFS= read -r reply; do
+        case "$reply" in *'"result"'*) break ;; esac
+      done
+      printf '%s\\n' "$reply" >> "$D/replies"
+      """
+    // `listen` keeps the first one running with nothing of its shown, as a
+    // mapped command keeps a status plugin warm.
+    func fixture(_ id: String, surface: String) throws -> PluginFixtureKit.Fixture {
+      try PluginFixtureKit.make(
+        id: id,
+        manifest: PluginFixtureKit.manifest(
+          id: id,
+          extra: """
+            "capabilities": ["calendar_events"],
+            \(surface),
+            "commands": [{ "command": "\(id)", "subcommand": "go", "description": "x" }]
+            """),
+        script: PluginFixtureKit.script(
+          prologue: "n=1",
+          onInitialize: PluginFixtureKit.initializeOK + "\n" + ask,
+          onPerform: ask + "\n" + PluginFixtureKit.performOK))
+    }
+    func replies(_ fixture: PluginFixtureKit.Fixture) -> [NSDictionary] {
+      let text =
+        (try? String(
+          contentsOf: fixture.dataDir.appendingPathComponent("replies"), encoding: .utf8)) ?? ""
+      return text.split(separator: "\n").compactMap {
+        (try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])?["result"]
+          as? NSDictionary
+      }
+    }
+    let refused: NSDictionary = [
+      "ok": false, "error": "requires the user to be using the plugin",
+    ]
+    let granted: NSDictionary = ["ok": true, "access": "granted"]
+
+    // Nothing of the plugin's is on a surface: its startup request is
+    // refused, and the one its command makes is honoured.
+    let quiet = try fixture("mgrprompt", surface: #""listen": ["core:config.changed"]"#)
+    defer { quiet.cleanup() }
+    let manager = PluginManager(baseDataDir: quiet.baseDataDir)
+    defer { manager.stop() }
+    let calendar = CalendarEventStub(access: .undetermined)
+    manager.hostRPC.calendarEvents = HostCalendarEvents(
+      provider: calendar, scheduler: PollScheduler(), changed: {})
+    manager.start(config: testConfig(thirdParty: ["file:\(quiet.root.path)"]))
+    waitUntilTrue("the startup request was answered") { replies(quiet).count == 1 }
+    XCTAssertEqual(replies(quiet), [refused])
+    XCTAssertEqual(calendar.asks, 0, "no prompt")
+    let answered = expectation(description: "perform")
+    XCTAssertTrue(
+      manager.invoke(command: "mgrprompt", subcommand: "go", args: []) {
+        XCTAssertTrue($0.ok)
+        answered.fulfill()
+      })
+    wait(for: [answered], timeout: 15)
+    XCTAssertEqual(replies(quiet), [refused, granted])
+    XCTAssertEqual(calendar.asks, 1)
+
+    // The enabled bar shows one of its segments: its startup request asks.
+    let shown = try fixture("mgrshown", surface: #""status": ["next"]"#)
+    defer { shown.cleanup() }
+    let observing = PluginManager(baseDataDir: shown.baseDataDir)
+    defer { observing.stop() }
+    let observedCalendar = CalendarEventStub(access: .undetermined, grants: false)
+    observing.hostRPC.calendarEvents = HostCalendarEvents(
+      provider: observedCalendar, scheduler: PollScheduler(), changed: {})
+    var config = testConfig(thirdParty: ["file:\(shown.root.path)"])
+    config.statusBar.template = FlashStatusBarTemplate(
+      template: "#{flash.plugin.mgrshown.next}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.flash.plugin.mgrshown.next",
+          token: "flash.plugin.mgrshown.next",
+          source: .plugin(.statusSegment(pluginID: "mgrshown", name: "next")))
+      ])
+    config.statusBar.enabled = true
+    observing.start(config: config)
+    waitUntilTrue("the observed startup request was answered") { replies(shown).count == 1 }
+    XCTAssertEqual(replies(shown), [["ok": true, "access": "denied"] as NSDictionary])
+    XCTAssertEqual(observedCalendar.asks, 1)
+  }
+
   func testManifestFileChangeReconcilesWithoutExplicitReload() throws {
     let fixture = try residentFixture(id: "definitionwatch")
     defer { fixture.cleanup() }

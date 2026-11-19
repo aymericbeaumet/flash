@@ -426,6 +426,18 @@ monitors read that no plugin publishes any more, with its replacement.
   SIGTERM to one process through `host.process_signal`. Flash sends it only
   inside a request the user confirmed, once per confirmation, and never to
   itself, to launchd or to a process group.
+- A plugin holding the new `calendar_events` capability reads your calendar
+  through Flash, which keeps EventKit and the Calendars grant:
+  `host.calendar_events` reports the access macOS grants, asks for it, and
+  lists the events of a window of at most 14 days, with the links found in
+  each event's notes and never the notes. macOS's prompt comes up only
+  while you are using that plugin (one of its commands is running, or a
+  status surface shows one of its values), and `core:calendar.changed`
+  tells such a plugin, and nobody else, that the calendar changed
+  ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
+- `host.open` takes `"if_handled": true` beside a URL: Flash then opens it
+  only when an application is registered for it, so a plugin tries an app's
+  own link (`zoommtg:`) before the web one.
 - A sandboxed plugin reads no process but its own. The plugin sandbox
   denied nothing of macOS's process-information interface (Seatbelt's
   default denial does not reach it), so any plugin could list every process

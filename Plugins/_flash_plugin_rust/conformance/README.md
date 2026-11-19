@@ -68,6 +68,11 @@ The lines describe one plugin and one moment:
   confirmed perform is in flight, so a destructive one is refused.
 - No process is signalled: with no confirmed perform in flight, the host
   refuses a signal to pid 4242.
+- macOS grants Calendars access. From 2027-01-15 08:00 UTC (1800000000) the
+  calendar holds `Standup` at 08:12 in `Work`, with a URL, the location
+  `Room 4` and a Zoom link in its notes, and `Lunch` at 10:00 in `Home`.
+- Only `https:` URLs have an application: `host.open` with `if_handled`
+  refuses a `zoommtg:` link.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
 - Searching the live source `example.live` for `ro` answers two rows; any
   other query answers none. The corpus pins frames, so its one plugin answers

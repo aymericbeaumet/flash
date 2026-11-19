@@ -59,6 +59,9 @@
       "$ref": "host.process_signal.schema.json"
     },
     {
+      "$ref": "host.calendar_events.schema.json"
+    },
+    {
       "$ref": "host.normal_mode_target.schema.json"
     },
     {

@@ -23,13 +23,15 @@ enum PluginHostRequest {
   /// `pid` is above 1: launchd, the caller's own group and every group are
   /// refused when the request is decoded.
   case processSignal(pid: pid_t, signal: HostProcessSignal)
+  case calendar(Calendar)
   case ax(AX)
 
   typealias Chord = (key: CGKeyCode, flags: CGEventFlags)
 
   enum OpenTarget: Equatable {
-    /// An absolute URL of any scheme but `file`.
-    case url(URL)
+    /// An absolute URL of any scheme but `file`. `ifHandled`: open it only
+    /// when an application is registered for it.
+    case url(URL, ifHandled: Bool = false)
     case app(bundleID: String)
   }
 
@@ -47,6 +49,22 @@ enum PluginHostRequest {
     static let operations: [(name: String, params: Set<String>)] = [
       ("list", ["direction"]), ("select", ["direction", "uid"]), ("step_volume", ["ticks"]),
       ("toggle_mute", []), ("volume", []),
+    ]
+  }
+
+  /// One `host.calendar_events` operation (`protocol.json`
+  /// `calendar_events`).
+  enum Calendar: Equatable {
+    case access
+    case requestAccess
+    /// `start < end`, at most `HostCalendarEvents.maxWindowSeconds` apart;
+    /// no titles reads every event calendar.
+    case list(start: Date, end: Date, calendars: [String])
+
+    /// The operation names, in contract order, each with the params it
+    /// takes besides `operation`.
+    static let operations: [(name: String, params: Set<String>)] = [
+      ("access", []), ("request_access", []), ("list", ["start", "end", "calendars"]),
     ]
   }
 
@@ -85,6 +103,7 @@ enum PluginHostRequest {
     case audioDevices = "host.audio_devices"
     case systemAction = "host.system_action"
     case processSignal = "host.process_signal"
+    case calendarEvents = "host.calendar_events"
     case normalModeTarget = "host.normal_mode_target"
     case activate = "host.activate"
     case open = "host.open"
@@ -105,6 +124,7 @@ enum PluginHostRequest {
       case .audioDevices: return .audioDevices
       case .systemAction: return .systemActions
       case .processSignal: return .processSignal
+      case .calendarEvents: return .calendarEvents
       case .normalModeTarget, .activate: return .appControl
       case .open: return .open
       case .postKeys, .axSnapshot, .axPerform, .axSet, .axSelectChild: return .accessibility
@@ -122,8 +142,9 @@ enum PluginHostRequest {
       case .audioDevices: return ["operation", "direction", "uid", "ticks"]
       case .systemAction: return ["action"]
       case .processSignal: return ["pid", "signal"]
+      case .calendarEvents: return ["operation", "start", "end", "calendars"]
       case .activate: return ["pid"]
-      case .open: return ["url", "bundle_id"]
+      case .open: return ["url", "bundle_id", "if_handled"]
       case .postKeys: return ["pid", "keys", "interval_ms"]
       case .axSnapshot: return ["root", "pid", "follow", "collect", "max_nodes", "prune_roles"]
       case .axPerform: return ["handle", "action"]
@@ -179,6 +200,8 @@ enum PluginHostRequest {
         throw Refusal(message: "host.process_signal requires a pid above 1 and a supported signal")
       }
       self = .processSignal(pid: pid, signal: signal)
+    case .calendarEvents:
+      self = .calendar(try Self.calendar(params, malformed: malformed))
     case .activate:
       guard let pid = PluginJSON.pid(params["pid"]) else {
         throw Refusal(message: "host.activate requires pid")
@@ -293,10 +316,60 @@ enum PluginHostRequest {
     }
   }
 
+  /// `host.calendar_events`: a known operation with exactly its own params.
+  private static func calendar(
+    _ params: [String: Any], malformed: Refusal
+  ) throws(Refusal) -> Calendar {
+    guard let name = params["operation"] as? String,
+      let operation = Calendar.operations.first(where: { $0.name == name })
+    else { throw Refusal(message: "host.calendar_events requires a supported operation") }
+    guard Set(params.keys).isSubset(of: operation.params.union(["operation"])) else {
+      throw malformed
+    }
+    switch name {
+    case "access": return .access
+    case "request_access": return .requestAccess
+    default: break
+    }
+    let limit = HostCalendarEvents.maxWindowSeconds
+    func instant(_ key: String) -> Int? {
+      PluginJSON.integer(params[key]).flatMap {
+        (0...HostCalendarEvents.maxTime).contains($0) ? $0 : nil
+      }
+    }
+    guard let start = instant("start"), let end = instant("end"), start < end,
+      end - start <= limit
+    else {
+      throw Refusal(
+        message: "host.calendar_events list requires whole seconds, start before end, "
+          + "at most \(limit) apart")
+    }
+    var calendars: [String] = []
+    if let raw = params["calendars"] {
+      guard let titles = raw as? [String], titles.count <= HostCalendarEvents.maxCalendars,
+        titles.allSatisfy({ !$0.isEmpty && $0.utf8.count <= PluginProtocol.maxTitleBytes })
+      else {
+        throw Refusal(
+          message: "host.calendar_events list takes at most "
+            + "\(HostCalendarEvents.maxCalendars) non-empty calendar titles")
+      }
+      calendars = titles
+    }
+    return .list(
+      start: Date(timeIntervalSince1970: TimeInterval(start)),
+      end: Date(timeIntervalSince1970: TimeInterval(end)), calendars: calendars)
+  }
+
   /// `host.open` names one thing: a URL or an app.
   private static func openTarget(_ params: [String: Any]) throws(Refusal) -> OpenTarget {
     let missing = Refusal(message: "host.open requires url or bundle_id")
-    guard params.count == 1 else { throw missing }
+    // `if_handled` goes with a URL: an app is named, not looked up.
+    var ifHandled = false
+    if let raw = params["if_handled"] {
+      guard let flag = PluginJSON.boolean(raw), params["url"] != nil else { throw missing }
+      ifHandled = flag
+    }
+    guard params.count == (params["if_handled"] == nil ? 1 : 2) else { throw missing }
     if let bundleID = params["bundle_id"] as? String { return .app(bundleID: bundleID) }
     guard let text = params["url"] as? String, let url = URLParsing.url(text), url.scheme != nil
     else { throw missing }
@@ -306,7 +379,7 @@ enum PluginHostRequest {
     guard url.scheme?.lowercased() != "file" else {
       throw Refusal(message: "host.open does not open local files")
     }
-    return .url(url)
+    return .url(url, ifHandled: ifHandled)
   }
 
   /// `host.post_keys`: 1 to 32 chords, each a key code under at least one

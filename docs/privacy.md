@@ -570,6 +570,17 @@ AI-provider quotas remain within its explicitly unsandboxed plugin; granting
 Apple Events does not grant a sandboxed plugin those credential files or CLI
 helpers.
 
+No plugin reads your calendar itself: the Calendars grant is Flash's, and a
+sandboxed plugin cannot reach EventKit. A plugin whose manifest declares the
+`calendar_events` capability asks Flash instead, for the events of a window
+of at most 14 days: each event's title, start and end, all-day, declined
+and cancelled flags, its calendar's title, its URL and location fields, and
+the links found in its notes. The notes themselves never leave Flash.
+macOS's Calendars prompt, which names Flash, comes up for such a plugin only
+while you are using it (one of its commands is running, or a status surface
+shows one of its values), never from the background, and Flash tells only
+those plugins that the calendar changed.
+
 Third-party plugins load only when listed in `[plugins] third_party`, and GitHub
 references must pin a full commit SHA. They get the same sandbox: one runs
 unsandboxed only when its manifest declares `"sandbox": false`.

@@ -642,6 +642,30 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
             .await,
         ),
         (
+            "host.calendar_events.access",
+            request(|ctx| async move { ctx.calendar_access().await }).await,
+        ),
+        (
+            "host.calendar_events.request-access",
+            request(|ctx| async move { ctx.request_calendar_access(Duration::from_secs(5)).await })
+                .await,
+        ),
+        (
+            "host.calendar_events.list",
+            request(
+                |ctx| async move { ctx.calendar_events(1_800_000_000, 1_800_172_800, &[]).await },
+            )
+            .await,
+        ),
+        (
+            "host.calendar_events.list.calendars",
+            request(|ctx| async move {
+                ctx.calendar_events(1_800_000_000, 1_800_172_800, &["Work".to_string()])
+                    .await
+            })
+            .await,
+        ),
+        (
             "host.normal_mode_target",
             request(|ctx| async move { ctx.normal_mode_target().await }).await,
         ),
@@ -652,6 +676,11 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
         (
             "host.open.url",
             request(|ctx| async move { ctx.open_url("https://example.com/a").await }).await,
+        ),
+        (
+            "host.open.url-if-handled",
+            request(|ctx| async move { ctx.open_url_if_handled("https://example.com/a").await })
+                .await,
         ),
         (
             "host.open.app",

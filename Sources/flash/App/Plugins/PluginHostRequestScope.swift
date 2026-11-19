@@ -7,9 +7,15 @@ import Foundation
 /// A host action that needs the user's consent also asks the scope for it:
 /// `claimConfirmedPerform` answers true once per `perform` the user confirmed
 /// that is still in flight for this child, and false otherwise.
+///
+/// A host action that shows one of macOS's privacy prompts asks whether the
+/// user is using the plugin: `servesUser` answers true while one of the
+/// child's performs is in flight or a status surface shows one of its
+/// segments, so a plugin never raises a prompt from the background.
 struct PluginHostRequestScope {
   let isCurrent: () -> Bool
   var claimConfirmedPerform: () -> Bool = { false }
+  var servesUser: () -> Bool = { false }
 
   func enqueue(on queue: DispatchQueue, execute: @escaping () -> Void) {
     queue.async {

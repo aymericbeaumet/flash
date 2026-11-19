@@ -390,6 +390,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     HostEvent.volumesChanged.rawValue: { [weak self] in
       VolumeChangeMonitor { self?.emitSignal(.volumesChanged) }
     },
+    // The calendar database, read only by the host for `host.calendar_events`.
+    HostEvent.calendarChanged.rawValue: { [weak self] in
+      CalendarChangeSource { self?.pluginManager.hostRPC.calendarEvents }
+    },
     // Keyed by the attach event, it serves core:usb.detached's listeners too
     // (`reconcileHostEventSources`).
     HostEvent.usbAttached.rawValue: { [weak self] in
@@ -635,6 +639,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     })
     // `kill(2)` for `host.process_signal`, wired here alone like the above.
     pluginManager.hostRPC.processSignals = LiveProcessSignals()
+    // EventKit for `host.calendar_events`, wired here alone too. A burst of
+    // database changes, or the user answering macOS's prompt, is one
+    // `core:calendar.changed`.
+    pluginManager.hostRPC.calendarEvents = HostCalendarEvents(
+      provider: LiveCalendarEvents(),
+      changed: { [weak self] in
+        DispatchQueue.main.async { self?.emitHostEvent(PluginEvent(.calendarChanged)) }
+      })
     let launchApplications = Self.runningApplicationsSnapshot()
     pluginManager.cacheRunningApplicationsSnapshot(launchApplications)
     launchStages.measure("plugins") { pluginManager.start(config: config) }

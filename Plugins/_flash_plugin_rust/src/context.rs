@@ -611,6 +611,15 @@ impl Context {
         open_url_from_response(&self.call_host("host.open", json!({ "url": url })).await)
     }
 
+    /// Open a URL only when an application is registered for it
+    /// (`host.open` with `if_handled`): `Err` when none is, and then nothing
+    /// was handed to LaunchServices. For a link an app may not be installed
+    /// for (`zoommtg:`), tried before the web link.
+    pub async fn open_url_if_handled(&self, url: &str) -> Result<Option<String>, String> {
+        let params = json!({ "url": url, "if_handled": true });
+        open_url_from_response(&self.call_host("host.open", params).await)
+    }
+
     /// Launch or raise an app by bundle id through the host (`host.open`).
     /// Requires the `open` capability.
     pub async fn open_app(&self, bundle_id: &str) -> bool {
