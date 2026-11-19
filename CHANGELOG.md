@@ -150,7 +150,10 @@ monitors read that no plugin publishes any more, with its replacement.
   line. A third-party plugin lists what its commands take under `args` in
   `commands[]` ([plugin protocol](docs/plugin-protocol.md#manifest));
   without it they take nothing, and only a `*` subcommand still receives
-  its words as typed.
+  its words as typed. A plugin built on the Rust SDK reads them by name
+  and type, with `CommandRequest::integer`, `value`, `flag` and
+  `positional`: `index()` is `integer("index")`, the old `flag("key")` is
+  `value("key")` and `has_flag("force")` is `flag("force")`.
 - **A status link opens only `http`, `https` and `mailto` URLs.** A
   `#[link=…]` on the bar, hinted or clicked, or a hyperlink in a popup, is
   text a plugin, a source or a program wrote, so any other scheme is now

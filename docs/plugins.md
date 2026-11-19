@@ -48,7 +48,8 @@ plugin is a directory with a `manifest.json` declaring what it serves:
 `sources` (flashlight catalogs, published or pulled live), `query` (inline answers),
 `hints`, `status` segments, `listen` event patterns, `commands`
 (`flash <command> <subcommand>`, two words like every Flash command: the
-plugin's own, or one of Flash's own commands the plugin performs), `bangs`
+plugin's own, with the `args` it takes, or one of Flash's own commands the
+plugin performs), `bangs`
 (`!token`), `mappings`, `navigation` schemes, `bindings`, `capabilities`,
 `sandbox` allowances, and `help` topics. `exec` is the argv that starts the
 process, which runs under a deny-default sandbox unless the manifest declares

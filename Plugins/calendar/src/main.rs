@@ -406,9 +406,6 @@ impl Shared {
         if !matches!(name.as_str(), "calendar join" | "calendar next") {
             return PerformResponse::fail(format!("unknown command: {name}"));
         }
-        if !command.args.is_empty() {
-            return PerformResponse::fail(format!("usage: {name}"));
-        }
         let (serial, generation) = self.begin_read();
         let read = self.read(ctx, Some(COMMAND_ASK_TIMEOUT)).await;
         // A command's read is the freshest there is: the values take it too.

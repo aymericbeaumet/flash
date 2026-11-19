@@ -35,38 +35,24 @@ enum Command {
 }
 
 /// The command a request names. Only `audio input` and `audio output` take
-/// an argument, `--device=<name or UID>`; the words after `--device=` are one
-/// name, so the command line keeps `Studio Speakers` whole.
+/// an argument, `--device`, which the manifest declares as a string: the
+/// host holds every invocation to that and hands the name over whole,
+/// `Studio Speakers` included.
 fn parse(request: &CommandRequest) -> Result<Command, String> {
     let name = request.name();
-    let direction = match name.as_str() {
-        "audio input" => Some(AudioDirection::Input),
-        "audio output" => Some(AudioDirection::Output),
-        _ => None,
+    let devices = |direction| match request.value("device").map(str::trim) {
+        None => Ok(Command::Devices(direction)),
+        Some("") => Err(format!("usage: {name} [--device=<name or UID>]")),
+        Some(device) => Ok(Command::Select(direction, device.to_string())),
     };
-    if let Some(direction) = direction {
-        let arguments = request.query();
-        if arguments.is_empty() {
-            return Ok(Command::Devices(direction));
-        }
-        return arguments
-            .strip_prefix("--device=")
-            .map(str::trim)
-            .filter(|device| !device.is_empty())
-            .map(|device| Command::Select(direction, device.to_string()))
-            .ok_or_else(|| format!("usage: {name} [--device=<name or UID>]"));
-    }
-    let command = match name.as_str() {
-        "volume up" => Command::VolumeUp,
-        "volume down" => Command::VolumeDown,
-        "volume mute" => Command::VolumeMute,
-        "media status" => Command::Status,
-        _ => return Err(format!("unknown command: {name}")),
-    };
-    if request.args.is_empty() {
-        Ok(command)
-    } else {
-        Err(format!("usage: {name}"))
+    match name.as_str() {
+        "audio input" => devices(AudioDirection::Input),
+        "audio output" => devices(AudioDirection::Output),
+        "volume up" => Ok(Command::VolumeUp),
+        "volume down" => Ok(Command::VolumeDown),
+        "volume mute" => Ok(Command::VolumeMute),
+        "media status" => Ok(Command::Status),
+        _ => Err(format!("unknown command: {name}")),
     }
 }
 
@@ -234,17 +220,12 @@ mod tests {
                 vec!["--device=speakers"],
                 Command::Select(AudioDirection::Output, "speakers".to_string()),
             ),
-            // A mapping writes the name as one word, the command line as
-            // the words it was typed in: both are one device.
+            // The host hands a name over as one argument, whatever words
+            // it holds.
             (
                 "audio input",
                 vec!["--device=Studio Microphone"],
                 Command::Select(AudioDirection::Input, "Studio Microphone".to_string()),
-            ),
-            (
-                "audio output",
-                vec!["--device=Studio", "Speakers"],
-                Command::Select(AudioDirection::Output, "Studio Speakers".to_string()),
             ),
         ];
         for (words, args, command) in cases {
@@ -256,21 +237,19 @@ mod tests {
         }
     }
 
+    /// The host holds `--device` to its declaration; a blank name still
+    /// selects nothing here, and an unknown pair names no command.
     #[test]
-    fn malformed_arguments_are_refused_with_the_usage() {
-        let device = "usage: audio output [--device=<name or UID>]";
+    fn a_blank_device_and_unknown_words_are_refused() {
         let cases = [
-            ("volume up", vec!["--steps=2"], "usage: volume up"),
-            ("volume up", vec!["now"], "usage: volume up"),
-            ("volume mute", vec!["--force"], "usage: volume mute"),
-            ("media status", vec!["--json"], "usage: media status"),
-            ("audio output", vec!["--device="], device),
-            ("audio output", vec!["--device= "], device),
-            ("audio output", vec!["Studio"], device),
-            ("audio output", vec!["--name=Mic"], device),
+            (
+                "audio output",
+                vec!["--device="],
+                "usage: audio output [--device=<name or UID>]",
+            ),
             (
                 "audio input",
-                vec!["--device"],
+                vec!["--device= "],
                 "usage: audio input [--device=<name or UID>]",
             ),
             (
@@ -289,15 +268,33 @@ mod tests {
         }
     }
 
+    /// The manifest declares what `parse` reads: `--device` on the two
+    /// `audio` commands and no argument anywhere else.
+    #[test]
+    fn the_manifest_declares_the_device_the_commands_read() {
+        let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        for command in manifest["commands"].as_array().unwrap() {
+            let args = &command["args"];
+            if command["command"] == "audio" {
+                assert_eq!(args.as_array().map(Vec::len), Some(1), "{command}");
+                assert_eq!(args[0]["name"], "device");
+                assert_eq!(args[0]["type"], "string");
+                assert_eq!(args[0].get("required"), None, "without it, the list");
+            } else {
+                assert_eq!(args, &Value::Null, "{command}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn a_refused_command_reaches_no_device() {
         let mut harness = Harness::new("media");
         let (calls, response) =
-            run_command(&mut harness, request("volume up", &["--steps=2"]), &[]).await;
+            run_command(&mut harness, request("audio output", &["--device="]), &[]).await;
         assert_eq!(calls, []);
         assert_eq!(
             response,
-            json!({ "ok": false, "error": "usage: volume up" })
+            json!({ "ok": false, "error": "usage: audio output [--device=<name or UID>]" })
         );
     }
 

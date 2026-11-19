@@ -209,7 +209,7 @@ impl Plugin for Fixture {
                             context.front_window_frame,
                         )
                     });
-                    if !focused || command.index() != Some(3) {
+                    if !focused || command.integer("index") != Some(3) {
                         return PerformResponse::fail("unexpected command");
                     }
                     PerformResponse::ok()
@@ -221,6 +221,15 @@ impl Plugin for Fixture {
                 "example decline" if command.context.is_none() => PerformResponse::unhandled(),
                 "example break" => PerformResponse::fail("example failed"),
                 "example repeat" => PerformResponse::ok().message(command.count.to_string()),
+                // An own command's declared arguments, read by name and type.
+                "example measure" => PerformResponse::ok().message(format!(
+                    "{} times={} mode={} dry_run={} loud={}",
+                    command.positional().unwrap_or("?"),
+                    command.integer("times").unwrap_or_default(),
+                    command.value("mode").unwrap_or("?"),
+                    command.flag("dry_run"),
+                    command.flag("loud"),
+                )),
                 "example confirm" => PerformResponse::ok().message(if command.confirmed {
                     "confirmed"
                 } else {

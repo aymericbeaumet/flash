@@ -1870,7 +1870,7 @@ mod tests {
             panic!("a core command decodes as a command");
         };
         assert_eq!(command.name(), "tab select");
-        assert_eq!(command.index(), Some(2));
+        assert_eq!(command.integer("index"), Some(2));
         let context = command.context.expect("context");
         assert_eq!(context.pid, Some(7));
         assert_eq!(context.bundle_id.as_deref(), Some("x"));

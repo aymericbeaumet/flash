@@ -163,10 +163,7 @@ impl FlashPlugin for System {
         let Some(entry) = entry(&name) else {
             return PerformResponse::fail(format!("unknown command: {name}"));
         };
-        // None of these commands takes an argument.
-        if !request.args.is_empty() {
-            return PerformResponse::fail(format!("usage: {name}"));
-        }
+        // No entry declares an argument, so the host hands these none.
         perform(&ctx, entry).await
     }
 
@@ -379,26 +376,18 @@ mod tests {
         );
     }
 
+    /// No command declares an argument, so the host hands them none; a
+    /// word the plugin does not serve asks the host nothing.
     #[tokio::test]
-    async fn an_argument_or_an_unknown_word_asks_the_host_nothing() {
+    async fn an_unknown_word_asks_the_host_nothing() {
         let mut harness = Harness::new("system");
-        for (words, args, error) in [
-            ("screen lock", vec!["--now"], "usage: screen lock"),
-            ("system restart", vec!["now"], "usage: system restart"),
-            (
-                "system hibernate",
-                vec![],
-                "unknown command: system hibernate",
-            ),
-        ] {
-            let response = System
-                .on_command(harness.context(), request(words, &args))
-                .await;
-            assert_eq!(
-                serde_json::to_value(response).unwrap(),
-                json!({ "ok": false, "error": error })
-            );
-        }
+        let response = System
+            .on_command(harness.context(), request("system hibernate", &[]))
+            .await;
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({ "ok": false, "error": "unknown command: system hibernate" })
+        );
         let unknown = System
             .on_resolve(
                 harness.context(),

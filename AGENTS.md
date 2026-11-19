@@ -402,9 +402,11 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   wording of a core command's bad arguments: `PluginGitInvocation`
   (mappings, `flash config check`), `resolveCommandWords` (command line,
   CLI) and `PluginManager.invoke`, and `performPluginCommand` before it
-  asks a `confirm`. The plugin receives one canonical spelling and checks
-  only what it alone can know. Never validate a declared argument in a
-  plugin instead, or add an accept-anything path.
+  asks a `confirm`. The plugin receives one canonical spelling, reads it
+  by name and type (`CommandRequest::integer`, `value`, `flag`,
+  `positional`) and checks only what it alone can know. Never parse or
+  validate a declared argument in a plugin instead, or add an
+  accept-anything path.
 - A new command adds its `"<topic> <action>"` entry to `URLEventHandler`'s
   table and `docs/commands.md`, and a new topic its category in
   `URLEventHandler.topicsByCategory` (`mise run build:schema` rewrites the

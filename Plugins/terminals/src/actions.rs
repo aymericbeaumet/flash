@@ -672,7 +672,7 @@ pub(crate) async fn perform_source_command(
     let resolution_ms = resolution_started.elapsed().as_millis();
     let action_started = Instant::now();
     let ok = match (req.command.as_str(), req.subcommand.as_str()) {
-        ("tab", "select") => tab_select(plugin, &client, req.index()).await,
+        ("tab", "select") => tab_select(plugin, &client, req.integer("index")).await,
         ("tab", "next") => tab_adjacent(plugin, &client, "next").await,
         ("tab", "previous") => tab_adjacent(plugin, &client, "previous").await,
         ("tab", "first") => tab_extreme(plugin, &client, "first").await,

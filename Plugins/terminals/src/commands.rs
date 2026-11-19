@@ -20,8 +20,8 @@ use crate::terminal_windows::raise_terminal_window;
 /// `perform {kind: "command"}` for `:tmux session <name>` and `:tmux window
 /// <session:index>`. Both switch the user's active tmux client to the
 /// requested target and return the terminal pid hosting it so Flash can
-/// raise that window. The target argument is taken verbatim from the
-/// first command arg, so a mapping like
+/// raise that window. The target is the one positional word each command's
+/// manifest entry declares, so a mapping like
 /// `["flash", "tmux", "window", "main:1"]`
 /// jumps straight to `main:1`.
 pub(crate) async fn invoke_command(
@@ -37,7 +37,7 @@ pub(crate) async fn invoke_command(
         }
     }
 
-    let target = cmd.args.first().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let target = cmd.positional().map(str::trim).filter(|s| !s.is_empty());
     let Some(target) = target else {
         ctx.log("warn", "[tmux] command missing target argument");
         return PerformResponse::fail("missing target argument");

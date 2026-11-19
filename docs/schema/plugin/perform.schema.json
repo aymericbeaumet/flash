@@ -63,7 +63,8 @@
               "type": "array",
               "items": {
                 "type": "string"
-              }
+              },
+              "description": "The argument words: a core command's as a mapping writes them, a bang's query, and for the plugin's own command the arguments its manifest entry declares, in the host's one spelling."
             },
             "context": {
               "$ref": "definitions.schema.json#/definitions/context"

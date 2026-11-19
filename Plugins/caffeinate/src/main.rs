@@ -57,37 +57,33 @@ impl Caffeinate {
     }
 }
 
-/// The request a command names. `on` and `toggle` take one argument,
-/// `--minutes=<n>` from 1; `off` and `status` take none.
+/// The request a command names. `on` and `toggle` take `--minutes`, which
+/// the manifest declares as a whole number from 1; `off` and `status`
+/// declare no argument. The host holds every invocation to that before the
+/// command arrives.
 fn parse(command: &CommandRequest) -> Result<Request, String> {
     let name = command.name();
-    let bounded: fn(Option<u32>) -> Request = match name.as_str() {
-        "caffeinate on" => Request::On,
-        "caffeinate toggle" => Request::Toggle,
-        "caffeinate off" | "caffeinate status" => {
-            if !command.args.is_empty() {
-                return Err(format!("usage: {name}"));
-            }
-            return Ok(if name == "caffeinate off" {
-                Request::Off
-            } else {
-                Request::Status
-            });
-        }
-        _ => return Err(format!("unknown command: {name}")),
-    };
-    let usage = || format!("usage: {name} [--minutes=<n>]");
-    match command.args.as_slice() {
-        [] => Ok(bounded(None)),
-        [argument] => argument
-            .strip_prefix("--minutes=")
-            .filter(|minutes| !minutes.is_empty() && minutes.bytes().all(|b| b.is_ascii_digit()))
-            .and_then(|minutes| minutes.parse::<u32>().ok())
-            .filter(|minutes| *minutes > 0)
-            .map(|minutes| bounded(Some(minutes)))
-            .ok_or_else(usage),
-        _ => Err(usage()),
+    match name.as_str() {
+        "caffeinate on" => minutes(command, &name).map(Request::On),
+        "caffeinate toggle" => minutes(command, &name).map(Request::Toggle),
+        "caffeinate off" => Ok(Request::Off),
+        "caffeinate status" => Ok(Request::Status),
+        _ => Err(format!("unknown command: {name}")),
     }
+}
+
+/// The `--minutes` bound, when one was given. The usage answers a number
+/// the declaration would have refused.
+fn minutes(command: &CommandRequest, name: &str) -> Result<Option<u32>, String> {
+    if command.value("minutes").is_none() {
+        return Ok(None);
+    }
+    command
+        .integer("minutes")
+        .and_then(|minutes| u32::try_from(minutes).ok())
+        .filter(|minutes| *minutes > 0)
+        .map(Some)
+        .ok_or_else(|| format!("usage: {name} [--minutes=<n>]"))
 }
 
 /// What a request answers once the Mac is, or is not, held awake. On, off
@@ -340,21 +336,18 @@ mod tests {
         }
     }
 
+    /// The host holds `--minutes` to its declaration; a number outside it
+    /// still takes nothing here.
     #[test]
-    fn malformed_arguments_are_refused_with_the_usage() {
+    fn a_bound_outside_the_declaration_is_refused_with_the_usage() {
         for subcommand in ["on", "toggle"] {
             let usage = format!("usage: caffeinate {subcommand} [--minutes=<n>]");
             for args in [
                 vec!["--minutes=0"],
                 vec!["--minutes=-5"],
-                vec!["--minutes=+5"],
                 vec!["--minutes=1h"],
                 vec!["--minutes="],
                 vec!["--minutes=4294967296"],
-                vec!["5"],
-                vec!["--minutes"],
-                vec!["--hours=1"],
-                vec!["--minutes=5", "--minutes=6"],
             ] {
                 assert_eq!(
                     parse(&command(subcommand, &args)),
@@ -363,16 +356,29 @@ mod tests {
                 );
             }
         }
-        for subcommand in ["off", "status"] {
-            assert_eq!(
-                parse(&command(subcommand, &["--minutes=5"])),
-                Err(format!("usage: caffeinate {subcommand}"))
-            );
-        }
         assert_eq!(
             parse(&command("wat", &[])),
             Err("unknown command: caffeinate wat".to_string())
         );
+    }
+
+    /// The manifest declares what `parse` reads: `--minutes` on `on` and
+    /// `toggle`, a whole number from 1 to the largest bound it holds.
+    #[test]
+    fn the_manifest_declares_the_minutes_the_commands_read() {
+        let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        for command in manifest["commands"].as_array().unwrap() {
+            let bounded = matches!(command["subcommand"].as_str(), Some("on" | "toggle"));
+            let expected = if bounded {
+                json!([{
+                    "name": "minutes", "type": "integer", "min": 1, "max": u32::MAX,
+                    "description": "How long to keep the Mac awake"
+                }])
+            } else {
+                Value::Null
+            };
+            assert_eq!(command["args"], expected, "{}", command["subcommand"]);
+        }
     }
 
     #[tokio::test]

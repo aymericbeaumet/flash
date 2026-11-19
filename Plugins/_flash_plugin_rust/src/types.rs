@@ -726,8 +726,16 @@ pub struct CommandContext {
 /// manifest's `commands[]` declares under one of Flash's topics (`tab
 /// close`), with `context` naming the focused app and `args` holding the
 /// argument words a mapping wrote (`--index=3`, `--force`); the plugin's own
-/// command (`tmux session main`), without `context`; and a bang, with the
-/// plugin id as `command` and the typed token as `subcommand`.
+/// command (`tmux session main`), without `context`, whose `args` are the
+/// ones its `commands[]` entry declares; and a bang, with the plugin id as
+/// `command`, the typed token as `subcommand` and the query words as `args`.
+///
+/// The host holds an own command to its declaration before it sends the
+/// perform, and a core command to Flash's own table, so a handler reads the
+/// arguments by name and type ([`integer`](Self::integer),
+/// [`value`](Self::value), [`flag`](Self::flag),
+/// [`positional`](Self::positional)) instead of parsing words. What only the
+/// plugin can know (a pid that does not exist) stays its own check.
 #[derive(Clone, Debug, Deserialize)]
 pub struct CommandRequest {
     #[serde(default)]
@@ -773,27 +781,38 @@ impl CommandRequest {
         format!("{} {}", self.command, self.subcommand)
     }
 
-    /// The args joined by a single space, trimmed.
+    /// The args joined by a single space, trimmed: a bang's query.
     pub fn query(&self) -> String {
         self.args.join(" ").trim().to_string()
     }
 
-    /// The value of `--<key>=<value>` among the args, when present.
-    pub fn flag(&self, key: &str) -> Option<&str> {
-        let prefix = format!("--{key}=");
+    /// The value of the argument `name` (`--name=value`), when given: a
+    /// declared `string` or `enum`. A `_` in the name is written `-`.
+    pub fn value(&self, name: &str) -> Option<&str> {
+        let prefix = format!("--{}=", name.replace('_', "-"));
         self.args
             .iter()
             .find_map(|arg| arg.strip_prefix(prefix.as_str()))
     }
 
-    /// Whether the bare flag `--<key>` is among the args.
-    pub fn has_flag(&self, key: &str) -> bool {
-        self.args.contains(&format!("--{key}"))
+    /// The argument `name` as a whole number (`--pid=4242`), when given: a
+    /// declared `integer`.
+    pub fn integer(&self, name: &str) -> Option<i64> {
+        self.value(name).and_then(|raw| raw.parse().ok())
     }
 
-    /// `--index=<n>` as a number, when well-formed (`tab select`).
-    pub fn index(&self) -> Option<i64> {
-        self.flag("index").and_then(|raw| raw.trim().parse().ok())
+    /// Whether the flag `name` is on (`--force`): a declared `flag`.
+    pub fn flag(&self, name: &str) -> bool {
+        self.args.contains(&format!("--{}", name.replace('_', "-")))
+    }
+
+    /// The command's one bare word (`main` in `tmux session main`), when
+    /// given: its declared positional.
+    pub fn positional(&self) -> Option<&str> {
+        self.args
+            .iter()
+            .map(String::as_str)
+            .find(|arg| !arg.starts_with("--"))
     }
 }
 
@@ -1538,7 +1557,7 @@ mod tests {
     }
 
     #[test]
-    fn command_flags_parse_numbers_numeric_strings_and_bare_flags() {
+    fn command_arguments_read_by_name_and_type() {
         let select: CommandRequest = serde_json::from_value(json!({
             "command": "tab",
             "subcommand": "select",
@@ -1547,13 +1566,11 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(select.name(), "tab select");
-        assert_eq!(select.index(), Some(3));
-        assert_eq!(select.flag("index"), Some("3"));
-        assert!(
-            !select.has_flag("index"),
-            "a value argument is not a bare flag"
-        );
-        assert!(!select.has_flag("force"));
+        assert_eq!(select.integer("index"), Some(3));
+        assert_eq!(select.value("index"), Some("3"));
+        assert!(!select.flag("index"), "a value argument is not a flag");
+        assert!(!select.flag("force"));
+        assert_eq!(select.positional(), None);
 
         let forced: CommandRequest = serde_json::from_value(json!({
             "command": "app",
@@ -1561,21 +1578,33 @@ mod tests {
             "args": ["--force"],
         }))
         .unwrap();
-        assert!(forced.has_flag("force"));
-        assert_eq!(forced.flag("force"), None, "a bare flag has no value");
-        assert_eq!(forced.index(), None);
+        assert!(forced.flag("force"));
+        assert_eq!(forced.value("force"), None, "a flag has no value");
+        assert_eq!(forced.integer("index"), None);
 
-        // Positional words are neither flags nor values; a malformed index is
-        // no index.
+        // An own command's arguments as the host spells them: the positional
+        // first, a name's `_` written `-`.
         let own: CommandRequest = serde_json::from_value(json!({
-            "command": "tmux",
-            "subcommand": "session",
-            "args": ["main", "--index=x"],
+            "command": "example",
+            "subcommand": "run",
+            "args": ["Daft Punk", "--pid=4242", "--device=Studio Speakers", "--dry-run"],
         }))
         .unwrap();
-        assert!(!own.has_flag("main"));
-        assert_eq!(own.flag("main"), None);
-        assert_eq!(own.index(), None);
-        assert_eq!(own.query(), "main --index=x");
+        assert_eq!(own.positional(), Some("Daft Punk"));
+        assert_eq!(own.integer("pid"), Some(4242));
+        assert_eq!(own.value("device"), Some("Studio Speakers"));
+        assert!(own.flag("dry_run"));
+        assert!(!own.flag("pid"));
+        assert_eq!(own.integer("device"), None, "not a number");
+        assert_eq!(own.value("missing"), None);
+
+        // A bang's words are its query.
+        let bang: CommandRequest = serde_json::from_value(json!({
+            "command": "example",
+            "subcommand": "g",
+            "args": ["rust", "book"],
+        }))
+        .unwrap();
+        assert_eq!(bang.query(), "rust book");
     }
 }

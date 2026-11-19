@@ -39,7 +39,10 @@ plugins.
    from a two-second cache. Killing is `ctx.signal_process` (the
    `process_signal` capability), which the host honours only inside the
    perform the user confirmed; each row carries its own `confirm`, naming
-   the process.
+   the process. The command declares its one argument (`"args": [{"name":
+   "pid", "type": "integer", "min": 2, "required": true}]`), so the host
+   refuses a missing or malformed pid before it asks, and the handler reads
+   `request.integer("pid")` and checks only that the process exists.
 4. **Live source over the host's Accessibility broker — `Plugins/menus`
    (~350 LOC + unit tests).** The menu-bar commands of the app you are in as
    `@menus` rows. One `per_scope` source and no command: `on_search` asks

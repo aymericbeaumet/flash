@@ -511,12 +511,10 @@ impl ItemCatalog {
         tokio::time::timeout(REFRESH_WAIT, outcome).await.ok()?.ok()
     }
 
-    /// The plugin's `open` and `refresh` commands.
+    /// The plugin's `open` and `refresh` commands. Their manifest entries
+    /// declare no argument, so the host hands them none.
     pub async fn command(&self, ctx: &Context, command: &CommandRequest) -> PerformResponse {
         let name = command.name();
-        if !command.args.is_empty() {
-            return PerformResponse::fail(format!("usage: {name}"));
-        }
         match command.subcommand.as_str() {
             "open" => {
                 if ctx.open_app(self.inner.spec.bundle_id).await {
@@ -1664,8 +1662,6 @@ mod tests {
         assert!(denied.is_ok());
         assert_eq!(denied.toast_message(), None, "a refusal says nothing");
 
-        let usage = host.command("refresh", &["--now"]).await;
-        assert_eq!(usage.error_message(), Some("usage: notes refresh"));
         let unknown = host.command("delete", &[]).await;
         assert_eq!(
             unknown.error_message(),

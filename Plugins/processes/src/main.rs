@@ -177,16 +177,13 @@ fn row_identity(row: &Candidate) -> Option<(i32, u64)> {
     Some((pid.parse().ok()?, start.parse().ok()?))
 }
 
-/// The pid `process kill --pid=<pid>` names: its one argument.
+/// The pid `process kill --pid=<pid>` names: its one argument, which the
+/// manifest declares as a required whole number from 2 and the host holds
+/// every invocation to.
 fn kill_pid(request: &CommandRequest) -> Option<i32> {
-    let [argument] = request.args.as_slice() else {
-        return None;
-    };
-    argument
-        .strip_prefix("--pid=")
-        .filter(|pid| !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()))?
-        .parse()
-        .ok()
+    request
+        .integer("pid")
+        .and_then(|pid| i32::try_from(pid).ok())
 }
 
 flash_plugin::plugin!(Processes);
@@ -485,8 +482,10 @@ mod tests {
         assert_eq!(host.calls.len(), 3);
     }
 
+    /// The host holds `--pid` to its declaration, so none of these but the
+    /// last arrives from it; none reaches the host back either way.
     #[tokio::test]
-    async fn a_malformed_or_refused_pid_asks_the_host_nothing() {
+    async fn a_missing_or_refused_pid_asks_the_host_nothing() {
         let kernel = kernel();
         let plugin = plugin(&kernel);
         let mut host = Host::new(json!({}));
@@ -495,9 +494,8 @@ mod tests {
             (vec!["4242"], KILL_USAGE),
             (vec!["--pid="], KILL_USAGE),
             (vec!["--pid=safari"], KILL_USAGE),
-            (vec!["--pid=-4242"], KILL_USAGE),
-            (vec!["--pid=4242", "--force"], KILL_USAGE),
             (vec!["--pid=99999999999"], KILL_USAGE),
+            (vec!["--pid=-4242"], "refusing pid -4242"),
             (vec!["--pid=1"], "refusing pid 1"),
             (vec!["--pid=0"], "refusing pid 0"),
             (vec!["--pid=9999"], "no process with pid 9999"),

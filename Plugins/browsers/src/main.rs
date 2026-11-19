@@ -948,7 +948,7 @@ async fn perform_command(ctx: &Context, command: &CommandRequest) -> PerformResp
     };
     let app = browser.bundle_id;
     let script = match (command.command.as_str(), command.subcommand.as_str()) {
-        ("tab", "select") => match command.index().filter(|n| *n > 0) {
+        ("tab", "select") => match command.integer("index").filter(|n| *n > 0) {
             Some(index) => dialect.tab_select_operation(app, index),
             None => return PerformResponse::unhandled(),
         },

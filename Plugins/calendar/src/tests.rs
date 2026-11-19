@@ -906,15 +906,11 @@ async fn join_says_why_nothing_opened() {
     );
 }
 
+/// The two commands declare no argument, so the host hands them none; a
+/// word the plugin does not serve reads nothing.
 #[tokio::test]
-async fn a_command_takes_no_argument() {
+async fn an_unknown_command_reads_nothing() {
     let (plugin, mut host) = Host::new(json!({}));
-    for subcommand in ["join", "next"] {
-        assert_eq!(
-            host.command(&plugin, subcommand, &["--now"]).await,
-            json!({ "ok": false, "error": format!("usage: calendar {subcommand}") })
-        );
-    }
     assert_eq!(
         host.command(&plugin, "agenda", &[]).await,
         json!({ "ok": false, "error": "unknown command: calendar agenda" })

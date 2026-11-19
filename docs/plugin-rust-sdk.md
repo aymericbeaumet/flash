@@ -55,8 +55,14 @@ naming the `source` and the `query` typed after its scope, answered with
 synchronous `evaluate`, `commands` / `bangs` ⇒ `on_command`, which also
 receives the core commands the manifest declares under Flash's topics (a
 `CommandRequest` whose `context` is then the focused app; match on
-`(command.command, command.subcommand)`, read `--index=N` with `index()`,
-a bool flag with `has_flag("force")`, a value with `flag("key")`; an own
+`(command.command, command.subcommand)` and read its arguments by name and
+type: `integer("index")` for `--index=3`, `value("device")` for a string or
+an enum, `flag("force")` for a flag, `positional()` for an own command's
+one bare word, a `_` in a name written `-`. An own command's are the `args`
+its `commands[]` entry declares: the host has already held the words to
+that declaration and `plugin!` checks its shape at build time, so a handler
+parses nothing and answers `usage:` only for what the host cannot know;
+`query()` is a bang's words. An own
 command's `count` is the NORMAL count typed before its key, 1 without one,
 and `confirmed` says the user answered a question before the command: the
 `confirm` its manifest entry declares, or an `alert confirm` around it),

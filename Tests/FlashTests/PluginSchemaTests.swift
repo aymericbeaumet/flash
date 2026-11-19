@@ -480,6 +480,25 @@ final class PluginSchemaTests: XCTestCase {
       XCTAssertTrue(JSONSchemaValidator.equal(own, try XCTUnwrap(lines[name]).params), name)
     }
 
+    // An own command's arguments go out in the one spelling its declaration
+    // gives them, whatever order and spelling they were typed in.
+    let declared = DeclaredArguments(parameters: [
+      CommandParameter(name: "name", kind: .text("name"), required: true, positional: true),
+      CommandParameter(name: "times", kind: .integer(min: 1, max: nil), required: false),
+      CommandParameter(name: "mode", kind: .choice(["fast", "slow"]), required: false),
+      CommandParameter(name: "dry_run", kind: .flag, required: false),
+      CommandParameter(name: "loud", kind: .flag, required: false),
+    ])
+    var measure = PluginManager.commandParams(
+      command: "example", subcommand: "measure",
+      args: try XCTUnwrap(
+        declared.canonical(["--dry_run=true", "--mode=fast", "--loud=0", "--times=+2", "Daft Punk"])
+      ))
+    measure["kind"] = "command"
+    XCTAssertTrue(
+      JSONSchemaValidator.equal(
+        measure, try XCTUnwrap(lines["perform.command.declared"]).params))
+
     for (name, confirmed) in [
       ("perform.command.confirmed", true), ("perform.command.unconfirmed", false),
     ] {

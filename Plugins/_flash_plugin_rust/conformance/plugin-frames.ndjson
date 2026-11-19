@@ -70,6 +70,7 @@
 {"name": "perform.reply.alert-value", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"caffeinate off","alert":{"title":"caffeinate","value":"off"}}}}
 {"name": "perform.reply.counted", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"5"}}}
 {"name": "perform.reply.uncounted", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"1"}}}
+{"name": "perform.reply.declared", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"Daft Punk times=2 mode=fast dry_run=true loud=false"}}}
 {"name": "perform.reply.confirmed", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"confirmed"}}}
 {"name": "perform.reply.unconfirmed", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"unconfirmed"}}}
 {"name": "perform.reply.navigated", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"navigation_url":"https://example.com/a"}}}

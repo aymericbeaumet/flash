@@ -83,7 +83,9 @@ The lines describe one plugin and one moment:
   for pushed and live sources alike, which no manifest may declare together.
 - Command `tab next --index=3` succeeds in the focused app, `example decline`
   is unhandled, `example break` fails, `example repeat` answers its count and
-  `example confirm` answers whether the user confirmed it.
+  `example confirm` answers whether the user confirmed it. `example measure`
+  declares a positional `name`, an integer `times`, an enum `mode` and the
+  flags `dry_run` and `loud`, and answers what it read of them.
 - The row `Restart` of `example.items` asks `Restart this Mac?` before it is
   resolved.
 

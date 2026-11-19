@@ -298,7 +298,7 @@ pub async fn perform_command(ctx: &Context, pid: i64, command: &CommandRequest) 
 
 async fn select_command(ctx: &Context, pid: i64, command: &CommandRequest) -> PerformResponse {
     let Some(index) = command
-        .index()
+        .integer("index")
         .and_then(|index| usize::try_from(index).ok())
         .filter(|index| *index > 0)
     else {
