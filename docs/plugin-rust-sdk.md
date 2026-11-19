@@ -105,6 +105,12 @@ Handed to every handler; cheap to clone. Key surface:
   publish — the host keeps the last-good catalog, across restarts. The
   testing `Harness` reads them back with `drain_published_rows()` (the last
   catalog) and `drain_publishes()` (every publish as `(source, rows)`).
+- Live rows: a live source publishes nothing, so the host shows what its
+  last `search` answered. `source_changed(name)` (the `changed`
+  notification) says those rows are stale; the host then searches again if
+  a flashlight query still shows the source, at most twice a second, and
+  does nothing otherwise. Call it when rows change after a reply, never on
+  a cadence.
 - Dirs: `data_dir`, `home_dir()`, `config_dir()`, `cache_dir()`,
   `share_dir()`, `bin_dir()` — all under the plugin's own data dir.
   `FLASH_PLUGIN_DATA_DIR` is required; there is no cwd fallback.
@@ -286,7 +292,11 @@ Handed to every handler; cheap to clone. Key surface:
   app launches, when focus leaves it, when the flashlight opens (the app
   focused, or the listing a minute old) and on `refresh`. An event relists
   what Flash may already read; only a query or `refresh` has the host ask
-  macOS. The manifest declares one live `per_scope` source and listens to
+  macOS. Rows that change after a search answered (a slow listing landing,
+  the one that follows the user's answer to macOS's prompt, the app
+  quitting) are announced with `source_changed`, so the scope on screen
+  redraws; rows a waiting search is about to answer with are not. The
+  manifest declares one live `per_scope` source and listens to
   `core:apps.launched`, `core:apps.terminated`, `core:focus.changed` and
   `core:session.opened`: events beside live sources keep no process, so
   nothing runs until the first query or command (`Plugins/notes`).

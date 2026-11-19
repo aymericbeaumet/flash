@@ -580,6 +580,19 @@ enum PluginWireCodec {
     }
   }
 
+  // MARK: - Live source changes
+
+  /// Decode a `changed` notification: exactly `{"source": "<name>"}`, the
+  /// name one of `liveSources`, the manifest sources the plugin declares
+  /// `live`. `nil` rejects it whole: another key, an empty name, a pushed
+  /// source or one the manifest does not declare.
+  static func changedSource(from params: [String: Any], liveSources: Set<String>) -> String? {
+    guard Set(params.keys) == ["source"], let source = params["source"] as? String,
+      !source.isEmpty, liveSources.contains(source)
+    else { return nil }
+    return source
+  }
+
   // MARK: - Poll registrations and status segments
 
   /// Registration names ride inside the event name, so keep them to

@@ -312,6 +312,13 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   (`Plugins/_flash_plugin_rust/src/catalog.rs`), shared by the three: an
   event relists what Flash may already read, and only a query or `refresh`
   asks.
+- A live source's rows are what its last `search` answered. A plugin whose
+  rows change afterwards says so with `changed` (`ctx.source_changed`;
+  `ItemCatalog` does when a listing lands with other rows), and the host
+  pulls again only while a flashlight query shows that source, through
+  `refreshLiveCandidates` and the one bound `LiveSourceChangeGate` holds
+  (`protocol.json` `changed`). Never poll a live source, pull one nobody
+  looks at, or keep a change for a later session.
 - A `listen` beside live sources keeps no process
   (`PluginManifest.isLiveBound`): the events feed rows nobody reads until a
   query asks, and the child hears them from its first search or perform on.

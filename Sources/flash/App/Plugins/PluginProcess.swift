@@ -180,6 +180,10 @@ final class PluginProcess {
   /// main-thread callback per runloop turn instead of one hop per change.
   private var statusNotificationPending = false
   private let statusNotifyLock = NSLock()
+  /// The live sources a child said changed and main has not heard of yet,
+  /// with the transport generation that said so: a burst costs one hop.
+  /// Guarded by `statusNotifyLock`.
+  private var pendingLiveSourceChanges: (sources: Set<String>, generation: UInt64)?
   /// Bounded restart loop: if
   /// `restartWindowAttempts` restarts happen within `restartWindowSeconds`,
   /// the plugin is parked in `.failed` and stops auto-restarting. The user
@@ -263,6 +267,9 @@ final class PluginProcess {
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
+  /// The running child said the rows of one of its live sources changed
+  /// (`changed`): called on main with the manifest source name.
+  var onLiveSourceChanged: ((String) -> Void)?
   var onFilesChanged: (() -> Void)?
   var watchesFiles: Bool { watchFiles }
   /// Host-owned catalog store validated `publish` notifications land in.
@@ -2188,6 +2195,8 @@ final class PluginProcess {
     switch method {
     case "status":
       applyStatusSegments(params)
+    case "changed":
+      applyLiveSourceChanged(params, generation: generation)
     case "poll":
       applyPollRegistrations(params)
     case "log":
@@ -2249,6 +2258,48 @@ final class PluginProcess {
           "encoded_bytes": String(decoded.encodedBytes),
         ])
     }
+  }
+
+  /// One `changed` notification: a live source of this plugin whose rows
+  /// are no longer the ones its last `search` answered. Only a running
+  /// child's word for one of its own live sources leaves this queue; what
+  /// the flashlight does with it, and how often, is main's
+  /// (`AppDelegate.pluginLiveSourceChanged`). A burst reaches main as one
+  /// hop, and a child replaced before that hop ran is not heard.
+  private func applyLiveSourceChanged(_ params: [String: Any], generation: UInt64) {
+    guard
+      let source = PluginWireCodec.changedSource(
+        from: params, liveSources: Set(manifest.sources.filter { $0.live != nil }.map(\.name)))
+    else {
+      FlashLog.plugin(
+        .warn, pluginID: manifest.id,
+        message: "[plugin] changed rejected: expected {source: <one of its live sources>}")
+      return
+    }
+    guard lifecycle.state == .running else { return }
+    statusNotifyLock.lock()
+    let scheduled = pendingLiveSourceChanges?.generation == generation
+    if scheduled {
+      pendingLiveSourceChanges?.sources.insert(source)
+    } else {
+      pendingLiveSourceChanges = ([source], generation)
+    }
+    statusNotifyLock.unlock()
+    guard !scheduled else { return }
+    // Runs on main alone: it takes the pending set under its lock, reads
+    // the transport generation under its own, and calls a callback main
+    // owns.
+    nonisolated(unsafe) let deliver: () -> Void = { [weak self] in
+      guard let self else { return }
+      self.statusNotifyLock.lock()
+      let pending = self.pendingLiveSourceChanges
+      if pending?.generation == generation { self.pendingLiveSourceChanges = nil }
+      self.statusNotifyLock.unlock()
+      guard let pending, pending.generation == generation, self.isTransportActive(generation)
+      else { return }
+      for source in pending.sources.sorted() { self.onLiveSourceChanged?(source) }
+    }
+    DispatchQueue.main.async { deliver() }
   }
 
   /// One `status` notification. The read-modify-write runs entirely under

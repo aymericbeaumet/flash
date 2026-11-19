@@ -297,6 +297,9 @@ final class PluginSchemaTests: XCTestCase {
         let segments = PluginWireCodec.statusSegments(from: params, declared: ["summary", "feed"])
       else { return .malformed }
       return segments.contains { $0.segment == .malformed } ? .malformed : .success
+    case ("changed"?, _):
+      return PluginWireCodec.changedSource(from: params, liveSources: ["example.live"]) == nil
+        ? .malformed : .success
     case ("poll"?, _):
       return PluginWireCodec.pollRegistrations(from: params) == nil ? .malformed : .success
     case (.some, _):

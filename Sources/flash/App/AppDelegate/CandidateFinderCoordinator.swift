@@ -35,6 +35,7 @@ extension AppDelegate {
     finder.scope = scope
     finder.sessionGeneration &+= 1
     finder.liveQuery.cancel()
+    cancelWaitingLiveSourceChange()
     invalidateCandidateQueryEvaluation()
     let generation = finder.sessionGeneration
     finder.fetchedNonLocationSourceIDs.removeAll()
@@ -381,16 +382,65 @@ extension AppDelegate {
   /// landed): pull the query's sources again under a renewed token, keeping
   /// the rows on screen until the new ones replace them.
   func refreshLiveCandidates(sourceID: String) {
-    switch overlay.inputMode {
-    case .commandLine: break
-    default: return
-    }
-    guard let current = finder.liveQuery.query, current.sourceIDs.contains(sourceID) else {
+    guard let current = shownLiveQuery, current.sourceIDs.contains(sourceID) else {
       return
     }
     let sources = current.sourceIDs.compactMap { registry.source(identifier: $0) }
     guard let token = finder.liveQuery.renew() else { return }
     pullLiveSources(sources, text: current.text, token: token)
+  }
+
+  /// The live query an open flashlight shows; nil with the command line
+  /// closed or no query scoped to a live source.
+  private var shownLiveQuery: CandidateLiveQuery<Candidate>.Query? {
+    switch overlay.inputMode {
+    case .commandLine: return finder.liveQuery.query
+    default: return nil
+    }
+  }
+
+  /// Whether the open flashlight's query is scoped to `change`'s source.
+  private func liveQueryShows(_ change: LiveSourceChange) -> Bool {
+    guard let query = shownLiveQuery, let source = registry.source(identifier: change.sourceID)
+    else { return false }
+    return change.isShown(by: query, descriptors: source.candidateSourceDescriptors)
+  }
+
+  static func liveChangeClockMs() -> Int {
+    Int(DispatchTime.now().uptimeNanoseconds / 1_000_000)
+  }
+
+  /// A running plugin said the rows of one of its live sources changed
+  /// (`changed`). With a flashlight query scoped to that source, its sources
+  /// are pulled again and the new rows replace the ones on screen, the
+  /// query and the selection staying as they are; with none, nothing
+  /// happens and nothing is kept for later. `LiveSourceChangeGate` bounds
+  /// the pulls: a burst is one now and one at the end of its interval.
+  func pluginLiveSourceChanged(pluginID: String, source: String) {
+    let change = LiveSourceChange(sourceID: "plugin:\(pluginID)", source: source)
+    guard liveQueryShows(change) else { return }
+    switch finder.liveChangeGate.admit(change, nowMs: Self.liveChangeClockMs()) {
+    case .pull:
+      FlashLog.trace("[flashlight] live_changed_repull source=\(change.sourceID)")
+      refreshLiveCandidates(sourceID: change.sourceID)
+    case .coalesced:
+      break
+    case .wait(let ms):
+      // Armed only while a query shows the source, for the rest of the
+      // interval; a closed session cancels it, and one that moved to
+      // another scope finds nothing to pull when it fires.
+      liveSourceChangeDeadline.arm(afterMs: ms) { [weak self] in
+        guard let self else { return }
+        let waiting = self.finder.liveChangeGate.takeWaiting()
+        guard
+          let shown = waiting.sorted(by: { $0.sourceID < $1.sourceID })
+            .first(where: self.liveQueryShows)
+        else { return }
+        self.finder.liveChangeGate.pulled(nowMs: Self.liveChangeClockMs())
+        FlashLog.trace("[flashlight] live_changed_repull source=\(shown.sourceID) trailing=true")
+        self.refreshLiveCandidates(sourceID: shown.sourceID)
+      }
+    }
   }
 
   private func pullLiveSources(
@@ -1765,11 +1815,20 @@ extension AppDelegate {
     finder.incrementalCache = nil
   }
 
+  /// A session that opens or closes owes nothing to a change that waited
+  /// on the previous one.
+  private func cancelWaitingLiveSourceChange() {
+    guard !finder.liveChangeGate.waiting.isEmpty else { return }
+    finder.liveChangeGate.cancelWaiting()
+    liveSourceChangeDeadline.cancel()
+  }
+
   func cancelCandidateFinderSessionWork() {
     // Bump the generation and cancel the UI deadline so in-flight plugin
     // replies cannot publish into a closed or superseded session.
     finder.sessionGeneration &+= 1
     finder.liveQuery.cancel()
+    cancelWaitingLiveSourceChange()
     invalidateCandidateQueryEvaluation()
     finder.resetInitialSnapshot()
     finder.submissionDeferral.cancel()

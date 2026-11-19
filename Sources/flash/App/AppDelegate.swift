@@ -214,6 +214,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// fetched after the first one.
   var clipboardImageMimes = ClipboardImageCache()
   let pluginStateRefresh = PollDeadline("core:plugin_state_refresh", priority: .normal, on: .main)
+  /// The pull a burst of plugin `changed` notifications ends with
+  /// (`pluginLiveSourceChanged`). `.normal`: it replaces rows already on
+  /// screen. Armed only while a flashlight query shows the changed source.
+  lazy var liveSourceChangeDeadline = PollDeadline(
+    "core:flashlight_live_changed", priority: .normal, on: .main)
   /// Every page path and alias of the bundled manual, read once at launch:
   /// `:help` completes them and plugin topics cannot take them.
   var manualTopicNames: [String] = []
@@ -607,6 +612,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       )
     }
     pluginManager.wifiInfoProvider = wifiInfoProvider
+    pluginManager.onLiveSourceChanged = { [weak self] pluginID, source in
+      self?.pluginLiveSourceChanged(pluginID: pluginID, source: source)
+    }
     pluginManager.onCatalogsChanged = { [weak self] in
       self?.handlePluginCatalogsChanged()
       self?.recordPublishedLocations()

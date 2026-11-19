@@ -203,6 +203,10 @@ final class PluginManager {
   }
 
   var onStateChanged: (() -> Void)?
+  /// A running plugin said the rows of one of its live sources changed
+  /// (`changed`): called on main with the plugin's id and the manifest
+  /// source name, only for a plugin this manager still runs.
+  var onLiveSourceChanged: ((_ pluginID: String, _ source: String) -> Void)?
   /// Main-thread notification after a changed `own_text_editing` union is published.
   var onOwnTextEditingAppsChanged: (() -> Void)?
   /// Coalesced (≤1/s) "catalogs changed" tick from the store — lossless,
@@ -261,6 +265,12 @@ final class PluginManager {
     hotSnapshotLock.lock()
     defer { hotSnapshotLock.unlock() }
     return hotSnapshot
+  }
+
+  /// Whether `plugin` is still one this manager runs, not a replaced or
+  /// unloaded instance whose callback was already on its way.
+  private func isLoaded(_ plugin: PluginProcess) -> Bool {
+    readHotSnapshot().plugins.contains { $0 === plugin }
   }
 
   /// The plugins whose manifests listen to `name`, resolved once per name
@@ -457,6 +467,7 @@ final class PluginManager {
     for plugin in plugins {
       plugin.stopAndWait(reason: "manager_stop")
       plugin.onStatusChanged = nil
+      plugin.onLiveSourceChanged = nil
       plugin.onHostRequest = nil
       plugin.runningApplicationsProvider = nil
     }
@@ -1021,6 +1032,10 @@ final class PluginManager {
         }
         plugin.onStatusChanged = { [weak self] in
           self?.notifyStateChanged()
+        }
+        plugin.onLiveSourceChanged = { [weak self, weak plugin] source in
+          guard let self, let plugin, self.isLoaded(plugin) else { return }
+          self.onLiveSourceChanged?(plugin.identifier, source)
         }
         plugin.onFilesChanged = { [weak self, weak plugin] in
           guard let plugin else { return }

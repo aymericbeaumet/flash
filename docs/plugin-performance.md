@@ -143,6 +143,14 @@ all live is on demand: no process at launch and no catalog.
   the reply to a query the user has typed past.
 - **The child stays up afterwards**, as after a first command: the next
   query costs a round trip, not a spawn.
+- **Stale rows are announced, not polled.** The host shows what the last
+  `search` answered. A plugin whose rows change afterwards sends `changed`
+  ([protocol](plugin-protocol.md#plugin-host-notifications)), and the host
+  searches again only while a query is scoped to that source: a change
+  nobody looks at costs one small frame and no search. One query is pulled
+  again at most once per 500 ms, the first notification at once and a burst
+  once more at its end, so a plugin that announces a change with every
+  reply costs two searches a second.
 
 The bundled `system` plugin is the `per_scope` example: nine fixed rows
 behind `@system` and nine commands, no process until the first of either.
@@ -195,7 +203,12 @@ rows and 4 MiB: 10,000 such contacts are 0.94 MB and 1.76 MB. The time the
 framework or Notes' script takes to read the real list is added to the
 first query only; a query that meets a listing in flight waits for it up to
 0.2 s, then answers from the previous one, and up to 0.7 s when it has
-none.
+none. A listing that lands after its query answered, with rows that differ
+from the ones answered, costs one `changed` frame and, if the scope is
+still on screen, one more search; the listing a waiting query answers with
+is that reply, and costs neither. `menus` and `system` hold no rows
+between two searches, and `processes` reads its table again as the query
+changes: none of them sends `changed`.
 
 ## Publish-then-exit plugins
 

@@ -287,6 +287,20 @@ impl Context {
         );
     }
 
+    /// Tell the host the rows of one live source changed (the `changed`
+    /// notification): `source` is a manifest `sources[].name` that declares
+    /// `live`. A live source's rows are pulled, so the host only ever shows
+    /// what the last `search` answered; send this when those rows are no
+    /// longer current and nothing else would have the host ask again — a
+    /// listing that landed after the reply, an access the user just granted.
+    /// The host asks again only while a flashlight query is scoped to the
+    /// source, at most once per `protocol.json` `changed.min_interval_ms`,
+    /// and does nothing otherwise, so this is cheap to send when rows
+    /// change and wrong to send on a timer.
+    pub fn source_changed(&self, source: &str) {
+        self.emit.notify("changed", json!({ "source": source }));
+    }
+
     /// Publish status-bar segment values declared by this plugin's
     /// `status` manifest section (the `status` notification). The host
     /// exposes each value as `#{flash.plugin.<plugin-id>.<segment>}` in

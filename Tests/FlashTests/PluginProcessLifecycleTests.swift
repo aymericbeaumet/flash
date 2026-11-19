@@ -1871,6 +1871,89 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertNil(store.entry(for: "livestrict"), "a live plugin publishes nothing")
   }
 
+  // MARK: 10b'. Live source changes
+
+  /// A `changed` notification is heard on main for a live source the
+  /// manifest declares, once for a burst; a source the plugin does not
+  /// declare and a malformed notification are refused.
+  func testAChangedNotificationIsHeardOnceForItsOwnLiveSource() throws {
+    let replies = """
+      case "$line" in
+      *'"query":"burst"'*)
+        printf '{"method":"changed","params":{"source":"live.items"}}\\n'
+        printf '{"method":"changed","params":{"source":"live.items"}}\\n'
+        printf '{"method":"changed","params":{"source":"live.items"}}\\n' ;;
+      *'"query":"refused"'*)
+        printf '{"method":"changed","params":{"source":"other.items"}}\\n'
+        printf '{"method":"changed","params":{"source":"live.items","rows":[]}}\\n'
+        printf '{"method":"changed","params":{"source":""}}\\n'
+        printf '{"method":"changed","params":{}}\\n' ;;
+      esac
+      printf '{"id":%s,"result":{"ok":true,"rows":[]}}\\n' "$id"
+      """
+    let fixture = try PluginFixtureKit.make(
+      id: "livechanged",
+      manifest: PluginFixtureKit.manifest(id: "livechanged", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(onSearch: replies))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    var heard: [String] = []
+    process.onLiveSourceChanged = {
+      XCTAssertTrue(Thread.isMainThread)
+      heard.append($0)
+    }
+    process.start()
+    XCTAssertEqual(search(process).count, 0)
+    XCTAssertEqual(heard, [], "a reply alone says nothing changed")
+
+    // Main is held while the burst arrives, so it costs one hop.
+    var answered = false
+    process.search(source: "live.items", query: "burst") { _ in answered = true }
+    Thread.sleep(forTimeInterval: 0.5)
+    waitUntilTrue("the burst's search answered") { answered }
+    XCTAssertEqual(heard, ["live.items"])
+
+    XCTAssertEqual(search(process, query: "refused").count, 0)
+    settleRunLoop(0.1)
+    XCTAssertEqual(heard, ["live.items"])
+    XCTAssertEqual(fixture.spawnCount(), 1, "a refused notification restarts nothing")
+  }
+
+  /// A child that is gone by the time main hears of its `changed` is not
+  /// heard: the notification belonged to that child's rows.
+  func testAChangedNotificationFromAChildThatIsGoneIsNotHeard() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "livegone",
+      manifest: PluginFixtureKit.manifest(id: "livegone", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(
+        onSearch: #"""
+          printf '{"method":"changed","params":{"source":"live.items"}}\n'
+          printf 'gone\n' >> "$D/gone"
+          exit 1
+          """#))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    var heard: [String] = []
+    process.onLiveSourceChanged = { heard.append($0) }
+    process.start()
+    var answered = false
+    process.search(source: "live.items", query: "") { _ in answered = true }
+    // Main is held until the child has written its notification and died.
+    let deadline = Date().addingTimeInterval(8)
+    let gone = fixture.dataDir.appendingPathComponent("gone").path
+    while !FileManager.default.fileExists(atPath: gone)
+      || process.runtimeStateSnapshot() == .running, Date() < deadline
+    {
+      Thread.sleep(forTimeInterval: 0.02)
+    }
+    Thread.sleep(forTimeInterval: 0.2)
+    waitUntilTrue("the search settled") { answered }
+    settleRunLoop(0.1)
+    XCTAssertEqual(heard, [])
+  }
+
   // MARK: 10c. Confirmed performs
 
   /// The consent a confirmed perform carries: handed out once, while that

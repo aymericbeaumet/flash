@@ -74,6 +74,17 @@ final class PluginProtocolParityTests: XCTestCase {
   }
 
   /// The two `text_grid` line shapes the host decodes are the contract's.
+  func testChangedBoundMatchesSpec() throws {
+    let changed = try XCTUnwrap(try spec()["changed"] as? [String: Any])
+    XCTAssertEqual(changed["min_interval_ms"] as? Int, PluginProtocol.changedMinIntervalMs)
+    XCTAssertEqual(LiveSourceChangeGate().minIntervalMs, PluginProtocol.changedMinIntervalMs)
+    let params = try XCTUnwrap(changed["params"] as? [String: [String]])
+    XCTAssertEqual(params, ["required": ["source"], "optional": []])
+    XCTAssertEqual(
+      PluginWireCodec.changedSource(from: ["source": "live.items"], liveSources: ["live.items"]),
+      "live.items")
+  }
+
   func testTextGridLineShapesMatchSpec() throws {
     let cell = try XCTUnwrap(try spec()["text_grid_cell"] as? [String: Any])
     XCTAssertEqual(Set(cell["keys"] as? [String] ?? []), PluginWireCodec.textGridCellKeys)

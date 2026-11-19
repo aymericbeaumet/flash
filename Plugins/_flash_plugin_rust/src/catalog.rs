@@ -11,6 +11,13 @@
 //! query scoped to its source, or the `refresh` command — may have the host
 //! show macOS's prompt, which the host refuses anywhere else.
 //!
+//! The source is live: the host shows what the last `search` answered. Rows
+//! that change afterwards — a listing that lands after the reply, the one
+//! that follows the user's answer to macOS's prompt, an app that quit — are
+//! announced with [`Context::source_changed`], and the host pulls again if
+//! the flashlight still shows them. Rows a waiting `search` is about to
+//! answer with are that reply, and are not announced.
+//!
 //! A plugin declares one live `per_scope` source, listens to
 //! `core:apps.launched`, `core:apps.terminated`, `core:focus.changed` and
 //! `core:session.opened`, and hands its handlers to one [`ItemCatalog`]:
@@ -239,6 +246,78 @@ struct State {
     asking: Option<Vec<Waiter>>,
     /// The last access macOS reported, so a query need not ask again.
     known_access: Option<GrantAccess>,
+    /// The searches that have not read their rows yet.
+    searching: usize,
+    /// The rows changed while a search waited, and the host was not told:
+    /// that search's reply carries them.
+    unannounced: bool,
+    /// The rows changed and the host is told once the lock is released
+    /// ([`Inner::announce`]).
+    pending_announce: bool,
+}
+
+impl State {
+    /// Replace the rows. True when the host must be told: they differ from
+    /// the ones it may be showing, and no waiting search will answer with
+    /// them.
+    fn replace_rows(&mut self, rows: Vec<Candidate>) -> bool {
+        if *self.rows == rows {
+            return false;
+        }
+        self.rows = Arc::new(rows);
+        if self.searching > 0 {
+            self.unannounced = true;
+            return false;
+        }
+        true
+    }
+}
+
+/// One search between its arrival and its reading the rows it answers with.
+/// Dropped before that — the SDK stops a handler at its deadline — it
+/// announces the change it would have answered.
+struct Searching<'a> {
+    inner: &'a Inner,
+    ctx: &'a Context,
+    answered: bool,
+}
+
+impl<'a> Searching<'a> {
+    fn begin(inner: &'a Inner, ctx: &'a Context) -> Self {
+        inner.lock().searching += 1;
+        Self {
+            inner,
+            ctx,
+            answered: false,
+        }
+    }
+
+    /// The rows this search answers with: the host has them from here on.
+    fn rows(mut self) -> Vec<Candidate> {
+        self.answered = true;
+        let mut state = self.inner.lock();
+        state.searching -= 1;
+        if state.searching == 0 {
+            state.unannounced = false;
+        }
+        state.rows.as_ref().clone()
+    }
+}
+
+impl Drop for Searching<'_> {
+    fn drop(&mut self) {
+        if self.answered {
+            return;
+        }
+        let announce = {
+            let mut state = self.inner.lock();
+            state.searching -= 1;
+            state.searching == 0 && std::mem::take(&mut state.unannounced)
+        };
+        if announce {
+            self.ctx.source_changed(self.inner.spec.source);
+        }
+    }
 }
 
 struct Inner {
@@ -319,6 +398,7 @@ impl ItemCatalog {
                     .any(|application| application.bundle_id == app);
                 let seeded = std::mem::replace(&mut inner.lock().seeded, true);
                 let launched = inner.set_running(running);
+                inner.announce(ctx);
                 inner.changed.notify_waiters();
                 if launched {
                     // A failed first listing is retried once.
@@ -332,6 +412,7 @@ impl ItemCatalog {
             }
             host_events::APPS_TERMINATED if ours => {
                 inner.set_running(false);
+                inner.announce(ctx);
             }
             host_events::FOCUS_CHANGED => {
                 let left = {
@@ -369,6 +450,7 @@ impl ItemCatalog {
             return SearchResponse::default();
         }
         let started = tokio::time::Instant::now();
+        let searching = Searching::begin(inner, ctx);
         inner.wait_until(SEED_WAIT, |state| state.seeded).await;
         let wait = if inner.lock().loaded {
             LOADED_SEARCH_WAIT
@@ -381,7 +463,8 @@ impl ItemCatalog {
         let ask = {
             let state = inner.lock();
             if !state.running {
-                return SearchResponse::default();
+                drop(state);
+                return SearchResponse::rows(searching.rows());
             }
             let settled = state.draining
                 || state.asking.is_some()
@@ -401,7 +484,7 @@ impl ItemCatalog {
             inner.request(ctx, request, Vec::new());
             inner.wait_until_idle(deadline).await;
         }
-        SearchResponse::rows(self.rows())
+        SearchResponse::rows(searching.rows())
     }
 
     /// Bring the app forward on the item a row names.
@@ -472,11 +555,19 @@ impl Inner {
             // Termination is authoritative: the rows go at once, and a
             // listing begun before it is dropped when it lands.
             state.generation += 1;
-            state.rows = Arc::default();
+            state.pending_announce |= state.replace_rows(Vec::new());
             state.loaded = false;
             state.known_access = None;
         }
         running && !was_running
+    }
+
+    /// Tell the host about rows that changed under the lock, once it is
+    /// released.
+    fn announce(&self, ctx: &Context) {
+        if std::mem::take(&mut self.lock().pending_announce) {
+            ctx.source_changed(self.spec.source);
+        }
     }
 
     /// Relist for an event, marked as listed now. `retry`: list once more
@@ -617,11 +708,14 @@ impl Inner {
                 if running {
                     self.log(ctx, "denied", 0, elapsed_ms);
                 }
-                self.clear(if running {
-                    CatalogOutcome::Denied
-                } else {
-                    CatalogOutcome::Cleared
-                })
+                self.clear(
+                    ctx,
+                    if running {
+                        CatalogOutcome::Denied
+                    } else {
+                        CatalogOutcome::Cleared
+                    },
+                )
             }
             CatalogStep::List => {
                 let rows = listed.unwrap_or_default();
@@ -632,11 +726,12 @@ impl Inner {
                     // already cleared it.
                     let current = state.generation == generation && state.running;
                     if current {
-                        state.rows = Arc::new(rows);
+                        state.pending_announce |= state.replace_rows(rows);
                         state.loaded = true;
                     }
                     current
                 };
+                self.announce(ctx);
                 if current {
                     let outcome = if count == 0 { "empty" } else { "ok" };
                     self.log(ctx, outcome, count, elapsed_ms);
@@ -653,10 +748,13 @@ impl Inner {
         deliver(waiters, &outcome);
     }
 
-    fn clear(&self, outcome: CatalogOutcome) -> CatalogOutcome {
-        let mut state = self.lock();
-        state.rows = Arc::default();
-        state.loaded = false;
+    fn clear(&self, ctx: &Context, outcome: CatalogOutcome) -> CatalogOutcome {
+        {
+            let mut state = self.lock();
+            state.pending_announce |= state.replace_rows(Vec::new());
+            state.loaded = false;
+        }
+        self.announce(ctx);
         outcome
     }
 
@@ -698,7 +796,7 @@ impl Inner {
                 // Listed on the queue, which answers whoever waited.
                 Ok(GrantAccess::Granted) => inner.request(&ctx, CatalogRequest::EVENT, waiters),
                 Ok(GrantAccess::Denied) => {
-                    let outcome = inner.clear(CatalogOutcome::Denied);
+                    let outcome = inner.clear(&ctx, CatalogOutcome::Denied);
                     deliver(waiters, &outcome);
                 }
                 // macOS cannot be asked now, the host refused to ask, or
@@ -787,6 +885,8 @@ mod tests {
         lists: usize,
         shown: Vec<String>,
         opened: Vec<String>,
+        /// The `changed` notifications the catalog wrote, by source.
+        changes: Vec<String>,
     }
 
     impl Host {
@@ -806,6 +906,7 @@ mod tests {
                 lists: 0,
                 shown: Vec::new(),
                 opened: Vec::new(),
+                changes: Vec::new(),
             }
         }
 
@@ -885,9 +986,14 @@ mod tests {
         async fn serve(&mut self) {
             loop {
                 settle().await;
-                let calls: Vec<(u64, String, Value)> = self
-                    .harness
-                    .drain()
+                let frames = self.harness.drain();
+                self.changes.extend(
+                    frames
+                        .iter()
+                        .filter(|frame| frame["method"] == "changed")
+                        .map(|frame| frame["params"]["source"].as_str().unwrap().to_string()),
+                );
+                let calls: Vec<(u64, String, Value)> = frames
                     .into_iter()
                     .filter_map(|frame| {
                         Some((
@@ -1377,6 +1483,161 @@ mod tests {
         assert_eq!(search.await.unwrap().rows.len(), 1);
         host.serve().await;
         assert_eq!((host.lists, host.accesses), (0, 0), "no second read");
+    }
+
+    // -- Telling the host --------------------------------------------------
+
+    fn listing(titles: &[&str]) -> Value {
+        let items: Vec<Value> = titles
+            .iter()
+            .enumerate()
+            .map(|(index, title)| json!({ "id": format!("note-{index}"), "title": title }))
+            .collect();
+        json!({ "ok": true, "access": "granted", "items": items })
+    }
+
+    /// A listing slower than the query's wait answers it empty; when it
+    /// lands, the host is told, so the rows appear without retyping.
+    #[tokio::test]
+    async fn a_listing_that_lands_after_the_query_tells_the_host() {
+        let mut host = Host::new(GrantAccess::Granted);
+        host.snapshot(true);
+        let (id, _, _) = host.harness.next_host_request().await.unwrap();
+        let request = SearchRequest {
+            source: SOURCE.to_string(),
+            query: String::new(),
+        };
+        assert_eq!(host.catalog.search(&host.ctx(), &request).await.rows, []);
+        host.serve().await;
+        assert_eq!(host.changes, [] as [&str; 0], "nothing changed yet");
+        assert!(host.harness.reply_host(id, listing(&["Groceries"])));
+        host.serve().await;
+        assert_eq!(host.changes, [SOURCE]);
+        assert_eq!(host.search().await, ["Groceries"], "the pull it causes");
+        assert_eq!(host.changes, [SOURCE], "answering says nothing more");
+    }
+
+    /// The rows a waiting query is about to answer with need no second
+    /// pull: the listing is its reply.
+    #[tokio::test]
+    async fn a_listing_that_answers_a_waiting_query_is_not_announced() {
+        let mut host = Host::new(GrantAccess::Granted);
+        host.snapshot(true);
+        let (id, _, _) = host.harness.next_host_request().await.unwrap();
+        let (catalog, ctx) = (host.catalog.clone(), host.ctx());
+        let request = SearchRequest {
+            source: SOURCE.to_string(),
+            query: String::new(),
+        };
+        let search = tokio::spawn(async move { catalog.search(&ctx, &request).await });
+        settle().await;
+        assert!(host.harness.reply_host(id, listing(&["Groceries"])));
+        assert_eq!(search.await.unwrap().rows.len(), 1);
+        host.serve().await;
+        assert_eq!(host.changes, [] as [&str; 0]);
+    }
+
+    /// A query the SDK dropped at its deadline never answered: the rows
+    /// that changed while it waited are announced when it goes.
+    #[tokio::test]
+    async fn a_dropped_query_leaves_its_change_announced() {
+        let mut host = Host::new(GrantAccess::Granted);
+        host.snapshot(true);
+        let (first, _, _) = host.harness.next_host_request().await.unwrap();
+        let (catalog, ctx) = (host.catalog.clone(), host.ctx());
+        let request = SearchRequest {
+            source: SOURCE.to_string(),
+            query: String::new(),
+        };
+        let search = tokio::spawn(async move { catalog.search(&ctx, &request).await });
+        settle().await;
+        // A second listing is queued behind the first, so the query still
+        // waits when the first one's rows land.
+        host.send(host_events::FOCUS_CHANGED, Some(NOTES));
+        host.send(host_events::FOCUS_CHANGED, Some("com.apple.Terminal"));
+        assert!(host.harness.reply_host(first, listing(&["Groceries"])));
+        let (second, _, _) = host.harness.next_host_request().await.unwrap();
+        assert_eq!(host.titles(), ["Groceries"]);
+        assert!(!search.is_finished(), "it waits for the second listing");
+        search.abort();
+        assert!(search.await.unwrap_err().is_cancelled());
+        assert!(host.harness.reply_host(second, listing(&["Groceries"])));
+        host.serve().await;
+        assert_eq!(host.changes, [SOURCE], "once, for the rows it never sent");
+    }
+
+    /// The query that raised macOS's prompt lists nothing; the listing that
+    /// follows the user's answer tells the host, and a refusal changes
+    /// nothing.
+    #[tokio::test]
+    async fn the_answer_to_the_prompt_tells_the_host() {
+        let mut host = Host::new(GrantAccess::Undetermined);
+        host.snapshot(true);
+        host.serve().await;
+        let (catalog, ctx) = (host.catalog.clone(), host.ctx());
+        let request = SearchRequest {
+            source: SOURCE.to_string(),
+            query: String::new(),
+        };
+        let search = tokio::spawn(async move { catalog.search(&ctx, &request).await });
+        let (id, _, params) = host.harness.next_host_request().await.unwrap();
+        assert_eq!(params, json!({ "operation": "list" }));
+        assert!(
+            host.harness
+                .reply_host(id, json!({ "ok": true, "access": "undetermined" }))
+        );
+        assert_eq!(search.await.unwrap().rows, [], "the prompt is open");
+        let (ask, _, params) = host.harness.next_host_request().await.unwrap();
+        assert_eq!(params, json!({ "operation": "request_access" }));
+        host.serve().await;
+        assert_eq!(host.changes, [] as [&str; 0], "nothing to show yet");
+        // The user answers; the listing follows.
+        host.access = GrantAccess::Granted;
+        assert!(
+            host.harness
+                .reply_host(ask, json!({ "ok": true, "access": "granted" }))
+        );
+        host.serve().await;
+        assert_eq!(host.titles(), ["Groceries"]);
+        assert_eq!(host.changes, [SOURCE]);
+
+        let mut refused = Host::new(GrantAccess::Undetermined);
+        refused.grants = false;
+        refused.snapshot(true);
+        refused.serve().await;
+        assert_eq!(refused.search().await, [] as [&str; 0]);
+        assert_eq!(refused.asks, 1);
+        assert_eq!(refused.changes, [] as [&str; 0], "empty before and after");
+    }
+
+    /// A relist tells the host only when its rows differ from the ones it
+    /// replaces; rows that go (the app quit, access was revoked) differ too.
+    #[tokio::test]
+    async fn a_relist_tells_the_host_only_when_the_rows_differ() {
+        let mut host = Host::new(GrantAccess::Granted);
+        host.snapshot(true);
+        host.serve().await;
+        assert_eq!(host.changes, [SOURCE], "the first rows");
+        assert_eq!(host.refresh().await, Some(CatalogOutcome::Listed(1)));
+        assert_eq!(host.changes, [SOURCE], "the same rows");
+        host.titles = vec!["Groceries", "Taxes"];
+        host.send(host_events::FOCUS_CHANGED, Some(NOTES));
+        host.send(host_events::FOCUS_CHANGED, Some("com.apple.Terminal"));
+        host.serve().await;
+        assert_eq!(host.changes, [SOURCE, SOURCE], "a note was added");
+        host.send(host_events::APPS_TERMINATED, Some(NOTES));
+        host.serve().await;
+        assert_eq!(host.changes, [SOURCE, SOURCE, SOURCE], "Notes quit");
+        host.send(host_events::APPS_TERMINATED, Some(NOTES));
+        host.serve().await;
+        assert_eq!(host.changes.len(), 3, "already empty");
+
+        let mut revoked = Host::new(GrantAccess::Granted);
+        revoked.snapshot(true);
+        revoked.serve().await;
+        revoked.access = GrantAccess::Denied;
+        assert_eq!(revoked.refresh().await, Some(CatalogOutcome::Denied));
+        assert_eq!(revoked.changes, [SOURCE, SOURCE]);
     }
 
     // -- Commands and picks -------------------------------------------------

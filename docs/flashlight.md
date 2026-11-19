@@ -61,11 +61,13 @@ then shows the previous list (0.7 s when there is none yet). The first
 which reads its list then: besides the read itself, 20 ms for a thousand
 contacts and 60 to 75 ms for five thousand, and 6 and 30 ms on later
 queries. Notes is read by script and can take longer than a query waits;
-its rows then show when you type the scope again. The first search of each
-asks macOS for access (Automation of Notes, Reminders, Contacts) and lists
-nothing while that prompt is up: type the scope again once you have
-answered. A refusal leaves it empty. A row that cannot be shown says so in
-the centred alert.
+its rows then show when the read ends, without typing anything. The first
+search of each asks macOS for access (Automation of Notes, Reminders,
+Contacts) and lists nothing while that prompt is up; the rows show once you
+have answered, if the scope is still on screen. A list read again while its
+rows are on screen replaces them where you are: what you typed and the
+selected position stay. A refusal leaves it empty. A row that cannot be
+shown says so in the centred alert.
 
 Browser history and bookmarks never join the default result pool: they reach
 the flashlight through `@history` and `@bookmarks`, which read every

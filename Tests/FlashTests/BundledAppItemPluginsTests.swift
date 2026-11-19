@@ -249,6 +249,46 @@ final class BundledAppItemPluginsTests: XCTestCase {
     XCTAssertEqual(failed.failureReason, "the item could not be shown")
   }
 
+  /// A listing slower than its query's wait answers that query empty, and
+  /// the one that follows the user's answer to macOS's prompt comes after
+  /// its query too: the plugin then tells the host its rows changed, which
+  /// is what redraws the scope on screen without typing it again.
+  func testAListingThatLandsAfterItsQueryTellsTheHost() throws {
+    let notes = AppItemStub(access: .granted, items: [Self.note(1, "Groceries")])
+    let slow = DispatchSemaphore(value: 0)
+    notes.gate = slow
+    let contacts = AppItemStub(
+      access: .undetermined, items: [HostAppItem(id: "1:ABPerson", title: "Ada Lovelace")],
+      holdsAnswer: true)
+    try start([.notes: notes, .contacts: contacts])
+    var changed: [String] = []
+    manager.onLiveSourceChanged = { pluginID, source in
+      XCTAssertTrue(Thread.isMainThread)
+      changed.append("\(pluginID) \(source)")
+    }
+
+    XCTAssertEqual(try pull("notes").rows.count, 0, "the listing is still going")
+    XCTAssertEqual(changed, [], "nothing changed yet")
+    notes.gate = nil
+    slow.signal()
+    waitUntilTrue("the listing lands and the plugin says so") {
+      changed == ["notes notes.notes"]
+    }
+    XCTAssertEqual(try pull("notes").rows.map(\.title), ["Groceries"])
+    XCTAssertEqual(notes.lists, 1)
+
+    XCTAssertEqual(try pull("contacts").rows.count, 0, "macOS's prompt is open")
+    XCTAssertEqual(contacts.asks, 1)
+    settleRunLoop(0.2)
+    XCTAssertEqual(changed.count, 1, "an answered pull and an open prompt change nothing")
+    contacts.answer()
+    waitUntilTrue("the grant's listing lands and the plugin says so") {
+      changed.last == "contacts contacts.cards"
+    }
+    XCTAssertEqual(try pull("contacts").rows.map(\.title), ["Ada Lovelace"])
+    XCTAssertEqual(changed.count, 2)
+  }
+
   /// Reminders are listed list by list in Reminders' order, then oldest
   /// first, under their list's title.
   func testRemindersAreOrderedByListThenAge() throws {

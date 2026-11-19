@@ -95,6 +95,8 @@ final class CandidateFinderSession {
       incrementalCache = nil
     }
   }
+  /// Bounds the pulls plugins' `changed` notifications cause.
+  var liveChangeGate = LiveSourceChangeGate()
   /// Independent from the flashlight-session generation: every bare query
   /// supersedes the prior evaluator fan-out even within one open surface.
   var queryEvaluationGeneration: UInt64 = 0

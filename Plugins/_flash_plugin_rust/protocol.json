@@ -26,6 +26,7 @@
     },
     "plugin_to_host_notifications": {
       "publish": "{rows, source?} \u2014 the plugin's catalog, host-owned store. Without `source`: a full replacement of every source's rows. With `source` (a manifest sources[].name that every row carries): a replacement of that source's rows alone, the other sources keeping theirs \u2014 a publish stays proportional to the change when volatile and static rows are separate sources. Quotas apply to the whole catalog after the merge; empty rows = authoritative empty (of the catalog, or of that source); transient failure = don't publish (host keeps last-good). The host decodes publishes on a queue that carries no replies, so a publish and a later reply are not ordered host-side; publishes of one plugin keep their order.",
+      "changed": "{source} \u2014 the rows of one live source changed: `source` is a manifest sources[].name that declares `live`. The host answers with a new `search` of the flashlight query scoped to that source, and with nothing when no query shows it; the `changed` section bounds how often. A plugin sends it when rows it already answered a `search` with are no longer current (a listing that landed after the reply, an access the user just granted); it carries no rows.",
       "status": "{segments: {name: value}} \u2014 manifest-declared names only; value is markup (\"\" clears) or a carousel object {prefix?: markup, lines: [markup], cycle_seconds: >= 1} the host rotates on its own clock (no lines clears; malformed objects are rejected whole)",
       "poll": "{registrations: {name: {every: seconds, priority} | {after: seconds, priority}}} \u2014 full-replacement set of the cadences (`every`) and one-shot deadlines (`after`, measured from receipt) the host should drive for this plugin; empty clears. Plugins must not arm their own timers or sleep to schedule work: the host folds every registration in the app onto one clock and sends `event {name: \"core:poll:<name>\"}` when one is due, regardless of manifest `listen`. A deadline fires once; repeating it unchanged in a later set neither re-arms nor re-fires it, and a changed or new name arms it afresh. Ticks are one-way and unacknowledged, so a plugin still running its previous callback drops the ones it missed instead of catching up. Bounds live in the `poll` section; a malformed or over-bound frame is rejected whole.",
       "log": "{level, message, fields, trace?} \u2014 content-free; trace names the interaction of the request being served"
@@ -294,6 +295,16 @@
         "source"
       ]
     }
+  },
+  "changed": {
+    "$comment": "The changed notification's params: `source` alone, the name of one of the plugin's own manifest sources[] that declares `live`. Any other key, an empty name, a pushed source or a source the manifest does not declare rejects the notification whole. The host pulls again only while a flashlight query is scoped to the named source, and at most once per min_interval_ms for one query: the first notification is honoured at once, and those that arrive inside the interval cost one more pull at its end, whatever their number. A notification for a source no query shows is dropped, never queued, as is one from a child that has since been replaced.",
+    "params": {
+      "required": [
+        "source"
+      ],
+      "optional": []
+    },
+    "min_interval_ms": 500
   },
   "perform_command": {
     "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words as a mapping writes them (--index=3, --force, or a bang's query words). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang. count is the NORMAL count typed before the key of the plugin's own command (5 then the key is one perform with count 5), an integer from 1 to count_max; absent means 1, and the host leaves it out for 1, for a core command (which it repeats itself) and for a bang. confirmed is `true` on a command the user confirmed (see `confirmation`), and absent otherwise.",

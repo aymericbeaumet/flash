@@ -101,13 +101,14 @@ monitors read that no plugin publishes any more, with its replacement.
   macOS asks for Reminders and Contacts access where it asked to let Flash
   control those two apps. It asks the first time you search one of the
   three or run its `refresh`, never at launch, and that first search lists
-  nothing while the prompt is up: type `@notes` again once you have
-  answered. Nothing of a plugin runs until that first query or command;
+  nothing while the prompt is up; the rows show once you have answered.
+  Nothing of a plugin runs until that first query or command;
   from then on its list is read when the app launches, when you leave it
   and when the flashlight opens on a list a minute old, as before. A query
   that arrives while a list is being read waits for it up to 0.2 s, 0.7 s
   when it has no list to show yet; a longer read (a large Notes library)
-  shows on the next query. A row that
+  shows when it ends, and a list read again while its rows are on screen
+  replaces them where you are. A row that
   cannot be shown says so in the centred alert, and an argument these
   commands do not take (`notes open --now`) is refused when the command
   runs, with its usage. With one of the three in `[plugins] disabled`, its
@@ -472,6 +473,12 @@ monitors read that no plugin publishes any more, with its replacement.
 - A plugin whose sources are live keeps no process for the events it
   listens to: it starts on its first query or command and hears them from
   then on ([activation](docs/plugin-protocol.md#process-model-and-lifecycle)).
+- A plugin tells Flash that the rows of one of its live sources changed
+  with the new `changed` notification (`ctx.source_changed` in the Rust
+  SDK). Flash searches that source again only while a flashlight query is
+  scoped to it, keeping what you typed and the selected position, and at
+  most once per 500 ms for one query; a change nobody looks at pulls
+  nothing ([notifications](docs/plugin-protocol.md#plugin-host-notifications)).
 - `host.open` takes `"if_handled": true` beside a URL: Flash then opens it
   only when an application is registered for it, so a plugin tries an app's
   own link (`zoommtg:`) before the web one.

@@ -470,6 +470,10 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
             notification(|ctx| ctx.publish(vec![confirming_row()])),
         ),
         (
+            "changed",
+            notification(|ctx| ctx.source_changed("example.live")),
+        ),
+        (
             "status",
             notification(|ctx| {
                 let feed = StatusCarousel::new(

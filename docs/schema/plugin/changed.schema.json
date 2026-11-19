@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/changed.schema.json",
+  "title": "changed",
+  "description": "Plugin to host: the rows of one of the plugin's live sources changed. The host pulls that source again with search only while a flashlight query is scoped to it, at most once per 500 ms for one query.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "method",
+    "params"
+  ],
+  "properties": {
+    "method": {
+      "const": "changed"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A manifest sources[].name of this plugin that declares `live`."
+        }
+      }
+    }
+  }
+}

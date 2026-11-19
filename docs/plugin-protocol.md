@@ -337,6 +337,7 @@ never asks the host what it supports. See the
 | `search` | host → plugin | request | The rows of a live source, for the flashlight query scoped to it |
 | `perform` | host → plugin | request | Run a row, a command, a bang or a navigation |
 | `publish` | plugin → host | notification | Replace the catalog, or one source's rows |
+| `changed` | plugin → host | notification | The rows of a live source changed |
 | `status` | plugin → host | notification | Set status-bar segment values |
 | `poll` | plugin → host | notification | Register the cadences and deadlines the host ticks |
 | `log` | plugin → host | notification | A structured, content-free log line |
@@ -469,7 +470,8 @@ never asks the host what it supports. See the
   another source or an over-quota reply rejects it whole, and the host serves
   no rows. The flashlight drops the reply to a query the user has typed
   past, so a late reply costs nothing but its rows. Selecting a row sends
-  `perform {kind: "resolve"}` with it, as for a published row.
+  `perform {kind: "resolve"}` with it, as for a published row. Rows that
+  change after the reply are announced with [`changed`](#plugin-host-notifications).
 - `perform` — the single effect method. Three kinds:
 
   ```json
@@ -662,6 +664,21 @@ surface that shows it again never reads stale figures.
   large publish never delays the reply behind it. An open flashlight
   refreshes from the store on a coalesced ≤1/s tick — lossless, since the
   store is already current.
+- `changed` — `{"source": "<name>"}`: the rows of one live source are no
+  longer the ones its last `search` answered. `source` is one of the
+  plugin's own `sources[].name` declaring `live`, and the only key: another
+  key, an empty name, a pushed source or one the manifest does not declare
+  rejects the notification (content-free log). It carries no rows. While a
+  flashlight query is scoped to that source, the host sends its `search`
+  again and the reply replaces the rows on screen, the typed query and the
+  selected position staying as they are. With no such query, or no
+  flashlight open, it does nothing and keeps nothing for later; a child
+  replaced before the host heard it is ignored. One query is pulled again
+  at most once per 500 ms (`protocol.json` `changed.min_interval_ms`): the
+  first notification at once, those inside the interval together at its
+  end. Send it when rows already answered are stale — a listing that landed
+  after the reply, an access the user just granted — never on a cadence,
+  and not for rows a `search` still in flight is about to answer with.
 - `status` — `{"segments": {"name": value}}` for manifest-declared status
   segments, rendered as `#{flash.plugin.<id>.<segment>}`. A value is markup
   (`""` clears) or a carousel object

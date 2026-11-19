@@ -29,6 +29,9 @@
       "$ref": "publish.schema.json"
     },
     {
+      "$ref": "changed.schema.json"
+    },
+    {
       "$ref": "status.schema.json"
     },
     {

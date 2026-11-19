@@ -26,6 +26,10 @@ enum PluginProtocol {
   /// Live flashlight `search` pull. The flashlight drops the reply to a
   /// query the user typed past, so a late one costs nothing but its rows.
   static let searchDeadlineMs = 1_000
+  /// How often a plugin's `changed` notifications pull a flashlight query's
+  /// live sources again: the first at once, a burst inside the interval
+  /// once more at its end.
+  static let changedMinIntervalMs = 500
   /// All three `perform` kinds.
   static let performDeadlineMs = 10_000
   /// Reply budget for the idle-liveness `ping`; ONE miss tears down.

@@ -749,6 +749,27 @@ mod tests {
         assert!(frame.starts_with(scoped.as_bytes()));
     }
 
+    /// A `changed` frame carries the one key the contract lists, and the
+    /// contract states how often the host honours one.
+    #[test]
+    fn changed_frames_match_the_shared_protocol_contract() {
+        use crate::testing::Harness;
+
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let changed = &contract["changed"];
+        assert_eq!(changed["params"]["required"], serde_json::json!(["source"]));
+        assert_eq!(changed["params"]["optional"], serde_json::json!([]));
+        assert_eq!(changed["min_interval_ms"], 500);
+        assert!(contract["methods"]["plugin_to_host_notifications"]["changed"].is_string());
+
+        let mut harness = Harness::new("example");
+        harness.context().source_changed("example.live");
+        assert_eq!(
+            harness.drain(),
+            [serde_json::json!({ "method": "changed", "params": { "source": "example.live" } })]
+        );
+    }
+
     /// The SDK pre-checks a script's size and clamps its timeout to the
     /// contract's bounds, so they must be the host's.
     #[test]

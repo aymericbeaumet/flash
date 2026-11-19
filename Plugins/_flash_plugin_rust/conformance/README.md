@@ -5,7 +5,7 @@ Two files, read by both ends of the plugin protocol:
 - `host-frames.ndjson`: frames the host sends (requests, `event`
   notifications, replies to `host.*` calls).
 - `plugin-frames.ndjson`: frames a plugin sends (replies, `publish`,
-  `status`, `poll` and `log` notifications, `host.*` requests).
+  `changed`, `status`, `poll` and `log` notifications, `host.*` requests).
 
 The SDK reads them in `src/conformance.rs`: host frames go through the real
 serve loop and decoders, and the SDK's encoders must write the plugin frames
@@ -79,7 +79,7 @@ The lines describe one plugin and one moment:
   and `Grace Hopper`. A `show` brings no app forward.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
 - Searching the live source `example.live` for `ro` answers two rows; any
-  other query answers none. The corpus pins frames, so its one plugin answers
+  other query answers none. It is the one source a `changed` may name. The corpus pins frames, so its one plugin answers
   for pushed and live sources alike, which no manifest may declare together.
 - Command `tab next --index=3` succeeds in the focused app, `example decline`
   is unhandled, `example break` fails, `example repeat` answers its count and

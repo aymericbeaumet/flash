@@ -403,6 +403,7 @@ release build.
 | Debounces · `core:config_reload`, `core:plugin_state_refresh`, `core:app_directories`, `core:ambient_location`, `core:plugin_reload:<id>:<n>` | 100–750 ms after the last event | normal | Someone is about to look, nobody is watching the instant |
 | Change coalescers · `core:network_changed`, `core:volumes_changed` | 500 ms window | normal | Plugins re-read what changed |
 | Catalog notify · `core:catalog_notify:<id>` | At most once a second | normal | An open flashlight re-reads the store on it |
+| Flashlight live refresh · `core:flashlight_live_changed` | The rest of 500 ms after a plugin's `changed` last pulled a query's live sources, while that query shows the changed source | normal | It replaces rows already on screen |
 | Inspector publish · `core:inspector_publish:<id>` | 100 ms window while a stream is open | normal | A diagnostic page |
 | Telemetry export · `core:telemetry_export` | `[telemetry.exporter] interval` after the first record since the last send; 1 s while more than one batch is queued | low | Nothing is sent while nothing changed; a backend reading a minute late is invisible |
 | Telemetry retry · `core:telemetry_retry:<signal>` | 1 s doubling to 5 min, or the server's `Retry-After`, at most six attempts | low | Retries and backoffs are background upkeep |
