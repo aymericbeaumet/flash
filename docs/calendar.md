@@ -107,11 +107,10 @@ lookahead_hours = 24   # how far ahead the next event may start, 1-168
 
 The plugin holds no Calendars access and cannot reach your calendars: it
 is sandboxed, and asks Flash, which reads them through EventKit
-([privacy](privacy.md)). Flash reads only while a status surface shows one of
-these values (the enabled bar, a text popup while it is open, a visible
-desktop widget, a monitor) and when `calendar join` or `calendar next` runs.
-The first such read asks macOS for Calendars access, and macOS names Flash,
-so a value only a popup reads asks when that popup first opens; the default
+([privacy](privacy.md)). Flash reads only while a status format reads one of
+these values (the enabled bar and its text popups, a desktop widget, a
+monitor) and when `calendar join` or `calendar next` runs. The first such
+read asks macOS for Calendars access, and macOS names Flash; the default
 configuration reads none of these values, so it never asks. A refusal leaves
 the values empty and the commands exit 1 until you allow Flash in System
 Settings › Privacy & Security › Calendars; then run `calendar next` once to

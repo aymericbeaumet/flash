@@ -11,18 +11,6 @@ final class StatusPopupController {
 
   /// Avoid flashing an empty panel while a hover pager prepares its first frame.
   static let firstFrameWait: TimeInterval = 0.15
-  /// How long a focused or standalone text popup that opened on plugin
-  /// values nobody was showing follows its document (`awaitValues`): long
-  /// enough for the plugins told their values are shown to publish them and
-  /// for the bar to evaluate again, short enough that nobody is reading yet.
-  static let documentSettle: TimeInterval = 1
-  /// Uptime seconds for that window; a test's own clock.
-  var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime } {
-    didSet {
-      focused.clock = clock
-      hover.clock = clock
-    }
-  }
   var willFocus: (() -> Void)?
   var willDismissFocus: (() -> Void)?
   var didDismissFocus: ((String) -> Void)?
@@ -144,14 +132,6 @@ final class StatusPopupController {
     focused.dismiss(reason: "focus_transferred", endsFocus: false)
     swap(&focused, &hover)
     focused.focus()
-  }
-
-  /// The popups of `names` on screen opened on plugin values nobody was
-  /// showing: each follows its document until they had time to land.
-  func awaitValues(_ names: Set<String>) {
-    for surface in [focused, hover] where surface.presentation.name.map(names.contains) == true {
-      surface.awaitValues()
-    }
   }
 
   func dismissPreview(reason: String = "dismiss") { hover.dismiss(reason: reason) }

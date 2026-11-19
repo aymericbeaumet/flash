@@ -35,22 +35,13 @@ final class BundledProcessesPluginTests: XCTestCase {
   }
 
   /// Start the plugin set under `toml`, with `signals` as the host's signal
-  /// mechanism: wired before any plugin starts. `shown` is what a surface
-  /// has on screen: every value the configuration reads, unless a test says
-  /// otherwise.
-  private func start(
-    _ toml: String = "", signals: (any ProcessSignalling)? = nil, shown: Set<String>? = nil
-  ) throws {
+  /// mechanism: wired before any plugin starts.
+  private func start(_ toml: String = "", signals: (any ProcessSignalling)? = nil) throws {
     let config = try Self.config(toml)
     dataDir = FileManager.default.temporaryDirectory
       .appendingPathComponent("flash-processes-plugin-\(UUID().uuidString)")
     manager = PluginManager(baseDataDir: dataDir)
     manager.hostRPC.processSignals = signals
-    if let shown {
-      manager.setShownStatusSegments(shown)
-    } else {
-      manager.showEverySegment(readBy: config)
-    }
     manager.start(config: config)
     waitUntilTrue("processes loaded") { self.status != nil }
   }
@@ -186,13 +177,11 @@ final class BundledProcessesPluginTests: XCTestCase {
     XCTAssertNotNil(row(rows, pid: pid_t(plugin)), "and so is the plugin itself")
   }
 
-  /// The sandbox proof for the status values: shown by a bar and, once it
-  /// opens, a text popup, the tables and the focused app's tree are sampled
-  /// inside the sandbox, on the host's clock, at the configured row count.
-  /// The popup's value is sampled only while the popup is open.
+  /// The sandbox proof for the status values: observed by a bar and a text
+  /// popup, the tables and the focused app's tree are sampled inside the
+  /// sandbox, on the host's clock, at the configured row count.
   func testObservedValuesAreSampledInsideTheSandbox() throws {
     let child = try spawnChild()
-    let tables: Set<String> = ["processes.top_mem", "processes.top_cpu"]
     try start(
       """
       [statusbar]
@@ -204,7 +193,7 @@ final class BundledProcessesPluginTests: XCTestCase {
 
       [plugins.processes]
       top_count = 3
-      """, shown: tables)
+      """)
     XCTAssertEqual(status?.activation, "resident", "its values are shown")
     waitUntilTrue("the plugin runs while its values are shown") { self.status?.pid != nil }
 
@@ -225,8 +214,7 @@ final class BundledProcessesPluginTests: XCTestCase {
     }
 
     // The focused app: this test runner, whose tree holds the plugin and
-    // the child. Its popup is closed: the focus is tracked and nothing is
-    // read for it.
+    // the child.
     manager.emit(
       PluginEvent(
         .focusChanged,
@@ -234,26 +222,9 @@ final class BundledProcessesPluginTests: XCTestCase {
           "bundle_id": "com.example.tests", "localized_name": "Tests", "pid": Int(getpid()),
         ],
         bundleID: "com.example.tests"))
-    settleRunLoop(0.6)
-    XCTAssertEqual(status?.statusSegments["focused_app_details"] ?? "", "", "the popup is closed")
-
-    // The popup opens: the app's identity at once, its figures a first
-    // read later.
-    let pid = status?.pid
-    let opened = DispatchTime.now()
-    func sinceOpened() -> Int {
-      Int((DispatchTime.now().uptimeNanoseconds - opened.uptimeNanoseconds) / 1_000_000)
-    }
-    manager.setShownStatusSegments(tables.union(["processes.focused_app_details"]))
-    waitUntilTrue("the placeholder was published") {
-      (self.status?.statusSegments["focused_app_details"] ?? "").contains("com.example.tests")
-    }
-    let placeholderMs = sinceOpened()
     waitUntilTrue("the focused app's figures were published") {
       (self.status?.statusSegments["focused_app_details"] ?? "").contains("Resources")
     }
-    print("processes popup opened: placeholder \(placeholderMs) ms, figures \(sinceOpened()) ms")
-    XCTAssertEqual(status?.pid, pid, "opening the popup spawned nothing")
     let details = try XCTUnwrap(status?.statusSegments["focused_app_details"])
     XCTAssertTrue(details.contains("Bundle        com.example.tests\nPID           \(getpid())"))
     XCTAssertNotNil(
@@ -266,63 +237,6 @@ final class BundledProcessesPluginTests: XCTestCase {
         of: "sleep +\(child.processIdentifier) +\\d+\\.\\d% ", options: .regularExpression),
       details)
     XCTAssertTrue(details.contains("Executable    /"), details)
-
-    // The popup closes: the value clears, the tables stay.
-    manager.setShownStatusSegments(tables)
-    waitUntilTrue("the closed popup's value was cleared") {
-      (self.status?.statusSegments["focused_app_details"] ?? "").isEmpty
-    }
-    XCTAssertEqual(lines("top_mem").count, 3)
-    XCTAssertEqual(status?.pid, pid)
-  }
-
-  /// A popup is all that reads the plugin: it runs, since the configuration
-  /// refers to its value, and reads nothing until the popup opens. Opening
-  /// it shows the focused app's identity at once and its figures one first
-  /// read later (a 150 ms wait on the host's clock for pids it has not
-  /// measured yet).
-  func testAPopupOpenedColdShowsThePlaceholderThenTheFigures() throws {
-    try start(
-      """
-      [statusbar]
-      enabled = true
-      template = "#[popup=app]app#[nopopup]"
-
-      [popup.app]
-      text = "#{flash.plugin.processes.focused_app_details}"
-      """, shown: [])
-    XCTAssertEqual(status?.activation, "resident", "the configuration refers to its value")
-    waitUntilTrue("the plugin runs") { self.status?.state == "running" }
-    manager.emit(
-      PluginEvent(
-        .focusChanged,
-        payload: [
-          "bundle_id": "com.example.tests", "localized_name": "Tests", "pid": Int(getpid()),
-        ],
-        bundleID: "com.example.tests"))
-    settleRunLoop(0.6)
-    XCTAssertEqual(status?.statusSegments["focused_app_details"] ?? "", "", "the popup is closed")
-
-    var details: String { status?.statusSegments["focused_app_details"] ?? "" }
-    func wait(_ what: String, _ condition: () -> Bool) -> Double {
-      let started = DispatchTime.now()
-      let deadline = Date().addingTimeInterval(8)
-      while !condition(), Date() < deadline {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.002))
-      }
-      XCTAssertTrue(condition(), what)
-      return Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e6
-    }
-    let pid = status?.pid
-    manager.setShownStatusSegments(["processes.focused_app_details"])
-    let placeholder = wait("the placeholder") { details.contains("Collecting metrics…") }
-    XCTAssertTrue(details.contains("Bundle        com.example.tests"), details)
-    let figures = placeholder + wait("the figures") { details.contains("Resources") }
-    print(
-      "processes popup opened cold: placeholder \(Int(placeholder)) ms, "
-        + "figures \(Int(figures)) ms")
-    XCTAssertEqual(status?.pid, pid, "opening the popup spawned nothing")
-    XCTAssertLessThan(figures, 2_000)
   }
 
   /// A kill reaches the host only as a request, and the host sends the

@@ -197,18 +197,18 @@ final class WidgetConfigTests: XCTestCase {
     var config = ConfigLoader.parse(toml)
     config.monitors = [:]
     XCTAssertEqual(
-      config.statusSegmentsRead(), ["sysinfo": ["network_label", "network_details"]])
-    XCTAssertEqual(config.statusSegmentsRead(hiddenWidgets: ["top"]), [:])
+      config.observedStatusSegments(), ["sysinfo": ["network_label", "network_details"]])
+    XCTAssertEqual(config.observedStatusSegments(hiddenWidgets: ["top"]), [:])
     var both = ConfigLoader.parse(
       toml.replacingOccurrences(
         of: "enabled = false\ntemplate = \"#{flash.plugin.sysinfo.cpu",
         with: "enabled = true\ntemplate = \"#{flash.plugin.sysinfo.cpu"))
     both.monitors = [:]
     XCTAssertEqual(
-      both.statusSegmentsRead(),
+      both.observedStatusSegments(),
       ["sysinfo": ["network_label", "network_details", "cpu_summary"]])
     XCTAssertEqual(
-      both.statusSegmentsRead(hiddenWidgets: ["top"]), ["sysinfo": ["cpu_summary"]],
+      both.observedStatusSegments(hiddenWidgets: ["top"]), ["sysinfo": ["cpu_summary"]],
       "a covered widget stops observing; the bar still does")
   }
 
@@ -231,7 +231,7 @@ final class WidgetConfigTests: XCTestCase {
     XCTAssertEqual(widget.anchor, .topRight)
     XCTAssertTrue(widget.template.template.contains("%% · MEM"))
     XCTAssertEqual(
-      config.statusSegmentsRead(),
+      config.observedStatusSegments(),
       ["sysinfo": ["cpu_percent", "memory_history"], "processes": ["top_cpu"]])
     XCTAssertTrue(widget.template.template.contains("#{flash.plugin.processes.top_cpu}"))
     XCTAssertEqual(ConfigLoader.parse(try String(contentsOf: url, encoding: .utf8)).widgets, [:])

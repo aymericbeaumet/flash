@@ -602,12 +602,10 @@ enum FlashStatusBarTemplateEngine {
     terminalPopupNames: Set<String> = [],
     nativeContext: StatusFormatContext? = nil,
     popupCache: PopupEvaluationCache? = nil,
-    visiblePopupNames: Set<String>? = nil,
-    shownPopupNames: Set<String>? = nil
+    visiblePopupNames: Set<String>? = nil
   ) -> (
     model: FlashStatusBarModel, jobs: [StatusFormatJobRequest], sources: Set<String>,
-    clock: StatusFormatTimeResolution?, dependencies: StatusFormatDependencies,
-    shown: StatusFormatDependencies
+    clock: StatusFormatTimeResolution?, dependencies: StatusFormatDependencies
   ) {
     let native =
       nativeContext ?? formatContext(context, dynamicValues: dynamicValues, jobValues: jobValues)
@@ -628,10 +626,6 @@ enum FlashStatusBarTemplateEngine {
     var jobs = result.jobs
     var dependencies = result.dependencies
     var clockDependencies = result.dependencies
-    // What is on screen reads: the template, and the popups that are open
-    // (`shownPopupNames`; nil counts every popup). A closed popup is still
-    // evaluated, so it opens on a document, but nobody is looking at it.
-    var shownDependencies = result.dependencies
     for name in popupTemplates.keys.sorted() {
       guard let popup = popupTemplates[name] else { continue }
       if let memo = popupCache?.memos[name],
@@ -642,9 +636,6 @@ enum FlashStatusBarTemplateEngine {
         if visiblePopupNames?.contains(name) ?? true {
           clockDependencies.formUnion(memo.dependencies)
         }
-        if shownPopupNames?.contains(name) ?? true {
-          shownDependencies.formUnion(memo.dependencies)
-        }
         popups[name] = memo.runs
         popupTexts[name] = memo.serialized
         continue
@@ -654,9 +645,6 @@ enum FlashStatusBarTemplateEngine {
       dependencies.formUnion(expanded.dependencies)
       if visiblePopupNames?.contains(name) ?? true {
         clockDependencies.formUnion(expanded.dependencies)
-      }
-      if shownPopupNames?.contains(name) ?? true {
-        shownDependencies.formUnion(expanded.dependencies)
       }
       let runs = trimmedPopupRuns(expanded.runs)
       let serialized = StatusFormatDocument.serialize(runs)
@@ -688,7 +676,7 @@ enum FlashStatusBarTemplateEngine {
             var run = $0
             run.text = normalizedTemplate(run.text)
             return run
-          })), jobs, sources, clock, dependencies, shownDependencies
+          })), jobs, sources, clock, dependencies
     )
   }
 

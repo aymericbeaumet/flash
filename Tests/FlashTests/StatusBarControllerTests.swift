@@ -283,15 +283,15 @@ final class StatusBarControllerTests: XCTestCase {
       harness.now += 0.5
       harness.wall += 0.5
     }
-    harness.controller.setPopups(shown: ["clock"], live: ["clock"])
+    harness.controller.setLivePopupNames(["clock"])
     harness.drain()
     XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }!, 101, accuracy: 0.001)
     let evaluations = harness.queue.sync { harness.controller.surfaceEvaluations["bar"] }
-    harness.controller.setPopups(shown: ["clock"], live: ["clock"])
+    harness.controller.setLivePopupNames(["clock"])
     harness.drain()
     XCTAssertEqual(harness.queue.sync { harness.controller.surfaceEvaluations["bar"] }, evaluations)
 
-    harness.controller.setPopups(shown: [], live: [])
+    harness.controller.setLivePopupNames([])
     harness.drain()
     XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }!, 140, accuracy: 0.001)
   }
@@ -304,9 +304,9 @@ final class StatusBarControllerTests: XCTestCase {
       "seconds": StatusWidgetSpec(template: .init(template: "%S"), intervalSeconds: 0, columns: 10)
     ])
     harness.drain()
-    harness.controller.setPopups(shown: ["clock"], live: ["clock"])
+    harness.controller.setLivePopupNames(["clock"])
     harness.drain()
-    harness.controller.setPopups(shown: [], live: [])
+    harness.controller.setLivePopupNames([])
     harness.drain()
     XCTAssertEqual(harness.queue.sync { harness.controller.nextWakeup }, 101)
     harness.controller.setWidgetVisible(name: "seconds", false)

@@ -167,10 +167,6 @@ final class PluginManager {
   /// Desktop widgets fully covered for at least `hiddenWidgetGraceMs`: they no
   /// longer observe plugin segments. Queue-confined, as is `pendingHides`.
   private var hiddenWidgets: Set<String> = []
-  /// Plugin id → the status segments a surface shows now, as the status
-  /// controller last reported them (`setShownStatusSegments`): what each
-  /// plugin hears as `core:status.observed`. Queue-confined.
-  private var shownStatusSegments: [String: Set<String>] = [:]
   /// One grace deadline per covered widget on the shared clock. `.low`:
   /// nobody can see a covered widget, and the grace only decides when its
   /// plugins stop sampling for it.
@@ -578,46 +574,16 @@ final class PluginManager {
     }
   }
 
-  /// The plugin segments a status surface shows now, each `<plugin>.<segment>`:
-  /// the status controller's required set, in which a covered widget and a
-  /// closed text popup count for nothing. Each plugin hears its own part as
-  /// `core:status.observed`; whether a status-bound plugin runs stays the
-  /// configuration's (`applyObservedStatus`).
-  func setShownStatusSegments(_ segments: Set<String>) {
-    let shown = Self.statusSegmentsByPlugin(segments)
-    // Runs on the manager's queue alone, which confines what it touches.
-    nonisolated(unsafe) let apply: () -> Void = { [weak self] in
-      guard let self, self.shownStatusSegments != shown else { return }
-      self.shownStatusSegments = shown
-      self.applyObservedStatus()
-    }
-    queue.async { apply() }
-  }
-
-  /// `<plugin>.<segment>` keys by plugin id. A key without a segment
-  /// (`flash.plugin.loaded_count`) is no plugin's.
-  static func statusSegmentsByPlugin(_ keys: Set<String>) -> [String: Set<String>] {
-    var segments: [String: Set<String>] = [:]
-    for key in keys {
-      guard let dot = key.firstIndex(of: ".") else { continue }
-      segments[String(key[..<dot]), default: []].insert(String(key[key.index(after: dot)...]))
-    }
-    return segments
-  }
-
-  /// Re-derive, without reloading any plugin, which segments the running
-  /// plugins' surfaces show now (`shownStatusSegments`) and which
-  /// status-bound plugins the configuration's surfaces keep running. The
-  /// two differ on purpose: a value only a closed text popup reads is not
-  /// observed, yet its plugin stays up, so opening the popup spawns nothing.
+  /// Re-derive which segments the running plugins' surfaces show, without
+  /// reloading any plugin.
   private func applyObservedStatus() {
     guard let config = desiredState.withLock({ $0.config }) else { return }
-    let read = config.statusSegmentsRead(hiddenWidgets: hiddenWidgets)
+    let observed = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
     for (id, plugin) in pluginsByID {
       // The segments first, as on reload: a plugin that becomes observed
       // spawns now and must hear the new set after its initialize.
-      plugin.setObservedStatusSegments(shownStatusSegments[id] ?? [])
-      plugin.setStatusObserved(read[id] != nil)
+      plugin.setObservedStatusSegments(observed[id] ?? [])
+      plugin.setStatusObserved(observed[id] != nil)
     }
   }
 
@@ -994,9 +960,7 @@ final class PluginManager {
     for name in pendingHides.keys where !enabledWidgets.contains(name) {
       pendingHides.removeValue(forKey: name)?.cancel()
     }
-    // The configuration decides which status-bound plugins run; what each
-    // one hears as observed is what a surface shows now.
-    let statusRead = config.statusSegmentsRead(hiddenWidgets: hiddenWidgets)
+    let observedStatus = config.observedStatusSegments(hiddenWidgets: hiddenWidgets)
     var claimManifests: [PluginManifest] = []
     var claimIDs = Set<String>()
     for item in desired {
@@ -1040,8 +1004,8 @@ final class PluginManager {
             fields: ["id": manifest.id, "setting": key])
         }
         let settings = resolved.values
-        let observedSegments = shownStatusSegments[manifest.id]
-        let statusObserved = statusRead[manifest.id] != nil
+        let observedSegments = observedStatus[manifest.id]
+        let statusObserved = observedSegments != nil
         let existing = pluginsByID[manifest.id]
         if existing?.root == item.root, existing?.manifest == manifest,
           existing?.settings == settings, existing?.watchesFiles == config.plugins.watchingEnabled

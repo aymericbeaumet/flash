@@ -142,11 +142,9 @@ final class PluginProcess {
   /// The latest spawn's duration, read as `flash.plugin.spawn_ms`. Guarded
   /// by `lock`; set where the spawn returns.
   private var publishedSpawn: PluginSpawnTiming?
-  /// Whether the configuration's status surfaces read this plugin's
-  /// segments (the enabled bar, its text popups open or not, a desktop
-  /// widget not covered for long, a monitor); decides a status-bound
-  /// plugin's activation, so a popup opening spawns nothing. Guarded by
-  /// `lock`.
+  /// Whether a status surface (the enabled bar, its popups, a desktop widget)
+  /// shows this plugin's segments; decides a status-bound plugin's
+  /// activation. Guarded by `lock`.
   private var statusObserved: Bool
   /// Whether a perform reached the current run, spawned by it or not. Such a
   /// run outlives its status observers and its mappings like any on-demand
@@ -157,10 +155,8 @@ final class PluginProcess {
   /// (`PluginWarmPolicy`): an on-demand child is then spawned once startup
   /// has settled and outlives its status observers. Guarded by `lock`.
   private var warm = false
-  /// The manifest `status` names a status surface shows now, sorted — the
-  /// `core:status.observed` payload, and one way the user is using the
-  /// plugin (`servesUser`). A closed text popup and a covered widget show
-  /// nothing. Guarded by `lock`.
+  /// The manifest `status` names a live status surface shows, sorted — the
+  /// `core:status.observed` payload. Guarded by `lock`.
   private var observedStatusSegments: [String]
   /// The set the current child last received; queue-confined and cleared on
   /// each initialize, so a restarted child starts from the truth and no child
@@ -346,11 +342,11 @@ final class PluginProcess {
     return manifest.activation(statusObserved: statusObserved)
   }
 
-  /// The configuration's status surfaces started or stopped reading this
-  /// plugin's segments. A status-bound plugin that becomes read spawns if it
-  /// has not yet. One that stops being read returns to on-demand: its
-  /// process stops unless it has run a perform or a mapping keeps it warm,
-  /// since on-demand plugins remain running once a command needs them.
+  /// The status surfaces started or stopped showing this plugin's segments. A
+  /// status-bound plugin that becomes observed spawns if it has not yet. One
+  /// that stops being observed returns to on-demand: its process stops unless
+  /// it has run a perform or a mapping keeps it warm, since on-demand plugins
+  /// remain running once a command needs them.
   func setStatusObserved(_ observed: Bool) {
     lock.lock()
     let changed = statusObserved != observed
@@ -1438,7 +1434,7 @@ final class PluginProcess {
 
   /// Whether the user is using the plugin now: one of its performs or of
   /// its searches is in flight, or a status surface shows one of its
-  /// segments now (a closed text popup shows none). Safe from any queue.
+  /// segments. Safe from any queue.
   private func servesUser() -> Bool {
     confirmedPerformsLock.lock()
     let serving = performsInFlight > 0 || searchesInFlight > 0

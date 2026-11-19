@@ -90,7 +90,7 @@ running plugins with `:plugins show`.
 | Automation: Notes | Flash, for `notes` | The first `@notes` search or `notes refresh` while Notes runs. Never from the background: Flash asks for the plugin only while a query is scoped to its rows or one of its commands runs. |
 | Reminders | Flash, for `reminders` | The first `@reminders` search or `reminders refresh` while Reminders runs, under the same rule. |
 | Contacts | Flash, for `contacts` | The first `@contacts` search or `contacts refresh` while Contacts runs, under the same rule. |
-| Calendars | Flash, for `calendar` | The first time a status surface shows a `#{flash.plugin.calendar.next…}` value (the enabled bar, a visible widget, a monitor, or a text popup when it opens), or the first `calendar join` or `calendar next`. The default configuration reads none. Never from the background: Flash asks for the plugin only while one of its values is shown or one of its commands runs. |
+| Calendars | Flash, for `calendar` | The first time a status format (the bar, a text popup, a widget) or a monitor reads a `#{flash.plugin.calendar.next…}` value, or the first `calendar join` or `calendar next`. The default configuration reads none. Never from the background: Flash asks for the plugin only while one of its values is shown or one of its commands runs. |
 | Automation: Spotify, Music, TV, Podcasts | Flash, for `media` | The first `media status` while that app runs. Flash never asks an app that is not running. |
 | Automation: System Events | Flash, for `aiproviders` | Sending Return after a chat bang pre-fills a query, while the opened app remains focused. |
 | Notifications | Flash | The first `notify send`, or the first rise of a monitor with `notify = true`. Never at launch; refusing leaves `notify send` failing with a reason. |
@@ -327,8 +327,8 @@ stored as separate register files.
   windows, nothing in them) and which status item of the menu bar is the
   clock or Control Center, all through Accessibility. Flash keeps only which
   view or panel is open, in memory.
-- **Process status and focused-app details:** while the bar, an open text
-  popup, a visible widget or a monitor shows a
+- **Process status and focused-app details:** while the bar, one of its
+  text popups, a visible widget or a monitor reads a
   [process value](status-format.md#process-values), and while a flashlight
   query names `@processes`, the bundled `processes` plugin reads process
   IDs, executable paths (a process is named after its executable), CPU time
@@ -592,8 +592,7 @@ and cancelled flags, its calendar's title, its URL and location fields, and
 the links found in its notes. The notes themselves never leave Flash.
 macOS's Calendars prompt, which names Flash, comes up for such a plugin only
 while you are using it (one of its commands is running, or a status surface
-shows one of its values now: a text popup counts only while it is open),
-never from the background, and Flash tells only
+shows one of its values), never from the background, and Flash tells only
 those plugins that the calendar changed. `calendar` is the bundled plugin
 that declares it, beside `open` for the meeting link it hands Flash to open:
 it is sandboxed with no allowance, reads no file and stores nothing.

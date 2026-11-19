@@ -9,19 +9,6 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Fixes
 
-- A plugin value that only a text popup reads is sampled only while that
-  popup is open. A plugin is told its values are shown (`core:status.observed`)
-  from what is on screen now: the enabled bar, a visible widget, a monitor,
-  and a text popup while it is hovered, pinned or standalone. A closed popup
-  used to count, so the `processes` plugin read the focused app every ten
-  seconds and on every focus change for a popup nobody had opened, and a
-  calendar value in a popup raised macOS's Calendars prompt at launch
-  instead of when the popup first opens. The plugin's process still runs
-  while the configuration reads its values, so opening the popup spawns
-  nothing: the value lands a moment after it opens, and a pinned or
-  standalone popup follows its document for that moment. A covered widget
-  stops its plugins' sampling at once rather than after 30 seconds
-  ([status plugins](docs/status-plugins.md#scheduling)).
 - A status plugin that ran a command keeps its process when the bar stops
   showing its segments, or when the mapping that kept it warm goes: only a
   child a command had started used to stay, so one a surface or a mapping
@@ -97,9 +84,8 @@ monitors read that no plugin publishes any more, with its replacement.
   process?`). It names no process in its question, refuses pids 0 and 1, a
   pid that is gone and Flash's own, and anything but `--pid=<pid>` fails
   with its usage when the command runs. A text popup that reads one of the
-  values has it sampled only while the popup is open: it opens on the
-  focused app's identity and `Collecting metrics…`, and the figures follow
-  a first read later. With `processes` in `[plugins] disabled` the
+  values keeps them sampled while the bar is enabled, open or not, so it
+  opens on current figures. With `processes` in `[plugins] disabled` the
   values are empty, `@processes` lists nothing and `process kill` does
   nothing.
 - **`@notes`, `@reminders` and `@contacts` are three plugins.** The `apple`
@@ -472,8 +458,7 @@ monitors read that no plugin publishes any more, with its replacement.
   lists the events of a window of at most 14 days, with the links found in
   each event's notes and never the notes. macOS's prompt comes up only
   while you are using that plugin (one of its commands is running, or a
-  status surface shows one of its values now, which a closed text popup
-  does not), and `core:calendar.changed`
+  status surface shows one of its values), and `core:calendar.changed`
   tells such a plugin, and nobody else, that the calendar changed
   ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
 - A plugin holding the new `notes`, `reminders` or `contacts` capability

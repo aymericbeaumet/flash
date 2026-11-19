@@ -1212,15 +1212,13 @@ struct Config {
     }
   }
 
-  /// Plugin id → the status segments the configuration's surfaces read: the
-  /// enabled bar (template and text popups, open or not), every enabled
-  /// widget not in `hiddenWidgets` (covered for a while) and every enabled
-  /// monitor, which watches whether anything shows it. The ids keep
-  /// status-bound plugins resident, so opening a popup spawns nothing. What
-  /// each plugin hears as observed (`core:status.observed`) is narrower: the
-  /// segments a surface shows now, which the status controller reports
-  /// (`PluginManager.setShownStatusSegments`).
-  func statusSegmentsRead(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
+  /// Plugin id → the status segments a live surface shows: the enabled bar
+  /// (template and text popups), every enabled widget not in
+  /// `hiddenWidgets` (fully covered) and every enabled monitor, which
+  /// watches whether anything shows it. The ids keep status-bound plugins
+  /// resident; the segments are what `core:status.observed` reports to each
+  /// plugin.
+  func observedStatusSegments(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
     var segments =
       statusBar.enabled
       ? Self.statusSegments(in: [statusBar.template] + Array(textPopups.values)) : [:]

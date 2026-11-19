@@ -72,7 +72,7 @@ extension AppDelegate {
         ).command.first
       },
       popupPath: FlashProcessEnvironment.shared.environment["PATH"],
-      statusSegmentsRead: config.statusSegmentsRead(),
+      statusSegmentsRead: config.observedStatusSegments(),
       statusSegmentsDeclared: pluginManager.declaredStatusSegments(),
       disabledPlugins: config.plugins.disabled,
       refusedLinkSchemes: overlay.statusLinkOpener.refusedSchemes,

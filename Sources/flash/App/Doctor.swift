@@ -111,7 +111,7 @@ enum Doctor {
     /// The `PATH` popups launch with, from the login environment.
     var popupPath: String?
     /// Plugin id → the status names the bar, widgets, popups and monitors
-    /// read (`Config.statusSegmentsRead`).
+    /// read (`Config.observedStatusSegments`).
     var statusSegmentsRead: [String: Set<String>] = [:]
     /// Plugin id → the status names each loaded plugin's manifest declares.
     var statusSegmentsDeclared: [String: Set<String>] = [:]

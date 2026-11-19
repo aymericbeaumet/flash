@@ -585,14 +585,14 @@ final class ConfigLoaderTests: XCTestCase {
     // The built-in monitors observe on their own (`MonitorTests`).
     var config = ConfigLoader.parse(toml)
     config.monitors = [:]
-    XCTAssertEqual(Set(config.statusSegmentsRead().keys), ["sysinfo"])
+    XCTAssertEqual(Set(config.observedStatusSegments().keys), ["sysinfo"])
     XCTAssertEqual(
-      config.statusSegmentsRead(),
+      config.observedStatusSegments(),
       ["sysinfo": ["cpu_summary", "cpu_label", "memory_details"]])
     var hidden = ConfigLoader.parse(
       toml.replacingOccurrences(of: "enabled = true", with: "enabled = false"))
     hidden.monitors = [:]
-    XCTAssertEqual(hidden.statusSegmentsRead(), [:], "a hidden bar observes nothing")
+    XCTAssertEqual(hidden.observedStatusSegments(), [:], "a hidden bar observes nothing")
   }
 
   func testDeclaredWindowLayoutsAreTheProportionalWindowMoveMappings() {
