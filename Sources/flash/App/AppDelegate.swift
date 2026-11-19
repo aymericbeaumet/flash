@@ -634,6 +634,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         }
       }
     }
+    // The machine and session actions `host.system_action` serves; wired
+    // here alone, so nothing reaches them before launch or inside a test.
+    pluginManager.hostRPC.systemActions = LiveSystemActions(lockScreen: { [weak self] in
+      self?.postLockScreenChord() ?? false
+    })
     let launchApplications = Self.runningApplicationsSnapshot()
     pluginManager.cacheRunningApplicationsSnapshot(launchApplications)
     launchStages.measure("plugins") { pluginManager.start(config: config) }

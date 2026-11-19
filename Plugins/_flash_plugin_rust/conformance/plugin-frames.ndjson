@@ -215,6 +215,12 @@
 {"name": "host.audio_devices.volume-with-a-direction", "expect": "reject", "reply": "host.audio_devices.reply.params-refused", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"volume","direction":"output"}}}
 {"name": "host.audio_devices.list-with-a-uid", "expect": "reject", "reply": "host.audio_devices.reply.params-refused", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"list","direction":"output","uid":"usb-1"}}}
 {"name": "host.audio_devices.unknown-param", "expect": "reject", "reply": "host.audio_devices.reply.params-refused", "frame": {"id":1,"method":"host.audio_devices","params":{"operation":"toggle_mute","device":"usb-1"}}}
+{"name": "host.system_action.lock", "expect": "accept", "reply": "host.system_action.reply", "frame": {"id":1,"method":"host.system_action","params":{"action":"lock_screen"}}}
+{"name": "host.system_action.restart-unconfirmed", "expect": "accept", "reply": "host.system_action.reply.unconfirmed", "frame": {"id":1,"method":"host.system_action","params":{"action":"restart"}}}
+{"name": "host.system_action.without-an-action", "expect": "reject", "reply": "host.system_action.reply.without-an-action", "frame": {"id":1,"method":"host.system_action","params":{}}}
+{"name": "host.system_action.unknown-action", "expect": "reject", "reply": "host.system_action.reply.without-an-action", "frame": {"id":1,"method":"host.system_action","params":{"action":"hibernate"}}}
+{"name": "host.system_action.action-not-a-string", "expect": "reject", "reply": "host.system_action.reply.without-an-action", "frame": {"id":1,"method":"host.system_action","params":{"action":["sleep"]}}}
+{"name": "host.system_action.unknown-param", "expect": "reject", "reply": "host.system_action.reply.params-refused", "frame": {"id":1,"method":"host.system_action","params":{"action":"sleep","delay":5}}}
 {"name": "host.open.url", "expect": "accept", "reply": "host.open.reply", "frame": {"id":1,"method":"host.open","params":{"url":"https://example.com/a"}}}
 {"name": "host.open.app", "expect": "accept", "reply": "host.open.reply.app", "frame": {"id":1,"method":"host.open","params":{"bundle_id":"com.example.app"}}}
 {"name": "host.open.local-file", "expect": "reject", "reply": "host.open.reply.local-file", "frame": {"id":1,"method":"host.open","params":{"url":"file:///Applications/Notes.app"}}}

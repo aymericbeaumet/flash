@@ -625,6 +625,16 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
             request(|ctx| async move { ctx.output_volume().await }).await,
         ),
         (
+            "host.system_action.lock",
+            request(|ctx| async move { ctx.system_action(crate::SystemAction::LockScreen).await })
+                .await,
+        ),
+        (
+            "host.system_action.restart-unconfirmed",
+            request(|ctx| async move { ctx.system_action(crate::SystemAction::Restart).await })
+                .await,
+        ),
+        (
             "host.normal_mode_target",
             request(|ctx| async move { ctx.normal_mode_target().await }).await,
         ),

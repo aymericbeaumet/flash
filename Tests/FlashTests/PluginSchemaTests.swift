@@ -372,6 +372,7 @@ final class PluginSchemaTests: XCTestCase {
     rpc.onSyntheticKeysRequested = { _, _, _ in }
     rpc.wifiInfoProvider = wifi
     rpc.audioDevices = AudioDeviceStub()
+    rpc.systemActions = SystemActionStub()
     rpc.appleScriptRunner = { _, _ in
       AppleScriptOutput(status: 0, stdout: "Focus\nRest\n", stderr: "")
     }

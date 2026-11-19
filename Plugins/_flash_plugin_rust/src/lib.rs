@@ -22,6 +22,7 @@ mod runtime;
 mod settle;
 pub mod status;
 pub mod sys;
+mod system;
 pub mod testing;
 mod trace;
 mod types;
@@ -54,3 +55,4 @@ pub use types::{
 
 pub use applescript::AppleScriptOperation;
 pub use audio::{AudioDevice, AudioDirection, MAX_VOLUME_TICKS, OutputVolume};
+pub use system::{CONFIRMATION_REQUIRED_ERROR, SystemAction, SystemActionOutcome};

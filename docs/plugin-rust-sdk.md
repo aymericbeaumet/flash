@@ -220,6 +220,16 @@ Handed to every handler; cheap to clone. Key surface:
   that many volume-key ticks (clamped to `MAX_VOLUME_TICKS` either way) and
   answers the percent, `toggle_output_mute()` answers whether it is muted,
   and `output_volume()` reads `OutputVolume { percent, muted }`.
+  The `system_actions` capability has `system_action(SystemAction::Sleep)`:
+  the host asks macOS for the action and the call answers
+  `Ok(SystemActionOutcome::Done)`, `Ok(Pending)` when macOS has not
+  answered within eight seconds and the host is still at it (a full Trash,
+  an Automation prompt left open), or `Err` with the host's reason. A
+  destructive action (`SystemAction::is_destructive`: restart, shut down,
+  log out, empty the Trash) is honoured only inside a perform the user
+  confirmed, once: call it from the `on_command` or `on_resolve` of a
+  command or row that declares `confirm`. Anywhere else it fails with
+  `CONFIRMATION_REQUIRED_ERROR`.
 - Host clock: a plugin never arms a timer or sleeps to schedule work.
   `ctx.interval(period, priority, callback)` registers a cadence with the
   host, which drives every poller in Flash — core watchers included — from one

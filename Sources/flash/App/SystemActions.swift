@@ -1,8 +1,6 @@
 import AppKit
 import FlashCore
 import Foundation
-import IOKit
-import IOKit.pwr_mgt
 
 /// The machine and session actions Flash performs itself: one command each
 /// (`flash screen lock`), and one row each in `@actions`. The raw value
@@ -102,44 +100,24 @@ enum SystemAction: String, CaseIterable, Hashable {
     return .ask(confirmation)
   }
 
-  /// How Flash carries the action out.
-  var execution: SystemActionExecution {
+  /// The host action behind the command (`HostSystemAction`), which holds
+  /// the mechanism.
+  var hostAction: HostSystemAction {
     switch self {
-    case .screenLock: return .lockScreenChord
-    case .systemSleep: return .sleepSystem
-    case .displaySleep: return .sleepDisplays
-    case .screensaverStart: return .startScreensaver
-    case .systemRestart:
-      return .appleScript("tell application \"System Events\" to restart", timeout: 10)
-    case .systemShutdown:
-      return .appleScript("tell application \"System Events\" to shut down", timeout: 10)
-    case .systemLogout:
-      return .appleScript("tell application \"System Events\" to log out", timeout: 10)
-    case .trashEmpty:
-      return .appleScript("tell application \"Finder\" to empty trash", timeout: 30)
-    case .darkModeToggle:
-      return .appleScript(
-        "tell application \"System Events\" to tell appearance preferences to "
-          + "set dark mode to not dark mode", timeout: 10)
+    case .screenLock: return .lockScreen
+    case .systemSleep: return .sleep
+    case .displaySleep: return .displaySleep
+    case .screensaverStart: return .screensaver
+    case .systemRestart: return .restart
+    case .systemShutdown: return .shutdown
+    case .systemLogout: return .logout
+    case .trashEmpty: return .emptyTrash
+    case .darkModeToggle: return .toggleAppearance
     }
   }
-}
 
-/// The mechanism behind one system action.
-enum SystemActionExecution: Equatable {
-  /// macOS's own Lock Screen shortcut, posted to the session through the
-  /// global-key path: macOS locks, Flash synthesizes no app chord.
-  case lockScreenChord
-  /// `pmset sleepnow` without the subprocess.
-  case sleepSystem
-  /// `pmset displaysleepnow` without the subprocess.
-  case sleepDisplays
-  case startScreensaver
-  /// An Apple Event to System Events or Finder, scripted.
-  case appleScript(String, timeout: TimeInterval)
-
-  /// Control-Command-Q, in Flash's key syntax.
-  static let lockScreenShortcut = "ctrl+cmd+q"
+  /// How Flash carries the action out.
+  var execution: SystemActionExecution { hostAction.execution }
 }
 
 /// One gated command's next step.
@@ -149,69 +127,6 @@ enum ConfirmationStep: Equatable {
   case run
   /// Nothing to run, for this reason.
   case refuse(String)
-}
-
-/// Performs every system action but the lock, one at a time on a background
-/// serial queue, never main: power management through IOKit, the screen
-/// saver through NSWorkspace, and the Apple Events through the in-process
-/// `AppleScriptRunner`, which can wait seconds on System Events or Finder.
-enum SystemActionPerformer {
-  private static let queue = DispatchQueue(label: "flash.system-actions", qos: .userInitiated)
-
-  /// `done` runs on main with nil, or the reason the action failed.
-  static func perform(
-    _ execution: SystemActionExecution, done: @escaping (String?) -> Void
-  ) {
-    queue.async {
-      let failure: String?
-      switch execution {
-      case .lockScreenChord:
-        failure = "the lock chord is posted on main"
-      case .sleepSystem:
-        failure = sleepSystem()
-      case .sleepDisplays:
-        failure = sleepDisplays()
-      case .startScreensaver:
-        failure = startScreensaver()
-      case .appleScript(let source, let timeout):
-        failure = AppleScriptRunner.run(source, timeout: timeout).failure
-      }
-      DispatchQueue.main.async { done(failure) }
-    }
-  }
-
-  private static func sleepSystem() -> String? {
-    let port = IOPMFindPowerManagement(mach_port_t(MACH_PORT_NULL))
-    guard port != IO_OBJECT_NULL else { return "power management unavailable" }
-    defer { IOServiceClose(port) }
-    let result = IOPMSleepSystem(port)
-    return result == kIOReturnSuccess ? nil : "IOPMSleepSystem returned \(result)"
-  }
-
-  /// The display wrangler's idle request, as `pmset displaysleepnow` makes it.
-  private static func sleepDisplays() -> String? {
-    let wrangler = IORegistryEntryFromPath(
-      kIOMainPortDefault, "IOService:/IOResources/IODisplayWrangler")
-    guard wrangler != IO_OBJECT_NULL else { return "display wrangler unavailable" }
-    defer { IOObjectRelease(wrangler) }
-    let result = IORegistryEntrySetCFProperty(
-      wrangler, "IORequestIdle" as CFString, kCFBooleanTrue)
-    return result == KERN_SUCCESS ? nil : "IORequestIdle returned \(result)"
-  }
-
-  private static func startScreensaver() -> String? {
-    guard
-      let url = NSWorkspace.shared.urlForApplication(
-        withBundleIdentifier: "com.apple.ScreenSaverEngine")
-    else { return "no ScreenSaverEngine" }
-    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) {
-      _, error in
-      if let error {
-        FlashLog.warn("[system] screensaver_start failed: \(error.localizedDescription)")
-      }
-    }
-    return nil
-  }
 }
 
 /// `@actions`: every system action as a flashlight row. Selecting one

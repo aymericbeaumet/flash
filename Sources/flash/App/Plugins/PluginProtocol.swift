@@ -172,6 +172,9 @@ enum PluginProtocol {
   static let hostCallCapacityError = "host call capacity exceeded"
   /// A plugin's read-only handler ran out of the request's `deadline_ms`.
   static let deadlineExceededError = "deadline exceeded"
+  /// A host action that needs the user's consent, asked outside a perform
+  /// the user confirmed.
+  static let confirmationRequiredError = "requires a perform the user confirmed"
   static func capabilityDeniedError(_ capability: String) -> String {
     "missing \(capability) capability"
   }

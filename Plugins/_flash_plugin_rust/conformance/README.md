@@ -61,6 +61,8 @@ The lines describe one plugin and one moment:
 - Output devices `MacBook Pro Speakers` (`built-in`, the default) and
   `USB Audio` (`usb-1`), the same two as inputs; the output at 38%, not
   muted. A step of two ticks lands on 50%.
+- The host carries out a system action without touching the Mac; no
+  confirmed perform is in flight, so a destructive one is refused.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
 - Searching the live source `example.live` for `ro` answers two rows; any
   other query answers none. The corpus pins frames, so its one plugin answers

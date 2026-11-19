@@ -4,7 +4,7 @@ import FlashCore
 /// The machine, session and process verbs Flash performs itself. One that
 /// nothing undoes asks first through the confirmation alert; `y` runs it
 /// again, confirmed. No path here blocks main: power requests and Apple
-/// Events run on `SystemActionPerformer`'s queue, process reads on
+/// Events run on `HostSystemActions.queue`, process reads on
 /// `processCommandQueue`.
 extension AppDelegate {
   static let processCommandQueue = DispatchQueue(
@@ -19,14 +19,19 @@ extension AppDelegate {
       FlashLog.warn("[system] \(action.rawValue) refused: \(reason)")
     case .run:
       FlashLog.debug("[system] run \(action.rawValue)")
-      guard action.execution != .lockScreenChord else {
-        if !lockScreen() { warnCommandFailure(command.diagnosticDescription) }
+      // The mechanisms are the ones `host.system_action` serves a plugin.
+      guard let mechanisms = pluginManager.hostRPC.systemActions else {
+        warnCommandFailure(command.diagnosticDescription)
         return
       }
-      SystemActionPerformer.perform(action.execution) { [weak self] failure in
-        guard let failure else { return }
-        FlashLog.warn("[system] \(action.rawValue) failed: \(failure)")
-        self?.warnCommandFailure(command.diagnosticDescription)
+      let execution = action.execution
+      HostSystemActions.queue(for: execution).async { [weak self] in
+        let failure = mechanisms.perform(execution)
+        DispatchQueue.main.async {
+          guard let failure else { return }
+          FlashLog.warn("[system] \(action.rawValue) failed: \(failure)")
+          self?.warnCommandFailure(command.diagnosticDescription)
+        }
       }
     }
   }
@@ -47,8 +52,9 @@ extension AppDelegate {
 
   /// macOS's Lock Screen shortcut, posted to the session the way any global
   /// key is: noted first, so the Carbon path does not take the echo for the
-  /// user's own binding of the same chord.
-  private func lockScreen() -> Bool {
+  /// user's own binding of the same chord. The lock mechanism of
+  /// `LiveSystemActions`; called on main.
+  func postLockScreenChord() -> Bool {
     guard let chord = HotkeySyntax.parse(hotkey: SystemActionExecution.lockScreenShortcut) else {
       return false
     }

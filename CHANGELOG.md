@@ -374,6 +374,12 @@ monitors read that no plugin publishes any more, with its replacement.
   other key cancels, and the request that follows a `y` says so
   (`confirmed`), as does one wrapped in `alert confirm`
   ([confirmation](docs/plugin-protocol.md#confirmation)).
+- A plugin holding the new `system_actions` capability asks Flash to lock
+  the screen, sleep the Mac or its displays, start the screen saver, toggle
+  dark mode, restart, shut down, log out or empty the Trash through
+  `host.system_action`. Restart, shut down, log out and emptying the Trash
+  are honoured only inside a request the user confirmed, once per
+  confirmation; anywhere else Flash refuses them.
 - `feed` and `searchproviders` no longer open network connections: Flash
   downloads the feed and DuckDuckGo's bang list for them through
   `host.fetch`, and their sandboxes deny the network like every other bundled

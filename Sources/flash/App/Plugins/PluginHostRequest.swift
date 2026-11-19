@@ -19,6 +19,7 @@ enum PluginHostRequest {
   case open(OpenTarget)
   case appleScript([String: Any])
   case audio(Audio)
+  case systemAction(HostSystemAction)
   case ax(AX)
 
   typealias Chord = (key: CGKeyCode, flags: CGEventFlags)
@@ -67,6 +68,7 @@ enum PluginHostRequest {
     case wifiInfo = "host.wifi_info"
     case appleScript = "host.applescript"
     case audioDevices = "host.audio_devices"
+    case systemAction = "host.system_action"
     case normalModeTarget = "host.normal_mode_target"
     case activate = "host.activate"
     case open = "host.open"
@@ -85,6 +87,7 @@ enum PluginHostRequest {
       case .wifiInfo: return .wifiInfo
       case .appleScript: return .appleEvents
       case .audioDevices: return .audioDevices
+      case .systemAction: return .systemActions
       case .normalModeTarget, .activate: return .appControl
       case .open: return .open
       case .postKeys, .axSnapshot, .axPerform, .axSet, .axSelectChild: return .accessibility
@@ -100,6 +103,7 @@ enum PluginHostRequest {
       case .wifiInfo: return ["request_authorization"]
       case .appleScript: return nil
       case .audioDevices: return ["operation", "direction", "uid", "ticks"]
+      case .systemAction: return ["action"]
       case .activate: return ["pid"]
       case .open: return ["url", "bundle_id"]
       case .postKeys: return ["pid", "keys", "interval_ms"]
@@ -146,6 +150,10 @@ enum PluginHostRequest {
       self = .appleScript(params)
     case .audioDevices:
       self = .audio(try Self.audio(params, malformed: malformed))
+    case .systemAction:
+      guard let name = params["action"] as? String, let action = HostSystemAction(rawValue: name)
+      else { throw Refusal(message: "host.system_action requires a supported action") }
+      self = .systemAction(action)
     case .activate:
       guard let pid = PluginJSON.pid(params["pid"]) else {
         throw Refusal(message: "host.activate requires pid")

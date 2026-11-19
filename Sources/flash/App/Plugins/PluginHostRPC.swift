@@ -46,6 +46,11 @@ final class PluginHostRPC {
   /// Every CoreAudio call is a synchronous audio-server request, so they
   /// run here, in order, off the main thread and off the plugin's queue.
   private let audioQueue = DispatchQueue(label: "flash.plugins.audio", qos: .userInitiated)
+  /// The mechanisms behind `host.system_action`: plugins never lock, sleep
+  /// or restart the Mac themselves. Nil until the resident wires its own at
+  /// launch (`LiveSystemActions`), and nil inside the test runner unless a
+  /// test injects one: an unwired host refuses every action.
+  var systemActions: (any SystemActionPerforming)?
 
   // Testability seams for the arms whose production bodies fire
   // irreversible side effects (LaunchServices open). Tests swap these to
@@ -144,6 +149,8 @@ final class PluginHostRPC {
       hostOpen(target, scope: scope, reply: reply)
     case .audio(let operation):
       hostAudioDevices(operation, scope: scope, reply: reply)
+    case .systemAction(let action):
+      hostSystemAction(action, pluginID: pluginID, scope: scope, reply: reply)
     case .appleScript(let params):
       PluginHostAppleScript.handle(
         params, targets: appleEventsTargets, browsers: browserEngines(), pluginID: pluginID,
@@ -274,6 +281,40 @@ final class PluginHostRPC {
       } catch {
         reply(["ok": false, "error": error.localizedDescription])
       }
+    }
+  }
+
+  /// `host.system_action`: one machine or session action, carried out by the
+  /// host's mechanisms. A destructive one runs only inside a perform the
+  /// user confirmed, which it claims: outside one, or once that perform's
+  /// consent is spent, it is refused before anything is asked of macOS.
+  private func hostSystemAction(
+    _ action: HostSystemAction, pluginID: String, scope: PluginHostRequestScope,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let systemActions else {
+      reply(["ok": false, "error": "system actions unavailable"])
+      return
+    }
+    if action.isDestructive, !scope.claimConfirmedPerform() {
+      FlashLog.warn(
+        "[plugin] system action refused: no confirmed perform in flight",
+        fields: ["plugin": pluginID, "action": action.rawValue])
+      reply(["ok": false, "error": PluginProtocol.confirmationRequiredError])
+      return
+    }
+    let execution = action.execution
+    scope.enqueue(on: HostSystemActions.queue(for: execution)) {
+      guard let failure = systemActions.perform(execution) else {
+        FlashLog.info(
+          "[plugin] system action", fields: ["plugin": pluginID, "action": action.rawValue])
+        reply(["ok": true])
+        return
+      }
+      FlashLog.warn(
+        "[plugin] system action failed: \(failure)",
+        fields: ["plugin": pluginID, "action": action.rawValue])
+      reply(["ok": false, "error": failure])
     }
   }
 

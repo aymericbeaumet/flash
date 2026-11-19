@@ -701,7 +701,8 @@ manifest; the full method↔capability table lives in `protocol.json`):
 can name a window without asking the user to pick one) +
 `host.activate` (`app_control`), `host.open` (`open`),
 `host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`),
-`host.audio_devices` (`audio_devices`), `host.post_keys` + `host.ax_snapshot` /
+`host.audio_devices` (`audio_devices`), `host.system_action`
+(`system_actions`), `host.post_keys` + `host.ax_snapshot` /
 `host.ax_perform` / `host.ax_set` / `host.ax_select_child`
 (`accessibility`). A denied call answers `{"ok": false, "error": "missing
 <capability> capability"}`. `host.ping` needs no capability and answers
@@ -767,6 +768,25 @@ negative, never zero, at most 16 either way), clears its mute and answers
 CoreAudio failure, an unknown UID or a device without the control answers
 `{"ok": false, "error"}`. The calls of every plugin run one at a time, off
 the main thread.
+`host.system_action` takes exactly `{"action"}` and asks macOS for one
+machine or session action, which stays in the resident: `lock_screen` posts
+macOS's Lock Screen shortcut to the session, `sleep` and `display_sleep` ask
+IOKit power management, `screensaver` opens ScreenSaverEngine and
+`toggle_appearance` switches dark mode through System Events. `restart`,
+`shutdown` and `logout` go through System Events and `empty_trash` through
+Finder, and nothing undoes them: the host honours one of these four only
+inside a `perform` the user [confirmed](#confirmation), one action per
+confirmed perform. Outside one — from an event, a poll tick, a search, a
+perform the user was not asked about, or after that perform's one action —
+it asks macOS for nothing and answers `{"ok": false, "error": "requires a
+perform the user confirmed"}`. A plugin cannot grant itself that consent: the
+request has no key for it, and only the user's `y` marks a perform. The
+reply is `{"ok": true}` once macOS took the request, or `{"ok": false,
+"error"}` with why it did not. The Apple Events are the host's own fixed
+scripts, so the plugin needs neither `apple_events` nor a target list and
+its sandbox gains nothing; macOS attributes the Automation request to
+Flash. The actions run one at a time, off the main thread except the lock
+chord. `protocol.json` `system_actions` lists them.
 `host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL
@@ -802,7 +822,10 @@ URL the allowlist admits. `open` hands URLs/bundle ids to LaunchServices
 host-side.
 `wifi_info` exposes only the current SSID after host-owned Location
 authorization. `audio_devices` lists the audio devices and changes the
-default device, the output volume and its mute. Omitted capabilities are
+default device, the output volume and its mute. `system_actions` locks the
+screen, sleeps the Mac or its displays, starts the screen saver, toggles
+dark mode and, inside a perform the user confirmed, restarts, shuts down,
+logs out or empties the Trash. Omitted capabilities are
 default-denied. The registry is
 frozen: additions are allowed, renames never.
 
@@ -1319,6 +1342,7 @@ content, or config values.
 | `request_capacity` | `plugin request capacity exceeded` | More concurrent host requests than the plugin admits |
 | `host_call_capacity` | `host call capacity exceeded` | More concurrent host RPCs than the bound allows |
 | `deadline_exceeded` | `deadline exceeded` | A `hints`, `text_grid` or `search` handler dropped before its deadline |
+| `confirmation_required` | `requires a perform the user confirmed` | A destructive `host.system_action` asked outside a confirmed perform |
 
 ## Limits and deadlines
 

@@ -102,6 +102,12 @@
 {"name": "host.audio_devices.reply.without-a-uid", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"host.audio_devices select requires a non-empty uid"}}}
 {"name": "host.audio_devices.reply.invalid-ticks", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"host.audio_devices step_volume requires non-zero ticks from -16 to 16"}}}
 {"name": "host.audio_devices.reply.params-refused", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.audio_devices params"}}}
+{"name": "host.system_action.reply", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.system_action.reply.unconfirmed", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"requires a perform the user confirmed"}}}
+{"name": "host.system_action.reply.failed", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"power management unavailable"}}}
+{"name": "host.system_action.reply.without-an-action", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"host.system_action requires a supported action"}}}
+{"name": "host.system_action.reply.params-refused", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.system_action params"}}}
+{"name": "host.system_action.reply.with-a-status", "expect": "reject", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":true,"error":"asleep"}}}
 {"name": "host.open.reply", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true,"bundle_id":"com.apple.Safari"}}}
 {"name": "host.open.reply.app", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true}}}
 {"name": "host.open.reply.local-file", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"host.open does not open local files"}}}

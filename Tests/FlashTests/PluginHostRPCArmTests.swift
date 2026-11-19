@@ -8,8 +8,9 @@ import XCTest
 /// Every arm of the plugin→host RPC surface, driven through
 /// `handleHostRequest` with synthetic capability sets. Side-effecting arms
 /// go through the closure/static seams (urlOpener, appOpener,
-/// onSyntheticKeysRequested, onNormalModeTargetRequested, wifiInfoProvider) —
-/// no test here ever opens a browser or posts a HID event.
+/// onSyntheticKeysRequested, onNormalModeTargetRequested, wifiInfoProvider,
+/// systemActions) — no test here ever opens a browser, posts a HID event or
+/// asks macOS for a system action.
 final class PluginHostRPCArmTests: XCTestCase {
 
   // MARK: - Plumbing
@@ -34,6 +35,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     capabilities: Set<PluginCapability> = [],
     fetchURLs: [String] = [],
     appleEventsTargets: [String] = [],
+    scope: PluginHostRequestScope = PluginHostRequestScope(isCurrent: { true }),
     timeout: TimeInterval = 5,
     file: StaticString = #filePath,
     line: UInt = #line
@@ -48,7 +50,7 @@ final class PluginHostRPCArmTests: XCTestCase {
       capabilities: capabilities,
       fetchURLs: fetchURLs,
       appleEventsTargets: appleEventsTargets,
-      scope: PluginHostRequestScope(isCurrent: { true })
+      scope: scope
     ) { result in
       lock.lock()
       reply = result
@@ -67,7 +69,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 13, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 14, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -81,7 +83,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 12, "12 gated + host.ping ungated")
+    XCTAssertEqual(gated, 13, "13 gated + host.ping ungated")
     // The ungated arm answers without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
   }
@@ -336,6 +338,196 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertEqual(
       audio["directions"] as? [String], AudioDeviceDirection.allCases.map(\.rawValue))
     XCTAssertEqual(audio["max_ticks"] as? Int, PluginHostRequest.maxVolumeTicks)
+  }
+
+  // MARK: - host.system_action (systemActions seam)
+
+  private func systemReply(
+    _ rpc: PluginHostRPC, _ params: [String: Any],
+    scope: PluginHostRequestScope = PluginHostRequestScope(isCurrent: { true })
+  ) -> NSDictionary {
+    hostReply(rpc, "host.system_action", params, capabilities: [.systemActions], scope: scope)
+      as NSDictionary
+  }
+
+  /// A scope inside `grants` performs the user confirmed: each hands its
+  /// consent out once.
+  private func scope(confirmedPerforms grants: Int) -> PluginHostRequestScope {
+    let lock = NSLock()
+    var left = grants
+    return PluginHostRequestScope(
+      isCurrent: { true },
+      claimConfirmedPerform: {
+        lock.lock()
+        defer { lock.unlock() }
+        guard left > 0 else { return false }
+        left -= 1
+        return true
+      })
+  }
+
+  /// The five actions something undoes run at once, each through its own
+  /// mechanism: the lock chord on main, the rest off it.
+  func testSystemActionsThatCanBeUndoneRunWithoutAConfirmation() {
+    let rpc = PluginHostRPC()
+    let mechanisms = SystemActionStub()
+    rpc.systemActions = mechanisms
+    let expected: [(String, SystemActionExecution, onMain: Bool)] = [
+      ("lock_screen", .lockScreenChord, true),
+      ("sleep", .sleepSystem, false),
+      ("display_sleep", .sleepDisplays, false),
+      ("screensaver", .startScreensaver, false),
+      (
+        "toggle_appearance",
+        .appleScript(
+          "tell application \"System Events\" to tell appearance preferences to "
+            + "set dark mode to not dark mode", timeout: 10), false
+      ),
+    ]
+    for (action, _, _) in expected {
+      XCTAssertEqual(systemReply(rpc, ["action": action]), ["ok": true] as NSDictionary, action)
+    }
+    XCTAssertEqual(mechanisms.executions, expected.map(\.1))
+    XCTAssertEqual(mechanisms.onMainThread, expected.map(\.onMain))
+  }
+
+  /// The four actions nothing undoes are refused, with the fixed error and
+  /// before any mechanism is reached, unless a perform the user confirmed
+  /// is in flight; that perform covers exactly one of them.
+  func testADestructiveSystemActionIsHonouredOnlyInsideAConfirmedPerform() throws {
+    let rpc = PluginHostRPC()
+    let mechanisms = SystemActionStub()
+    rpc.systemActions = mechanisms
+    let refused: NSDictionary = ["ok": false, "error": "requires a perform the user confirmed"]
+    XCTAssertEqual(PluginProtocol.confirmationRequiredError, refused["error"] as? String)
+    let destructive = ["restart", "shutdown", "logout", "empty_trash"]
+    for action in destructive {
+      XCTAssertEqual(systemReply(rpc, ["action": action]), refused, action)
+    }
+    XCTAssertEqual(mechanisms.executions, [], "nothing was asked of macOS")
+
+    // The same request, inside one confirmed perform: honoured once.
+    let confirmed = scope(confirmedPerforms: 1)
+    XCTAssertEqual(
+      systemReply(rpc, ["action": "restart"], scope: confirmed), ["ok": true] as NSDictionary)
+    XCTAssertEqual(
+      mechanisms.executions,
+      [.appleScript("tell application \"System Events\" to restart", timeout: 10)])
+    XCTAssertEqual(mechanisms.onMainThread, [false])
+    XCTAssertEqual(
+      systemReply(rpc, ["action": "shutdown"], scope: confirmed), refused,
+      "the perform's consent is spent")
+    XCTAssertEqual(mechanisms.executions.count, 1)
+
+    // An action something undoes never spends a consent.
+    let kept = scope(confirmedPerforms: 1)
+    XCTAssertEqual(
+      systemReply(rpc, ["action": "sleep"], scope: kept), ["ok": true] as NSDictionary)
+    XCTAssertEqual(
+      systemReply(rpc, ["action": "empty_trash"], scope: kept), ["ok": true] as NSDictionary)
+    XCTAssertEqual(
+      mechanisms.executions.last,
+      .appleScript("tell application \"Finder\" to empty trash", timeout: 30))
+  }
+
+  /// A mechanism's failure is the reply's error; a host with no mechanisms
+  /// wired refuses every action, and spends no consent on it.
+  func testSystemActionFailuresAndAnUnwiredHostAnswerWhy() {
+    let rpc = PluginHostRPC()
+    XCTAssertNil(rpc.systemActions, "nothing is wired outside the resident's launch")
+    let unwired: NSDictionary = ["ok": false, "error": "system actions unavailable"]
+    XCTAssertEqual(systemReply(rpc, ["action": "sleep"]), unwired)
+    let untouched = scope(confirmedPerforms: 1)
+    XCTAssertEqual(systemReply(rpc, ["action": "restart"], scope: untouched), unwired)
+    XCTAssertTrue(untouched.claimConfirmedPerform(), "the consent was not spent")
+
+    let mechanisms = SystemActionStub()
+    mechanisms.failure = "power management unavailable"
+    rpc.systemActions = mechanisms
+    XCTAssertEqual(
+      systemReply(rpc, ["action": "sleep"]),
+      ["ok": false, "error": "power management unavailable"] as NSDictionary)
+    XCTAssertEqual(mechanisms.executions, [.sleepSystem])
+  }
+
+  func testSystemActionRefusesWhatItDoesNotDefine() {
+    let rpc = PluginHostRPC()
+    let mechanisms = SystemActionStub()
+    rpc.systemActions = mechanisms
+    let unsupported = "host.system_action requires a supported action"
+    let malformed: [([String: Any], String)] = [
+      ([:], unsupported),
+      (["action": "hibernate"], unsupported),
+      (["action": "Restart"], unsupported),
+      (["action": ["sleep"]], unsupported),
+      (["action": "sleep", "delay": 5], "invalid host.system_action params"),
+      (["action": "restart", "confirmed": true], "invalid host.system_action params"),
+    ]
+    for (params, error) in malformed {
+      XCTAssertEqual(
+        systemReply(rpc, params, scope: scope(confirmedPerforms: 1)),
+        ["ok": false, "error": error] as NSDictionary, "\(params)")
+    }
+    XCTAssertEqual(mechanisms.executions, [], "a plugin cannot confirm its own request")
+  }
+
+  /// The actions, the destructive ones and the refusal are the contract's.
+  func testSystemActionsContractMatchesSpec() throws {
+    let spec = try XCTUnwrap(try protocolSpec()["system_actions"] as? [String: Any])
+    XCTAssertEqual(spec["actions"] as? [String], HostSystemAction.allCases.map(\.rawValue))
+    XCTAssertEqual(
+      spec["destructive"] as? [String],
+      HostSystemAction.allCases.filter(\.isDestructive).map(\.rawValue))
+    let errors = try XCTUnwrap(try protocolSpec()["errors"] as? [String: Any])
+    XCTAssertEqual(
+      errors["confirmation_required"] as? String, PluginProtocol.confirmationRequiredError)
+  }
+
+  /// The resident's mechanisms: the lock chord through the closure the app
+  /// wires, each Apple Event as a fixed script through the runner. The
+  /// power and screen-saver requests answer a refusal inside the test
+  /// runner, which this suite never puts to the test.
+  func testTheLiveMechanismsPostTheLockChordAndRunFixedScripts() throws {
+    XCTAssertFalse(HostSystemActions.mechanismsAllowed, "inert inside the test runner")
+    let chord = try XCTUnwrap(HotkeySyntax.parse(hotkey: SystemActionExecution.lockScreenShortcut))
+    XCTAssertEqual(chord.virtualKey, UInt32(kVK_ANSI_Q))
+    XCTAssertEqual(chord.eventFlags, [.maskControl, .maskCommand])
+
+    var locks = 0
+    var scripts: [String] = []
+    var live = LiveSystemActions(lockScreen: {
+      locks += 1
+      return locks == 1
+    })
+    live.appleScript = { source, timeout in
+      scripts.append("\(Int(timeout))s \(source)")
+      return AppleScriptOutput(
+        status: scripts.count == 1 ? 0 : 1, stdout: "",
+        stderr: "execution error: Not authorized to send Apple events to Finder. (-1743)\n")
+    }
+    XCTAssertNil(live.perform(.lockScreenChord))
+    XCTAssertEqual(live.perform(.lockScreenChord), "lock screen shortcut unavailable")
+    XCTAssertEqual(locks, 2)
+    XCTAssertNil(live.perform(HostSystemAction.logout.execution))
+    XCTAssertEqual(
+      live.perform(HostSystemAction.emptyTrash.execution),
+      "applescript status=1 execution error: Not authorized to send Apple events to Finder. "
+        + "(-1743)")
+    XCTAssertEqual(
+      scripts,
+      [
+        "10s tell application \"System Events\" to log out",
+        "30s tell application \"Finder\" to empty trash",
+      ])
+    XCTAssertEqual(
+      HostSystemAction.shutdown.execution,
+      .appleScript("tell application \"System Events\" to shut down", timeout: 10))
+    // Every action maps to a mechanism, and only the lock runs on main.
+    XCTAssertEqual(
+      HostSystemAction.allCases.filter {
+        HostSystemActions.queue(for: $0.execution) === DispatchQueue.main
+      },
+      [.lockScreen])
   }
 
   // MARK: - host.open (urlOpener / appOpener seams)

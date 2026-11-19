@@ -53,6 +53,9 @@
       "$ref": "host.audio_devices.schema.json"
     },
     {
+      "$ref": "host.system_action.schema.json"
+    },
+    {
       "$ref": "host.normal_mode_target.schema.json"
     },
     {

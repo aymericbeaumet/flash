@@ -65,7 +65,7 @@ const FETCH_REPLY_TIMEOUT: Duration = Duration::from_secs(32);
 /// never errors and never returns nil — host death and the call timeout
 /// arrive as these result objects instead.
 const HOST_CLOSED_ERROR: &str = "host closed stdin";
-const HOST_TIMEOUT_ERROR: &str = "host call timed out";
+pub(crate) const HOST_TIMEOUT_ERROR: &str = "host call timed out";
 
 /// The `publish` notification's params, serialized straight into the frame:
 /// `source` names the one source these rows replace, or is absent for a

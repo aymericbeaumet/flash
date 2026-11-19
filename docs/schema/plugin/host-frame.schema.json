@@ -44,6 +44,9 @@
       "$ref": "host.audio_devices.reply.schema.json"
     },
     {
+      "$ref": "host.system_action.reply.schema.json"
+    },
+    {
       "$ref": "host.normal_mode_target.reply.schema.json"
     },
     {

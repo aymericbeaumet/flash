@@ -25,9 +25,11 @@ on its first showing, the inspector listens only on demand or with
 `[debug] http_inspector_enabled`, the [OTLP receiver](telemetry.md) only
 with `[telemetry.receiver] enabled` and the exporter only with an
 `[telemetry.exporter] endpoint`, `[startup] run`'s commands run once after
-the first configuration load and only when it lists some, and CoreAudio is
+the first configuration load and only when it lists some, CoreAudio is
 touched per `host.audio_devices` request of a plugin holding the
-`audio_devices` capability. A
+`audio_devices` capability, and the lock chord, power management and the
+System Events and Finder scripts per `host.system_action` request of one
+holding `system_actions`. A
 plugin whose manifest declares only `status` runs while a visible surface
 reads one of its segments; a plugin with only commands starts on its first
 `perform`; a manifest without `exec` never spawns. A mapping that runs a

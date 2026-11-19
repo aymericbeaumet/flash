@@ -269,6 +269,13 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   devices only through `host.audio_devices`, behind its declared
   `audio_devices` capability, on the host's audio queue, never on main.
   Device matching, reports and wording belong to the plugin (`media`).
+- The lock chord, IOKit power requests, the screen saver and the System
+  Events and Finder scripts are the host's (`HostSystemActions.swift`),
+  behind `host.system_action` and the `system_actions` capability. A
+  destructive action claims a perform the user confirmed
+  (`claimConfirmedPerform`) or is refused; never add another path to one.
+  The resident alone wires `LiveSystemActions`, at launch: tests inject
+  `SystemActionPerforming` and never reach the mechanisms.
 - Read the window list only through `WindowSnapshot.windowList`
   (guardrail-enforced), and never make main wait on a queue that calls it
   ([the deadlock](docs/input-internals.md#input-capture-and-latency)).

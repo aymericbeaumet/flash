@@ -693,6 +693,86 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertTrue(performed.contains(#""source":"mgrlive.items""#), performed)
   }
 
+  // MARK: - destructive host actions
+
+  /// What keeps a faulty plugin from restarting the Mac unprompted, end to
+  /// end over the wire: the same `host.system_action` request is refused
+  /// when the plugin sends it at startup or inside a perform the user was
+  /// not asked about, and honoured once inside a perform the user
+  /// confirmed. The mechanisms are a stub; nothing here reaches macOS.
+  func testADestructiveHostActionNeedsAConfirmedPerformInFlight() throws {
+    let restart = #"{"id":%s,"method":"host.system_action","params":{"action":"restart"}}"#
+    let ask = """
+      printf '\(restart)\\n' "$n"
+      n=$((n + 1))
+      while IFS= read -r reply; do
+        case "$reply" in *'"result"'*) break ;; esac
+      done
+      printf '%s\\n' "$reply" >> "$D/replies"
+      """
+    let fixture = try PluginFixtureKit.make(
+      id: "mgrgate",
+      manifest: PluginFixtureKit.manifest(
+        id: "mgrgate",
+        extra: """
+          "capabilities": ["system_actions"],
+          "listen": ["core:config.changed"],
+          "commands": [{ "command": "mgrgate", "subcommand": "go", "description": "x" }]
+          """),
+      script: PluginFixtureKit.script(
+        prologue: "n=1",
+        onInitialize: PluginFixtureKit.initializeOK + "\n" + ask,
+        onPerform: ask + "\n" + ask + "\n" + PluginFixtureKit.performOK))
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    let mechanisms = SystemActionStub()
+    manager.hostRPC.systemActions = mechanisms
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("running") { self.status(manager, "mgrgate")?.state == "running" }
+
+    func replies() -> [NSDictionary] {
+      let text =
+        (try? String(
+          contentsOf: fixture.dataDir.appendingPathComponent("replies"), encoding: .utf8)) ?? ""
+      return text.split(separator: "\n").compactMap {
+        (try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])?["result"]
+          as? NSDictionary
+      }
+    }
+    func invoke(confirmed: Bool) {
+      let answered = expectation(description: "perform")
+      XCTAssertTrue(
+        manager.invoke(command: "mgrgate", subcommand: "go", args: [], confirmed: confirmed) {
+          XCTAssertTrue($0.ok)
+          answered.fulfill()
+        })
+      wait(for: [answered], timeout: 15)
+    }
+    let refused: NSDictionary = ["ok": false, "error": "requires a perform the user confirmed"]
+    let honoured: NSDictionary = ["ok": true]
+
+    // Outside any perform, at startup: refused.
+    waitUntilTrue("the startup request was answered") { replies().count == 1 }
+    XCTAssertEqual(replies(), [refused])
+    // Inside a perform the user was not asked about: refused, twice.
+    invoke(confirmed: false)
+    XCTAssertEqual(replies(), [refused, refused, refused])
+    XCTAssertEqual(mechanisms.executions, [], "nothing was asked of macOS")
+
+    // Inside a perform the user confirmed: honoured, once.
+    invoke(confirmed: true)
+    XCTAssertEqual(replies().suffix(2), [honoured, refused])
+    XCTAssertEqual(
+      mechanisms.executions,
+      [.appleScript("tell application \"System Events\" to restart", timeout: 10)])
+
+    // The confirmed perform was answered: its consent went with it.
+    invoke(confirmed: false)
+    XCTAssertEqual(replies().suffix(2), [refused, refused])
+    XCTAssertEqual(mechanisms.executions.count, 1)
+  }
+
   func testManifestFileChangeReconcilesWithoutExplicitReload() throws {
     let fixture = try residentFixture(id: "definitionwatch")
     defer { fixture.cleanup() }

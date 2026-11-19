@@ -45,6 +45,12 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// output volume and toggle its mute through the host
   /// (`host.audio_devices`). CoreAudio stays in the resident.
   case audioDevices = "audio_devices"
+  /// Lock the screen, sleep the Mac or its displays, start the screen
+  /// saver, toggle dark mode, restart, shut down, log out and empty the
+  /// Trash through the host (`host.system_action`). The mechanisms stay in
+  /// the resident and add nothing to the plugin's sandbox; the four that
+  /// cannot be undone run only inside a perform the user confirmed.
+  case systemActions = "system_actions"
 }
 
 /// A macOS privacy grant a plugin's work depends on, declared in its

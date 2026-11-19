@@ -36,6 +36,7 @@
       "host.wifi_info": "wifi_info",
       "host.applescript": "apple_events",
       "host.audio_devices": "audio_devices",
+      "host.system_action": "system_actions",
       "host.normal_mode_target": "app_control",
       "host.activate": "app_control",
       "host.open": "open",
@@ -145,6 +146,26 @@
       "output"
     ],
     "max_ticks": 16
+  },
+  "system_actions": {
+    "$comment": "host.system_action: the machine and session actions stay in the host. A request carries exactly {action}; any other key refuses the call. It answers {ok:true} once the host asked macOS for the action, or {ok:false, error} with why it could not. lock_screen posts macOS's Lock Screen shortcut to the session; sleep and display_sleep ask IOKit power management; screensaver opens ScreenSaverEngine; toggle_appearance switches dark mode through System Events. The `destructive` actions cannot be undone: restart, shutdown and logout go through System Events, empty_trash through Finder. The host honours a destructive action only inside a perform the user confirmed (see `confirmation`), one action per confirmed perform; outside one it does nothing and answers errors.confirmation_required. The Apple Events are the host's own fixed scripts: the plugin needs no apple_events capability and no target list, its sandbox gains no allowance, and macOS attributes the Automation request to Flash.",
+    "actions": [
+      "lock_screen",
+      "sleep",
+      "display_sleep",
+      "screensaver",
+      "toggle_appearance",
+      "restart",
+      "shutdown",
+      "logout",
+      "empty_trash"
+    ],
+    "destructive": [
+      "restart",
+      "shutdown",
+      "logout",
+      "empty_trash"
+    ]
   },
   "applescript": {
     "$comment": "Typed host-owned AppleScript templates; no source code, script field, raw terminology or evaluated strings are accepted. Requests carry operation, timeout_ms and the operation-specific data fields. All strings enter templates only as escaped literals. Supported browser IDs use fixed Chromium/Safari dialects. Every operation checks its actual target against manifest apple_events_targets; shortcuts use com.apple.shortcuts.events, chat_submit uses com.apple.systemevents and now_playing uses the bundle_id it names. now_playing {bundle_id, artist} asks one media player (an app whose scripting has player state and current track) what it plays, never launching it: the result is the player state, a line feed and the current track's name, with its artist after an em dash when artist is true; an app that is not running answers an empty result. The plugin needs apple_events. script_bytes bounds generated source; result_bytes bounds the UTF-8 result; deadlines and per-plugin concurrency include queue admission. The host returns {ok:true,result} or {ok:false,error,status?}; source/results never enter diagnostics.",
@@ -371,7 +392,8 @@
     "capability_denied": "missing <capability> capability",
     "request_capacity": "plugin request capacity exceeded",
     "host_call_capacity": "host call capacity exceeded",
-    "deadline_exceeded": "deadline exceeded"
+    "deadline_exceeded": "deadline exceeded",
+    "confirmation_required": "requires a perform the user confirmed"
   },
   "capabilities": [
     "accessibility",
@@ -381,6 +403,7 @@
     "network",
     "network_fetch",
     "open",
+    "system_actions",
     "wifi_info"
   ],
   "id_semantics": "positive monotonic integers per sender; host and plugin counters are independent and may overlap (an inbound id+method frame is always a request). Exactly one reply per id'd request. Responses to unknown ids are dropped silently. There is no cancellation: late replies are dropped and the deadline table is the contract.",
