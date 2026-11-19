@@ -344,9 +344,9 @@ monitors read that no plugin publishes any more, with its replacement.
   and `media status` keep their words in mappings, the CLI and the command
   line, and `[plugins] disabled = ["caffeinate", "media"]` removes them.
   Both are sandboxed. `caffeinate` takes the power assertions in its own
-  process, which starts with the first `caffeinate` command and macOS frees
-  of them however it ends; `pmset -g assertions` lists them under
-  `flash-plugin-caffeinate`. `media` holds no audio access: Flash keeps
+  process, which starts with the first `caffeinate` command; macOS drops
+  them with that process however it ends, and `pmset -g assertions` lists
+  them under `flash-plugin-caffeinate`. `media` holds no audio access: Flash keeps
   CoreAudio and the players' AppleScript and serves them through
   `host.audio_devices` (the new `audio_devices` capability) and the
   `host.applescript` operation `now_playing`. Two additions any plugin
@@ -354,8 +354,8 @@ monitors read that no plugin publishes any more, with its replacement.
   `alert` shows Flash's centred alert, a one-line message or a title over a
   value (`volume` over `38%`), wherever the command ran; and a count before
   a plugin command's key reaches the plugin in its one request (`count`),
-  where the count used to be dropped, so `5` then volume-up is one move of
-  five ticks. A plugin command that fails says why: its reason is the
+  where a plugin command used to run once whatever the count, so `5` then
+  volume-up is one move of five ticks. A plugin command that fails says why: its reason is the
   failure alert's text and what `flash <command>` prints, where both used to
   say only that the command failed.
 - `feed` and `searchproviders` no longer open network connections: Flash
