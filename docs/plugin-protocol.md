@@ -827,7 +827,15 @@ authorization. `audio_devices` lists the audio devices and changes the
 default device, the output volume and its mute. `system_actions` locks the
 screen, sleeps the Mac or its displays, starts the screen saver, toggles
 dark mode and, inside a perform the user confirmed, restarts, shuts down,
-logs out or empties the Trash. Omitted capabilities are
+logs out or empties the Trash. `process_info` grants no host RPC: like
+`network` it only composes the sandbox profile, so only a sandboxed plugin
+declares it. The profile lets a plugin ask the kernel about its own process
+alone and denies it the pid list; with `process_info` it may list pids and
+read other processes through libproc in its own process: `proc_pidinfo`
+(task and BSD info, and `proc_pidpath`), a process's descriptor list and
+`proc_pid_rusage` (CPU time, resident memory, disk I/O). The other
+`process-info` operations (file ports, control, code signature, ledger) stay
+denied for other processes. Omitted capabilities are
 default-denied. The registry is
 frozen: additions are allowed, renames never.
 
@@ -952,9 +960,10 @@ Section semantics:
   interpreter that `exec` resolves outside the plugin root). An object adds
   allowances; without `sandbox` the plugin gets none. The one allowance is
   `mach`: named mach services the plugin needs. The `network` capability
-  composes `network-outbound`, which also covers local unix sockets; an
-  unsandboxed plugin declaring it fails to load, since it has no profile to
-  widen. `"sandbox": false` runs the plugin unsandboxed for external or
+  composes `network-outbound`, which also covers local unix sockets, and
+  `process_info` composes the libproc reads of other processes (see
+  [Host RPCs](#host-rpcs)); an unsandboxed plugin declaring either fails to
+  load, since it has no profile to widen. `"sandbox": false` runs the plugin unsandboxed for external or
   credentialed helpers, as `screenshot`, `terminals` and `aiproviders` require.
   `browsers`, `shortcuts` and `media` keep the default sandbox: their fixed
   AppleScript operations run in the host through `apple_events`. `sysinfo`
@@ -1576,6 +1585,18 @@ contains an allowed child, carve the child out inside the deny filter with
 `require-all` and `require-not`; `PluginSandbox.secretsReadDeny` is the
 canonical pattern for allowing a plugin's own data directory while denying its
 siblings.
+
+`(deny default)` does not cover every operation family. A profile with no
+`process-info*` rule reads every process through libproc (measured on macOS
+26), so `PluginSandbox.processInfoRules` writes that denial out: other
+processes by target, the pid list by name, and under `process_info` only the
+operations no reader uses, so no allow has to reopen a deny. The profile's
+`sysctl-read` allowance is broad, which leaves the kernel's own process list
+(`kern.proc`) and a same-user process's arguments (`kern.procargs2`)
+readable by every sandboxed plugin: Seatbelt's sysctl name filters do not
+match those nodes, so no rule closes them. `process_info` therefore gates
+what libproc adds, the resource, task and descriptor reads and the
+executable path, not the existence of other processes.
 
 Seatbelt matches canonical vnode paths. Resolve symlinked executables before
 putting them in a profile, and canonicalize temporary fixture roots

@@ -79,6 +79,51 @@ final class PluginSandboxTests: XCTestCase {
       profile.contains("(allow mach-lookup (global-name \"com.apple.PowerManagement.control\"))"))
   }
 
+  /// Seatbelt's `(deny default)` leaves the `process-info*` family open, so
+  /// the profile denies it by name: a plugin reads its own process alone,
+  /// and cannot list pids. No rule relies on its position among the others.
+  func testOtherProcessesAreDeniedByNameWithoutTheCapability() throws {
+    let profile = try XCTUnwrap(
+      PluginSandbox.resolvedSandboxProfile(
+        manifest: specManifest(), settings: [:], root: root, dataDir: dataDir
+      ).profile)
+    XCTAssertTrue(profile.contains("(deny process-info* (target others))"))
+    XCTAssertTrue(profile.contains("(deny process-info-listpids)"))
+    XCTAssertTrue(profile.contains("(allow process-info* (target self))"))
+    XCTAssertFalse(profile.contains("(allow process-info-listpids)"))
+    XCTAssertFalse(profile.contains("(allow process-info-pidinfo"))
+  }
+
+  /// `process_info` opens exactly the libproc reads a process table needs,
+  /// for other processes: the pid list, `proc_pidinfo` (which serves the
+  /// path too), the descriptor list and `proc_pid_rusage`. The operations
+  /// it does not name stay denied for other processes, and the deny names
+  /// only those, so no allow has to reopen it.
+  func testProcessInfoCapabilityOpensTheLibprocReadsOfOtherProcesses() throws {
+    let profile = try XCTUnwrap(
+      PluginSandbox.resolvedSandboxProfile(
+        manifest: specManifest([.processInfo]), settings: [:], root: root, dataDir: dataDir
+      ).profile)
+    XCTAssertTrue(profile.contains("(allow process-info* (target self))"))
+    XCTAssertTrue(profile.contains("(allow process-info-listpids)"))
+    XCTAssertTrue(
+      profile.contains(
+        "(allow process-info-pidinfo process-info-pidfdinfo process-info-rusage"
+          + " (target others))"))
+    XCTAssertTrue(
+      profile.contains(
+        "(deny process-info-pidfileportinfo process-info-setcontrol process-info-dirtycontrol"
+          + " process-info-codesignature process-info-ledger (target others))"))
+    XCTAssertFalse(profile.contains("(deny process-info* (target others))"))
+    XCTAssertFalse(profile.contains("(deny process-info-listpids)"))
+    XCTAssertEqual(
+      Set(PluginSandbox.processInfoOperations).intersection(
+        PluginSandbox.deniedProcessInfoOperations), [], "an operation is opened or denied")
+    // The capability widens nothing else.
+    XCTAssertFalse(profile.contains("network-outbound"))
+    XCTAssertFalse(profile.contains("(allow process-fork)"))
+  }
+
   func testConfigKillSwitchDisablesSandboxLoudly() {
     let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: specManifest(), settings: ["sandbox": .bool(false)],

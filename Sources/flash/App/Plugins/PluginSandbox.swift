@@ -48,12 +48,51 @@ enum PluginSandbox {
       .joined(separator: "\n")
   }
 
+  /// The `process-info*` operations the `process_info` capability opens for
+  /// other processes: `proc_pidinfo` (which also serves `proc_pidpath`), the
+  /// descriptor list (`PROC_PIDLISTFDS` is checked as `pidfdinfo`) and
+  /// `proc_pid_rusage`. Listing pids names no target and is opened beside
+  /// them.
+  static let processInfoOperations = [
+    "process-info-pidinfo", "process-info-pidfdinfo", "process-info-rusage",
+  ]
+  /// The ones no bundled reader uses, denied for other processes even with
+  /// the capability.
+  static let deniedProcessInfoOperations = [
+    "process-info-pidfileportinfo", "process-info-setcontrol", "process-info-dirtycontrol",
+    "process-info-codesignature", "process-info-ledger",
+  ]
+
+  /// What a plugin may ask the kernel about processes. `(deny default)` does
+  /// not reach the `process-info*` family (measured on macOS 26: a profile
+  /// with no rule for it reads every process), so the denial is written out.
+  /// Each deny names exactly what it denies, by target or by operation, and
+  /// no allow has to reopen one: a plugin always reads its own process;
+  /// other processes and the pid list need the `process_info` capability,
+  /// which opens `processInfoOperations` and nothing else.
+  static func processInfoRules(for manifest: PluginManifest) -> [String] {
+    guard manifest.capabilities.contains(.processInfo) else {
+      return [
+        "(deny process-info* (target others))",
+        "(deny process-info-listpids)",
+        "(allow process-info* (target self))",
+      ]
+    }
+    return [
+      "(deny \(deniedProcessInfoOperations.joined(separator: " ")) (target others))",
+      "(allow process-info* (target self))",
+      "(allow process-info-listpids)",
+      "(allow \(processInfoOperations.joined(separator: " ")) (target others))",
+    ]
+  }
+
   /// Deny-default profile generated from the manifest's `sandbox` spec plus
   /// capability composition: everything is denied except loading the binary
   /// (plugin root + system libraries, plus an interpreter outside the root),
-  /// the plugin's own data dir, declared mach allowances, and
+  /// the plugin's own data dir, declared mach allowances,
   /// network-outbound when the `network` capability is declared — never to
-  /// the resident's own socket.
+  /// the resident's own socket — and libproc reads of other processes when
+  /// `process_info` is (`processInfoRules`).
   static func denyDefaultSandboxProfile(
     for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL,
     executablePath: String = "",
@@ -84,7 +123,6 @@ enum PluginSandbox {
       "(allow file* (subpath \(q(dataDir.path))))",
       "(allow file-write-data (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))",
       "(allow file-read-metadata)",
-      "(allow process-info* (target self))",
       "(allow sysctl-read)",
       // Baseline mach services every process ends up touching (unified
       // logging, notifications). Name-scoped on purpose — no wildcard.
@@ -93,6 +131,7 @@ enum PluginSandbox {
         + " (global-name \"com.apple.system.notification_center\")"
         + " (global-name \"com.apple.system.logger\"))",
     ]
+    lines.append(contentsOf: processInfoRules(for: manifest))
     if manifest.capabilities.contains(.network) {
       lines.append("(allow network-outbound)")
       lines.append(residentSocketDeny(residentSocketDirectories))

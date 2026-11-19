@@ -51,6 +51,13 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// the resident and add nothing to the plugin's sandbox; the four that
   /// cannot be undone run only inside a perform the user confirmed.
   case systemActions = "system_actions"
+  /// Read other processes through libproc in the plugin's own process: the
+  /// pid list, `proc_pidinfo` and `proc_pidpath`, the descriptor list and
+  /// `proc_pid_rusage`. It composes those `process-info` operations into the
+  /// deny-default profile, which otherwise denies them for every process but
+  /// the plugin's own, and grants no host RPC. Only a sandboxed plugin
+  /// declares it.
+  case processInfo = "process_info"
 }
 
 /// A macOS privacy grant a plugin's work depends on, declared in its
@@ -1271,6 +1278,12 @@ struct PluginManifest: Decodable, Equatable {
       throw PluginError.failure(
         "manifest.json network capability only composes the sandbox profile; an unsandboxed "
           + "plugin cannot declare it")
+    }
+    // `process_info` composes libproc reads into the same profile.
+    if capabilities.contains(.processInfo), sandboxSpec == nil {
+      throw PluginError.failure(
+        "manifest.json process_info capability only composes the sandbox profile; an "
+          + "unsandboxed plugin cannot declare it")
     }
     let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
     // Reject `.`/`..`/anything containing `..`: the id becomes the plugin's

@@ -403,6 +403,7 @@
     "network",
     "network_fetch",
     "open",
+    "process_info",
     "system_actions",
     "wifi_info"
   ],

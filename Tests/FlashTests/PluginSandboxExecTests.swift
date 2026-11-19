@@ -82,6 +82,40 @@ final class PluginSandboxExecTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(checked, 8, "only \(checked) sandboxed manifests checked")
   }
 
+  /// The process-info rules, as written with and without the `process_info`
+  /// capability: both forms compile and run under the real `sandbox-exec`.
+  func testTheProcessInfoRulesCompileWithAndWithoutTheCapability() throws {
+    guard FileManager.default.isExecutableFile(atPath: PluginSandbox.sandboxExecPath) else {
+      throw XCTSkip("sandbox-exec unavailable")
+    }
+    let dataDir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-sandbox-test/process-info")
+    try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+    for capabilities: Set<PluginCapability> in [[], [.processInfo]] {
+      let manifest = PluginManifest(
+        id: "probe", name: "Probe", version: "1", description: "",
+        exec: ["./flash-plugin-probe"], capabilities: capabilities)
+      let profile = try XCTUnwrap(
+        PluginSandbox.resolvedSandboxProfile(
+          manifest: manifest, settings: [:], root: URL(fileURLWithPath: "/tmp/plugin-root"),
+          dataDir: dataDir
+        ).profile)
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
+      process.arguments = ["-p", profile + Self.trueAllowance, "/usr/bin/true"]
+      let stderr = Pipe()
+      process.standardError = stderr
+      try process.run()
+      process.waitUntilExit()
+      let diagnostics =
+        String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+      XCTAssertEqual(
+        process.terminationStatus, 0,
+        "\(capabilities.map(\.rawValue)): sandbox-exec exit \(process.terminationStatus) — "
+          + diagnostics)
+    }
+  }
+
   /// Boots every built sandboxed plugin under its resolved profile. Host RPCs
   /// are answered like a host that grants nothing. Skips when no binary is
   /// built (`mise run build:plugins`).

@@ -502,7 +502,15 @@ it writes only to its own data directory, runs no executable but its own (or
 the interpreter its manifest names), and reaches the network only when it
 declares it. A plugin allowed to open URLs never opens a local file through
 Flash (`file:`), so it cannot have a script or an app it wrote run outside its
-sandbox.
+sandbox. A sandboxed plugin asks macOS about its own process alone: the
+profile denies it the process list and other processes' CPU time, memory,
+disk I/O, thread counts, open-descriptor lists and executable paths, which
+only a plugin declaring the `process_info` capability reads. That denial
+covers the process-information interface (libproc). The profile also lets a
+plugin read kernel settings (`sysctl`), and macOS serves the names and IDs of
+running processes, and the launch arguments and environment of your own,
+through that interface to any program that asks; the sandbox cannot filter
+those entries, so a sandboxed plugin can read them too.
 
 Three bundled plugins opt out: `screenshot` and `terminals` execute helpers
 (the system screenshot utility, tmux and ssh), while `aiproviders` reads the

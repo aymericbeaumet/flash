@@ -391,6 +391,14 @@ monitors read that no plugin publishes any more, with its replacement.
   `host.system_action`. Restart, shut down, log out and emptying the Trash
   are honoured only inside a request the user confirmed, once per
   confirmation; anywhere else Flash refuses them.
+- A sandboxed plugin reads no process but its own. The plugin sandbox
+  denied nothing of macOS's process-information interface (Seatbelt's
+  default denial does not reach it), so any plugin could list every process
+  with its CPU time, memory, open descriptors and path. The profile now
+  denies that by name, and the new `process_info` capability opens the
+  reads a process table needs (the pid list, `proc_pidinfo`, the descriptor
+  list and `proc_pid_rusage`) to the plugin that declares it
+  ([privacy](docs/privacy.md#plugin-isolation)).
 - Lock, sleep, restart, shut down, log out, empty the Trash, dark mode and
   the screen saver are a bundled plugin, `system`. It is sandboxed and holds
   no power over the Mac: it asks Flash for each action, and Flash restarts,

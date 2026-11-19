@@ -372,6 +372,10 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   changing its path.
 - Seatbelt denies cannot be reopened by later allows. Carve permitted children
   out of the deny, canonicalize symlinked paths, and retain secret-read denies.
+  `(deny default)` leaves `process-info*` open: `PluginSandbox.processInfoRules`
+  denies other processes by name and opens the libproc reads only under the
+  `process_info` capability
+  ([profile invariants](docs/plugin-protocol.md#seatbelt-profile-invariants)).
   Local socket connections require network capability. Do not widen the sandbox
   to host credentialed network CLIs that require the subprocess shape.
   Bundled plugins hold no `network` capability and no HTTPS client: a
