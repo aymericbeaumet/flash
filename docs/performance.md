@@ -802,7 +802,7 @@ network, bytes and requests are what a visit costs.
 | --- | ---: | ---: |
 | Total HTML (175 pages, 48 alias stubs) | 7,798 KiB | 1,654 KiB |
 | Median page | 40.4 KiB | 8.0 KiB |
-| Largest page (`plugin-protocol`) | 136.5 KiB | 38.1 KiB |
+| Largest page (`plugin-protocol`) | 155.9 KiB | 44.0 KiB |
 | Site JavaScript | 81.4 KiB | 29.9 KiB |
 | CSS | 36.0 KiB | 7.0 KiB |
 | Navigation asset | 35.3 KiB | 5.1 KiB |
@@ -832,7 +832,9 @@ fetch-ahead half of the speculation rules and never the prerender.
 site and holds total HTML, the median and the largest page, the site's
 JavaScript and CSS, the navigation asset and the search outline to budgets
 about 12% above these figures. The search text is the manual's own words:
-it is measured, not held.
+it is measured, not held. The largest page's row was weighed again later the
+same day, from the build alone, once the plugin protocol had outgrown its
+first budget; the other rows are the first measurement.
 
 ## Not measured, by design
 

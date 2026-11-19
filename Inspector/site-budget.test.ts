@@ -13,11 +13,13 @@ import { measureSite, overBudget, type SiteBudget, type SiteSizes } from "./scri
 // to grow, none for a second copy of an article, a navigation inlined into
 // every page or a new dependency. Measure before raising one
 // (`mise run bench:help -- --site`, docs/performance.md, "The published site").
+// The largest page is the plugin protocol, which grows with every host RPC
+// and capability: its budget was measured again the same day, at 155.9 KiB.
 const KiB = 1024;
 const budget: SiteBudget = {
   html: { raw: 8700 * KiB, gzip: 1860 * KiB },
   medianPage: { raw: 45 * KiB, gzip: 9 * KiB },
-  largestPage: { raw: 153 * KiB, gzip: 43 * KiB },
+  largestPage: { raw: 175 * KiB, gzip: 49.5 * KiB },
   js: { raw: 92 * KiB, gzip: 33.5 * KiB },
   css: { raw: 40.5 * KiB, gzip: 7.9 * KiB },
   navigation: { raw: 39.5 * KiB, gzip: 5.8 * KiB },
@@ -50,7 +52,7 @@ test("a site within its budget has nothing to report; each figure over it is nam
       budget,
     ),
     [
-      "the largest page (commands/index.html) is 512.0 KiB, over its 153.0 KiB budget",
+      "the largest page (commands/index.html) is 512.0 KiB, over its 175.0 KiB budget",
       "the site's JavaScript is 54.5 KiB gzipped, over its 33.5 KiB budget",
     ],
   );
