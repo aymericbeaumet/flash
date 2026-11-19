@@ -29,7 +29,8 @@ the first configuration load and only when it lists some, CoreAudio is
 touched per `host.audio_devices` request of a plugin holding the
 `audio_devices` capability, and the lock chord, power management and the
 System Events and Finder scripts per `host.system_action` request of one
-holding `system_actions`. A
+holding `system_actions`, and `kill(2)` per confirmed `host.process_signal`
+request of one holding `process_signal`. A
 plugin whose manifest declares only `status` runs while a visible surface
 reads one of its segments; a plugin with only commands and live sources
 (`system`) starts on its first `perform` or `search`; a manifest without

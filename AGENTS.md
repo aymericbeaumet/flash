@@ -278,6 +278,12 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   `SystemActionPerforming` and never reach the mechanisms. The command
   words, the `@system` rows, their questions and wording belong to the
   plugin (`system`).
+- `kill(2)` for a plugin is the host's (`HostProcessSignals.swift`), behind
+  `host.process_signal` and the `process_signal` capability: SIGTERM alone,
+  one per perform the user confirmed (`claimConfirmedPerform`), never the
+  resident, launchd or a group. The resident alone wires
+  `LiveProcessSignals`; a test injects `ProcessSignalling` and may only
+  signal a child it spawned.
 - Read the window list only through `WindowSnapshot.windowList`
   (guardrail-enforced), and never make main wait on a queue that calls it
   ([the deadlock](docs/input-internals.md#input-capture-and-latency)).

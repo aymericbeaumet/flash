@@ -63,6 +63,8 @@ The lines describe one plugin and one moment:
   muted. A step of two ticks lands on 50%.
 - The host carries out a system action without touching the Mac; no
   confirmed perform is in flight, so a destructive one is refused.
+- No process is signalled: with no confirmed perform in flight, the host
+  refuses a signal to pid 4242.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
 - Searching the live source `example.live` for `ro` answers two rows; any
   other query answers none. The corpus pins frames, so its one plugin answers

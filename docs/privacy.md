@@ -535,7 +535,10 @@ one fixed script to System Events or Finder. Flash restarts, shuts down, logs
 out or empties the Trash only for a request you just answered `y` to in its
 confirmation alert, one action per answer; the same request from the plugin
 at any other moment is refused, so a faulty plugin cannot run one unprompted.
-The plugin reads and stores nothing. The AppleScript RPC accepts only named operations with fixed host templates and escaped
+The plugin reads and stores nothing. No plugin signals a process: one
+declaring the `process_signal` capability asks Flash, which sends SIGTERM to
+one process only for a request you just answered `y` to, one signal per
+answer, and never to itself, to launchd or to a group of processes. The AppleScript RPC accepts only named operations with fixed host templates and escaped
 string values; it accepts no script source, shell command or file operation.
 Each operation checks its target against the declared app IDs. Chat submission
 can send Return only to a supported browser that is still frontmost. Credentials for

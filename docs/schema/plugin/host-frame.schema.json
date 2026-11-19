@@ -47,6 +47,9 @@
       "$ref": "host.system_action.reply.schema.json"
     },
     {
+      "$ref": "host.process_signal.reply.schema.json"
+    },
+    {
       "$ref": "host.normal_mode_target.reply.schema.json"
     },
     {

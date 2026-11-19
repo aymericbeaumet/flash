@@ -51,6 +51,11 @@ final class PluginHostRPC {
   /// launch (`LiveSystemActions`), and nil inside the test runner unless a
   /// test injects one: an unwired host refuses every action.
   var systemActions: (any SystemActionPerforming)?
+  /// The mechanism behind `host.process_signal`: plugins never signal a
+  /// process themselves. Nil until the resident wires its own at launch
+  /// (`LiveProcessSignals`), and nil inside the test runner unless a test
+  /// injects one: an unwired host refuses every signal.
+  var processSignals: (any ProcessSignalling)?
 
   // Testability seams for the arms whose production bodies fire
   // irreversible side effects (LaunchServices open). Tests swap these to
@@ -151,6 +156,8 @@ final class PluginHostRPC {
       hostAudioDevices(operation, scope: scope, reply: reply)
     case .systemAction(let action):
       hostSystemAction(action, pluginID: pluginID, scope: scope, reply: reply)
+    case .processSignal(let pid, let signal):
+      hostProcessSignal(signal, pid: pid, pluginID: pluginID, scope: scope, reply: reply)
     case .appleScript(let params):
       PluginHostAppleScript.handle(
         params, targets: appleEventsTargets, browsers: browserEngines(), pluginID: pluginID,
@@ -314,6 +321,48 @@ final class PluginHostRPC {
       FlashLog.warn(
         "[plugin] system action failed: \(failure)",
         fields: ["plugin": pluginID, "action": action.rawValue])
+      reply(["ok": false, "error": failure])
+    }
+  }
+
+  /// `host.process_signal`: one signal to one process. Every signal runs
+  /// only inside a perform the user confirmed, which it claims: outside
+  /// one, or once that perform's consent is spent, it is refused before the
+  /// kernel is asked anything. The resident, launchd and process groups are
+  /// refused whatever the user confirmed, and spend no consent.
+  private func hostProcessSignal(
+    _ signal: HostProcessSignal, pid: pid_t, pluginID: String, scope: PluginHostRequestScope,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let processSignals else {
+      reply(["ok": false, "error": "process signals unavailable"])
+      return
+    }
+    if let refusal = HostProcessSignals.refusal(of: pid) {
+      FlashLog.warn(
+        "[plugin] process signal refused: \(refusal)",
+        fields: ["plugin": pluginID, "signal": signal.rawValue])
+      reply(["ok": false, "error": refusal])
+      return
+    }
+    guard scope.claimConfirmedPerform() else {
+      FlashLog.warn(
+        "[plugin] process signal refused: no confirmed perform in flight",
+        fields: ["plugin": pluginID, "signal": signal.rawValue])
+      reply(["ok": false, "error": PluginProtocol.confirmationRequiredError])
+      return
+    }
+    scope.enqueue(on: HostProcessSignals.queue) {
+      guard let failure = processSignals.send(signal, to: pid) else {
+        FlashLog.info(
+          "[plugin] process signal",
+          fields: ["plugin": pluginID, "signal": signal.rawValue, "pid": "\(pid)"])
+        reply(["ok": true])
+        return
+      }
+      FlashLog.warn(
+        "[plugin] process signal failed: \(failure)",
+        fields: ["plugin": pluginID, "signal": signal.rawValue, "pid": "\(pid)"])
       reply(["ok": false, "error": failure])
     }
   }

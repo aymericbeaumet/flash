@@ -58,6 +58,11 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// the plugin's own, and grants no host RPC. Only a sandboxed plugin
   /// declares it.
   case processInfo = "process_info"
+  /// Send a signal to a process through the host (`host.process_signal`).
+  /// `kill(2)` stays in the resident and the plugin's sandbox gains
+  /// nothing; every signal runs only inside a perform the user confirmed,
+  /// never to Flash itself, launchd or a process group.
+  case processSignal = "process_signal"
 }
 
 /// A macOS privacy grant a plugin's work depends on, declared in its

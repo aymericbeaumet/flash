@@ -391,6 +391,10 @@ monitors read that no plugin publishes any more, with its replacement.
   `host.system_action`. Restart, shut down, log out and emptying the Trash
   are honoured only inside a request the user confirmed, once per
   confirmation; anywhere else Flash refuses them.
+- A plugin holding the new `process_signal` capability asks Flash to send
+  SIGTERM to one process through `host.process_signal`. Flash sends it only
+  inside a request the user confirmed, once per confirmation, and never to
+  itself, to launchd or to a process group.
 - A sandboxed plugin reads no process but its own. The plugin sandbox
   denied nothing of macOS's process-information interface (Seatbelt's
   default denial does not reach it), so any plugin could list every process

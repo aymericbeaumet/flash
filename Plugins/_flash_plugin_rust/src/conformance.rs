@@ -635,6 +635,13 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
                 .await,
         ),
         (
+            "host.process_signal.term-unconfirmed",
+            request(
+                |ctx| async move { ctx.signal_process(4242, crate::ProcessSignal::Term).await },
+            )
+            .await,
+        ),
+        (
             "host.normal_mode_target",
             request(|ctx| async move { ctx.normal_mode_target().await }).await,
         ),

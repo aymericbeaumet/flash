@@ -108,6 +108,12 @@
 {"name": "host.system_action.reply.without-an-action", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"host.system_action requires a supported action"}}}
 {"name": "host.system_action.reply.params-refused", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.system_action params"}}}
 {"name": "host.system_action.reply.with-a-status", "expect": "reject", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":true,"error":"asleep"}}}
+{"name": "host.process_signal.reply", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.process_signal.reply.unconfirmed", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"requires a perform the user confirmed"}}}
+{"name": "host.process_signal.reply.failed", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"No such process"}}}
+{"name": "host.process_signal.reply.without-a-pid", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"host.process_signal requires a pid above 1 and a supported signal"}}}
+{"name": "host.process_signal.reply.params-refused", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.process_signal params"}}}
+{"name": "host.process_signal.reply.with-an-error", "expect": "reject", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":true,"error":"No such process"}}}
 {"name": "host.open.reply", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true,"bundle_id":"com.apple.Safari"}}}
 {"name": "host.open.reply.app", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true}}}
 {"name": "host.open.reply.local-file", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"host.open does not open local files"}}}

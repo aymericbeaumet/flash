@@ -230,6 +230,12 @@ Handed to every handler; cheap to clone. Key surface:
   confirmed, once: call it from the `on_command` or `on_resolve` of a
   command or row that declares `confirm`. Anywhere else it fails with
   `CONFIRMATION_REQUIRED_ERROR`.
+  The `process_signal` capability has `signal_process(pid,
+  ProcessSignal::Term)`: the host sends SIGTERM to that process and the call
+  answers `Ok(())`, or `Err` with the kernel's reason (`No such process`,
+  `Operation not permitted`) or the host's refusal. Every signal needs a
+  perform the user confirmed, once, like a destructive system action, and
+  the host never signals itself, launchd or a process group.
 - Host clock: a plugin never arms a timer or sleeps to schedule work.
   `ctx.interval(period, priority, callback)` registers a cadence with the
   host, which drives every poller in Flash — core watchers included — from one

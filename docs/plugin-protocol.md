@@ -704,7 +704,8 @@ can name a window without asking the user to pick one) +
 `host.activate` (`app_control`), `host.open` (`open`),
 `host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`),
 `host.audio_devices` (`audio_devices`), `host.system_action`
-(`system_actions`), `host.post_keys` + `host.ax_snapshot` /
+(`system_actions`), `host.process_signal` (`process_signal`),
+`host.post_keys` + `host.ax_snapshot` /
 `host.ax_perform` / `host.ax_set` / `host.ax_select_child`
 (`accessibility`). A denied call answers `{"ok": false, "error": "missing
 <capability> capability"}`. `host.ping` needs no capability and answers
@@ -789,6 +790,20 @@ scripts, so the plugin needs neither `apple_events` nor a target list and
 its sandbox gains nothing; macOS attributes the Automation request to
 Flash. The actions run one at a time, off the main thread except the lock
 chord. `protocol.json` `system_actions` lists them.
+`host.process_signal` takes exactly `{"pid", "signal"}` and sends one signal
+to one process: `kill(2)` stays in the resident. `signal` is `"term"`
+(SIGTERM), the only one. `pid` is an integer above 1: `0` (the caller's
+process group), a negative pid (a group, or every process) and `1`
+(launchd) refuse the request as malformed, and the host refuses its own pid
+(`refusing to signal Flash itself`). The host honours every signal only
+inside a `perform` the user [confirmed](#confirmation), one signal per
+confirmed perform; outside one it asks the kernel nothing and answers
+`{"ok": false, "error": "requires a perform the user confirmed"}`. A refused
+pid spends no consent. The reply is `{"ok": true}` once the kernel took the
+signal, or `{"ok": false, "error"}` with the kernel's reason (`No such
+process`, `Operation not permitted` for another user's process). The
+plugin's sandbox gains nothing. `protocol.json` `process_signals` lists the
+signals.
 `host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL
@@ -827,7 +842,9 @@ authorization. `audio_devices` lists the audio devices and changes the
 default device, the output volume and its mute. `system_actions` locks the
 screen, sleeps the Mac or its displays, starts the screen saver, toggles
 dark mode and, inside a perform the user confirmed, restarts, shuts down,
-logs out or empties the Trash. `process_info` grants no host RPC: like
+logs out or empties the Trash. `process_signal` sends SIGTERM to one
+process, only inside a perform the user confirmed. `process_info` grants no
+host RPC: like
 `network` it only composes the sandbox profile, so only a sandboxed plugin
 declares it. The profile lets a plugin ask the kernel about its own process
 alone and denies it the pid list; with `process_info` it may list pids and
@@ -1357,7 +1374,7 @@ content, or config values.
 | `request_capacity` | `plugin request capacity exceeded` | More concurrent host requests than the plugin admits |
 | `host_call_capacity` | `host call capacity exceeded` | More concurrent host RPCs than the bound allows |
 | `deadline_exceeded` | `deadline exceeded` | A `hints`, `text_grid` or `search` handler dropped before its deadline |
-| `confirmation_required` | `requires a perform the user confirmed` | A destructive `host.system_action` asked outside a confirmed perform |
+| `confirmation_required` | `requires a perform the user confirmed` | A destructive `host.system_action` or a `host.process_signal` asked outside a confirmed perform |
 
 ## Limits and deadlines
 

@@ -20,6 +20,7 @@ mod poll;
 pub mod process;
 mod runtime;
 mod settle;
+mod signal;
 pub mod status;
 pub mod sys;
 mod system;
@@ -41,6 +42,7 @@ pub use observed::ObservedCadences;
 pub use poll::{Deadline, PollHandle, PollPriority};
 pub use runtime::{Plugin, run};
 pub use settle::Settle;
+pub use signal::ProcessSignal;
 pub use status::{
     Align, Color, Column, History, MAX_INLINE_PREVIEW_ENCODED_BYTES, Markup, Preview,
     PreviewTooLarge, Published, StatusCarousel, StatusSegment, StatusValue, Style, Table,

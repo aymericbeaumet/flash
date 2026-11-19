@@ -639,6 +639,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.hostRPC.systemActions = LiveSystemActions(lockScreen: { [weak self] in
       self?.postLockScreenChord() ?? false
     })
+    // `kill(2)` for `host.process_signal`, wired here alone like the above.
+    pluginManager.hostRPC.processSignals = LiveProcessSignals()
     let launchApplications = Self.runningApplicationsSnapshot()
     pluginManager.cacheRunningApplicationsSnapshot(launchApplications)
     launchStages.measure("plugins") { pluginManager.start(config: config) }

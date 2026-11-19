@@ -9,8 +9,9 @@ import XCTest
 /// `handleHostRequest` with synthetic capability sets. Side-effecting arms
 /// go through the closure/static seams (urlOpener, appOpener,
 /// onSyntheticKeysRequested, onNormalModeTargetRequested, wifiInfoProvider,
-/// systemActions) — no test here ever opens a browser, posts a HID event or
-/// asks macOS for a system action.
+/// systemActions, processSignals) — no test here ever opens a browser, posts
+/// a HID event or asks macOS for a system action, and the one that sends a
+/// signal sends it to a child process it spawned.
 final class PluginHostRPCArmTests: XCTestCase {
 
   // MARK: - Plumbing
@@ -69,7 +70,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 14, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 15, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -83,7 +84,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 13, "13 gated + host.ping ungated")
+    XCTAssertEqual(gated, 14, "14 gated + host.ping ungated")
     // The ungated arm answers without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
   }
@@ -528,6 +529,168 @@ final class PluginHostRPCArmTests: XCTestCase {
         HostSystemActions.queue(for: $0.execution) === DispatchQueue.main
       },
       [.lockScreen])
+  }
+
+  // MARK: - host.process_signal (processSignals seam)
+
+  private func signalReply(
+    _ rpc: PluginHostRPC, _ params: [String: Any],
+    scope: PluginHostRequestScope = PluginHostRequestScope(isCurrent: { true })
+  ) -> NSDictionary {
+    hostReply(rpc, "host.process_signal", params, capabilities: [.processSignal], scope: scope)
+      as NSDictionary
+  }
+
+  /// A signal is refused, with the fixed error and before the mechanism is
+  /// reached, unless a perform the user confirmed is in flight; that
+  /// perform covers exactly one signal.
+  func testAProcessSignalIsHonouredOnlyInsideAConfirmedPerform() {
+    let rpc = PluginHostRPC()
+    let mechanism = ProcessSignalStub()
+    rpc.processSignals = mechanism
+    let refused: NSDictionary = ["ok": false, "error": "requires a perform the user confirmed"]
+    XCTAssertEqual(signalReply(rpc, ["pid": 4242, "signal": "term"]), refused)
+    XCTAssertEqual(mechanism.sent, [], "the kernel was asked nothing")
+
+    let confirmed = scope(confirmedPerforms: 1)
+    XCTAssertEqual(
+      signalReply(rpc, ["pid": 4242, "signal": "term"], scope: confirmed),
+      ["ok": true] as NSDictionary)
+    XCTAssertEqual(mechanism.sent, [.init(signal: .term, pid: 4242, onMainThread: false)])
+    XCTAssertEqual(
+      signalReply(rpc, ["pid": 4243, "signal": "term"], scope: confirmed), refused,
+      "the perform's consent is spent")
+    XCTAssertEqual(mechanism.sent.count, 1)
+  }
+
+  /// The pids no confirmation reaches: launchd, the caller's own process
+  /// group, a group or every process, and the resident itself. Each is
+  /// refused before the mechanism, and none spends the perform's consent.
+  func testAProcessSignalNeverReachesLaunchdAGroupOrFlashItself() {
+    let rpc = PluginHostRPC()
+    let mechanism = ProcessSignalStub()
+    rpc.processSignals = mechanism
+    let confirmed = scope(confirmedPerforms: 1)
+    let undecodable = "host.process_signal requires a pid above 1 and a supported signal"
+    for pid in [1, 0, -1, -4242, Int(Int32.max) + 1] {
+      XCTAssertEqual(
+        signalReply(rpc, ["pid": pid, "signal": "term"], scope: confirmed),
+        ["ok": false, "error": undecodable] as NSDictionary, "\(pid)")
+    }
+    XCTAssertEqual(
+      signalReply(rpc, ["pid": Int(getpid()), "signal": "term"], scope: confirmed),
+      ["ok": false, "error": "refusing to signal Flash itself"] as NSDictionary)
+    XCTAssertEqual(mechanism.sent, [])
+    XCTAssertTrue(confirmed.claimConfirmedPerform(), "no refusal spent the consent")
+
+    XCTAssertEqual(HostProcessSignals.refusal(of: 1), "refusing pid 1")
+    XCTAssertEqual(HostProcessSignals.refusal(of: 0), "refusing pid 0")
+    XCTAssertEqual(HostProcessSignals.refusal(of: -7), "refusing pid -7")
+    XCTAssertEqual(
+      HostProcessSignals.refusal(of: 4242, own: 4242), "refusing to signal Flash itself")
+    XCTAssertNil(HostProcessSignals.refusal(of: 4242, own: 99))
+  }
+
+  /// The kernel's reason is the reply's error; a host with no mechanism
+  /// wired refuses every signal, and spends no consent on it.
+  func testProcessSignalFailuresAndAnUnwiredHostAnswerWhy() {
+    let rpc = PluginHostRPC()
+    XCTAssertNil(rpc.processSignals, "nothing is wired outside the resident's launch")
+    let untouched = scope(confirmedPerforms: 1)
+    XCTAssertEqual(
+      signalReply(rpc, ["pid": 4242, "signal": "term"], scope: untouched),
+      ["ok": false, "error": "process signals unavailable"] as NSDictionary)
+    XCTAssertTrue(untouched.claimConfirmedPerform(), "the consent was not spent")
+
+    let mechanism = ProcessSignalStub()
+    mechanism.failure = "No such process"
+    rpc.processSignals = mechanism
+    XCTAssertEqual(
+      signalReply(rpc, ["pid": 4242, "signal": "term"], scope: scope(confirmedPerforms: 1)),
+      ["ok": false, "error": "No such process"] as NSDictionary)
+    XCTAssertEqual(mechanism.sent.map(\.pid), [4242])
+  }
+
+  func testProcessSignalRefusesWhatItDoesNotDefine() {
+    let rpc = PluginHostRPC()
+    let mechanism = ProcessSignalStub()
+    rpc.processSignals = mechanism
+    let undecodable = "host.process_signal requires a pid above 1 and a supported signal"
+    let malformed: [([String: Any], String)] = [
+      ([:], undecodable),
+      (["signal": "term"], undecodable),
+      (["pid": 4242], undecodable),
+      (["pid": "4242", "signal": "term"], undecodable),
+      (["pid": 4242.5, "signal": "term"], undecodable),
+      (["pid": true, "signal": "term"], undecodable),
+      (["pid": 4242, "signal": "kill"], undecodable),
+      (["pid": 4242, "signal": "TERM"], undecodable),
+      (["pid": 4242, "signal": 15], undecodable),
+      (["pid": 4242, "signal": "term", "confirmed": true], "invalid host.process_signal params"),
+      (["pid": 4242, "signal": "term", "group": true], "invalid host.process_signal params"),
+    ]
+    for (params, error) in malformed {
+      XCTAssertEqual(
+        signalReply(rpc, params, scope: scope(confirmedPerforms: 1)),
+        ["ok": false, "error": error] as NSDictionary, "\(params)")
+    }
+    XCTAssertEqual(mechanism.sent, [], "a plugin cannot confirm its own request")
+  }
+
+  /// The signals are the contract's, and SIGTERM is the only one.
+  func testProcessSignalsContractMatchesSpec() throws {
+    let spec = try XCTUnwrap(try protocolSpec()["process_signals"] as? [String: Any])
+    XCTAssertEqual(spec["signals"] as? [String], HostProcessSignal.allCases.map(\.rawValue))
+    XCTAssertEqual(spec["min_pid"] as? Int, 2)
+    XCTAssertEqual(HostProcessSignal.allCases.map(\.number), [SIGTERM])
+  }
+
+  /// The resident's own mechanism signals nothing inside the test runner,
+  /// and never the pids the host refuses.
+  func testTheLiveMechanismIsInertInsideTheTestRunner() {
+    XCTAssertFalse(HostProcessSignals.mechanismsAllowed, "inert inside the test runner")
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["600"]
+    XCTAssertNoThrow(try child.run())
+    defer {
+      child.terminate()
+      child.waitUntilExit()
+    }
+    XCTAssertEqual(
+      LiveProcessSignals().send(.term, to: child.processIdentifier),
+      "process signals are inert inside the test runner")
+    XCTAssertTrue(child.isRunning, "the child was not signalled")
+  }
+
+  /// End to end through the dispatcher, with a mechanism that really sends
+  /// the signal: to the one child process this test spawned, and to nothing
+  /// else. Unconfirmed, the child keeps running; confirmed, SIGTERM ends it.
+  func testAConfirmedSignalTerminatesTheChildThisTestSpawned() throws {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["600"]
+    let exited = expectation(description: "the child exited")
+    child.terminationHandler = { _ in exited.fulfill() }
+    try child.run()
+    defer { if child.isRunning { child.terminate() } }
+    let rpc = PluginHostRPC()
+    let mechanism = ChildProcessSignals(child: child)
+    rpc.processSignals = mechanism
+    let pid = Int(child.processIdentifier)
+
+    XCTAssertEqual(
+      signalReply(rpc, ["pid": pid, "signal": "term"]),
+      ["ok": false, "error": "requires a perform the user confirmed"] as NSDictionary)
+    XCTAssertTrue(child.isRunning, "an unconfirmed signal reaches nothing")
+
+    XCTAssertEqual(
+      signalReply(rpc, ["pid": pid, "signal": "term"], scope: scope(confirmedPerforms: 1)),
+      ["ok": true] as NSDictionary)
+    wait(for: [exited], timeout: 10)
+    XCTAssertEqual(child.terminationReason, .uncaughtSignal)
+    XCTAssertEqual(child.terminationStatus, SIGTERM)
+    XCTAssertEqual(mechanism.refused, [], "only the child was ever signalled")
   }
 
   // MARK: - host.open (urlOpener / appOpener seams)

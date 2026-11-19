@@ -20,6 +20,9 @@ enum PluginHostRequest {
   case appleScript([String: Any])
   case audio(Audio)
   case systemAction(HostSystemAction)
+  /// `pid` is above 1: launchd, the caller's own group and every group are
+  /// refused when the request is decoded.
+  case processSignal(pid: pid_t, signal: HostProcessSignal)
   case ax(AX)
 
   typealias Chord = (key: CGKeyCode, flags: CGEventFlags)
@@ -69,6 +72,7 @@ enum PluginHostRequest {
     case appleScript = "host.applescript"
     case audioDevices = "host.audio_devices"
     case systemAction = "host.system_action"
+    case processSignal = "host.process_signal"
     case normalModeTarget = "host.normal_mode_target"
     case activate = "host.activate"
     case open = "host.open"
@@ -88,6 +92,7 @@ enum PluginHostRequest {
       case .appleScript: return .appleEvents
       case .audioDevices: return .audioDevices
       case .systemAction: return .systemActions
+      case .processSignal: return .processSignal
       case .normalModeTarget, .activate: return .appControl
       case .open: return .open
       case .postKeys, .axSnapshot, .axPerform, .axSet, .axSelectChild: return .accessibility
@@ -104,6 +109,7 @@ enum PluginHostRequest {
       case .appleScript: return nil
       case .audioDevices: return ["operation", "direction", "uid", "ticks"]
       case .systemAction: return ["action"]
+      case .processSignal: return ["pid", "signal"]
       case .activate: return ["pid"]
       case .open: return ["url", "bundle_id"]
       case .postKeys: return ["pid", "keys", "interval_ms"]
@@ -154,6 +160,13 @@ enum PluginHostRequest {
       guard let name = params["action"] as? String, let action = HostSystemAction(rawValue: name)
       else { throw Refusal(message: "host.system_action requires a supported action") }
       self = .systemAction(action)
+    case .processSignal:
+      guard let pid = PluginJSON.pid(params["pid"]), pid > 1,
+        let name = params["signal"] as? String, let signal = HostProcessSignal(rawValue: name)
+      else {
+        throw Refusal(message: "host.process_signal requires a pid above 1 and a supported signal")
+      }
+      self = .processSignal(pid: pid, signal: signal)
     case .activate:
       guard let pid = PluginJSON.pid(params["pid"]) else {
         throw Refusal(message: "host.activate requires pid")

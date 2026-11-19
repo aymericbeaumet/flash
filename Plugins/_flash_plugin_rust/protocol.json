@@ -37,6 +37,7 @@
       "host.applescript": "apple_events",
       "host.audio_devices": "audio_devices",
       "host.system_action": "system_actions",
+      "host.process_signal": "process_signal",
       "host.normal_mode_target": "app_control",
       "host.activate": "app_control",
       "host.open": "open",
@@ -166,6 +167,13 @@
       "logout",
       "empty_trash"
     ]
+  },
+  "process_signals": {
+    "$comment": "host.process_signal: kill(2) stays in the host. A request carries exactly {pid, signal}; any other key refuses the call. pid is an integer of at least min_pid: 0 (the caller's process group), a negative pid (a group, or every process) and 1 (launchd) are refused when the request is decoded, and the host refuses its own pid. term is SIGTERM. The host honours every signal only inside a perform the user confirmed (see `confirmation`), one signal per confirmed perform; outside one it asks the kernel nothing and answers errors.confirmation_required. It answers {ok:true} once the kernel took the signal, or {ok:false, error} with the kernel's reason (No such process, Operation not permitted) or the refusal. The plugin's sandbox gains no allowance.",
+    "signals": [
+      "term"
+    ],
+    "min_pid": 2
   },
   "applescript": {
     "$comment": "Typed host-owned AppleScript templates; no source code, script field, raw terminology or evaluated strings are accepted. Requests carry operation, timeout_ms and the operation-specific data fields. All strings enter templates only as escaped literals. Supported browser IDs use fixed Chromium/Safari dialects. Every operation checks its actual target against manifest apple_events_targets; shortcuts use com.apple.shortcuts.events, chat_submit uses com.apple.systemevents and now_playing uses the bundle_id it names. now_playing {bundle_id, artist} asks one media player (an app whose scripting has player state and current track) what it plays, never launching it: the result is the player state, a line feed and the current track's name, with its artist after an em dash when artist is true; an app that is not running answers an empty result. The plugin needs apple_events. script_bytes bounds generated source; result_bytes bounds the UTF-8 result; deadlines and per-plugin concurrency include queue admission. The host returns {ok:true,result} or {ok:false,error,status?}; source/results never enter diagnostics.",
@@ -404,6 +412,7 @@
     "network_fetch",
     "open",
     "process_info",
+    "process_signal",
     "system_actions",
     "wifi_info"
   ],

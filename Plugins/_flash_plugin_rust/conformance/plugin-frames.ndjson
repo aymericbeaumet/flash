@@ -221,6 +221,14 @@
 {"name": "host.system_action.unknown-action", "expect": "reject", "reply": "host.system_action.reply.without-an-action", "frame": {"id":1,"method":"host.system_action","params":{"action":"hibernate"}}}
 {"name": "host.system_action.action-not-a-string", "expect": "reject", "reply": "host.system_action.reply.without-an-action", "frame": {"id":1,"method":"host.system_action","params":{"action":["sleep"]}}}
 {"name": "host.system_action.unknown-param", "expect": "reject", "reply": "host.system_action.reply.params-refused", "frame": {"id":1,"method":"host.system_action","params":{"action":"sleep","delay":5}}}
+{"name": "host.process_signal.term-unconfirmed", "expect": "accept", "reply": "host.process_signal.reply.unconfirmed", "frame": {"id":1,"method":"host.process_signal","params":{"pid":4242,"signal":"term"}}}
+{"name": "host.process_signal.without-a-pid", "expect": "reject", "reply": "host.process_signal.reply.without-a-pid", "frame": {"id":1,"method":"host.process_signal","params":{"signal":"term"}}}
+{"name": "host.process_signal.launchd", "expect": "reject", "reply": "host.process_signal.reply.without-a-pid", "frame": {"id":1,"method":"host.process_signal","params":{"pid":1,"signal":"term"}}}
+{"name": "host.process_signal.process-group", "expect": "reject", "reply": "host.process_signal.reply.without-a-pid", "frame": {"id":1,"method":"host.process_signal","params":{"pid":-4242,"signal":"term"}}}
+{"name": "host.process_signal.pid-not-an-integer", "expect": "reject", "reply": "host.process_signal.reply.without-a-pid", "frame": {"id":1,"method":"host.process_signal","params":{"pid":"4242","signal":"term"}}}
+{"name": "host.process_signal.without-a-signal", "expect": "reject", "reply": "host.process_signal.reply.without-a-pid", "frame": {"id":1,"method":"host.process_signal","params":{"pid":4242}}}
+{"name": "host.process_signal.unknown-signal", "expect": "reject", "reply": "host.process_signal.reply.without-a-pid", "frame": {"id":1,"method":"host.process_signal","params":{"pid":4242,"signal":"kill"}}}
+{"name": "host.process_signal.unknown-param", "expect": "reject", "reply": "host.process_signal.reply.params-refused", "frame": {"id":1,"method":"host.process_signal","params":{"pid":4242,"signal":"term","confirmed":true}}}
 {"name": "host.open.url", "expect": "accept", "reply": "host.open.reply", "frame": {"id":1,"method":"host.open","params":{"url":"https://example.com/a"}}}
 {"name": "host.open.app", "expect": "accept", "reply": "host.open.reply.app", "frame": {"id":1,"method":"host.open","params":{"bundle_id":"com.example.app"}}}
 {"name": "host.open.local-file", "expect": "reject", "reply": "host.open.reply.local-file", "frame": {"id":1,"method":"host.open","params":{"url":"file:///Applications/Notes.app"}}}
