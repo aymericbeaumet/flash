@@ -143,6 +143,12 @@ pub(crate) const MAX_ALERT_VALUE_BYTES: usize = 64;
 /// `title` is required, the rest optional.
 pub(crate) const ALERT_KEYS: [&str; 3] = ["title", "value", "widest_value"];
 
+/// The characters that break a line, as the host reads them: an alert's
+/// `value` and `widest_value` hold none.
+const LINE_BREAKS: [char; 7] = [
+    '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
+];
+
 /// A `perform` reply's alert: a non-blank `title` within its bound, alone or
 /// over a non-blank one-line `value`; `widest_value`, a line of the same
 /// bound, comes only with a `value`.
@@ -154,7 +160,7 @@ pub(crate) fn valid_alert(alert: &Value) -> bool {
             .filter(|text| {
                 !text.trim().is_empty()
                     && text.len() <= MAX_ALERT_VALUE_BYTES
-                    && !text.contains(['\n', '\r'])
+                    && !text.contains(LINE_BREAKS)
             })
             .map(Some),
     };

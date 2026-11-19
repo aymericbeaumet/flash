@@ -490,8 +490,8 @@ never asks the host what it supports. See the
   "caffeinate on"}`, a one-line message, or `{"title": "volume", "value":
   "38%", "widest_value"?: "100%"}`, a title over a one-line value.
   `widest_value` is the widest value the alert shows, so its box keeps one
-  size while the value changes, and comes only with a `value`. Every string
-  is non-blank; `title` is at most 256 bytes, `value` and `widest_value` at
+  size while the value changes, and comes only with a `value`; neither holds
+  a line break, while a `title` may and wraps. Every string is non-blank; `title` is at most 256 bytes, `value` and `widest_value` at
   most 64 (`quotas.alert_title_bytes`, `alert_value_bytes`). A malformed
   alert rejects the whole reply. A plugin draws no alert of its own: this is
   the one centred alert, and it replaces the one on screen. An `error` of

@@ -219,6 +219,39 @@
       "valid": false
     },
     {
+      "name": "alert-value-with-a-line-separator",
+      "value": {
+        "ok": true,
+        "alert": {
+          "title": "volume",
+          "value": "38%\u2028muted"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "alert-widest-value-with-a-vertical-tab",
+      "value": {
+        "ok": true,
+        "alert": {
+          "title": "volume",
+          "value": "38%",
+          "widest_value": "100%\u000b"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "alert-title-of-two-lines",
+      "value": {
+        "ok": true,
+        "alert": {
+          "title": "caffeinate\non"
+        }
+      },
+      "valid": true
+    },
+    {
       "name": "alert-value-over-the-byte-bound",
       "value": {
         "ok": true,

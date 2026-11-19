@@ -77,6 +77,8 @@
 {"name": "perform.reply.alert-unknown-key", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":"38%","style":"error"}}}}
 {"name": "perform.reply.alert-widest-without-a-value", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","widest_value":"100%"}}}}
 {"name": "perform.reply.alert-value-of-two-lines", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":"38%\nmuted"}}}}
+{"name": "perform.reply.alert-value-with-a-line-separator", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":"38%\u2028muted"}}}}
+{"name": "perform.reply.alert-title-of-two-lines", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"caffeinate\non"}}}}
 {"name": "perform.reply.alert-value-not-a-string", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":38}}}}
 {"name": "perform.reply.alert-value-over-the-bound", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":"99999999999999999999999999999999999999999999999999999999999999999"}}}}
 {"name": "perform.reply.failure-with-an-alert", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":false,"error":"example failed","alert":{"title":"volume"}}}}

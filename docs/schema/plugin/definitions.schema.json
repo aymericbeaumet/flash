@@ -210,10 +210,10 @@
       ]
     },
     "alert_line": {
-      "description": "One non-blank line of an alert, at most quotas.alert_value_bytes.",
+      "description": "One non-blank line of an alert, without a line break, at most quotas.alert_value_bytes.",
       "type": "string",
       "maxLength": 64,
-      "pattern": "^[^\\n\\r]*\\S[^\\n\\r]*$"
+      "pattern": "^[^\\n\\u000b\\u000c\\r\\u0085\\u2028\\u2029]*\\S[^\\n\\u000b\\u000c\\r\\u0085\\u2028\\u2029]*$"
     },
     "perform_alert": {
       "description": "The centred alert a perform reply asks the host to show: a one-line message, or a title over a one-line value. widest_value is the widest value the alert shows, so its box keeps one size while the value changes.",

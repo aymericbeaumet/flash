@@ -197,7 +197,7 @@
     ]
   },
   "perform_alert": {
-    "$comment": "The alert a perform reply may carry: the host's centred alert, shown wherever the plugin's own command or bang ran (a key, the CLI, the command line). title alone is a one-line message; title over value is a state (volume over 38%), value one line; widest_value, the widest value the alert shows (100%), keeps its box one size while the value changes and comes only with a value. Every string is non-blank; title is at most quotas.alert_title_bytes, value and widest_value at most quotas.alert_value_bytes. A malformed alert rejects the whole reply. With an alert, message is the caller's output alone: the CLI prints it, the command line shows it, and a key shows the alert without a toast.",
+    "$comment": "The alert a perform reply may carry: the host's centred alert, shown wherever the plugin's own command or bang ran (a key, the CLI, the command line). title alone is a one-line message; title over value is a state (volume over 38%), value one line (no line feed, carriage return, vertical tab, form feed, U+0085, U+2028 or U+2029); widest_value, the widest value the alert shows (100%), keeps its box one size while the value changes and comes only with a value. Every string is non-blank; title is at most quotas.alert_title_bytes, value and widest_value at most quotas.alert_value_bytes. A malformed alert rejects the whole reply. With an alert, message is the caller's output alone: the CLI prints it, the command line shows it, and a key shows the alert without a toast.",
     "required": [
       "title"
     ],
