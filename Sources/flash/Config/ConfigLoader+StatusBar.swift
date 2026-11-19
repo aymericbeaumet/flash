@@ -333,15 +333,6 @@ extension ConfigLoader {
           } else if !config.telemetry.receiver.enabled {
             diagnose("reads \(token), but [telemetry.receiver] is not enabled")
           }
-        } else if token.hasPrefix("flash.calendar.") {
-          // The next-meeting values: the controller supplies them from the
-          // events `CalendarEvents` reads while a surface reads one.
-          source = nil
-          if !CalendarStatusValue.isCalendarValue(token) {
-            diagnose(
-              "has unknown Flash value \(token); the next-meeting values are "
-                + CalendarStatusValue.allCases.map(\.rawValue).joined(separator: ", "))
-          }
         } else if token.hasPrefix("flash.widget.") {
           source = nil
           if !(widget && ["flash.widget.name", "flash.widget.columns"].contains(token)) {

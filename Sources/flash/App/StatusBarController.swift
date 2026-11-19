@@ -68,8 +68,6 @@ final class FlashStatusBarController {
     /// The received-metric values it read (`#{flash.otel…}`): only their
     /// metrics wake it.
     var telemetryKeys: Set<String> = []
-    /// It read a `#{flash.calendar.next…}` value: only then are events read.
-    var readsCalendar = false
     /// The finest time unit this surface shows; its clock ticks on that
     /// unit's boundaries. Nil: it shows no time.
     var clock: StatusFormatTimeResolution?
@@ -100,7 +98,6 @@ final class FlashStatusBarController {
         dependencies.values.lazy.filter { $0.hasPrefix(Self.pluginValuePrefix) }
           .map { String($0.dropFirst(Self.pluginValuePrefix.count)) })
       telemetryKeys = dependencies.values.filter(TelemetryQuery.isTelemetryKey)
-      readsCalendar = dependencies.values.contains(where: CalendarStatusValue.isCalendarValue)
     }
   }
 
@@ -194,15 +191,6 @@ final class FlashStatusBarController {
   private var telemetryReadKeys: Set<String>?
   /// A metric an active surface reads changed since the last reading.
   private var telemetryDirty = false
-  /// Whether an active surface of the running controller reads a
-  /// `#{flash.calendar.next…}` value, as the priority its changes wake at:
-  /// `.high` while the bar or a visible widget shows one, `.low` for
-  /// monitors alone. Nil: none does, and no event is read.
-  private var calendarPriority: PollScheduler.Priority?
-  /// The events `CalendarEvents` last published, kept only while required.
-  private var calendarAgenda: CalendarAgenda?
-  /// Told whether events are required, each time that changes.
-  private let calendarObserver: (Bool) -> Void
   /// The bar's surface; nil while `[statusbar] enabled` is off.
   private var bar: SurfaceState? = SurfaceState()
   private var widgets: [String: WidgetState] = [:]
@@ -292,11 +280,9 @@ final class FlashStatusBarController {
     monitorFireSink: ((MonitorFire) -> Void)? = nil,
     monitorNotifySink: ((String, StatusAlert) -> Void)? = nil,
     monitorTriggerSink: ((String, MonitorLevel) -> Void)? = nil,
-    telemetry: TelemetryStore? = nil,
-    calendarObserver: @escaping (Bool) -> Void = { _ in }
+    telemetry: TelemetryStore? = nil
   ) {
     self.telemetry = telemetry
-    self.calendarObserver = calendarObserver
     self.widgetSink = widgetSink
     self.monitorSink = monitorSink
     self.monitorAlertSink = monitorAlertSink
@@ -399,11 +385,6 @@ final class FlashStatusBarController {
     requiredTelemetryKeys = []
     telemetryValues = [:]
     telemetryReadKeys = nil
-    calendarAgenda = nil
-    if calendarPriority != nil {
-      calendarPriority = nil
-      calendarObserver(false)
-    }
     stopJobs(jobs)
   }
 
@@ -649,19 +630,6 @@ final class FlashStatusBarController {
     }
   }
 
-  /// The events `#{flash.calendar.next…}` values are made of, as
-  /// `CalendarEvents` read them; nil: none to show. Ignored while no active
-  /// surface reads a calendar value.
-  func updateCalendarAgenda(_ agenda: CalendarAgenda?) {
-    queue.async { [weak self] in
-      guard let self else { return }
-      let agenda = self.calendarPriority == nil ? nil : agenda
-      guard agenda != self.calendarAgenda else { return }
-      self.calendarAgenda = agenda
-      self.publishCurrentModel()
-    }
-  }
-
   private func stopJobs(_ jobs: [any StatusCommandTask]) {
     let native = jobs.compactMap { $0 as? StatusFormatCommandJob }
     for job in jobs where !(job is StatusFormatCommandJob) { job.cancel() }
@@ -729,14 +697,6 @@ final class FlashStatusBarController {
       telemetryDirty = false
     }
     for (key, text) in telemetryValues { values[key] = text }
-    // The next event as of now: a countdown is read at the time it shows.
-    if let calendarAgenda {
-      for (key, text) in CalendarNext.values(
-        calendarAgenda, at: wallClock(), timeZone: calendar.timeZone)
-      {
-        values[key] = text
-      }
-    }
     for (name, record) in sourceRecords {
       if let cycle = record.cycle {
         values[name] = StatusCycleKey.wrap(
@@ -953,7 +913,6 @@ final class FlashStatusBarController {
     var sources = Set<String>()
     var pluginSegments = Set<String>()
     var telemetryKeys = Set<String>()
-    var calendar: PollScheduler.Priority?
     var jobs: [String: StatusFormatJobRequest] = [:]
     var cadences: [String: TimeInterval] = [:]
     var foregroundJobs = Set<String>()
@@ -963,9 +922,6 @@ final class FlashStatusBarController {
       sources.formUnion(surface.sources)
       pluginSegments.formUnion(surface.pluginSegments)
       telemetryKeys.formUnion(surface.telemetryKeys)
-      if surface.readsCalendar {
-        calendar = active.foreground ? .high : calendar ?? .low
-      }
       let cadence = Self.cadence(active.interval)
       if active.foreground { foregroundSources.formUnion(surface.sources) }
       for job in surface.jobs {
@@ -986,13 +942,6 @@ final class FlashStatusBarController {
       requiredTelemetryKeys = telemetryKeys
       telemetry?.observe(keys: telemetryKeys)
     }
-    // Events are read for a running controller's surfaces only.
-    if schedule == nil { calendar = nil }
-    if (calendar == nil) != (calendarPriority == nil) {
-      if calendar == nil { calendarAgenda = nil }
-      calendarObserver(calendar != nil)
-    }
-    calendarPriority = calendar
     requiredJobs = jobs
     let obsolete = shellRecords.keys.filter { requiredJobs[$0] == nil }
     var obsoleteJobs = obsolete.compactMap { shellRecords.removeValue(forKey: $0)?.job }
@@ -1213,16 +1162,15 @@ final class FlashStatusBarController {
   /// rather than owning a timer. It is armed only while a visible surface or
   /// an enabled monitor requires something.
   ///
-  /// Each deadline carries the slack its kind tolerates. A clock boundary, a
-  /// carousel rotation and the next change of a calendar value are the
-  /// visible change itself — the second has to turn on the second — so they
-  /// are `.high`. A job or source re-run, the
+  /// Each deadline carries the slack its kind tolerates. A clock boundary and
+  /// a carousel rotation are the visible change itself — the second has to
+  /// turn on the second — so they are `.high`. A job or source re-run, the
   /// placeholder for a job that has not answered and the throttled publish of
   /// output that already arrived are `.normal`: their output lands whenever
   /// the command finishes, so a tenth of a second is invisible, and the looser
   /// slack lets them coalesce with the rest of the app's wake-ups. What only
-  /// monitors require — their jobs, sources and calendar values — is `.low`:
-  /// background upkeep nobody watches.
+  /// monitors require — their jobs and sources — is `.low`: background
+  /// upkeep nobody watches.
   private func armTimer() {
     scheduler.unregister(Self.pollClientID)
     timerGeneration &+= 1
@@ -1256,14 +1204,6 @@ final class FlashStatusBarController {
       pluginCycles.filter { requiredPluginSegments.contains($0.key) }.values
         .filter(\.needsRotationTimer).map(\.nextRotationAt), .high)
     if let clockDeadline = clockDeadline(now: clock()) { add([clockDeadline], .high) }
-    // A calendar value changes at instants of its own — the countdown's
-    // next minute, an event starting or ending — never on a cadence.
-    if let calendarPriority, let calendarAgenda {
-      let wall = wallClock()
-      if let change = CalendarNext.nextChange(calendarAgenda, after: wall) {
-        add([clock() + change.timeIntervalSince(wall)], calendarPriority)
-      }
-    }
     if let pendingJobPublish = schedule.pendingJobPublish { add([pendingJobPublish], .normal) }
     guard let wakeup = Self.nextWakeup(deadlines) else { return }
     schedule.nextWakeup = wakeup.at

@@ -241,7 +241,6 @@ extension AppDelegate {
       terminalPopupNames: cfg.terminalPopupNames,
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     statusBarController?.setBar(enabled: cfg.statusBar.enabled)
-    calendarEvents.configure(cfg.calendar)
     statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))
     statusBarController?.updateMonitors(cfg.monitorSpecs)
     registry.updateFlashlightConfig(cfg.flashlight)

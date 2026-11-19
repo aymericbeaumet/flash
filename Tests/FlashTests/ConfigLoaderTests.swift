@@ -2267,7 +2267,6 @@ final class ConfigLoaderTests: XCTestCase {
 
     XCTAssertEqual(c.app, d.app)
     XCTAssertEqual(c.keyboard, d.keyboard)
-    XCTAssertEqual(c.calendar, d.calendar)
     XCTAssertEqual(c.tiling, d.tiling)
     XCTAssertEqual(c.hints, d.hints)
     XCTAssertEqual(c.overlay, d.overlay)

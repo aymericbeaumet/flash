@@ -13,7 +13,7 @@
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     <!-- @contacts.cards reads Contacts, @reminders.tasks Reminders and
-         #{flash.calendar.next} and `calendar join` Calendar through EventKit,
+         #{flash.plugin.calendar.next} and `calendar join` Calendar through EventKit,
          once the user allows it. -->
     <key>com.apple.security.personal-information.addressbook</key>
     <true/>

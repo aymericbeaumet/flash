@@ -160,7 +160,7 @@ Everything the bar can show is available. These values suit widgets:
 | `#{flash.plugin.sysinfo.power_state}` | `charging`, `discharging`, `charged` or `ac`. |
 | `#{flash.plugin.terminals.session}`, `window`, `pane` | The attached local tmux client's session, window and pane; empty without one. |
 | `#{flash.calendar}` | The 75-column [calendar](calendar.md): three months, the day's progress, time zone, DST and moon. |
-| `#{flash.calendar.next}`, `next_title`, `next_in`, `next_minutes`, `next_start`, `next_end`, `next_ongoing`, `next_link` | The [next meeting](calendar.md#next-meeting): `Standup in 12m`, and its parts. Reading one asks macOS for Calendars access once. |
+| `#{flash.plugin.calendar.next}`, `next_title`, `next_in`, `next_minutes`, `next_start`, `next_end`, `next_ongoing`, `next_link` | The `calendar` plugin's [next meeting](calendar.md#next-meeting): `Standup in 12m`, and its parts. Reading one asks macOS for Calendars access once. |
 | `#{flash.plugin.processes.top_cpu}`, `top_mem` | The busiest processes by CPU or resident memory, one row each. |
 | `#{flash.plugin.processes.focused_app_details}` | The focused app's CPU, memory, sockets, threads, uptime and disk I/O. |
 | `#{flash.source.<name>}` | The output of a [named source](status-format.md#jobs-sources-and-flash-styles). |

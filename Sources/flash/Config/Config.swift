@@ -1069,9 +1069,6 @@ struct Config {
   var app = App()
   var keyboard = Keyboard()
   var clipboard = Clipboard()
-  /// `[calendar]`: the events `#{flash.calendar.next…}` and the `calendar`
-  /// commands count.
-  var calendar = CalendarSettings()
   /// `[tiling]`: tiling and workspaces, off by default (docs/tiling.md).
   var tiling = TilingSettings()
   var overlay = Overlay()

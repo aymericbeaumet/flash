@@ -8,18 +8,20 @@ three-month calendar view is a status value too.
 
 ## Next meeting
 
-`#{flash.calendar.next}` reads `Standup in 12m`, then `Standup now` once it
-began. Its parts compose a template of your own:
+The next meeting is the bundled `calendar` plugin's: its status segments,
+`calendar join` and `calendar next`.
+`#{flash.plugin.calendar.next}` reads `Standup in 12m`, then `Standup now`
+once it began. Its parts compose a template of your own:
 
 | Value | Example | What it is |
 | --- | --- | --- |
-| `#{flash.calendar.next}` | `Standup in 12m`, `Standup now` | The title and when |
-| `#{flash.calendar.next_title}` | `Standup` | The title, on one line |
-| `#{flash.calendar.next_in}` | `in 12m`, `in 1h 5m`, `now` | When it starts |
-| `#{flash.calendar.next_minutes}` | `12` | Whole minutes until it starts, rounded up; `0` once it began |
-| `#{flash.calendar.next_start}`, `#{flash.calendar.next_end}` | `09:30` | Its times, 24-hour, local |
-| `#{flash.calendar.next_ongoing}` | `1` | `1` once it began, empty before |
-| `#{flash.calendar.next_link}` | `https://meet.google.com/abc-defg-hij` | Its meeting link as the event writes it; empty without one |
+| `#{flash.plugin.calendar.next}` | `Standup in 12m`, `Standup now` | The title and when |
+| `#{flash.plugin.calendar.next_title}` | `Standup` | The title, on one line |
+| `#{flash.plugin.calendar.next_in}` | `in 12m`, `in 1h 5m`, `now` | When it starts |
+| `#{flash.plugin.calendar.next_minutes}` | `12` | Whole minutes until it starts, rounded up; `0` once it began |
+| `#{flash.plugin.calendar.next_start}`, `#{flash.plugin.calendar.next_end}` | `09:30` | Its times, 24-hour, local |
+| `#{flash.plugin.calendar.next_ongoing}` | `1` | `1` once it began, empty before |
+| `#{flash.plugin.calendar.next_link}` | `https://meet.google.com/abc-defg-hij` | Its meeting link as the event writes it; empty without one |
 
 Every value is empty while no event is next, which a
 [monitor](monitors.md) reads as unknown. A title is text: a `#` in it never
@@ -29,14 +31,14 @@ The next event is the one that began within the last ten minutes and has not
 ended (the latest to begin, if several did), long enough to join it late;
 otherwise the first to start within the look-ahead, 24 hours by default. At
 equal starts, one with a meeting link comes first. Cancelled events never
-count; all-day and declined ones count only when [`[calendar]`](config:calendar) says so.
+count; all-day and declined ones count only when `[plugins.calendar]` says so.
 
 ```toml
 [statusbar]
 enabled = true
 template = """
 #[align=left]#[pill]#{flash.mode}#[nopill]
-#[align=right]#{?flash.calendar.next,#[range=user|join]#[shrink]#{flash.calendar.next_title}#[noshrink] #{flash.calendar.next_in}#[norange] · ,}%H:%M
+#[align=right]#{?flash.plugin.calendar.next,#[range=user|join]#[shrink]#{flash.plugin.calendar.next_title}#[noshrink] #{flash.plugin.calendar.next_in}#[norange] · ,}%H:%M
 """
 
 # A click on the meeting joins it.
@@ -46,7 +48,7 @@ join = ["flash", "calendar", "join"]
 
 `#[shrink]` lets a long title give way first ([overflow](status-format.md#overflow-and-shrink)).
 To show a meeting only once it is two hours away, test the countdown:
-`#{?#{&&:#{flash.calendar.next},#{e|<=:#{flash.calendar.next_minutes},120}},#{flash.calendar.next} · ,}`.
+`#{?#{&&:#{flash.plugin.calendar.next},#{e|<=:#{flash.plugin.calendar.next_minutes},120}},#{flash.plugin.calendar.next} · ,}`.
 
 ### An alert before it starts
 
@@ -55,10 +57,10 @@ meeting, whether the bar is on or not:
 
 ```toml
 [monitors.meeting]
-value = "#{flash.calendar.next_minutes}"
+value = "#{flash.plugin.calendar.next_minutes}"
 direction = "below"
 warning = 2
-message = "#{flash.calendar.next}"
+message = "#{flash.plugin.calendar.next}"
 # Join it as well, the moment the alert shows:
 # run = ["flash", "calendar", "join"]
 ```
@@ -79,10 +81,12 @@ that is one web link. A Zoom or Teams link opens straight in the app when it
 is installed (`zoommtg:`, `msteams:`), any other in its default handler.
 
 `calendar next` shows the next event in the centred alert, its title over
-`in 12m · 09:30–09:45 · Zoom`; from the CLI it prints that line. Both exit 1
-and say why when no event is in the look-ahead, when the event has no link
-(`calendar join`) or when Flash may not read your calendars. Bind either
-like any command:
+`in 12m · 09:30–09:45 · Zoom`, and the CLI prints `Standup in 12m ·
+09:30–09:45 · Zoom` as well. `calendar join` answers `Joining Standup`: on
+a banner from a key, printed from the CLI. Both exit 1 and say why when no
+event is in the look-ahead, when the event has no link (`calendar join`) or
+when Flash may not read your calendars. Neither takes an argument. Bind
+either like any command:
 
 ```toml
 [mode.all.mappings]
@@ -92,7 +96,7 @@ like any command:
 ### Settings
 
 ```toml
-[calendar]
+[plugins.calendar]
 calendars = ["Work"]   # titles as Calendar shows them; empty reads every calendar
 all_day = false        # count all-day events
 declined = false       # count events you declined
@@ -101,37 +105,43 @@ lookahead_hours = 24   # how far ahead the next event may start, 1-168
 
 ### Access and cost
 
-Flash reads your calendars through EventKit, in process, only while a status
-format — the bar, a text popup, a desktop widget or a monitor — reads one of
-these values, and when `calendar join` or `calendar next` runs. The first
-such read asks macOS for Calendars access; the default configuration reads
-none of these values, so it never asks. A refusal leaves the values empty and
-the commands exit 1 until you allow Flash in System Settings › Privacy &
-Security › Calendars; then run `calendar next` once to read them. Reminders
-are never read here.
+The plugin holds no Calendars access and cannot reach your calendars: it
+is sandboxed, and asks Flash, which reads them through EventKit
+([privacy](privacy.md)). Flash reads only while a status format reads one of
+these values (the enabled bar and its text popups, a desktop widget, a
+monitor) and when `calendar join` or `calendar next` runs. The first such
+read asks macOS for Calendars access, and macOS names Flash; the default
+configuration reads none of these values, so it never asks. A refusal leaves
+the values empty and the commands exit 1 until you allow Flash in System
+Settings › Privacy & Security › Calendars; then run `calendar next` once to
+read them. A command run while macOS's prompt is still open says so after
+eight seconds: answer the prompt and run it again. Reminders are never read
+here.
 
-A read covers events from now to twice the look-ahead and keeps, in memory
-only, each event's title, times, all-day, declined and cancelled flags, its
-calendar's title and the meeting link found in it; the location and notes
-are scanned for that link and not kept ([privacy](privacy.md)). Flash reads
-again when the calendar database changes (half a second after a burst of
-changes settles) and once one look-ahead has passed, and stops when no
-surface reads a value. The values change at instants of their own — the
-countdown's next minute, an event starting, ending or leaving its first ten
-minutes — and the status controller wakes for exactly those on the shared
-clock, at monitor priority when only a monitor reads them. Nothing polls.
+A read covers events from now to twice the look-ahead. Flash hands the
+plugin each event's title, times, all-day, declined and cancelled flags, its
+calendar's title, its URL and location, and the links found in its notes,
+never the notes themselves; the plugin keeps them in memory only. It reads
+again when the calendar database changes (half a second after the first of
+a burst of changes), once one look-ahead has passed (a day at most), and
+five minutes after a read that failed, and stops when nothing shows a
+value. The values change at instants of their own — the countdown's next
+minute, an event starting, ending or leaving its first ten minutes — and
+the plugin asks Flash's one clock for exactly the next of them. Nothing
+polls. With `calendar` in `[plugins] disabled`, the values are empty and the
+commands do nothing.
 
 ### Coming from MeetingBar or Itsycal
 
 | MeetingBar, Itsycal | Flash |
 | --- | --- |
-| The next meeting and its countdown in the menu bar | `#{flash.calendar.next}` in `[statusbar] template` |
+| The next meeting and its countdown in the menu bar | `#{flash.plugin.calendar.next}` in `[statusbar] template` |
 | Join the next meeting (MeetingBar's shortcut) | `calendar join` on a key, or a `#[range]` click on the bar |
-| Notification or full-screen reminder before a meeting | A `[monitors.meeting]` on `#{flash.calendar.next_minutes}`, and its centred alert |
+| Notification or full-screen reminder before a meeting | A `[monitors.meeting]` on `#{flash.plugin.calendar.next_minutes}`, and its centred alert |
 | Joining as it starts | That monitor's `run = ["flash", "calendar", "join"]` |
 | Month calendar dropdown (Itsycal) | `#{flash.calendar}` in a text popup, below |
 | Agenda and event editing | Calendar, Fantastical, or calcurse or khal in a terminal popup |
-| Hide calendars, all-day and declined events | `[calendar] calendars`, `all_day`, `declined` |
+| Hide calendars, all-day and declined events | `[plugins.calendar] calendars`, `all_day`, `declined` |
 
 ## Calendar popup
 
@@ -242,9 +252,9 @@ location access, and shows no events or todos: the
 [next-meeting values](#next-meeting) are what read your calendars. One result is cached
 for each second and timezone, including its current UTC offset. The existing
 status clock refreshes it every second; daylight-saving and timezone changes
-also update the clock and offset. A timezone
-change also re-renders the bar's clock and the next meeting's start and end
-in the new zone at once, and `calendar next` and `calendar join` read the new
-zone too. Calendar
+also update the clock and offset. A timezone change re-renders the bar's
+clock at once; the next meeting's start and end follow at their next change,
+within a minute while it counts down, and `calendar next` reads the new zone
+when it runs. Calendar
 generation adds no timer or plugin; the popup host owns the display process
 and snapshot file.

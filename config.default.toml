@@ -311,6 +311,18 @@ startup_timeout = 5
 # [plugins.processes]
 # top_count = 5 # rows of each table, 1-20
 
+# The calendar plugin publishes the next meeting: #{flash.plugin.calendar.next}
+# ("Standup in 12m"), …next_minutes and its other parts (docs/calendar.md),
+# and runs `calendar join` and `calendar next`. Flash reads your calendars
+# for it (and macOS asks once whether Flash may) only while a status format,
+# widget or monitor reads one of those values, or one of those commands
+# runs. Cancelled events never count.
+# [plugins.calendar]
+# calendars = []       # calendar titles to read, as Calendar shows them; empty reads every calendar
+# all_day = false      # count all-day events
+# declined = false     # count events you declined
+# lookahead_hours = 24 # how far ahead the next event may start, in hours (1-168)
+
 # RSS headlines from the last 24 hours. No requests run until a URL is set.
 # The template owns the name and the hovers. The name and the headline can
 # open different popups; `$FLASH_STATUS_LINK` is the headline's item link:
@@ -336,21 +348,6 @@ startup_timeout = 5
 # are never dropped; they may fill all but one entry.
 # [clipboard]
 # history_size = 1000 # entries kept, 1..10000
-
-# The events #{flash.calendar.next}, #{flash.calendar.next_minutes} and the
-# other next-meeting values show, and `calendar join` and `calendar next`
-# read. Flash reads your calendars (and macOS asks once whether it may) only
-# when a status format, widget or monitor reads one of those values, or one
-# of those commands runs. Cancelled events never count.
-[calendar]
-# Calendar titles to read, as Calendar shows them; empty reads every calendar.
-calendars = []
-# Count all-day events.
-all_day = false
-# Count events you declined.
-declined = false
-# How far ahead the next event may start, in hours (1-168).
-lookahead_hours = 24
 
 # Tiling and workspaces, as AeroSpace and i3 do it, without macOS Spaces or
 # disabling System Integrity Protection (docs/tiling.md). Off by default: with
@@ -443,11 +440,10 @@ link_schemes = []
 # empty.
 # Flash supplies flash.mode, flash.date,
 # flash.focused_app_name, flash.focused_app_bundle_id, flash.calendar (a
-# three-month calendar), flash.calendar.next ("Standup in 12m", see
-# [calendar]) and its
-# next_title/next_in/next_minutes/next_start/next_end/next_ongoing/next_link
-# parts,
-# flash.plugin.<id>.<segment>, flash.plugin.loaded_count/ready_count/error_count,
+# three-month calendar),
+# flash.plugin.<id>.<segment> (flash.plugin.calendar.next, "Standup in 12m",
+# is the next meeting; see [plugins.calendar]),
+# flash.plugin.loaded_count/ready_count/error_count,
 # flash.plugin.spawn_ms, flash.source.<name>, and flash.history.<name> for a
 # source that keeps a history.
 # Colours use the standard xterm palette, ANSI names, or explicit #RRGGBB.

@@ -447,6 +447,21 @@ final class HostCalendarEventsTests: XCTestCase {
     XCTAssertEqual(EventKitAccess.access(.restricted), .denied)
   }
 
+  /// macOS kills an app that reads Calendar without saying why. macOS 14
+  /// reads the full-access key, macOS 13 the original one.
+  func testTheBundleExplainsTheRead() throws {
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Resources/Info.plist")
+    let info = try XCTUnwrap(
+      try PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil)
+        as? [String: Any])
+    XCTAssertNotNil(info["NSCalendarsFullAccessUsageDescription"] as? String)
+    XCTAssertEqual(
+      info["NSCalendarsUsageDescription"] as? String,
+      info["NSCalendarsFullAccessUsageDescription"] as? String)
+  }
+
   func testCalendarEventsContractMatchesSpec() throws {
     let url = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

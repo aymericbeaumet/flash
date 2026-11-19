@@ -119,11 +119,7 @@ native case to the corpus and inspect the corresponding pinned parser branch.
 Flash supplies `flash.mode`, `flash.date`, `flash.focused_app_name`,
 `flash.focused_app_bundle_id`, `flash.secure_input`,
 the [tiling](tiling.md#the-bar-and-plugins) `flash.workspace` and
-`flash.workspaces`, the three-month `flash.calendar` and the
-[next meeting](calendar.md#next-meeting)
-`flash.calendar.next` with its parts `next_title`, `next_in`, `next_minutes`,
-`next_start`, `next_end`, `next_ongoing` and `next_link`
-(`flash.calendar.next_minutes`, …),
+`flash.workspaces`, the three-month `flash.calendar`,
 `flash.plugin.<id>.<segment>`, `flash.plugin.loaded_count`,
 `flash.plugin.ready_count`, `flash.plugin.error_count`,
 `flash.plugin.errors`, `flash.plugin.spawn_ms`, `flash.plugin.spawn_id`,
@@ -157,12 +153,15 @@ clears it when its `--minutes` run out. A bar, popup or widget that shows it
 keeps the plugin's process running; without one the process starts with the
 first `caffeinate` command.
 
-`flash.calendar.next` reads `Standup in 12m`, then `Standup now`, and every
-`flash.calendar.next…` value is empty while no event is next:
-`#{?flash.calendar.next,#{flash.calendar.next} · ,}`. Flash reads your
-calendars only while a surface or a monitor reads one of these values, and
-macOS asks for Calendars access the first time; see
-[calendar](calendar.md#next-meeting).
+The [next meeting](calendar.md#next-meeting) is the `calendar` plugin's:
+`flash.plugin.calendar.next` reads `Standup in 12m`, then `Standup now`,
+with its parts `next_title`, `next_in`, `next_minutes`, `next_start`,
+`next_end`, `next_ongoing` and `next_link`
+(`flash.plugin.calendar.next_minutes`, …). Every one is empty while no event
+is next: `#{?flash.plugin.calendar.next,#{flash.plugin.calendar.next} · ,}`.
+Flash reads your calendars for the plugin only while a surface or a monitor
+reads one of these values, and macOS asks for Calendars access the first
+time.
 
 ### Process values
 
@@ -506,9 +505,9 @@ evaluation reports the finest unit it showed: seconds when a strftime seconds
 conversion (`%S`, `%T`, `%s`, `%X`, `%r`, `%c`, `%+`) or the analog clock in
 `#{flash.calendar}` was expanded; days when only date conversions were; minutes for anything else,
 including `#{flash.date}` and `t:` times. A literal `%%` is not time, and
-neither are the `#{flash.calendar.next…}` values: the controller wakes at the
-instants they change (the countdown's next minute, an event starting or
-ending). The controller wakes at the next boundary of the finest unit any
+neither is a plugin's segment, the `#{flash.plugin.calendar.next…}`
+countdown included: its plugin publishes it at the instants it changes. The
+controller wakes at the next boundary of the finest unit any
 visible surface shows; a day ends at local midnight or at a daylight-saving transition inside
 it. A text popup contributes its clock only while its hover preview is visible;
 pinned and standalone pagers keep their snapshot until explicit refresh.

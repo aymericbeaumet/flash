@@ -109,7 +109,7 @@ run = ["afplay", "/System/Library/Sounds/Tink.aiff"]
 ```
 
 The month view reads no events, so this asks for no permission. Put
-`#{?flash.calendar.next,#{flash.calendar.next} · ,}` before the date to show
+`#{?flash.plugin.calendar.next,#{flash.plugin.calendar.next} · ,}` before the date to show
 the next meeting as well; that is the first read that makes macOS ask whether
 Flash may read your calendars.
 

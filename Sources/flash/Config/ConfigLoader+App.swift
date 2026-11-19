@@ -2,7 +2,7 @@ import FlashCore
 import Foundation
 import TOMLKit
 
-/// `[app]`, `[keyboard]`, `[clipboard]`, `[calendar]`, `[startup]` and `[debug]`.
+/// `[app]`, `[keyboard]`, `[clipboard]`, `[startup]` and `[debug]`.
 extension ConfigLoader {
   static func applyClipboard(
     _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
@@ -13,38 +13,6 @@ extension ConfigLoader {
       message: "clipboard.history_size must be an integer between 1 and 10000",
       locations: locations, into: &config, validate: { (1...10_000).contains($0) },
       assign: { value, config in config.clipboard.historySize = value })
-  }
-
-  static func applyCalendar(
-    _ table: TOMLTable?, locations: ConfigSourceLocationIndex, into config: inout Config
-  ) {
-    guard let table else { return }
-    applyStringArray(
-      table["calendars"], path: ["calendar", "calendars"],
-      message: "calendar.calendars must be an array of calendar titles", locations: locations,
-      into: &config
-    ) { value, config in
-      config.calendar.calendars = value
-    }
-    applyBool(
-      table["all_day"], path: ["calendar", "all_day"],
-      message: "calendar.all_day must be true or false", locations: locations, into: &config
-    ) { value, config in
-      config.calendar.allDay = value
-    }
-    applyBool(
-      table["declined"], path: ["calendar", "declined"],
-      message: "calendar.declined must be true or false", locations: locations, into: &config
-    ) { value, config in
-      config.calendar.declined = value
-    }
-    let hours = CalendarSettings.lookaheadHoursRange
-    applyInt(
-      table["lookahead_hours"], path: ["calendar", "lookahead_hours"],
-      message:
-        "calendar.lookahead_hours must be an integer between \(hours.lowerBound) and \(hours.upperBound)",
-      locations: locations, into: &config, validate: { hours.contains($0) },
-      assign: { value, config in config.calendar.lookaheadHours = value })
   }
 
   static func applyApp(

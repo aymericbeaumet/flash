@@ -19,7 +19,7 @@ running plugins with `:plugins show`.
   may request Automation to list their data. The screenshot plugin invokes
   macOS `screencapture`, which needs Screen Recording when used. An explicit
   `:sysinfo refresh` may request Location to read the Wi-Fi name. Showing
-  the next meeting (`#{flash.calendar.next}`) or running `calendar join`
+  the next meeting (`#{flash.plugin.calendar.next}`) or running `calendar join`
   requests Calendars. Your own calendar or other commands can request
   permissions too; macOS attributes
   child-process requests to Flash. Releasing a stuck secure-input flag can
@@ -90,7 +90,7 @@ running plugins with `:plugins show`.
 | Automation: Notes | Flash | The first `@notes` search or `notes refresh` while Notes runs. |
 | Reminders | Flash | The first `@reminders` search or `reminders refresh` while Reminders runs. |
 | Contacts | Flash | The first `@contacts` search or `contacts refresh` while Contacts runs. |
-| Calendars | Flash | The first time a status format (the bar, a text popup, a widget) or a monitor reads a `#{flash.calendar.next…}` value, or the first `calendar join` or `calendar next`. The default configuration reads none. |
+| Calendars | Flash, for `calendar` | The first time a status format (the bar, a text popup, a widget) or a monitor reads a `#{flash.plugin.calendar.next…}` value, or the first `calendar join` or `calendar next`. The default configuration reads none. Never from the background: Flash asks for the plugin only while one of its values is shown or one of its commands runs. |
 | Automation: Spotify, Music, TV, Podcasts | Flash, for `media` | The first `media status` while that app runs. Flash never asks an app that is not running. |
 | Automation: System Events | Flash, for `aiproviders` | Sending Return after a chat bang pre-fills a query, while the opened app remains focused. |
 | Notifications | Flash | The first `notify send`, or the first rise of a monitor with `notify = true`. Never at launch; refusing leaves `notify send` failing with a reason. |
@@ -197,20 +197,24 @@ stored as separate register files.
   and asks only when you first scope a query to one or run its refresh
   command; a refused access leaves it empty, without a message.
 - **Calendar events:** only while a status format or a monitor reads a
-  `#{flash.calendar.next…}` value, and when you run `calendar join` or
+  `#{flash.plugin.calendar.next…}` value, and when you run `calendar join` or
   `calendar next`, Flash reads the events of your calendars (all of them, or
-  those `[calendar] calendars` names) from now to twice
-  `[calendar] lookahead_hours` (48 hours by default) through EventKit, in
-  process; never reminders. It keeps each event's title, start and end,
-  all-day, declined and cancelled flags, its calendar's title and the
-  meeting link found in its URL, location or notes, in memory only: the
-  location and notes are scanned for that link and dropped. Nothing is
-  written to disk, and the log names only the meeting service, or the link's
-  host, that a `calendar join` opened; what a monitor shows of the event is
-  on the local inspector's monitors page, like any monitor's value. It
-  reads again when the calendar database changes and once a look-ahead has
-  passed. Flash reads nothing before macOS grants access; a refusal leaves
-  the values empty.
+  those `[plugins.calendar] calendars` names) from now to twice
+  `[plugins.calendar] lookahead_hours` (48 hours by default) through
+  EventKit, in process, for the bundled `calendar` plugin; never reminders.
+  The grant is Flash's and stays in Flash: the plugin is sandboxed and holds
+  none. Flash hands it each event's title, start and end, all-day, declined
+  and cancelled flags, its calendar's title, its URL and location fields and
+  the links found in its notes. The notes themselves never leave Flash,
+  which keeps nothing of a read. The plugin picks the meeting link among
+  those and keeps the events in memory only. Nothing is written to disk, and
+  the log names only the meeting service, or the link's host, that a
+  `calendar join` opened, never an event; the values the plugin publishes
+  (the next event's title, times and link) are on the local inspector's
+  plugins and monitors pages, like any plugin's and any monitor's. It reads
+  again when the calendar database changes and once a look-ahead has passed.
+  Flash reads nothing before macOS grants access; a refusal leaves the
+  values empty.
 - **Files:** Spotlight file-name queries that Flash runs itself, only for a
   flashlight query scoped to files (`!f` or `@files`).
 - **The focused text:** when you run an `input` command, Flash reads the
@@ -579,7 +583,9 @@ the links found in its notes. The notes themselves never leave Flash.
 macOS's Calendars prompt, which names Flash, comes up for such a plugin only
 while you are using it (one of its commands is running, or a status surface
 shows one of its values), never from the background, and Flash tells only
-those plugins that the calendar changed.
+those plugins that the calendar changed. `calendar` is the bundled plugin
+that declares it, beside `open` for the meeting link it hands Flash to open:
+it is sandboxed with no allowance, reads no file and stores nothing.
 
 Third-party plugins load only when listed in `[plugins] third_party`, and GitHub
 references must pin a full commit SHA. They get the same sandbox: one runs

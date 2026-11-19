@@ -41,10 +41,9 @@ and its diagnostics.
 | [`[monitors.<name>]`](config:monitors) | Values that raise an alert when they cross a threshold ([monitors](monitors.md)) |
 | [`[popup]`](config:popup), [`[popup.<name>]`](config:popup.terminal) | Shared popup style and named terminal/text popups ([popups](popups.md)) |
 | [`[clipboard]`](config:clipboard) | Clipboard history size ([clipboard](clipboard.md)) |
-| [`[calendar]`](config:calendar) | The events the next-meeting values and `calendar join` count ([calendar](calendar.md#settings)) |
 | [`[tiling]`](config:tiling), `[tiling.gaps]`, `[tiling.monitors]`, `[[tiling.rules]]` | Opt-in tiling and workspaces: layout, gaps, pinned workspaces and floating rules ([tiling](tiling.md)) |
 | [`[startup]`](config:startup) | Commands run once each time Flash starts, such as `defaults write` lines ([startup commands](startup.md)) |
-| [`[plugins]`](config:plugins), `[plugins.<id>]` | Enabled plugins and their settings ([plugins](plugins.md#enable-and-configure)) |
+| [`[plugins]`](config:plugins), `[plugins.<id>]` | Enabled plugins and their settings ([plugins](plugins.md#enable-and-configure)), such as `[plugins.calendar]` for the events the [next meeting](calendar.md#settings) counts |
 | [`[debug]`](config:debug) | Logging and the local inspector |
 
 Each section name links to its place in

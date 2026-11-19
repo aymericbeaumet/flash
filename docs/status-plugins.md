@@ -130,6 +130,11 @@ Keep the ownership boundaries intact:
   alone declares `process_info` and samples the process table. No plugin
   signals a pid: `process kill` asks the host, which sends SIGTERM only for
   a request the user confirmed.
+- The `calendar` plugin owns the next-meeting values
+  (`flash.plugin.calendar.next` and its parts), `calendar join` and
+  `calendar next`. It reads no calendar: the host does, for the
+  `calendar_events` capability, and the plugin decides which event is next
+  and which link joins it.
 - The `caffeinate` plugin owns the keep-awake power assertions
   (`caffeinate on`, `#{flash.plugin.caffeinate.state}`): they belong to its
   process, so they end with it. No other plugin holds the Mac awake.
@@ -169,6 +174,8 @@ while a surface shows it.
 | `processes` · focused app | 10 s while `focused_app_details` is observed | normal | CPU has no change event; a tenth of a second is invisible at ten seconds |
 | `processes` · focus settle | 300 ms after a focus change, while `focused_app_details` is observed | high | The placeholder on screen waits on it |
 | `processes` · first-read bracket | One 150 ms wait when a read meets a pid it has not measured | high | A table on screen, or a typed `@processes` query, waits on it |
+| `calendar` · next change | The instant a value next changes (the countdown's next minute, an event starting, ending or leaving its first ten minutes), a day at most, while a segment is observed | high | The countdown is on screen beside the clock |
+| `calendar` · next read | One look-ahead after a read, a day at most; 5 min after a failed one, while a segment is observed | low | The look-ahead moving on brings in events hours away |
 | `caffeinate` · bound | A bounded hold's `--minutes`, a day at a time, armed only while it lasts | low | powerd ends the assertions at the bound itself; the tick releases them and clears `state` |
 
 ## Raw numeric segments
@@ -242,6 +249,27 @@ lists every process from one read per two seconds, and each row carries the
 question the host asks before it resolves it. `process kill --pid=<pid>` and
 a confirmed row ask `host.process_signal` for SIGTERM; a row is refused when
 its pid now names a process started at another time.
+
+## Next meeting
+
+The next-meeting values are the `calendar` plugin's segments
+(`#{flash.plugin.calendar.next}`, `next_title`, `next_in`, `next_minutes`,
+`next_start`, `next_end`, `next_ongoing`, `next_link`), with
+`[plugins.calendar]` choosing the events that count;
+[calendar](calendar.md#next-meeting) describes each. The plugin is sandboxed
+and reaches no calendar. It listens to `core:status.observed`, and while a
+segment is observed it asks the host for the events from now to twice the
+look-ahead (`host.calendar_events`, the `calendar_events` capability), asks
+again on `core:calendar.changed` and once a look-ahead has passed, and
+registers one deadline on the host's clock for the instant a value next
+changes (the [scheduling](#scheduling) table): nothing polls, and a value
+that stops being observed is cleared. Only the read a newly shown value or a
+command starts may ask macOS for access; a read the calendar or the clock
+started never does. Which event is next, the countdown and the meeting link
+among an event's URL, location and the links of its notes are decided in the
+plugin (`Plugins/calendar/src/agenda.rs`, `links.rs`); the notes themselves
+never reach it. `calendar join` hands the link to `host.open`, the app's own
+link first (`if_handled`) when it has one.
 
 ## Refresh and failure invariants
 

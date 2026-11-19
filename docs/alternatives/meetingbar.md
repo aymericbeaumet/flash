@@ -19,8 +19,8 @@ an alert before it starts. It has no meeting menu.
 | License, price | Apache-2.0; free, optional patronage | MIT, free |
 | Platforms | macOS 12+ | macOS 13+ |
 | Permissions | Calendars for Calendar.app accounts, or a Google sign-in; Notifications for reminders | Accessibility; Calendars on the first read of a next-meeting value; Notifications only for a monitor with `notify = true` |
-| Calendars | Calendar.app accounts, or Google Calendar directly | Calendar.app accounts through EventKit; `[calendar] calendars` picks some |
-| In the bar | Title, time, countdown, icon or service of the current or next meeting; a menu of today's and tomorrow's events | `#{flash.calendar.next}` and its parts, placed in your template; no event list |
+| Calendars | Calendar.app accounts, or Google Calendar directly | Calendar.app accounts through EventKit; `[plugins.calendar] calendars` picks some |
+| In the bar | Title, time, countdown, icon or service of the current or next meeting; a menu of today's and tomorrow's events | `#{flash.plugin.calendar.next}` and its parts, placed in your template; no event list |
 | Joining | One click or a global shortcut; 50+ services; a browser or native app per service | `calendar join` on a key, a bar click or a monitor; eleven services, then the event's URL field; Zoom and Teams open in their apps |
 | Reminders | macOS notifications, an optional full-screen reminder | Flash's centred alert from a monitor, and a macOS notification with `notify = true` |
 | Configuration | Preferences window, Shortcuts, AppleScript | One TOML file, live reload, `flash config check` |
@@ -60,14 +60,14 @@ an alert before it starts. It has no meeting menu.
   popup, widget or monitor uses a next-meeting value, re-reads when the
   calendar database changes, and polls nothing; it keeps titles, times and
   the link in memory and nothing on disk ([access and cost](../calendar.md#access-and-cost)).
-- **In your dotfiles.** `[calendar]`, the template and the reminder are text
+- **In your dotfiles.** `[plugins.calendar]`, the template and the reminder are text
   that `flash config check` validates.
 
 ## Flash features you might like
 
 - `calendar next` shows the next event in the centred alert, its title over
   `in 12m · 09:30–09:45 · Zoom`, and prints the same line in a terminal.
-- `#{flash.calendar.next_title}`, `next_in`, `next_start`, `next_end` and
+- `#{flash.plugin.calendar.next_title}`, `next_in`, `next_start`, `next_end` and
   `next_minutes` to lay out the title your way, with `#[shrink]` so a long
   title gives way first ([next meeting](../calendar.md#next-meeting)).
 - A countdown test that shows the meeting only once it is two hours away.
@@ -83,14 +83,14 @@ both MeetingBar and Itsycal. For MeetingBar's settings:
 
 | MeetingBar | Flash |
 | --- | --- |
-| Next meeting in the status bar | `#{flash.calendar.next}` (`Standup in 12m`) in `[statusbar] template` |
-| Title, time or countdown only | `#{flash.calendar.next_title}`, `next_start`, `next_in` |
+| Next meeting in the status bar | `#{flash.plugin.calendar.next}` (`Standup in 12m`) in `[statusbar] template` |
+| Title, time or countdown only | `#{flash.plugin.calendar.next_title}`, `next_start`, `next_in` |
 | Shorten long titles | `#[shrink]…#[noshrink]` around the title |
 | Click to join | `#[range=user|join]` around it, and `join = ["flash", "calendar", "join"]` in `[statusbar.click]` |
 | Global join shortcut | `calendar join` in `[mode.all.mappings]` |
-| Notification before the meeting | `[monitors.meeting]` on `#{flash.calendar.next_minutes}`, `direction = "below"`, with `notify = true` |
+| Notification before the meeting | `[monitors.meeting]` on `#{flash.plugin.calendar.next_minutes}`, `direction = "below"`, with `notify = true` |
 | Full-screen reminder | The centred alert; there is no full-screen one |
-| Choose calendars | `[calendar] calendars = ["Work"]`, titles as Calendar shows them |
+| Choose calendars | `[plugins.calendar] calendars = ["Work"]`, titles as Calendar shows them |
 | Hide all-day and declined events | `all_day = false`, `declined = false`, the defaults |
 | Hide tentative, pending or linkless events | Not available |
 | Today's and tomorrow's events | Calendar or Fantastical; icalBuddy in a widget, as in the [clock and agenda example](../examples/widgets/README.md) |
@@ -109,7 +109,7 @@ guide explains the [next-meeting values](../calendar.md#next-meeting) and the
 enabled = true
 template = """
 #[align=left]#[pill]#{flash.mode}#[nopill]
-#[align=right]#{?flash.calendar.next,#[range=user|join]#[shrink]#{flash.calendar.next_title}#[noshrink] #{flash.calendar.next_in}#[norange] · ,}%H:%M
+#[align=right]#{?flash.plugin.calendar.next,#[range=user|join]#[shrink]#{flash.plugin.calendar.next_title}#[noshrink] #{flash.plugin.calendar.next_in}#[norange] · ,}%H:%M
 """
 
 # A click on the meeting joins it.
@@ -119,13 +119,13 @@ join = ["flash", "calendar", "join"]
 # The centred alert two minutes before each meeting, also left in
 # Notification Center.
 [monitors.meeting]
-value = "#{flash.calendar.next_minutes}"
+value = "#{flash.plugin.calendar.next_minutes}"
 direction = "below"
 warning = 2
-message = "#{flash.calendar.next}"
+message = "#{flash.plugin.calendar.next}"
 notify = true
 
-[calendar]
+[plugins.calendar]
 # calendars = ["Work"]  # empty reads every calendar
 lookahead_hours = 24
 

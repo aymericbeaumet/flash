@@ -267,6 +267,7 @@ final class PluginSettingsTests: XCTestCase {
       [
         "aiproviders": ["grok_auth_file"],
         "answers": ["target_currencies"],
+        "calendar": ["all_day", "calendars", "declined", "lookahead_hours"],
         "feed": ["cycle_interval", "refresh_interval", "url"],
         "processes": ["top_count"],
         "snippets": ["file"],

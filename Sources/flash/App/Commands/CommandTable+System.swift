@@ -19,8 +19,6 @@ extension URLEventHandler {
     "contacts refresh": .init(
       AppleCatalogCommand.refresh(.contacts).summary,
       parse: { _ in .appleCatalog(.refresh(.contacts)) }),
-    "calendar join": .init(CalendarCommand.join.summary, parse: { _ in .calendar(.join) }),
-    "calendar next": .init(CalendarCommand.next.summary, parse: { _ in .calendar(.next) }),
     "desktop show": surface(.desktop, .show),
     "desktop hide": surface(.desktop, .hide),
     "desktop toggle": surface(.desktop, .toggle),

@@ -301,8 +301,6 @@ extension URLCommand {
       return named(command.name.description)
     case .appleCatalog(let command):
       return named(command.name.description)
-    case .calendar(let command):
-      return named(command.name.description)
     case .marks(let command):
       return named(command.name.description, command.argTokens)
     case .systemKey(let key):

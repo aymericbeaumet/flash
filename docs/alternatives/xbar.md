@@ -68,7 +68,7 @@ plugin unchanged and keeps its title; the dropdown is what you give up.
   plugin that polled every ten seconds to notice a change can stop polling
   ([pushed status values](../commands.md#pushed-status-values)).
 - The built-in system values (`#{flash.plugin.sysinfo.cpu_label}`, memory,
-  disks, network, battery) and `#{flash.calendar.next}` cover what many
+  disks, network, battery) and `#{flash.plugin.calendar.next}` cover what many
   xbar System and Time plugins print ([status plugins](../status-plugins.md)).
 - `output = "i3blocks"` and `"waybar"` for scripts written for those bars.
 

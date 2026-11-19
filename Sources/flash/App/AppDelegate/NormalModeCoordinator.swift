@@ -1375,9 +1375,6 @@ extension AppDelegate {
       }
     case .appleCatalog(let command):
       performAppleCatalogCommand(command)
-    case .calendar(let command):
-      completesLater = true
-      performCalendarCommand(command, presents: true) { outcome, _ in completion?(outcome) }
     case .marks(let command):
       performMarkCommand(command)
     case .functionKey(let index):

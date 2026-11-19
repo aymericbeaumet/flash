@@ -197,7 +197,6 @@ enum ConfigLoader {
     applyApp(section("app"), locations: locations, into: &config)
     applyKeyboard(section("keyboard"), locations: locations, into: &config)
     applyClipboard(section("clipboard"), locations: locations, into: &config)
-    applyCalendar(section("calendar"), locations: locations, into: &config)
     applyTiling(section("tiling"), locations: locations, into: &config)
     applyHints(section("hints"), locations: locations, into: &config)
     let plugins = section("plugins")
@@ -292,7 +291,6 @@ enum ConfigLoader {
       "monitors",
       "rules",
     ],
-    "calendar": ["calendars", "all_day", "declined", "lookahead_hours"],
     "hints": [
       "keys", "min_length", "magic_modifiers", "key_priority", "label_order", "adjust_digits",
       "position_history_size", "position_history_scope", "pointer_follows_focus",

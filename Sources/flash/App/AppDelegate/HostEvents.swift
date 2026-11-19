@@ -215,9 +215,9 @@ final class SystemEventObservers {
     }
     tokens.append((NotificationCenter.default, screens))
     // Foundation caches the system time zone until it is reset: without
-    // this, `calendar next`, `calendar join` and every other reader of
-    // `TimeZone.current` would keep the old zone whatever the bar shows. The
-    // status controller re-renders on the same notification.
+    // this, every reader of `TimeZone.current` would keep the old zone
+    // whatever the bar shows. The status controller re-renders on the same
+    // notification.
     let zone = NotificationCenter.default.addObserver(
       forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main
     ) { _ in NSTimeZone.resetSystemTimeZone() }

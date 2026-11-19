@@ -853,7 +853,9 @@ a URL, a location or a link over 16 KiB is left out whole, never cut. A
 reply holds at most 1,000 events and 1 MiB of them; later ones are left out
 and `truncated` is `true`. An EventKit failure answers `{"ok": false,
 "error"}`. `protocol.json` `calendar_events` and `calendar_event` pin the
-operations, the bounds and the shape.
+operations, the bounds and the shape. The bundled `calendar` plugin is its
+reader: it lists from now to twice its look-ahead while one of its segments
+is observed, again on `core:calendar.changed`, and for each of its commands.
 `host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL

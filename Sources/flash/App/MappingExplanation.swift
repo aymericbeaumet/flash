@@ -401,8 +401,6 @@ extension URLCommand {
       return command.explanation
     case .appleCatalog(let command):
       return command.explanation
-    case .calendar(let command):
-      return command.explanation
     case .marks(let command):
       return command.explanation
     case .systemKey(let key):

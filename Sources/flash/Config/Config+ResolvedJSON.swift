@@ -150,10 +150,6 @@ extension Config {
         "configured": plugins.settings.keys.sorted(),
       ],
       "clipboard": ["history_size": clipboard.historySize],
-      "calendar": [
-        "calendars": calendar.calendars, "all_day": calendar.allDay,
-        "declined": calendar.declined, "lookahead_hours": calendar.lookaheadHours,
-      ],
       "tiling": [
         "enabled": tiling.enabled, "persist": tiling.persist, "layout": tiling.layout.rawValue,
         "orientation": tiling.orientation?.rawValue ?? "auto",

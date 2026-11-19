@@ -81,8 +81,8 @@ top edge.
   click on its segment to a URL or a Flash command.
 - `!clip` in the flashlight is the clipboard history Bartender Pro puts in
   the Command Bar ([clipboard](../clipboard.md)).
-- `#{flash.calendar.next}` shows the next meeting and `calendar join` joins
-  it; a monitor on `#{flash.calendar.next_minutes}` with `notify = true`
+- `#{flash.plugin.calendar.next}` shows the next meeting and `calendar join` joins
+  it; a monitor on `#{flash.plugin.calendar.next_minutes}` with `notify = true`
   posts the reminder to Notification Center
   ([calendar](../calendar.md#an-alert-before-it-starts)).
 - `media status` says what the running media apps play, and the volume.

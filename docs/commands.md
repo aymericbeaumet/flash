@@ -93,8 +93,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `appwindows hide` | Close App Exposé |
 | `appwindows show` | Show the focused app's windows (App Exposé) |
 | `appwindows toggle` | Show the focused app's windows, or close App Exposé |
-| `calendar join` | Open the meeting link of the next or current calendar event |
-| `calendar next` | Show the next calendar event |
 | `clipboard copy` | Copy with the focused app's copy command |
 | `clipboard delete --id=<entry-id>` | Delete one clipboard history entry |
 | `clipboard paste` | Paste with the focused app's paste command |
@@ -569,8 +567,8 @@ flash caffeinate toggle                      # keep the Mac awake, or let it sle
 flash caffeinate on --minutes=30             # keep the Mac awake for 30 minutes (caffeinate off ends it early)
 flash notes refresh                          # relist @notes now (reminders refresh, contacts refresh)
 flash contacts open                          # open Contacts (notes open, reminders open)
-flash calendar join                          # open the next or current event's meeting link, in its app
-flash calendar next                          # print the next event: Standup in 12m · 09:30–09:45 · Zoom
+flash calendar join                          # open the next or current event's meeting link, in its app (the calendar plugin)
+flash calendar next                          # show and print the next event: Standup in 12m · 09:30–09:45 · Zoom
 flash clipboard show                         # open the clipboard history, the same words as :clipboard show
 flash clipboard delete --id=<id>             # remove one history entry; <id> is 32 hex characters
 flash clipboard pin --id=<id>                # keep an entry first and out of trimming (clipboard unpin undoes it)
@@ -988,16 +986,23 @@ open the app.
 
 ## Calendar
 
-`calendar join` opens the meeting link of the event about to start or just
-started, else of the meeting in progress, else of the next event: Zoom,
-Google Meet, Microsoft Teams, Webex, Around, Whereby, FaceTime, Slack huddles
-and other links found in the event's URL, location or notes. A Zoom or Teams
-link opens in its app when it is installed. `calendar next` shows the next
-event in the centred alert, or prints it from the CLI. With no event in the
-look-ahead, an event without a link for `calendar join`, or no access to your
-calendars, either exits 1 and says why. The first one asks macOS for
-Calendars access if Flash never asked. See [calendar](calendar.md#next-meeting)
-for which event is next and the `#{flash.calendar.next}` values.
+`calendar join` and `calendar next` are the commands of the bundled
+`calendar` plugin, so the reference table above, which lists Flash's own,
+leaves them out. `calendar join` opens the meeting link of the event about
+to start or just started, else of the meeting in progress, else of the next
+event: Zoom, Google Meet, Microsoft Teams, Webex, Around, Whereby, FaceTime,
+Slack huddles and other links found in the event's URL, location or notes.
+A Zoom or Teams link opens in its app when it is installed. It answers
+`Joining <title>`, on a banner from a key. `calendar next` shows the next
+event in the centred alert, and prints it from the CLI as well. With no
+event in the look-ahead, an event without a link for `calendar join`, or no
+access to your calendars, either exits 1 and says why, in the centred alert
+too. Neither takes an argument: one fails with `usage: calendar join` when
+the command runs. The first one asks macOS for Calendars access if Flash
+never asked, and says so if the prompt is still open eight seconds later.
+With `calendar` in `[plugins] disabled` they do nothing. See
+[calendar](calendar.md#next-meeting) for which event is next and the
+`#{flash.plugin.calendar.next}` values.
 
 ## Notifications, logs and metrics
 

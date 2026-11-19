@@ -255,10 +255,9 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
 - App-scoped mappings select by the focused app's exact bundle ID. Refresh the
   effective mapping table on focus changes; defer Carbon registration work off
   the key event path.
-- The Notes, Reminders, Contacts and Calendar reads run on their owners'
-  serial queues (`AppleCatalogs`, `CalendarEvents`), never on main, and ask
-  macOS for access only when a query, command, surface or monitor uses them
-  ([boundaries](docs/architecture.md#boundaries)).
+- The Notes, Reminders and Contacts reads run on `AppleCatalogs`' serial
+  queues, never on main, and ask macOS for access only when a query or a
+  command uses them ([boundaries](docs/architecture.md#boundaries)).
 - The keep-awake power assertions belong to the `caffeinate` plugin's
   process, never the resident's. A status-bound child that has run a
   `perform` stays up when its surfaces or mappings go: only a reload, a
@@ -294,6 +293,11 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   (`HostEvent.requiredCapability`). The resident alone wires
   `LiveCalendarEvents`, inert under XCTest; a test injects
   `CalendarEventProviding` and never reads a real calendar or shows a prompt.
+  Which event is next, the values, when they change and which link joins a
+  meeting belong to the plugin (`calendar`, `Plugins/calendar/src/agenda.rs`
+  and `links.rs`), which reads only while `core:status.observed` lists a
+  segment or a command runs, and wakes on the host clock for the next change
+  ([next meeting](docs/status-plugins.md#next-meeting)).
 - The process table belongs to the `processes` plugin
   (`Plugins/processes/src/sys.rs`, libproc under `process_info`), never the
   resident: the top tables, the focused app's summary, `@processes` and

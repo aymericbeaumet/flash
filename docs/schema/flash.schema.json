@@ -34,32 +34,6 @@
       },
       "type" : "object"
     },
-    "calendar" : {
-      "additionalProperties" : false,
-      "description" : "The events #{flash.calendar.next}, #{flash.calendar.next_minutes} and the other next-meeting values show, and `calendar join` and `calendar next` read. Flash reads your calendars (and macOS asks once whether it may) only when a status format, widget or monitor reads one of those values, or one of those commands runs. Cancelled events never count.",
-      "properties" : {
-        "all_day" : {
-          "description" : "Count all-day events.",
-          "type" : "boolean"
-        },
-        "calendars" : {
-          "description" : "Calendar titles to read, as Calendar shows them; empty reads every calendar.",
-          "items" : {
-            "type" : "string"
-          },
-          "type" : "array"
-        },
-        "declined" : {
-          "description" : "Count events you declined.",
-          "type" : "boolean"
-        },
-        "lookahead_hours" : {
-          "description" : "How far ahead the next event may start, in hours (1-168).",
-          "type" : "integer"
-        }
-      },
-      "type" : "object"
-    },
     "clipboard" : {
       "additionalProperties" : false,
       "properties" : {
@@ -1637,6 +1611,44 @@
           "additionalProperties" : false,
           "description" : "The caffeinate plugin's settings.",
           "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
+        "calendar" : {
+          "additionalProperties" : false,
+          "description" : "The calendar plugin's settings.",
+          "properties" : {
+            "all_day" : {
+              "default" : false,
+              "description" : "Count all-day events.",
+              "type" : "boolean"
+            },
+            "calendars" : {
+              "default" : [
+
+              ],
+              "description" : "Calendar titles to read, as Calendar shows them; empty reads every calendar.",
+              "items" : {
+                "type" : "string"
+              },
+              "type" : "array"
+            },
+            "declined" : {
+              "default" : false,
+              "description" : "Count events you declined.",
+              "type" : "boolean"
+            },
+            "lookahead_hours" : {
+              "default" : 24,
+              "description" : "How far ahead the next event may start, in hours.",
+              "maximum" : 168,
+              "minimum" : 1,
+              "type" : "integer"
+            },
             "sandbox" : {
               "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
               "type" : "boolean"

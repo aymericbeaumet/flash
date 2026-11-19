@@ -371,12 +371,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `@notes`, `@reminders`, `@contacts` and the
   /// `<catalog> open` / `<catalog> refresh` commands; see `AppleCatalogs`.
   let appleCatalogs = AppleCatalogs(readers: AppleCatalogReaders.live())
-  /// `#{flash.calendar.next…}` and the `calendar` commands; see
-  /// `CalendarEvents`. Lazy, so a delegate that never launches (a test)
-  /// never reads the calendar's authorization.
-  lazy var calendarEvents = CalendarEvents(publish: { [weak self] agenda in
-    DispatchQueue.main.async { self?.statusBarController?.updateCalendarAgenda(agenda) }
-  })
   /// The 36 app marks behind `mark set` and `mark jump`; see
   /// `performMarkCommand`. Lazy, so a delegate that never launches (a test)
   /// never reads or migrates the file.
@@ -693,8 +687,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.statusBarController?.setWidgetVisible(name: name, visible)
       self?.pluginManager.setWidgetVisible(name: name, visible)
     })
-    let calendar = calendarEvents
-    calendar.configure(config.calendar)
     let statusBarStartedAt = LatencyProbe.now
     statusBarController = FlashStatusBarController(
       overlay: overlay,
@@ -715,8 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           name, title: alert.title, body: alert.value ?? "", error: alert.style == .error)
       },
       monitorTriggerSink: { [weak self] name, level in self?.emitMonitorTriggered(name, level) },
-      telemetry: telemetry.store,
-      calendarObserver: { [weak calendar] observed in calendar?.observe(observed) })
+      telemetry: telemetry.store)
     launchStages.add("statusbar", since: statusBarStartedAt)
     telemetry.wire(
       stateChanged: { [weak self] in self?.debugStateDidChange() },
@@ -1082,12 +1073,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
     case .appleCatalog(let command):
       performAppleCatalogCommand(command)
-    case .calendar(let command):
-      completesLater = true
-      // A caller presents the output itself: the CLI prints it.
-      performCalendarCommand(command, presents: completion == nil) { outcome, output in
-        completion?(outcome, output)
-      }
     case .marks(let command):
       performMarkCommand(command)
     case .macro(let command):

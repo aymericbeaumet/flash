@@ -75,7 +75,6 @@ enum ConfigSchema {
     let percent: [String: Any] = ["type": "number", "minimum": 0, "maximum": 100]
     return [
       "clipboard.history_size": integer,
-      "calendar.calendars": stringList,
       "hints.mouse_grid_keys": stringList,
       "widgets.*.enabled": boolean, "widgets.*.hide_from_capture": boolean,
       "widgets.*.template": string, "widgets.*.font": string,

@@ -647,8 +647,19 @@ monitors read that no plugin publishes any more, with its replacement.
   reloads, hint sessions, monitor triggers, workspaces), `flash --json`
   prints any reply as JSON, and `flash` starts Flash when it is not running
   ([IPC protocol](docs/ipc-protocol.md)).
-- User-defined layers (`mode layer --name=`), clipboard history in the
-  flashlight (`!clip`), the next calendar event and `calendar join`.
+- User-defined layers (`mode layer --name=`) and clipboard history in the
+  flashlight (`!clip`).
+- The next meeting, from the bundled `calendar` plugin:
+  `#{flash.plugin.calendar.next}` reads `Standup in 12m` in the bar, a
+  popup, a widget or a monitor, with its parts (`next_title`, `next_in`,
+  `next_minutes`, `next_start`, `next_end`, `next_ongoing`, `next_link`);
+  `calendar join` opens the meeting link of the next or current event, in
+  Zoom's or Teams' app when it is installed, and `calendar next` shows the
+  event. `[plugins.calendar]` picks the calendars, all-day and declined
+  events and the look-ahead. The plugin is sandboxed and reads no calendar:
+  Flash reads them for it, only while a value is shown or a command runs,
+  and hands it the links of an event's notes, never the notes
+  ([calendar](docs/calendar.md#next-meeting)).
 - In-place updates with a "Check for Updates…" button in About.
 - `[monitors] run` takes a list of commands, run in order and stopped at the
   first failure, one run at a time, with a `timeout` and a `cooldown` that
@@ -727,10 +738,6 @@ monitors read that no plugin publishes any more, with its replacement.
   only (`0600`); the copies of Firefox history kept Firefox's `0644`.
 - An unknown command names the one it most likely meant, in `flash config
   check`, the CLI and the log.
-- `flash config check` accepts the next-meeting values
-  (`#{flash.calendar.next}` and its parts) in the bar, popups, widgets and
-  monitors instead of calling them unknown, and lists them when one is
-  misspelled.
 - Closing the About window with `x`, `:q` or ⌘W never closes the app behind
   it: while it is the key window, it gets every key.
 - A burst of `notificationcenter toggle` or `controlcenter toggle` ends as

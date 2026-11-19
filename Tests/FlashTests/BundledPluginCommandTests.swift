@@ -68,6 +68,227 @@ final class BundledPluginCommandTests: XCTestCase {
       retired.contains { $0.contains("unknown Flash value flash.caffeinate") }, "\(retired)")
   }
 
+  /// The next meeting is the `calendar` plugin's: its eight segments, its
+  /// two commands under a word that is no topic of Flash's, and its
+  /// settings. `flash.calendar.next` and `[calendar]` name nothing, while
+  /// `flash.calendar`, the three-month view, stays Flash's own value.
+  func testTheCalendarPluginOwnsTheCalendarWordItsValuesAndItsSettings() throws {
+    XCTAssertEqual(try bundledCommands()["calendar"]?.sorted(), ["join", "next"])
+    XCTAssertFalse(URLEventHandler.isTopic("calendar"), "calendar is the plugin's, not a topic")
+    XCTAssertEqual(try owner(of: "calendar"), ["calendar"])
+    let root = try XCTUnwrap(
+      PluginRepository.officialPluginRoots().first { $0.lastPathComponent == "calendar" })
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(
+      manifest.pluginCommands.map { "\($0.command) \($0.subcommand): \($0.prompt ?? "")" },
+      ["calendar join: ", "calendar next: "], "neither asks first")
+    XCTAssertEqual(manifest.sourceCommands, [], "it performs no core command")
+    let segments = [
+      "next", "next_title", "next_in", "next_minutes", "next_start", "next_end", "next_ongoing",
+      "next_link",
+    ]
+    XCTAssertEqual(manifest.status, segments)
+    XCTAssertTrue(manifest.isStatusBound)
+    XCTAssertEqual(
+      manifest.activation(statusObserved: false), .onDemand, "no process until a value is shown")
+    XCTAssertEqual(manifest.activation(statusObserved: true), .resident)
+    XCTAssertEqual(manifest.capabilities, [.calendarEvents, .open])
+    XCTAssertEqual(
+      manifest.listen, [HostEvent.statusObserved.rawValue, HostEvent.calendarChanged.rawValue])
+    XCTAssertEqual(manifest.sandboxSpec, PluginSandboxSpec(), "the default sandbox, no allowance")
+    XCTAssertEqual(manifest.sources.count, 0)
+    XCTAssertEqual(manifest.mappings.count, 0, "no default key was bound to it")
+    XCTAssertEqual(manifest.settings["calendars"]?.type, .stringArray)
+    XCTAssertEqual(manifest.settings["all_day"]?.type, .boolean)
+    XCTAssertEqual(manifest.settings["declined"]?.type, .boolean)
+    XCTAssertEqual(manifest.settings["lookahead_hours"]?.type, .integer)
+    let manifests = try PluginRepository.officialPluginRoots().map(PluginManifest.load(from:))
+    XCTAssertEqual(PluginManifest.commandClaimFailures(manifests), [:])
+
+    // A mapping, the CLI and the command line keep the words.
+    for subcommand in ["join", "next"] {
+      let command = URLCommand.pluginCommand(command: "calendar", subcommand: subcommand, args: [])
+      XCTAssertEqual(
+        parseMappingCommand(argv: ["flash", "calendar", subcommand]), .flashCommand(command))
+      XCTAssertEqual(command.argv, ["flash", "calendar", subcommand])
+    }
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "calendar"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "calendar", "agenda"]))
+    let inventory = NormalModeDispatcher.CommandLineInventory.core(
+      pluginCommands: try bundledCommands())
+    XCTAssertEqual(
+      NormalModeDispatcher.resolveCommandLine(":calendar join", inventory: inventory),
+      .plugin(command: "calendar", subcommand: "join", args: []))
+    XCTAssertEqual(
+      NormalModeDispatcher.resolveCommandLine(":calendar", inventory: inventory),
+      .incomplete("calendar"), "the word alone joins nothing")
+
+    // Every segment validates wherever a status format reads it: the bar, a
+    // text popup, a widget and a monitor, which all count as showing it.
+    let names = segments.map { "flash.plugin.calendar.\($0)" }
+    let all = names.map { "#{\($0)}" }.joined(separator: " ")
+    let config = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "\(all) #{flash.calendar}"
+
+      [popup.meeting]
+      text = "\(all)"
+
+      [widgets.meeting]
+      template = "\(all)"
+
+      [monitors.meeting]
+      value = "#{flash.plugin.calendar.next_minutes}"
+      direction = "below"
+      warning = 2
+      message = "#{flash.plugin.calendar.next}"
+      detail = "#{flash.plugin.calendar.next_link}"
+
+      [plugins.calendar]
+      calendars = ["Work", "Family"]
+      all_day = true
+      declined = true
+      lookahead_hours = 8
+      """)
+    XCTAssertEqual(config.loadingDiagnostics.map(\.message), [])
+    XCTAssertEqual(
+      config.plugins.settings["calendar"],
+      [
+        "calendars": .stringArray(["Work", "Family"]), "all_day": .bool(true),
+        "declined": .bool(true), "lookahead_hours": .int(8),
+      ])
+    XCTAssertEqual(
+      config.observedStatusSegments()["calendar"], Set(segments),
+      "a widget and a monitor show them with the bar off")
+    let monitorOnly = ConfigLoader.parse(
+      """
+      [monitors.meeting]
+      value = "#{flash.plugin.calendar.next_minutes}"
+      direction = "below"
+      warning = 2
+      """)
+    XCTAssertEqual(monitorOnly.loadingDiagnostics.map(\.message), [])
+    XCTAssertEqual(monitorOnly.observedStatusSegments()["calendar"], ["next_minutes"])
+
+    func diagnostics(_ toml: String) -> [String] {
+      ConfigLoader.parse(toml).loadingDiagnostics.map(\.message)
+    }
+    for retired in ["flash.calendar.next", "flash.calendar.next_minutes"] {
+      let reported = diagnostics("[statusbar]\ntemplate = \"#{\(retired)}\"")
+      XCTAssertTrue(
+        reported.contains { $0.contains("unknown Flash value \(retired)") }, "\(reported)")
+    }
+    let section = diagnostics("[calendar]\nlookahead_hours = 8")
+    XCTAssertTrue(section.contains { $0.contains("calendar") }, "\(section)")
+    // `flash config check` holds the settings to the manifest's types.
+    let invalid = ConfigLoader.parseLayers(
+      [
+        ConfigLoader.Layer(
+          text: """
+            [plugins.calendar]
+            calendars = "Work"
+            all_day = "yes"
+            lookahead_hours = 0
+            unknown = 1
+            """)
+      ], pluginSettings: .bundled()
+    ).loadingDiagnostics.map(\.message)
+    XCTAssertEqual(
+      invalid,
+      [
+        "plugins.calendar.all_day must be true or false",
+        "plugins.calendar.calendars must be an array of strings",
+        "plugins.calendar.lookahead_hours must be an integer between 1 and 168",
+        "unknown config key 'plugins.calendar.unknown'",
+      ])
+  }
+
+  /// The templates docs/calendar.md shows, over segments as the plugin
+  /// publishes them: empty while no event is next, and a title from someone
+  /// else's invitation as text, never a style, a link or a click range.
+  func testTheDocumentedCalendarTemplatesRenderOverThePluginsSegments() {
+    func render(_ template: String, _ segments: [String: String]) -> [FlashStatusTextSegment] {
+      let context = FlashStatusBarContext(pluginStatuses: [
+        PluginStatusBarInfo(
+          id: "calendar", state: "running", hasError: false,
+          statusSegments: segments.mapValues(PluginStatusSegment.text))
+      ])
+      return FlashStatusBarTemplateEngine.evaluate(
+        template: .init(template: "#[align=right]" + template), context: context
+      ).model.rightDocument.filter { !$0.text.isEmpty }
+    }
+    func text(_ template: String, _ segments: [String: String]) -> String {
+      render(template, segments).map(\.text).joined()
+    }
+    let soon = [
+      "next": "Standup in 12m", "next_title": "Standup", "next_in": "in 12m",
+      "next_minutes": "12",
+    ]
+    let later = [
+      "next": "Review in 3h", "next_title": "Review", "next_in": "in 3h", "next_minutes": "180",
+    ]
+    let none = ["next": "", "next_title": "", "next_in": "", "next_minutes": ""]
+    let bar =
+      "#{?flash.plugin.calendar.next,#[range=user|join]#[shrink]#{flash.plugin.calendar.next_title}"
+      + "#[noshrink] #{flash.plugin.calendar.next_in}#[norange] · ,}X"
+    XCTAssertEqual(text(bar, soon), "Standup in 12m · X")
+    XCTAssertEqual(Set(render(bar, soon).compactMap(\.range)), ["join"])
+    XCTAssertNil(render(bar, soon).last?.range)
+    XCTAssertEqual(text(bar, none), "X")
+    XCTAssertEqual(text(bar, [:]), "X", "before the plugin published anything")
+    let gated =
+      "#{?#{&&:#{flash.plugin.calendar.next},#{e|<=:#{flash.plugin.calendar.next_minutes},120}},"
+      + "#{flash.plugin.calendar.next} · ,}X"
+    XCTAssertEqual(text(gated, soon), "Standup in 12m · X")
+    XCTAssertEqual(text(gated, later), "X")
+    XCTAssertEqual(text(gated, none), "X")
+
+    // The plugin doubles `#` in a title and in a link (`Markup::text`).
+    let hostile = render(
+      "#{flash.plugin.calendar.next} #{flash.plugin.calendar.next_link}",
+      [
+        "next": "##[range=user|x]1:1 ##2 in 5m",
+        "next_link": "https://facetime.apple.com/join##v=1&p=AbC",
+      ])
+    XCTAssertEqual(
+      hostile.map(\.text).joined(),
+      "#[range=user|x]1:1 #2 in 5m https://facetime.apple.com/join#v=1&p=AbC")
+    XCTAssertTrue(hostile.allSatisfy { $0.range == nil && $0.link == nil })
+  }
+
+  /// Every next-meeting value the manual, the README and the reference
+  /// configuration name is a segment the plugin declares, the calendar
+  /// guide documents each of them, and none still uses a retired name.
+  func testTheDocumentedNextMeetingValuesAreThePluginsSegments() throws {
+    let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+    let root = try XCTUnwrap(
+      PluginRepository.officialPluginRoots().first { $0.lastPathComponent == "calendar" })
+    let names = Set(
+      try PluginManifest.load(from: root).status.map { "flash.plugin.calendar.\($0)" })
+    let segment = try NSRegularExpression(pattern: #"flash\.plugin\.calendar\.[a-z_]+"#)
+    let retired = try NSRegularExpression(
+      pattern: #"flash\.calendar\.next[a-z_]*|\[calendar\](?!\()"#)
+    func tokens(_ pattern: NSRegularExpression, _ path: String) throws -> Set<String> {
+      let text = try String(contentsOf: repository.appendingPathComponent(path), encoding: .utf8)
+      return Set(
+        pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+          Range($0.range, in: text).map { String(text[$0]) }
+        })
+    }
+    XCTAssertEqual(try tokens(segment, "docs/calendar.md"), names)
+    let docs = repository.appendingPathComponent("docs")
+    let enumerator = try XCTUnwrap(FileManager.default.enumerator(atPath: docs.path))
+    let pages = enumerator.compactMap { $0 as? String }.filter { $0.hasSuffix(".md") }
+      .map { "docs/\($0)" }
+    for path in pages + ["README.md", "config.default.toml"] {
+      let unknown = try tokens(segment, path).subtracting(names)
+      XCTAssertTrue(unknown.isEmpty, "\(path) names \(unknown.sorted())")
+      XCTAssertEqual(try tokens(retired, path), [], path)
+    }
+  }
+
   /// The process tables, the focused app's summary, `@processes` and
   /// `process kill` are the `processes` plugin's: its segments, its live
   /// source of the shared `processes` type, and a word that is no topic of

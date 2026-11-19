@@ -324,9 +324,6 @@ indirect enum URLCommand: Hashable, Sendable {
   /// `notes open`, `notes refresh` and their reminders and contacts twins:
   /// open the app, or relist its flashlight catalog. See `AppleCatalogs`.
   case appleCatalog(AppleCatalogCommand)
-  /// `calendar join` and `calendar next`: the next or current event's
-  /// meeting link, or the event itself. See `CalendarEvents`.
-  case calendar(CalendarCommand)
   /// `mark set --letter=<x>` and `mark jump --letter=<x>`: save the
   /// focused app under a letter or digit, or bring it back. See `MarkStore`.
   case marks(MarkCommand)

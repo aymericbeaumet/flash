@@ -1,0 +1,63 @@
+{
+  "id": "calendar",
+  "name": "Calendar",
+  "version": "0.1.0",
+  "description": "The next meeting from your calendars: its title, countdown, times and meeting link as status segments (`next`, `next_title`, `next_in`, `next_minutes`, `next_start`, `next_end`, `next_ongoing`, `next_link`), `calendar join`, which opens its meeting link, and `calendar next`, which shows it.",
+  "exec": [
+    "./flash-plugin-calendar"
+  ],
+  "settings": {
+    "calendars": {
+      "type": "string_array",
+      "description": "Calendar titles to read, as Calendar shows them; empty reads every calendar.",
+      "default": []
+    },
+    "all_day": {
+      "type": "boolean",
+      "description": "Count all-day events.",
+      "default": false
+    },
+    "declined": {
+      "type": "boolean",
+      "description": "Count events you declined.",
+      "default": false
+    },
+    "lookahead_hours": {
+      "type": "integer",
+      "description": "How far ahead the next event may start, in hours.",
+      "default": 24,
+      "min": 1,
+      "max": 168
+    }
+  },
+  "commands": [
+    {
+      "command": "calendar",
+      "subcommand": "join",
+      "description": "Open the meeting link of the next or current calendar event"
+    },
+    {
+      "command": "calendar",
+      "subcommand": "next",
+      "description": "Show the next calendar event"
+    }
+  ],
+  "listen": [
+    "core:status.observed",
+    "core:calendar.changed"
+  ],
+  "status": [
+    "next",
+    "next_title",
+    "next_in",
+    "next_minutes",
+    "next_start",
+    "next_end",
+    "next_ongoing",
+    "next_link"
+  ],
+  "capabilities": [
+    "calendar_events",
+    "open"
+  ]
+}

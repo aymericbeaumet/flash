@@ -387,3 +387,38 @@ final class LiveCalendarEvents: CalendarEventProviding {
     ) { _ in onChange() }
   }
 }
+
+/// macOS's EventKit authorization, as Flash reads it for events and for
+/// reminders: only full access lets it read.
+enum EventKitAccess {
+  /// Asks macOS for full access to `entity`. macOS 13 has one level of
+  /// access, which `requestAccess(to:)` asks for (its usage descriptions
+  /// are `NSCalendarsUsageDescription` and `NSRemindersUsageDescription`);
+  /// macOS 14 split it and asks through `requestFullAccessTo…`.
+  static func request(_ entity: EKEntityType, _ done: @escaping (Bool) -> Void) {
+    let asking = EKEventStore()
+    let completion: EKEventStoreRequestAccessCompletionHandler = { granted, _ in
+      withExtendedLifetime(asking) { done(granted) }
+    }
+    if #available(macOS 14.0, *) {
+      if entity == .reminder {
+        asking.requestFullAccessToReminders(completion: completion)
+      } else {
+        asking.requestFullAccessToEvents(completion: completion)
+      }
+    } else {
+      asking.requestAccess(to: entity, completion: completion)
+    }
+  }
+
+  /// macOS 13's `.authorized` is `.fullAccess`'s raw value, so the same
+  /// switch reads both.
+  static func access(_ status: EKAuthorizationStatus) -> AppleCatalogAccess {
+    switch status {
+    case .fullAccess: return .granted
+    case .notDetermined: return .undetermined
+    case .writeOnly, .denied, .restricted: return .denied
+    @unknown default: return .denied
+    }
+  }
+}
