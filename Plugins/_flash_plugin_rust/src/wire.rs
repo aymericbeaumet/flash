@@ -28,6 +28,25 @@ pub(crate) fn deserialize_optional_pid<'de, D: Deserializer<'de>>(
     }
 }
 
+/// The largest `count` of a `perform` command (`perform_command.count_max`):
+/// NORMAL's largest count.
+pub(crate) const MAX_COMMAND_COUNT: u32 = 999;
+
+/// A command without a `count` runs once.
+pub(crate) fn one() -> u32 {
+    1
+}
+
+/// A `perform` command's `count`: an integer from 1 to
+/// [`MAX_COMMAND_COUNT`]. Anything else refuses the request.
+pub(crate) fn deserialize_count<'de, D: Deserializer<'de>>(input: D) -> Result<u32, D::Error> {
+    Value::deserialize(input)?
+        .as_u64()
+        .and_then(|count| u32::try_from(count).ok())
+        .filter(|count| (1..=MAX_COMMAND_COUNT).contains(count))
+        .ok_or_else(|| serde::de::Error::custom("invalid command count"))
+}
+
 fn present<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value.get(key).filter(|value| !value.is_null())
 }
@@ -490,7 +509,8 @@ mod tests {
             shape["required"],
             serde_json::json!(["command", "subcommand", "args"])
         );
-        assert_eq!(shape["optional"], serde_json::json!(["context"]));
+        assert_eq!(shape["optional"], serde_json::json!(["context", "count"]));
+        assert_eq!(shape["count_max"], MAX_COMMAND_COUNT);
     }
 
     /// The alert a `perform` reply may carry has the contract's keys and

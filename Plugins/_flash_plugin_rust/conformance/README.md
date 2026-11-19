@@ -60,7 +60,7 @@ The lines describe one plugin and one moment:
   prints `Focus\nRest\n`.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
 - Command `tab next --index=3` succeeds in the focused app, `example decline`
-  is unhandled and `example break` fails.
+  is unhandled, `example break` fails and `example repeat` answers its count.
 
 Request ids are fixed per method (`initialize` 1, `ping` 2, `evaluate` 3,
 `hints` 4, `text_grid` 5, `perform` 6); every `host.*` call is id 1, the first

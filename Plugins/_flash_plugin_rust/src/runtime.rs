@@ -1600,6 +1600,7 @@ mod tests {
             subcommand,
             args,
             context,
+            count,
         })) = decode_perform(json!({
             "kind": "command", "command": "tmux", "subcommand": "window", "args": ["a b", "c"]
         }))
@@ -1612,6 +1613,7 @@ mod tests {
             context.is_none(),
             "an own command carries no focused-app context"
         );
+        assert_eq!(count, 1, "a command without a count runs once");
 
         let EvaluateRequest { query } =
             decode::<EvaluateRequest>(json!({ "query": "1+1" }), "evaluate").unwrap();

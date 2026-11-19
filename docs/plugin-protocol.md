@@ -436,7 +436,7 @@ never asks the host what it supports. See the
 
   ```json
   {"kind": "resolve",  "row": {…}}
-  {"kind": "command",  "command": "…", "subcommand": "…", "args": […], "context"?: {"bundle_id", "pid", "front_window_frame"}}
+  {"kind": "command",  "command": "…", "subcommand": "…", "args": […], "context"?: {"bundle_id", "pid", "front_window_frame"}, "count"?: 5}
   {"kind": "navigate", "url": "tmux://…"}
   ```
 
@@ -451,7 +451,12 @@ never asks the host what it supports. See the
   `context` is the focused app, and it is sent exactly for a core command:
   an own command or a bang runs from any surface, the flashlight and the
   CLI included, so it has no focused app (`host.normal_mode_target` asks
-  for one). `protocol.json` `perform_command` pins the shape.
+  for one). `count` is the NORMAL count typed before the key of the plugin's
+  own command: `5` then the key is one `perform` with `"count": 5`, never
+  five, so the plugin applies it in one step (five volume ticks, one alert).
+  It is an integer from 1 to 999, absent means 1, and the host leaves it out
+  for 1, for a bang and for a core command, which it repeats itself.
+  `protocol.json` `perform_command` pins the shape.
 
   Uniform reply, universal trichotomy:
 

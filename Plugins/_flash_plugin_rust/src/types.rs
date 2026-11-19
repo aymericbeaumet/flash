@@ -695,7 +695,7 @@ pub struct CommandContext {
 /// argument words a mapping wrote (`--index=3`, `--force`); the plugin's own
 /// command (`tmux session main`), without `context`; and a bang, with the
 /// plugin id as `command` and the typed token as `subcommand`.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct CommandRequest {
     #[serde(default)]
     pub command: String,
@@ -705,6 +705,26 @@ pub struct CommandRequest {
     pub args: Vec<String>,
     #[serde(default)]
     pub context: Option<CommandContext>,
+    /// The NORMAL count typed before the key of the plugin's own command:
+    /// `5` then the key arrives once, with 5. It is 1 without a count, from
+    /// the CLI and the command line, and for a core command or a bang.
+    #[serde(
+        default = "crate::wire::one",
+        deserialize_with = "crate::wire::deserialize_count"
+    )]
+    pub count: u32,
+}
+
+impl Default for CommandRequest {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            subcommand: String::new(),
+            args: Vec::new(),
+            context: None,
+            count: 1,
+        }
+    }
 }
 
 impl CommandRequest {
@@ -1382,6 +1402,34 @@ mod tests {
             PerformResponse::fail("").to_value(),
             json!({ "ok": false, "error": "perform failed" })
         );
+    }
+
+    #[test]
+    fn a_command_carries_its_count_and_runs_once_without_one() {
+        let command = |extra: serde_json::Value| {
+            let mut params = json!({ "command": "volume", "subcommand": "up", "args": [] });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<CommandRequest>(params)
+        };
+        assert_eq!(command(json!({})).unwrap().count, 1);
+        assert_eq!(command(json!({ "count": 1 })).unwrap().count, 1);
+        assert_eq!(command(json!({ "count": 5 })).unwrap().count, 5);
+        assert_eq!(command(json!({ "count": 999 })).unwrap().count, 999);
+        assert_eq!(CommandRequest::default().count, 1);
+        for count in [
+            json!(0),
+            json!(-1),
+            json!(1000),
+            json!(2.5),
+            json!("5"),
+            json!(null),
+            json!(true),
+        ] {
+            assert!(command(json!({ "count": count })).is_err(), "{count}");
+        }
     }
 
     #[test]

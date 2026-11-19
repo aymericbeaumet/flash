@@ -53,7 +53,8 @@ synchronous `evaluate`, `commands` / `bangs` ⇒ `on_command`, which also
 receives the core commands the manifest declares under Flash's topics (a
 `CommandRequest` whose `context` is then the focused app; match on
 `(command.command, command.subcommand)`, read `--index=N` with `index()`,
-a bool flag with `has_flag("force")`, a value with `flag("key")`),
+a bool flag with `has_flag("force")`, a value with `flag("key")`; an own
+command's `count` is the NORMAL count typed before its key, 1 without one),
 `navigation` ⇒ `on_navigate`, `hints` ⇒ `on_hints`. Optional: `on_event`,
 `on_resolve`, `on_text_grid` (a hint provider's visible text as a
 `TextGridResponse` of `TextGridLine::text` / `TextGridLine::format` lines,

@@ -272,6 +272,46 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(bang["args"] as? [String], ["hello", "world"])
   }
 
+  /// A NORMAL count before a plugin command's key is one `perform` carrying
+  /// the count, never that many performs.
+  func testACountedCommandIsOnePerformCarryingItsCount() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "countperform",
+      manifest: PluginFixtureKit.manifest(
+        id: "countperform",
+        extra: Self.residentSurfaces
+          + """
+          ,
+          "commands": [{ "command": "counted", "subcommand": "step", "description": "test" }]
+          """),
+      script: PluginFixtureKit.script(
+        onPerform: #"printf '%s\n' "$line" >> "$D/performs"; "#
+          + PluginFixtureKit.performOK))
+    defer { fixture.cleanup() }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("plugin running") {
+      self.status(manager, fixture.pluginID)?.state == "running"
+    }
+    let performed = expectation(description: "the command answered")
+    XCTAssertTrue(
+      manager.invoke(command: "counted", subcommand: "step", args: [], count: 5) { result in
+        XCTAssertTrue(result.ok)
+        performed.fulfill()
+      })
+    wait(for: [performed], timeout: 15)
+    let lines = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("performs"), encoding: .utf8
+    ).split(separator: "\n")
+    XCTAssertEqual(lines.count, 1, "five steps are one request")
+    let frame = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(try XCTUnwrap(lines.first).utf8)) as? [String: Any])
+    let params = try XCTUnwrap(frame["params"] as? [String: Any])
+    XCTAssertEqual(Set(params.keys), ["kind", "command", "subcommand", "args", "count"])
+    XCTAssertEqual(params["count"] as? Int, 5)
+  }
+
   // MARK: - bindings
 
   func testOwnTextEditingChangesNotifyOnceAfterPublication() throws {

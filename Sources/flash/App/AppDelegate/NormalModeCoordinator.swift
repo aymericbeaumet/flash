@@ -1551,9 +1551,17 @@ extension AppDelegate {
       openDebugDashboard(.telemetry)
     case .showAbout:
       handleURLCommand(command)
+    // A count before a plugin's own command reaches it in its one `perform`.
+    case .pluginCommand:
+      completesLater = true
+      if let completion {
+        performPluginCommand(command, count: repeatCount) { outcome, _ in completion(outcome) }
+      } else {
+        performPluginCommand(command, count: repeatCount)
+      }
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .clipboardHistory,
       .clipboardRestore,
-      .pluginCommand, .moveWindow, .statusPush, .statusRefresh, .notify, .logWrite, .metricRecord,
+      .moveWindow, .statusPush, .statusRefresh, .notify, .logWrite, .metricRecord,
       .menuChoose, .configReload, .configEdit,
       .systemSurface,
       .startup, .updates,

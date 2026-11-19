@@ -449,6 +449,13 @@ final class PluginSchemaTests: XCTestCase {
       JSONSchemaValidator.equal(
         PluginWireCodec.contextJSON(context), try XCTUnwrap(command["context"])))
 
+    for (name, count) in [("perform.command.counted", 5), ("perform.command.uncounted", 1)] {
+      var own = PluginManager.commandParams(
+        command: "example", subcommand: "repeat", args: [], count: count)
+      own["kind"] = "command"
+      XCTAssertTrue(JSONSchemaValidator.equal(own, try XCTUnwrap(lines[name]).params), name)
+    }
+
     let row = Candidate(
       title: "Example row", url: URL(string: "https://example.com/a"),
       metadata: [

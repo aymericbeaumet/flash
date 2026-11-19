@@ -54,6 +54,8 @@
 {"name": "perform.reply.full", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":512,"navigation_url":"https://example.com/a","message":"Done","alert":{"title":"volume","value":"38%","widest_value":"100%"}}}}
 {"name": "perform.reply.alert-message", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"caffeinate on"}}}}
 {"name": "perform.reply.alert-value", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"caffeinate off","alert":{"title":"caffeinate","value":"off"}}}}
+{"name": "perform.reply.counted", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"5"}}}
+{"name": "perform.reply.uncounted", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"1"}}}
 {"name": "perform.reply.navigated", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"navigation_url":"https://example.com/a"}}}
 {"name": "perform.reply.null-optionals", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":null,"navigation_url":null,"message":null,"alert":null}}}
 {"name": "perform.reply.unhandled", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":false,"unhandled":true}}}

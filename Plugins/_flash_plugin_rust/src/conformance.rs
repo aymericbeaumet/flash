@@ -198,6 +198,7 @@ impl Plugin for Fixture {
                 }
                 "example decline" if command.context.is_none() => PerformResponse::unhandled(),
                 "example break" => PerformResponse::fail("example failed"),
+                "example repeat" => PerformResponse::ok().message(command.count.to_string()),
                 // Call the host RPC the first argument names and hand back
                 // what the SDK made of the host's reply.
                 "example call" => {

@@ -205,14 +205,34 @@ final class PluginProtocolParityTests: XCTestCase {
   }
 
   /// A `perform {kind: "command"}` carries the command's two words, its
-  /// argument words and, for a core command, the focused-app context.
+  /// argument words and, for a core command, the focused-app context; an
+  /// own command's count is the next test's.
   func testPerformCommandShapeMatchesSpec() throws {
     let shape = try XCTUnwrap(try spec()["perform_command"] as? [String: Any])
     XCTAssertEqual(shape["required"] as? [String], ["command", "subcommand", "args"])
-    XCTAssertEqual(shape["optional"] as? [String], ["context"])
+    XCTAssertEqual(shape["optional"] as? [String], ["context", "count"])
     XCTAssertEqual(
       Set(try XCTUnwrap(shape["context"] as? [String])),
       Set(PluginWireCodec.contextJSON(Self.sampleContext).keys))
+  }
+
+  /// A plugin's own command carries its two words, its argument words and,
+  /// above 1, the NORMAL count: one `perform`, never that many.
+  func testACommandsCountRidesItsOnePerformAndIsLeftOutForOne() throws {
+    let shape = try XCTUnwrap(try spec()["perform_command"] as? [String: Any])
+    XCTAssertEqual(shape["count_max"] as? Int, PluginProtocol.maxCommandCount)
+    let required = Set(try XCTUnwrap(shape["required"] as? [String]))
+    let once = PluginManager.commandParams(command: "volume", subcommand: "up", args: [])
+    XCTAssertEqual(Set(once.keys), required)
+    let five = PluginManager.commandParams(
+      command: "volume", subcommand: "up", args: [], count: 5)
+    XCTAssertEqual(Set(five.keys), required.union(["count"]))
+    XCTAssertEqual(five["count"] as? Int, 5)
+    for (count, sent) in [(0, nil), (-3, nil), (1, nil), (999, 999), (5000, 999)] as [(Int, Int?)] {
+      let params = PluginManager.commandParams(
+        command: "volume", subcommand: "up", args: [], count: count)
+      XCTAssertEqual(params["count"] as? Int, sent, "\(count)")
+    }
   }
 
   private static let sampleContext = AppContext(

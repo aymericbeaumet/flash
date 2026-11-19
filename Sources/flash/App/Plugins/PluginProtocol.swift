@@ -135,6 +135,9 @@ enum PluginProtocol {
   /// The three `perform` kinds: a published row, a command (a core command
   /// the plugin performs, its own command or a bang) and a route.
   static let performKinds = ["resolve", "command", "navigate"]
+  /// The largest `count` a `perform` command carries
+  /// (`perform_command.count_max`): NORMAL's largest count.
+  static let maxCommandCount = RepeatCount.max
 
   // MARK: - Canonical error strings (spec-pinned EXACT text)
 

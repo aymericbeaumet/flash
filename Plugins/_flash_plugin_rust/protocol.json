@@ -162,15 +162,17 @@
     }
   },
   "perform_command": {
-    "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words as a mapping writes them (--index=3, --force, or a bang's query words). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang.",
+    "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words as a mapping writes them (--index=3, --force, or a bang's query words). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang. count is the NORMAL count typed before the key of the plugin's own command (5 then the key is one perform with count 5), an integer from 1 to count_max; absent means 1, and the host leaves it out for 1, for a core command (which it repeats itself) and for a bang.",
     "required": [
       "command",
       "subcommand",
       "args"
     ],
     "optional": [
-      "context"
+      "context",
+      "count"
     ],
+    "count_max": 999,
     "context": [
       "bundle_id",
       "pid",

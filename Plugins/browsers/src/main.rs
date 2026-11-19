@@ -1471,6 +1471,7 @@ mod tests {
                 pid: Some(4242),
                 front_window_frame: None,
             }),
+            count: 1,
         }
     }
 

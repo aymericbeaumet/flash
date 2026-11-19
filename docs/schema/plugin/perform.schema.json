@@ -63,9 +63,15 @@
             },
             "context": {
               "$ref": "definitions.schema.json#/definitions/context"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 999,
+              "description": "The NORMAL count typed before the key of the plugin's own command; absent means 1."
             }
           },
-          "$comment": "context comes with a core command the manifest declares under one of Flash's topics, never with the plugin's own command or a bang."
+          "$comment": "context comes with a core command the manifest declares under one of Flash's topics, never with the plugin's own command or a bang. count comes only with the plugin's own command, when it is above 1."
         },
         {
           "type": "object",

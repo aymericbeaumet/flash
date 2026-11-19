@@ -605,11 +605,14 @@ final class PluginManager {
   /// Returns true when a plugin owns `(command, subcommand)` and the
   /// invocation was dispatched (synchronous ownership check). The plugin
   /// runs asynchronously; `onResult` delivers how its `perform` settled.
+  /// `count` is the NORMAL count typed before the command's key: the plugin
+  /// gets it in one `perform`, never as that many.
   @discardableResult
   func invoke(
     command: String,
     subcommand: String,
     args: [String],
+    count: Int = 1,
     in context: PluginSelectorContext = PluginSelectorContext(),
     onResult: ((PluginCommandResult) -> Void)? = nil
   ) -> Bool {
@@ -644,8 +647,21 @@ final class PluginManager {
       command: lcCommand,
       subcommand: resolved.subcommand,
       args: resolved.args,
+      count: count,
       onResult: onResult)
     return true
+  }
+
+  /// The params of one `perform {kind: "command"}` for a plugin's own
+  /// command or a bang (`perform_command`): the two words and the argument
+  /// words, and `count` only above 1.
+  static func commandParams(
+    command: String, subcommand: String, args: [String], count: Int = 1
+  ) -> [String: Any] {
+    var params: [String: Any] = ["command": command, "subcommand": subcommand, "args": args]
+    let count = min(max(count, 1), PluginProtocol.maxCommandCount)
+    if count > 1 { params["count"] = count }
+    return params
   }
 
   /// Dispatch one `perform {kind: "command"}` and adapt the trichotomy to
@@ -655,15 +671,13 @@ final class PluginManager {
     command: String,
     subcommand: String,
     args: [String],
+    count: Int = 1,
     onResult: ((PluginCommandResult) -> Void)?
   ) {
     plugin.perform(
       kind: "command",
-      params: [
-        "command": command,
-        "subcommand": subcommand,
-        "args": args,
-      ]
+      params: Self.commandParams(
+        command: command, subcommand: subcommand, args: args, count: count)
     ) { outcome in
       switch outcome {
       case .performed(let pid, let navigationURL, let message, let alert):

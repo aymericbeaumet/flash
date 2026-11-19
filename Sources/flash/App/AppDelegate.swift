@@ -970,34 +970,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           completion?(.failed, nil)
         }
       }
-    case .pluginCommand(let command, let subcommand, let args):
+    case .pluginCommand:
       completesLater = true
-      let dispatched = pluginManager.invoke(
-        command: command,
-        subcommand: subcommand,
-        args: args,
-        in: pluginSelectorContext()
-      ) { [weak self] result in
-        guard result.ok else {
-          // The plugin's own reason, when it gave one: shown, and handed to
-          // the caller as the failure's text.
-          if let reason = result.failureAlert {
-            self?.displayCommandWarning(reason)
-          } else {
-            self?.warnCommandFailure(cmd.diagnosticDescription)
-          }
-          completion?(.failed, result.error)
-          return
-        }
-        self?.activateCommandTarget(result.targetPID, navigationURL: result.navigationURL)
-        self?.presentPluginResult(result, callerPresentsOutput: completion != nil)
-        completion?(.performed, result.message)
-      }
-      if !dispatched {
-        warnUnsupportedCommand(cmd.diagnosticDescription)
-        completion?(.unavailable, nil)
-      }
-      return dispatched
+      return performPluginCommand(cmd, completion: completion)
     case .moveWindow(let params):
       // Use the *non-Flash* frontmost app as the move target. Without
       // this, normal-mode capture (which activates Flash to satisfy the
@@ -1137,6 +1112,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       Self.openConfigurationFile()
     }
     return true
+  }
+
+  /// Run a plugin's own command. `count` is the NORMAL count typed before
+  /// its key, sent in the one `perform`. Its alert shows wherever it ran;
+  /// its output goes to `completion`, or on a banner without one. False when
+  /// no loaded plugin owns the command here.
+  @discardableResult
+  func performPluginCommand(
+    _ cmd: URLCommand, count: Int = 1,
+    completion: ((NormalModeCommandOutcome, String?) -> Void)? = nil
+  ) -> Bool {
+    guard case .pluginCommand(let command, let subcommand, let args) = cmd else { return false }
+    let dispatched = pluginManager.invoke(
+      command: command,
+      subcommand: subcommand,
+      args: args,
+      count: count,
+      in: pluginSelectorContext()
+    ) { [weak self] result in
+      guard result.ok else {
+        // The plugin's own reason, when it gave one: shown, and handed to
+        // the caller as the failure's text.
+        if let reason = result.failureAlert {
+          self?.displayCommandWarning(reason)
+        } else {
+          self?.warnCommandFailure(cmd.diagnosticDescription)
+        }
+        completion?(.failed, result.error)
+        return
+      }
+      self?.activateCommandTarget(result.targetPID, navigationURL: result.navigationURL)
+      self?.presentPluginResult(result, callerPresentsOutput: completion != nil)
+      completion?(.performed, result.message)
+    }
+    if !dispatched {
+      warnUnsupportedCommand(cmd.diagnosticDescription)
+      completion?(.unavailable, nil)
+    }
+    return dispatched
   }
 
   /// An unknown or unsupported command does nothing visible: a typo on the

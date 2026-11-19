@@ -319,9 +319,11 @@ monitors read that no plugin publishes any more, with its replacement.
 - A plugin's command can show Flash's centred alert: a `perform` reply's
   `alert` is a one-line message or a title over a value (`volume` over
   `38%`), drawn wherever the command ran, a key, the CLI and the command
-  line alike. A plugin command that fails says why: its reason is the
-  failure alert's text and what `flash <command>` prints, where both used to
-  say only that the command failed.
+  line alike. A count before a plugin command's key reaches the plugin in
+  its one request (`count`), where the count used to be dropped. A plugin
+  command that fails says why: its reason is the failure alert's text and
+  what `flash <command>` prints, where both used to say only that the
+  command failed.
 - `feed` and `searchproviders` no longer open network connections: Flash
   downloads the feed and DuckDuckGo's bang list for them through
   `host.fetch`, and their sandboxes deny the network like every other bundled
