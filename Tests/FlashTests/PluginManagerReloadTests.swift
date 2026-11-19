@@ -209,8 +209,8 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(manager.bangCandidateSource(token: "sb", in: terminal), "scopedbang.rows")
     let performed = expectation(description: "bang dispatched to its owner")
     XCTAssertTrue(
-      manager.invokeBang(token: "sb", query: "hello", in: terminal) { ok, _, _, _ in
-        XCTAssertTrue(ok)
+      manager.invokeBang(token: "sb", query: "hello", in: terminal) { result in
+        XCTAssertTrue(result.ok)
         performed.fulfill()
       })
     wait(for: [performed], timeout: 10)
@@ -242,13 +242,13 @@ final class PluginManagerReloadTests: XCTestCase {
     let performed = expectation(description: "both performs answered")
     performed.expectedFulfillmentCount = 2
     XCTAssertTrue(
-      manager.invoke(command: "wired", subcommand: "echo", args: ["a", "b"]) { ok, _, _, _ in
-        XCTAssertTrue(ok)
+      manager.invoke(command: "wired", subcommand: "echo", args: ["a", "b"]) { result in
+        XCTAssertTrue(result.ok)
         performed.fulfill()
       })
     XCTAssertTrue(
-      manager.invokeBang(token: "wb", query: "hello  world") { ok, _, _, _ in
-        XCTAssertTrue(ok)
+      manager.invokeBang(token: "wb", query: "hello  world") { result in
+        XCTAssertTrue(result.ok)
         performed.fulfill()
       })
     wait(for: [performed], timeout: 15)
@@ -567,9 +567,8 @@ final class PluginManagerReloadTests: XCTestCase {
     let answered = expectation(description: "command answered")
     var handled: Bool?
     XCTAssertTrue(
-      manager.invoke(command: "routed", subcommand: "ping", args: []) {
-        ok, _, _, _ in
-        handled = ok
+      manager.invoke(command: "routed", subcommand: "ping", args: []) { result in
+        handled = result.ok
         answered.fulfill()
       })
     wait(for: [answered], timeout: 15)

@@ -199,6 +199,37 @@
       "valid": false
     },
     {
+      "name": "alert-title-at-the-byte-bound",
+      "value": {
+        "ok": true,
+        "alert": {
+          "title": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "alert-title-over-the-byte-bound",
+      "value": {
+        "ok": true,
+        "alert": {
+          "title": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "alert-value-over-the-byte-bound",
+      "value": {
+        "ok": true,
+        "alert": {
+          "title": "volume",
+          "value": "ééééééééééééééééééééééééééééééééé"
+        }
+      },
+      "valid": false
+    },
+    {
       "name": "invalid-url",
       "value": {
         "ok": true,

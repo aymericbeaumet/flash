@@ -104,12 +104,50 @@ pub(crate) fn valid_result(method: &str, result: &Value) -> bool {
         return valid_text_grid(result);
     }
     if method == "perform" {
-        return only_keys(result, &["ok", "target_pid", "navigation_url", "message"])
-            && present(result, "navigation_url")
-                .and_then(Value::as_str)
-                .is_none_or(absolute_url);
+        return only_keys(
+            result,
+            &["ok", "target_pid", "navigation_url", "message", "alert"],
+        ) && present(result, "navigation_url")
+            .and_then(Value::as_str)
+            .is_none_or(absolute_url)
+            && present(result, "alert").is_none_or(valid_alert);
     }
     true
+}
+
+/// UTF-8 bytes of a `perform` reply's alert title (`quotas.alert_title_bytes`).
+pub(crate) const MAX_ALERT_TITLE_BYTES: usize = 256;
+/// UTF-8 bytes of its `value` and of its `widest_value`
+/// (`quotas.alert_value_bytes`).
+pub(crate) const MAX_ALERT_VALUE_BYTES: usize = 64;
+/// The keys of a `perform` reply's `alert` (`protocol.json` `perform_alert`):
+/// `title` is required, the rest optional.
+pub(crate) const ALERT_KEYS: [&str; 3] = ["title", "value", "widest_value"];
+
+/// A `perform` reply's alert: a non-blank `title` within its bound, alone or
+/// over a non-blank one-line `value`; `widest_value`, a line of the same
+/// bound, comes only with a `value`.
+pub(crate) fn valid_alert(alert: &Value) -> bool {
+    let line = |key: &str| match alert.get(key) {
+        None => Some(None),
+        Some(value) => value
+            .as_str()
+            .filter(|text| {
+                !text.trim().is_empty()
+                    && text.len() <= MAX_ALERT_VALUE_BYTES
+                    && !text.contains(['\n', '\r'])
+            })
+            .map(Some),
+    };
+    let (Some(value), Some(widest)) = (line("value"), line("widest_value")) else {
+        return false;
+    };
+    only_keys(alert, &ALERT_KEYS)
+        && alert
+            .get("title")
+            .and_then(Value::as_str)
+            .is_some_and(|title| !title.trim().is_empty() && title.len() <= MAX_ALERT_TITLE_BYTES)
+        && (widest.is_none() || value.is_some())
 }
 
 /// A reply to the host RPC `method`: the response law every result follows,
@@ -453,6 +491,23 @@ mod tests {
             serde_json::json!(["command", "subcommand", "args"])
         );
         assert_eq!(shape["optional"], serde_json::json!(["context"]));
+    }
+
+    /// The alert a `perform` reply may carry has the contract's keys and
+    /// bounds.
+    #[test]
+    fn perform_alerts_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let shape = &contract["perform_alert"];
+        assert_eq!(shape["required"], serde_json::json!(["title"]));
+        assert_eq!(
+            shape["optional"],
+            serde_json::json!(["value", "widest_value"])
+        );
+        assert_eq!(ALERT_KEYS, ["title", "value", "widest_value"]);
+        let quotas = &contract["quotas"];
+        assert_eq!(quotas["alert_title_bytes"], MAX_ALERT_TITLE_BYTES as u64);
+        assert_eq!(quotas["alert_value_bytes"], MAX_ALERT_VALUE_BYTES as u64);
     }
 
     /// The one manifest `lifecycle` value, and what a plugin declaring it

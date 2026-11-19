@@ -1716,11 +1716,10 @@ extension AppDelegate {
       token: typed.token,
       query: typed.remainder,
       in: context
-    ) { [weak self] ok, pid, stdout, navigationURL in
-      guard ok, let self else { return }
-      self.activateCommandTarget(pid, navigationURL: navigationURL)
-      guard let stdout, !stdout.isEmpty else { return }
-      self.overlay.displayBanner(stdout)
+    ) { [weak self] result in
+      guard result.ok, let self else { return }
+      self.activateCommandTarget(result.targetPID, navigationURL: result.navigationURL)
+      self.presentPluginResult(result)
     }
     if !dispatched {
       FlashLog.info("[normal] bang_unclaimed", fields: ["bang": typed.token])

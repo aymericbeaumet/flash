@@ -45,7 +45,7 @@ pub use status::{
 };
 pub use types::{
     Candidate, CandidateEffect, CommandContext, CommandRequest, EvaluateRequest, EvaluateResponse,
-    Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, Perform,
+    Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, Perform, PerformAlert,
     PerformResponse, Priority, QueryAnswer, RunningApplication, TERMINAL_LINK_ROLE, TextGridCell,
     TextGridLine, TextGridRequest, TextGridResponse, ax_notifications, candidate_metadata,
     host_events,

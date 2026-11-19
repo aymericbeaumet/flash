@@ -39,7 +39,12 @@ enum PluginWireCodec {
   }
 
   private static let envelopeKeys: Set<String> = ["id", "method", "params", "result"]
-  private static let performOKKeys: Set<String> = ["ok", "target_pid", "navigation_url", "message"]
+  private static let performOKKeys: Set<String> = [
+    "ok", "target_pid", "navigation_url", "message", "alert",
+  ]
+  /// Every key of a `perform` reply's `alert` (`perform_alert`); `title` is
+  /// required.
+  static let alertKeys: Set<String> = ["title", "value", "widest_value"]
   private static let hintPayloadKeys: Set<String> = ["ok", "targets", "context_pid"]
   private static let frameKeys: Set<String> = ["x", "y", "width", "height"]
   private static let catalogRowKeys: Set<String> = ["source", "title", "url", "metadata", "effect"]
@@ -149,7 +154,12 @@ enum PluginWireCodec {
       } else {
         message = nil
       }
-      return .performed(pid: pid, navigationURL: navigationURL, message: message)
+      var alert: PluginAlert?
+      if let raw = PluginJSON.present(result["alert"]) {
+        guard let decoded = self.alert(from: raw) else { return nil }
+        alert = decoded
+      }
+      return .performed(pid: pid, navigationURL: navigationURL, message: message, alert: alert)
     }
     if result.count == 2, PluginJSON.boolean(result["unhandled"]) == true {
       return .unhandled
@@ -158,6 +168,29 @@ enum PluginWireCodec {
       !error.trimmed.isEmpty
     else { return nil }
     return .failed(error)
+  }
+
+  /// Decode a `perform` reply's alert: a non-blank title within its bound,
+  /// alone or over a non-blank one-line value; a widest value, a line of the
+  /// same bound, comes only with a value.
+  static func alert(from value: Any) -> PluginAlert? {
+    guard let alert = value as? [String: Any], keys(of: alert, within: alertKeys),
+      let title = alert["title"] as? String, !title.trimmed.isEmpty,
+      title.utf8.count <= PluginProtocol.maxAlertTitleBytes
+    else { return nil }
+    /// An optional line: absent is nil, anything but a bounded line refuses.
+    func line(_ key: String) -> String?? {
+      guard let raw = alert[key] else { return .some(nil) }
+      guard let text = raw as? String, !text.trimmed.isEmpty,
+        text.utf8.count <= PluginProtocol.maxAlertValueBytes,
+        !text.contains(where: \.isNewline)
+      else { return nil }
+      return text
+    }
+    guard let value = line("value"), let widest = line("widest_value"),
+      widest == nil || value != nil
+    else { return nil }
+    return PluginAlert(title: title, value: value, widestValue: widest)
   }
 
   static func hintTargets(

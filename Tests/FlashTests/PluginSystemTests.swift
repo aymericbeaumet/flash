@@ -417,6 +417,33 @@ final class PluginSystemTests: XCTestCase {
 
   // MARK: - The perform trichotomy
 
+  /// A command's alert shows wherever it ran and stands in for the banner;
+  /// its output is a banner only when no caller presents it.
+  func testACommandsAlertShowsWhereverItRanAndItsOutputOnlyWithoutACaller() {
+    let alert = PluginAlert(title: "volume", value: "38%", widestValue: "100%")
+    let step = PluginCommandResult(ok: true, message: "volume 38%", alert: alert)
+    for callerPresentsOutput in [false, true] {
+      XCTAssertEqual(
+        step.presentation(callerPresentsOutput: callerPresentsOutput),
+        .alert(StatusAlert(title: "volume", value: "38%", valueAnchor: "100%")))
+    }
+    let list = PluginCommandResult(ok: true, message: "* Speakers [built-in]")
+    XCTAssertEqual(
+      list.presentation(callerPresentsOutput: false), .banner("* Speakers [built-in]"))
+    XCTAssertEqual(list.presentation(callerPresentsOutput: true), .nothing)
+    XCTAssertEqual(
+      PluginCommandResult(ok: true).presentation(callerPresentsOutput: false), .nothing)
+  }
+
+  /// A plugin's reason for a failure is the alert's text while it fits one.
+  func testACommandsFailureReasonIsShownWhileItFitsAnAlert() {
+    let reason = "audio device not found: Studio"
+    XCTAssertEqual(PluginCommandResult(ok: false, error: reason).failureAlert, reason)
+    let long = String(repeating: "x", count: PluginProtocol.maxAlertTitleBytes + 1)
+    XCTAssertNil(PluginCommandResult(ok: false, error: long).failureAlert)
+    XCTAssertNil(PluginCommandResult.unhandled.failureAlert)
+  }
+
   func testPerformOutcomeDecodeFollowsTheTrichotomy() {
     // ok:true carries optional pid/navigation/message.
     XCTAssertEqual(
@@ -433,6 +460,24 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       PluginWireCodec.performOutcome(from: ["ok": true]),
       .performed(pid: nil, navigationURL: nil, message: nil))
+    // An alert is a message, or a title over a value the host draws as its
+    // one centred alert; a malformed one refuses the whole reply.
+    XCTAssertEqual(
+      PluginWireCodec.performOutcome(from: [
+        "ok": true, "message": "volume 38%",
+        "alert": ["title": "volume", "value": "38%", "widest_value": "100%"],
+      ]),
+      .performed(
+        pid: nil, navigationURL: nil, message: "volume 38%",
+        alert: PluginAlert(title: "volume", value: "38%", widestValue: "100%")))
+    XCTAssertEqual(
+      PluginAlert(title: "volume", value: "38%", widestValue: "100%").statusAlert,
+      StatusAlert(title: "volume", value: "38%", valueAnchor: "100%"))
+    XCTAssertEqual(
+      PluginAlert(title: "caffeinate on").statusAlert, StatusAlert.message("caffeinate on"))
+    XCTAssertEqual(
+      PluginWireCodec.performOutcome(from: ["ok": true, "alert": ["title": " "]]),
+      .failed("malformed perform reply"))
     // {ok:false, unhandled:true} is the one blessed error-free NAK: the host
     // MAY fall back.
     XCTAssertEqual(

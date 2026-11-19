@@ -265,9 +265,64 @@ struct PluginSpawnTiming: Equatable {
 /// timeout, and crash all coerce here — the action may still land late and a
 /// keystroke fallback would double-fire).
 enum PluginPerformOutcome: Equatable {
-  case performed(pid: pid_t?, navigationURL: URL?, message: String?)
+  case performed(pid: pid_t?, navigationURL: URL?, message: String?, alert: PluginAlert? = nil)
   case unhandled
   case failed(String)
+}
+
+/// The alert a `perform` reply asks the host to show (`perform_alert`): a
+/// one-line message, or a title over a one-line value.
+struct PluginAlert: Equatable {
+  var title: String
+  /// Nil for a one-line message.
+  var value: String?
+  /// The widest value the alert shows, so its box keeps one size.
+  var widestValue: String?
+
+  /// The one centred alert it is drawn as.
+  var statusAlert: StatusAlert {
+    StatusAlert(title: title, value: value, valueAnchor: widestValue)
+  }
+}
+
+/// How a plugin's own command or bang ended, for whoever ran it.
+struct PluginCommandResult: Equatable {
+  var ok: Bool
+  /// An app the command asked Flash to raise.
+  var targetPID: pid_t?
+  /// The route recorded into movement history for `ctrl-o` / `ctrl-i`.
+  var navigationURL: URL?
+  /// The command's output: its caller presents it, a banner otherwise.
+  var message: String?
+  /// The centred alert to show wherever the command ran.
+  var alert: PluginAlert?
+  /// Why the plugin's command broke; nil when it was not the plugin's.
+  var error: String?
+
+  static let unhandled = PluginCommandResult(ok: false)
+
+  /// What the resident draws once the command ran.
+  enum Presentation: Equatable {
+    case alert(StatusAlert)
+    case banner(String)
+    case nothing
+  }
+
+  /// The alert wherever the command ran (a key, the CLI, the command line);
+  /// else the output on a banner, unless a caller presents it: the CLI
+  /// prints it and the command line shows it.
+  func presentation(callerPresentsOutput: Bool) -> Presentation {
+    if let alert { return .alert(alert.statusAlert) }
+    guard !callerPresentsOutput, let message, !message.isEmpty else { return .nothing }
+    return .banner(message)
+  }
+
+  /// The plugin's own reason for a failure, when it is short enough for an
+  /// alert; a longer one stays in the log and with the caller.
+  var failureAlert: String? {
+    guard let error, error.utf8.count <= PluginProtocol.maxAlertTitleBytes else { return nil }
+    return error
+  }
 }
 
 struct PluginWireTarget {

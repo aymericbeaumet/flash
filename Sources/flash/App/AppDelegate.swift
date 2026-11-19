@@ -977,18 +977,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         subcommand: subcommand,
         args: args,
         in: pluginSelectorContext()
-      ) { [weak self] ok, pid, stdout, navigationURL in
-        guard ok else {
-          self?.warnCommandFailure(cmd.diagnosticDescription)
-          completion?(.failed, nil)
+      ) { [weak self] result in
+        guard result.ok else {
+          // The plugin's own reason, when it gave one: shown, and handed to
+          // the caller as the failure's text.
+          if let reason = result.failureAlert {
+            self?.displayCommandWarning(reason)
+          } else {
+            self?.warnCommandFailure(cmd.diagnosticDescription)
+          }
+          completion?(.failed, result.error)
           return
         }
-        self?.activateCommandTarget(pid, navigationURL: navigationURL)
-        if let completion {
-          completion(.performed, stdout)
-        } else {
-          self?.presentPluginResult(stdout)
-        }
+        self?.activateCommandTarget(result.targetPID, navigationURL: result.navigationURL)
+        self?.presentPluginResult(result, callerPresentsOutput: completion != nil)
+        completion?(.performed, result.message)
       }
       if !dispatched {
         warnUnsupportedCommand(cmd.diagnosticDescription)
@@ -1147,6 +1150,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   func warnCommandFailure(_ command: String) {
     displayCommandWarning("Command failed or was not handled: \(command). Check :logs for details.")
+  }
+
+  /// What a plugin's command shows once it ran: its alert wherever it ran,
+  /// and its output on a banner unless the alert or a caller presents it
+  /// (the CLI prints it, the command line shows it).
+  func presentPluginResult(_ result: PluginCommandResult, callerPresentsOutput: Bool = false) {
+    switch result.presentation(callerPresentsOutput: callerPresentsOutput) {
+    case .alert(let alert): overlay.displayAlert(alert)
+    case .banner(let text): overlay.displayBanner(text)
+    case .nothing: break
+    }
   }
 
   private func presentPluginResult(_ stdout: String?) {

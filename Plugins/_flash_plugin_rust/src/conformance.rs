@@ -194,6 +194,7 @@ impl Plugin for Fixture {
                         .target_pid(512)
                         .navigation_url("https://example.com/a")
                         .message("Done")
+                        .alert(crate::PerformAlert::value("volume", "38%").widest_value("100%"))
                 }
                 "example decline" if command.context.is_none() => PerformResponse::unhandled(),
                 "example break" => PerformResponse::fail("example failed"),

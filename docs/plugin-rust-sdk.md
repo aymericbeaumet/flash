@@ -72,8 +72,12 @@ that lifecycle beside any surface a live child serves, as the host does
 resolve/command/navigate all arrive as the single `perform` method —
 the SDK routes kinds to your handlers, and every one of them answers with the
 `PerformResponse` trichotomy: `ok()` (+ `.target_pid()` / `.navigation_url()`
-/ `.message()`), `unhandled()` ("not my context" — the host may fall back),
-or `fail(msg)` ("mine, but it broke" — the host must not fall back). Tests read
+/ `.message()` / `.alert()`), `unhandled()` ("not my context" — the host may
+fall back), or `fail(msg)` ("mine, but it broke" — the host must not fall
+back; a command's caller reads `msg`). `.message()` is a command's output and
+`.alert(PerformAlert::message("caffeinate on"))` or
+`.alert(PerformAlert::value("volume", "38%").widest_value("100%"))` the
+centred alert Flash shows wherever the command ran. Tests read
 a built response back with `is_ok()` / `is_unhandled()` / `error_message()` /
 `toast_message()`.
 

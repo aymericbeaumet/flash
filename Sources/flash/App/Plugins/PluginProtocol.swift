@@ -58,6 +58,10 @@ enum PluginProtocol {
   /// Percent-encoded bytes of one `#[popup=inline:…]` body in a status
   /// segment; a larger one leaves the markup without its preview.
   static let maxInlinePreviewBytes = 16 * 1024
+  /// UTF-8 bytes of a `perform` reply's alert title, and of its value and
+  /// widest value; a larger one rejects the reply.
+  static let maxAlertTitleBytes = 256
+  static let maxAlertValueBytes = 64
 
   // MARK: - host.applescript bounds (`applescript` in protocol.json)
 

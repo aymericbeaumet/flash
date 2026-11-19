@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/perform.reply.schema.json",
   "title": "perform reply",
-  "description": "Plugin to host, exactly one of: performed, not mine (the host may fall back), or mine but broke (the host must not).",
+  "description": "Plugin to host, exactly one of: performed, not mine (the host may fall back), or mine but broke (the host must not). A performed command may carry the alert the host shows; a malformed alert rejects the whole reply.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -47,6 +47,16 @@
               "type": [
                 "string",
                 "null"
+              ]
+            },
+            "alert": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "definitions.schema.json#/definitions/perform_alert"
+                }
               ]
             }
           }

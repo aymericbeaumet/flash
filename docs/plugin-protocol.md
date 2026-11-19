@@ -456,7 +456,7 @@ never asks the host what it supports. See the
   Uniform reply, universal trichotomy:
 
   ```json
-  {"ok": true, "target_pid"?: 123, "navigation_url"?: "…", "message"?: "…"}
+  {"ok": true, "target_pid"?: 123, "navigation_url"?: "…", "message"?: "…", "alert"?: {…}}
   {"ok": false, "unhandled": true}
   {"ok": false, "error": "…"}
   ```
@@ -464,14 +464,31 @@ never asks the host what it supports. See the
   `ok: true` = performed (`target_pid` raises that app; `navigation_url` is
   the route the command landed on, recorded as a stop in movement history
   at once — a tab switch names its destination, so a burst of switches
-  leaves a stop per press where the catalog would show only the last;
-  `message` shows as a toast). `unhandled` = "not my
+  leaves a stop per press where the catalog would show only the last).
+  `unhandled` = "not my
   context" — the host MAY fall back (e.g. to a keystroke mapping). An
   `error` = "mine, but it broke" — the host MUST NOT fall back
   (double-fire protection); no reply / timeout / crash coerces to this case.
   Unknown `kind` → error. The host never dispatches `perform`
   to a plugin in `failed`/unspawnable state — it settles as `unhandled`
   without burning the deadline (nothing could have started).
+
+  The plugin's own command or bang answers whoever ran it with `message`
+  and `alert`. `message` is the command's output: the CLI prints it, the
+  command line shows it, and a key shows it on a banner. `alert` is the
+  centred alert Flash draws wherever the command ran, a key, the CLI and
+  the command line alike; with one, a key shows no banner. It is `{"title":
+  "caffeinate on"}`, a one-line message, or `{"title": "volume", "value":
+  "38%", "widest_value"?: "100%"}`, a title over a one-line value.
+  `widest_value` is the widest value the alert shows, so its box keeps one
+  size while the value changes, and comes only with a `value`. Every string
+  is non-blank; `title` is at most 256 bytes, `value` and `widest_value` at
+  most 64 (`quotas.alert_title_bytes`, `alert_value_bytes`). A malformed
+  alert rejects the whole reply. A plugin draws no alert of its own: this is
+  the one centred alert, and it replaces the one on screen. An `error` of
+  such a command is logged, handed to its caller as the failure's text, and
+  shown in the failure alert when it fits an alert title; a longer one
+  shows the generic failure alert.
 
 #### Event coalescing
 

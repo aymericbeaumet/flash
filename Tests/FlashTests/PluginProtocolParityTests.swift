@@ -97,6 +97,17 @@ final class PluginProtocolParityTests: XCTestCase {
     XCTAssertEqual(quotas["fetch_timeout_ms_max"] as? Int, PluginProtocol.fetchTimeoutMsCeiling)
     XCTAssertEqual(quotas["text_grid_dimension"] as? Int, PluginProtocol.maxTextGridDimension)
     XCTAssertEqual(quotas["inline_preview_bytes"] as? Int, PluginProtocol.maxInlinePreviewBytes)
+    XCTAssertEqual(quotas["alert_title_bytes"] as? Int, PluginProtocol.maxAlertTitleBytes)
+    XCTAssertEqual(quotas["alert_value_bytes"] as? Int, PluginProtocol.maxAlertValueBytes)
+  }
+
+  /// The alert a `perform` reply may carry has the contract's keys.
+  func testPerformAlertShapeMatchesSpec() throws {
+    let shape = try XCTUnwrap(try spec()["perform_alert"] as? [String: Any])
+    XCTAssertEqual(shape["required"] as? [String], ["title"])
+    XCTAssertEqual(
+      Set((shape["required"] as? [String] ?? []) + (shape["optional"] as? [String] ?? [])),
+      PluginWireCodec.alertKeys)
   }
 
   /// `host.applescript` runs under the contract's bounds: the host clamps a

@@ -156,7 +156,7 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintPro
       params: ["row": PluginWireCodec.candidateJSON(candidate)]
     ) { outcome in
       switch outcome {
-      case .performed(let pid, let navigationURL, _):
+      case .performed(let pid, let navigationURL, _, _):
         completion(.resolved(pid: pid, navigationURL: navigationURL))
       case .unhandled, .failed:
         completion(.unresolved)
@@ -206,7 +206,7 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator, DeferredHintPro
   private static func sourceCommandResult(from outcome: PluginPerformOutcome) -> SourceCommandResult
   {
     switch outcome {
-    case .performed(let pid, let navigationURL, _):
+    case .performed(let pid, let navigationURL, _, _):
       return .performed(pid: pid, navigationURL: navigationURL)
     case .unhandled:
       return .unhandled

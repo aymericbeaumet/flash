@@ -604,18 +604,14 @@ final class PluginManager {
 
   /// Returns true when a plugin owns `(command, subcommand)` and the
   /// invocation was dispatched (synchronous ownership check). The plugin
-  /// runs asynchronously; `onResult` delivers `(ok, targetPID, message,
-  /// navigationURL)` once its `perform` settles. `targetPID`, when present,
-  /// is an app the command asked Flash to raise; `message`, when present, is
-  /// text to surface as a toast; `navigationURL` is the route recorded into
-  /// movement history for `ctrl-o` / `ctrl-i`.
+  /// runs asynchronously; `onResult` delivers how its `perform` settled.
   @discardableResult
   func invoke(
     command: String,
     subcommand: String,
     args: [String],
     in context: PluginSelectorContext = PluginSelectorContext(),
-    onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
+    onResult: ((PluginCommandResult) -> Void)? = nil
   ) -> Bool {
     let snapshot = readHotSnapshot()
     let lcCommand = command.lowercased()
@@ -653,13 +649,13 @@ final class PluginManager {
   }
 
   /// Dispatch one `perform {kind: "command"}` and adapt the trichotomy to
-  /// the `(ok, pid, message, navigationURL)` shape command callers consume.
+  /// the result command callers consume.
   private func performCommand(
     plugin: PluginProcess,
     command: String,
     subcommand: String,
     args: [String],
-    onResult: ((Bool, pid_t?, String?, URL?) -> Void)?
+    onResult: ((PluginCommandResult) -> Void)?
   ) {
     plugin.perform(
       kind: "command",
@@ -670,16 +666,19 @@ final class PluginManager {
       ]
     ) { outcome in
       switch outcome {
-      case .performed(let pid, let navigationURL, let message):
+      case .performed(let pid, let navigationURL, let message, let alert):
         FlashLog.debug(
           "[plugin] command=\(command) subcommand=\(subcommand) ok=true "
             + "target_pid=\(pid.map(String.init) ?? "nil") "
             + "navigation_scheme=\(navigationURL?.scheme ?? "nil")")
-        onResult?(true, pid, message, navigationURL)
+        onResult?(
+          PluginCommandResult(
+            ok: true, targetPID: pid, navigationURL: navigationURL, message: message,
+            alert: alert))
       case .unhandled:
         FlashLog.debug(
           "[plugin] command=\(command) subcommand=\(subcommand) unhandled")
-        onResult?(false, nil, nil, nil)
+        onResult?(.unhandled)
       case .failed(let error):
         FlashLog.plugin(
           .warn,
@@ -690,7 +689,7 @@ final class PluginManager {
             "subcommand": subcommand,
             "error": error,
           ])
-        onResult?(false, nil, nil, nil)
+        onResult?(PluginCommandResult(ok: false, error: error))
       }
     }
   }
@@ -706,7 +705,7 @@ final class PluginManager {
     token: String,
     query: String,
     in context: PluginSelectorContext = PluginSelectorContext(),
-    onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
+    onResult: ((PluginCommandResult) -> Void)? = nil
   ) -> Bool {
     let snapshot = readHotSnapshot()
     let lcToken = token.lowercased()

@@ -51,9 +51,11 @@
 {"name": "text_grid.reply.unknown-key", "expect": "reject", "reply_to": "text_grid", "frame": {"id":5,"result":{"ok":true,"columns":80,"rows":24,"lines":[{"row":0,"column":0,"text":"$ cargo test"}],"cursor":{"row":0,"column":0}}}}
 {"name": "text_grid.reply.without-rows", "expect": "reject", "reply_to": "text_grid", "frame": {"id":5,"result":{"ok":true,"columns":80,"lines":[]}}}
 {"name": "perform.reply", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true}}}
-{"name": "perform.reply.full", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":512,"navigation_url":"https://example.com/a","message":"Done"}}}
+{"name": "perform.reply.full", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":512,"navigation_url":"https://example.com/a","message":"Done","alert":{"title":"volume","value":"38%","widest_value":"100%"}}}}
+{"name": "perform.reply.alert-message", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"caffeinate on"}}}}
+{"name": "perform.reply.alert-value", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":"caffeinate off","alert":{"title":"caffeinate","value":"off"}}}}
 {"name": "perform.reply.navigated", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"navigation_url":"https://example.com/a"}}}
-{"name": "perform.reply.null-optionals", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":null,"navigation_url":null,"message":null}}}
+{"name": "perform.reply.null-optionals", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":null,"navigation_url":null,"message":null,"alert":null}}}
 {"name": "perform.reply.unhandled", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":false,"unhandled":true}}}
 {"name": "perform.reply.failure", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":false,"error":"example failed"}}}
 {"name": "perform.reply.unknown-kind", "expect": "accept", "reply_to": "perform", "frame": {"id":6,"result":{"ok":false,"error":"unknown perform kind: launch"}}}
@@ -67,6 +69,15 @@
 {"name": "perform.reply.target-pid-zero", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"target_pid":0}}}
 {"name": "perform.reply.relative-navigation-url", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"navigation_url":"example.com/a"}}}
 {"name": "perform.reply.message-not-a-string", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"message":3}}}
+{"name": "perform.reply.alert-not-an-object", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":"volume 38%"}}}
+{"name": "perform.reply.alert-without-a-title", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"value":"38%"}}}}
+{"name": "perform.reply.alert-blank-title", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":" "}}}}
+{"name": "perform.reply.alert-unknown-key", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":"38%","style":"error"}}}}
+{"name": "perform.reply.alert-widest-without-a-value", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","widest_value":"100%"}}}}
+{"name": "perform.reply.alert-value-of-two-lines", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":"38%\nmuted"}}}}
+{"name": "perform.reply.alert-value-not-a-string", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":38}}}}
+{"name": "perform.reply.alert-value-over-the-bound", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":true,"alert":{"title":"volume","value":"99999999999999999999999999999999999999999999999999999999999999999"}}}}
+{"name": "perform.reply.failure-with-an-alert", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":false,"error":"example failed","alert":{"title":"volume"}}}}
 {"name": "perform.reply.ok-not-a-boolean", "expect": "reject", "reply_to": "perform", "frame": {"id":6,"result":{"ok":"true"}}}
 {"name": "reply.unknown-method", "expect": "accept", "frame": {"id":9,"result":{"ok":false,"error":"unknown method: teleport"}}}
 {"name": "publish", "expect": "accept", "frame": {"method":"publish","params":{"rows":[{"source":"example.items","title":"Example row","url":"https://example.com/a","metadata":{"subtitle":"First"},"effect":{"type":"copy_text","text":"Example row"}},{"source":"example.items","title":"Open the site","effect":{"type":"open","url":"https://example.com/"}},{"source":"example.tabs","title":"Open the app","effect":{"type":"open","bundle_id":"com.example.app"}},{"source":"example.items","title":"Insert","effect":{"type":"insert_text","text":"inserted"}},{"source":"example.items","title":"Bare"}]}}}

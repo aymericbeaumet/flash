@@ -800,11 +800,51 @@ pub enum Perform {
 // Outbound responses
 // ---------------------------------------------------------------------------
 
+/// The centred alert a command's reply asks the host to show: one message
+/// line, or a title over a one-line value (`volume` over `38%`). The host
+/// draws it wherever the command ran; a plugin never draws its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PerformAlert {
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    widest_value: Option<String>,
+}
+
+impl PerformAlert {
+    /// A one-line message.
+    pub fn message(text: impl Into<String>) -> Self {
+        Self {
+            title: text.into(),
+            value: None,
+            widest_value: None,
+        }
+    }
+
+    /// A title over the value it reports.
+    pub fn value(title: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            value: Some(value.into()),
+            widest_value: None,
+        }
+    }
+
+    /// The widest value this alert shows (`100%`), so its box keeps one size
+    /// while the value changes. Only a title over a value takes one.
+    pub fn widest_value(mut self, widest: impl Into<String>) -> Self {
+        self.widest_value = Some(widest.into());
+        self
+    }
+}
+
 /// The uniform `perform` reply — the universal trichotomy. `ok` = performed
 /// (`target_pid` raises that app and records the jump in movement history;
-/// `message` shows as a toast). `unhandled` = "not my context"; the host MAY
-/// fall back. `fail` = "mine, but it broke"; the host MUST NOT fall back
-/// (double-fire protection).
+/// `message` is the command's output, a toast when nothing else presents it;
+/// `alert` shows the host's centred alert). `unhandled` = "not my context";
+/// the host MAY fall back. `fail` = "mine, but it broke"; the host MUST NOT
+/// fall back (double-fire protection).
 #[derive(Clone, Debug, Serialize)]
 pub struct PerformResponse {
     ok: bool,
@@ -818,6 +858,8 @@ pub struct PerformResponse {
     navigation_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alert: Option<PerformAlert>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -834,6 +876,7 @@ impl PerformResponse {
             target_pid: None,
             navigation_url: None,
             message: None,
+            alert: None,
         }
     }
 
@@ -847,11 +890,13 @@ impl PerformResponse {
             target_pid: None,
             navigation_url: None,
             message: None,
+            alert: None,
         }
     }
 
-    /// "Mine, but it broke" — the host must not fall back. The message is
-    /// logged host-side; keep it content-free.
+    /// "Mine, but it broke" — the host must not fall back. The host logs the
+    /// message and, for the plugin's own command, shows it and hands it to
+    /// the caller: say why in a line, without the user's data.
     pub fn fail(message: impl Into<String>) -> Self {
         let message = message.into();
         Self {
@@ -866,6 +911,7 @@ impl PerformResponse {
             target_pid: None,
             navigation_url: None,
             message: None,
+            alert: None,
         }
     }
 
@@ -882,9 +928,16 @@ impl PerformResponse {
         self
     }
 
-    /// Text for Flash to surface as a toast.
+    /// The command's output: the CLI prints it and the command line shows
+    /// it; a key shows it as a toast, unless the reply carries an `alert`.
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
+        self
+    }
+
+    /// The centred alert Flash shows wherever the command ran.
+    pub fn alert(mut self, alert: PerformAlert) -> Self {
+        self.alert = Some(alert);
         self
     }
 
@@ -929,6 +982,11 @@ impl PerformResponse {
             .is_some_and(|url| !crate::wire::absolute_url(url))
         {
             return serde_json::json!({ "ok": false, "error": "invalid perform navigation_url" });
+        }
+        if let Some(alert) = &self.alert
+            && !serde_json::to_value(alert).is_ok_and(|alert| crate::wire::valid_alert(&alert))
+        {
+            return serde_json::json!({ "ok": false, "error": "invalid perform alert" });
         }
         serde_json::to_value(self).unwrap_or_else(|_| {
             serde_json::json!({ "ok": false, "error": "perform response could not be encoded" })
@@ -1194,10 +1252,41 @@ mod tests {
     }
 
     #[test]
+    fn an_alert_is_a_message_or_a_title_over_a_value() {
+        assert_eq!(
+            PerformResponse::ok()
+                .alert(PerformAlert::message("caffeinate on"))
+                .to_value(),
+            json!({ "ok": true, "alert": { "title": "caffeinate on" } })
+        );
+        let volume = PerformResponse::ok()
+            .message("volume 38%")
+            .alert(PerformAlert::value("volume", "38%").widest_value("100%"));
+        assert_eq!(
+            volume.to_value(),
+            json!({ "ok": true, "message": "volume 38%", "alert": {
+                "title": "volume", "value": "38%", "widest_value": "100%"
+            } })
+        );
+        assert!(crate::wire::valid_result("perform", &volume.to_value()));
+    }
+
+    #[test]
     fn perform_builders_always_emit_valid_wire_outcomes() {
         for response in [
             PerformResponse::fail(" \t\n"),
             PerformResponse::ok().navigation_url("relative/path"),
+            PerformResponse::ok().alert(PerformAlert::message(" ")),
+            PerformResponse::ok().alert(PerformAlert::value("volume", "")),
+            PerformResponse::ok().alert(PerformAlert::value("volume", "3\n8%")),
+            PerformResponse::ok().alert(PerformAlert::message("volume").widest_value("100%")),
+            PerformResponse::ok().alert(PerformAlert::message(
+                "x".repeat(crate::wire::MAX_ALERT_TITLE_BYTES + 1),
+            )),
+            PerformResponse::ok().alert(PerformAlert::value(
+                "volume",
+                "9".repeat(crate::wire::MAX_ALERT_VALUE_BYTES + 1),
+            )),
         ] {
             assert!(crate::wire::valid_result("perform", &response.to_value()));
             assert_eq!(response.to_value()["ok"], false);
