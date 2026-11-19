@@ -197,7 +197,7 @@ scripts ([IPC protocol](ipc-protocol.md#events)):
 | `core:mode.changed` | Flash's mode changed | `mode`, `previous` (as `resident status` names them) |
 | `core:hints.shown`, `core:hints.committed`, `core:hints.cancelled` | A hint session drew its labels, committed a target, or ended without one | `surface`; `targets` when shown |
 | `core:monitor.triggered` | A value monitor rose into warning or error | `monitor`, `level` |
-| `core:ax.changed`, `core:session.opened`, `core:status.observed` | Plugin plumbing: an AX notification, the flashlight opening, a plugin's segments shown | see the protocol |
+| `core:ax.changed`, `core:calendar.changed`, `core:session.opened`, `core:status.observed` | Plugin plumbing: an AX notification, the calendar changing (heard only by plugins holding `calendar_events`, never by a monitor), the flashlight opening, a plugin's segments shown | see the protocol |
 
 An event monitor costs nothing between events: they are workspace and system
 notifications, never a poll, and network and volume changes are observed only

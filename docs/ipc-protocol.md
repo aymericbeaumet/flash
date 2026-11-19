@@ -346,8 +346,9 @@ Not streamed, because only a plugin can use them: `core:apps.changed` (the
 running-apps snapshot a plugin's catalog keys on; `core:apps.launched` and
 `core:apps.terminated` report the changes), `core:ax.changed` (an observed
 app's Accessibility notifications: every keystroke posts one, so its timing
-alone would leak typing), `core:session.opened` and `core:status.observed`.
-Subscribing to one is an `unknown_event`.
+alone would leak typing), `core:calendar.changed` (for plugins holding the
+`calendar_events` capability alone), `core:session.opened` and
+`core:status.observed`. Subscribing to one is an `unknown_event`.
 
 Status values (`#{…}`) are not events: Flash evaluates a value only while a
 surface shows it, and a value can carry whatever a command printed. A
