@@ -430,7 +430,7 @@ final class PluginHostRPC {
         switch calendarEvents.list(from: start, to: end, calendars: calendars) {
         case .events(let events, let truncated):
           var result: [String: Any] = [
-            "ok": true, "access": AppleCatalogAccess.granted.wireName, "events": events,
+            "ok": true, "access": GrantAccess.granted.wireName, "events": events,
           ]
           if truncated { result["truncated"] = true }
           FlashLog.debug(
@@ -449,10 +449,10 @@ final class PluginHostRPC {
   }
 
   /// `host.notes`, `host.reminders` and `host.contacts`: the access macOS
-  /// grants Flash to one app, a request for it, its items or one of them
-  /// shown, each on that app's queue. Nothing but `request_access` asks
-  /// macOS, and only while the user is using the plugin: a prompt never
-  /// comes up from a background refresh.
+  /// grants Flash to one app, a request for it or its items, each on that
+  /// app's queue, or one of them shown, beside it. Nothing but
+  /// `request_access` asks macOS, and only while the user is using the
+  /// plugin: a prompt never comes up from a background refresh.
   private func hostAppItems(
     _ kind: HostAppItemKind, _ operation: PluginHostRequest.AppItems, pluginID: String,
     scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
@@ -464,7 +464,9 @@ final class PluginHostRPC {
     // Read as the request arrives, in the order of the plugin's frames: the
     // search that made it ask may be answered before the app's queue runs.
     let servesUser = operation == .requestAccess && scope.servesUser()
-    scope.enqueue(on: items.queue) {
+    var queue = items.queue
+    if case .show = operation { queue = HostAppItems.showQueue }
+    scope.enqueue(on: queue) {
       switch operation {
       case .access:
         reply(["ok": true, "access": items.access().wireName])
@@ -493,7 +495,7 @@ final class PluginHostRPC {
         switch listing {
         case .items(let listed, let truncated):
           var result: [String: Any] = [
-            "ok": true, "access": AppleCatalogAccess.granted.wireName, "items": listed,
+            "ok": true, "access": GrantAccess.granted.wireName, "items": listed,
           ]
           if truncated { result["truncated"] = true }
           // The count and the time, never an item.

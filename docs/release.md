@@ -108,8 +108,9 @@ fallbacks in particular:
   `app switch` brings the chosen app forward, and the About window comes to
   the front.
 - Calendars and Reminders: the first `calendar next` (the `calendar` plugin,
-  through Flash) and `@reminders` search show macOS's prompt with Flash's
-  explanation, and read once granted.
+  through Flash) and `@reminders` search (the `reminders` plugin, through
+  Flash) show macOS's prompt with Flash's explanation, and read once
+  granted.
 - URLs: a tmux pane printing `https://ja.wikipedia.org/wiki/日本` gets a link
   hint that opens the page.
 - `[app] autostart`, a terminal popup and a text popup, and `[startup] run`

@@ -88,6 +88,31 @@ monitors read that no plugin publishes any more, with its replacement.
   opens on current figures. With `processes` in `[plugins] disabled` the
   values are empty, `@processes` lists nothing and `process kill` does
   nothing.
+- **`@notes`, `@reminders` and `@contacts` are three plugins.** The `apple`
+  plugin of 1.1 is `notes`, `reminders` and `contacts`, one per app, so each
+  can be turned off on its own: replace `apple` in `[plugins] disabled` with
+  the ones you want off. The rows keep their titles and subtitles,
+  reminders come list by list and oldest first, and `notes open`, `notes
+  refresh` and their `reminders` and `contacts` twins keep their words. The
+  plugins are sandboxed and read no app: Flash lists each app for its
+  plugin (a note's name, an open reminder's title and list, the name on a
+  contact card, and nothing else of them), Notes through its own fixed
+  AppleScript and Reminders and Contacts through macOS's frameworks, so
+  macOS asks for Reminders and Contacts access where it asked to let Flash
+  control those two apps. It asks the first time you search one of the
+  three or run its `refresh`, never at launch, and that first search lists
+  nothing while the prompt is up: type `@notes` again once you have
+  answered. Nothing of a plugin runs until that first query or command;
+  from then on its list is read when the app launches, when you leave it
+  and when the flashlight opens on a list a minute old, as before. A query
+  that arrives while a list is being read waits for it up to 0.2 s, 0.7 s
+  when it has no list to show yet; a longer read (a large Notes library)
+  shows on the next query. A row that
+  cannot be shown says so in the centred alert, and an argument these
+  commands do not take (`notes open --now`) is refused when the command
+  runs, with its usage. With one of the three in `[plugins] disabled`, its
+  list is empty and its commands do nothing
+  ([flashlight](docs/flashlight.md)).
 - **`@menus` is the `menus` plugin's.** It lists the same items under the
   same titles, in the same order. The menus are read once, when the query
   names `@menus`, where they were read again every three seconds while you
@@ -176,8 +201,8 @@ monitors read that no plugin publishes any more, with its replacement.
 - **Other plugins merged or moved into Flash itself.** tmux is part of
   `terminals` (`#{flash.plugin.terminals.session}`, `[plugins.terminals]
   ssh_hosts`); history is part of `browsers`; reference is `emojis`; search
-  bangs are `searchproviders` (source `searchproviders.bangs`). apple,
-  files and marks are built in: drop them from `[plugins] disabled`.
+  bangs are `searchproviders` (source `searchproviders.bangs`). files and
+  marks are built in: drop them from `[plugins] disabled`.
   caffeinate, media, processes and system are bundled plugins under the same
   ids, so an entry for one of them still turns its commands and values off.
 - **Removed plugins:** github, kitty, spotify, windows and vscode, and the

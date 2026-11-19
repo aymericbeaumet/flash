@@ -386,9 +386,6 @@
       "apps",
       "windows",
       "clipboard",
-      "notes",
-      "reminders",
-      "contacts",
       "files"
     ],
     "shared": {
@@ -403,7 +400,10 @@
       "network": "default",
       "system": "default",
       "processes": "default",
-      "menus": "default"
+      "menus": "default",
+      "notes": "default",
+      "reminders": "default",
+      "contacts": "default"
     }
   },
   "hint_target": {

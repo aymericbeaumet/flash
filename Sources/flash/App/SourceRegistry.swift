@@ -41,7 +41,6 @@ final class SourceRegistry {
     runningApplications: [NSRunningApplication]? = nil,
     runningApplicationsProvider: (() -> [NSRunningApplication])? = nil,
     pluginSourcesProvider: (() -> [FlashSource])? = nil,
-    appleCatalogs: AppleCatalogs? = nil,
     clipboard: ClipboardFlashlight? = nil,
     windows: WindowListSource? = nil
   ) {
@@ -73,15 +72,6 @@ final class SourceRegistry {
           AccessibilityProvider()
         },
       ]
-    // Notes, Reminders and Contacts rows, from the resident's catalogs.
-    let appleCatalogSources =
-      appleCatalogs.map { catalogs in
-        AppleCatalog.allCases.map { catalog in
-          SourceDescriptor(identifier: catalog.sourceID, activationPolicy: .always) {
-            AppleCatalogSource(catalog: catalog, catalogs: catalogs)
-          }
-        }
-      } ?? []
     // Clipboard history and register rows, from the resident's store.
     let clipboardSources =
       clipboard.map { flashlight in
@@ -100,7 +90,7 @@ final class SourceRegistry {
           }
         ]
       } ?? []
-    self.descriptors = builtIn + appleCatalogSources + clipboardSources + windowSources
+    self.descriptors = builtIn + clipboardSources + windowSources
     refreshRunningApplications(initialRunningApplications)
   }
 

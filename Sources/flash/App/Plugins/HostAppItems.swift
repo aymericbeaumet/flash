@@ -51,13 +51,15 @@ enum HostAppItemListing: Equatable {
 }
 
 /// Reads one app's items. The blocking calls run on `HostAppItems`' queue,
-/// never main; nothing here asks macOS for access but `requestAccess`. The
+/// never main, but for a `show` and the `access` it reads first, which run
+/// on `HostAppItems.showQueue` beside a listing; nothing here asks macOS
+/// for access but `requestAccess`. The
 /// resident wires the live readers at launch; nothing is wired inside the
 /// test runner, where a test injects its own and no test reads the Mac's
 /// notes, reminders or contacts, runs a script or shows a prompt.
 protocol AppItemProviding: AnyObject {
   /// Whether Flash may read the app now, as macOS answers without asking.
-  func access() -> AppleCatalogAccess
+  func access() -> GrantAccess
   /// Whether macOS can be asked now. Notes answers an Automation request
   /// only while it runs.
   func canRequestAccess() -> Bool
@@ -86,13 +88,18 @@ final class HostAppItems: @unchecked Sendable {
   static let maxIDBytes = 1_024
   /// A listing this slow is logged as a warning.
   static let slowListMs = 1_000
+  /// Where a `show` runs, for every app: a pick never waits behind a
+  /// listing in flight on the app's queue, and Notes' script can take
+  /// seconds.
+  static let showQueue = DispatchQueue(
+    label: "flash.app-items.show", qos: .userInitiated, attributes: .concurrent)
 
   /// What a `list` answers.
   enum Listing {
     /// The items as written on the wire, and whether later ones were left
     /// out of the reply.
     case items([[String: Any]], truncated: Bool)
-    case noAccess(AppleCatalogAccess)
+    case noAccess(GrantAccess)
     case failed(String)
   }
 
@@ -111,7 +118,7 @@ final class HostAppItems: @unchecked Sendable {
   }
 
   /// Runs on `queue`.
-  func access() -> AppleCatalogAccess { provider.access() }
+  func access() -> GrantAccess { provider.access() }
 
   /// Runs on `queue`.
   func canRequestAccess() -> Bool { provider.canRequestAccess() }
@@ -119,7 +126,7 @@ final class HostAppItems: @unchecked Sendable {
   /// Ask macOS when Flash never asked; `done` gets the access once the user
   /// answered, on `queue`. Runs on `queue`, which stays free while the
   /// prompt is up.
-  func requestAccess(_ done: @escaping (AppleCatalogAccess) -> Void) {
+  func requestAccess(_ done: @escaping (GrantAccess) -> Void) {
     let access = provider.access()
     guard access == .undetermined else { return done(access) }
     guard prompt.join({ done($0 ? .granted : .denied) }) else { return }
@@ -151,8 +158,8 @@ final class HostAppItems: @unchecked Sendable {
   }
 
   /// Bring the app forward on the item with `id`; `done` gets nil, or why it
-  /// failed, on any queue. Runs on `queue`. Only an app Flash may read is
-  /// asked: a Notes script sent without the grant would raise macOS's
+  /// failed, on any queue. Runs on `showQueue`. Only an app Flash may read
+  /// is asked: a Notes script sent without the grant would raise macOS's
   /// prompt.
   func show(id: String, done: @escaping (String?) -> Void) {
     guard provider.access() == .granted else { return done("\(kind.method) show requires access") }
@@ -235,7 +242,15 @@ enum LiveAppItems {
   static func open(_ url: URL?, done: @escaping (String?) -> Void) {
     guard mechanismsAllowed else { return done(inertReason) }
     guard let url else { return done("no URL for the item") }
-    AppleCatalogReaders.open(url, done: done)
+    // `done` only replies to the plugin.
+    nonisolated(unsafe) let done = done
+    // NSWorkspace's asynchronous open, started on main as the flashlight's
+    // other opens are.
+    DispatchQueue.main.async {
+      NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+        done(error?.localizedDescription)
+      }
+    }
   }
 }
 
@@ -247,7 +262,7 @@ final class LiveNotesItems: AppItemProviding {
   static let listTimeout: TimeInterval = 30
   static let showTimeout: TimeInterval = 10
 
-  func access() -> AppleCatalogAccess {
+  func access() -> GrantAccess {
     guard LiveAppItems.mechanismsAllowed else { return .denied }
     return AutomationConsent.access(toBundleID: Self.bundleID, ask: false)
   }
@@ -306,6 +321,50 @@ final class LiveNotesItems: AppItemProviding {
   }
 }
 
+/// The scripts behind `host.notes`: Notes has no framework API. They are
+/// the host's own and fixed; a plugin supplies the identifier `show` takes
+/// and nothing else, as an escaped literal.
+enum NotesScripts {
+  /// Every note of every account as `id<TAB>name`, one per line; nothing
+  /// when Notes is not running, so a listing never launches it.
+  ///
+  /// The ids and names are read with one `every note` request each per
+  /// account, never one request per note: each Apple Event is a round trip
+  /// Notes answers on its main thread, so a per-note loop over a few hundred
+  /// notes took 10–30 s per listing (and hit the 30 s timeout) while Notes
+  /// itself stopped responding. Notes returns both lists in the same element
+  /// order, so they pair by index.
+  static let list = """
+    if application "Notes" is not running then return ""
+    tell application "Notes"
+      set output to {}
+      repeat with acc in accounts
+        try
+          set ids to id of every note of acc
+          set names to name of every note of acc
+          repeat with i from 1 to count of ids
+            set the end of output to ((item i of ids as text) & tab & (item i of names as text))
+          end repeat
+        end try
+      end repeat
+      set AppleScript's text item delimiters to linefeed
+      return output as text
+    end tell
+    """
+
+  /// Bring Notes forward on the note with this id.
+  static func show(id: String) -> String {
+    """
+    tell application "Notes"
+      activate
+      try
+        show note id \(PluginAppleScriptOperation.quote(id))
+      end try
+    end tell
+    """
+  }
+}
+
 /// Reminders: the open reminders of every list, through EventKit. macOS asks
 /// once whether Flash may access Reminders.
 final class LiveRemindersItems: AppItemProviding {
@@ -314,7 +373,7 @@ final class LiveRemindersItems: AppItemProviding {
   /// reminders queue touches it.
   private var store: EKEventStore?
 
-  func access() -> AppleCatalogAccess {
+  func access() -> GrantAccess {
     guard LiveAppItems.mechanismsAllowed else { return .denied }
     return EventKitAccess.access(EKEventStore.authorizationStatus(for: .reminder))
   }
@@ -371,11 +430,40 @@ final class LiveRemindersItems: AppItemProviding {
   }
 }
 
+/// One EventKit fetch, handed from its callback queue to the waiting reader.
+final class FetchedReminders {
+  struct Entry: Equatable {
+    var id: String
+    var listID: String
+    var list: String
+    var title: String
+    var created: Date?
+  }
+
+  private let lock = NSLock()
+  private let done = DispatchSemaphore(value: 0)
+  private var entries: [Entry] = []
+
+  func finish(_ entries: [Entry]) {
+    lock.lock()
+    self.entries = entries
+    lock.unlock()
+    done.signal()
+  }
+
+  func wait(seconds: TimeInterval) -> [Entry]? {
+    guard done.wait(timeout: .now() + seconds) == .success else { return nil }
+    lock.lock()
+    defer { lock.unlock() }
+    return entries
+  }
+}
+
 /// Contacts: every card's name, in Contacts' order, through the Contacts
 /// framework: never a phone number, an address or any other field. macOS
 /// asks once whether Flash may access Contacts.
 final class LiveContactsItems: AppItemProviding {
-  func access() -> AppleCatalogAccess {
+  func access() -> GrantAccess {
     guard LiveAppItems.mechanismsAllowed else { return .denied }
     switch CNContactStore.authorizationStatus(for: .contacts) {
     case .authorized: return .granted

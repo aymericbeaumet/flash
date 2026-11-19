@@ -255,9 +255,6 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
 - App-scoped mappings select by the focused app's exact bundle ID. Refresh the
   effective mapping table on focus changes; defer Carbon registration work off
   the key event path.
-- The Notes, Reminders and Contacts reads run on `AppleCatalogs`' serial
-  queues, never on main, and ask macOS for access only when a query or a
-  command uses them ([boundaries](docs/architecture.md#boundaries)).
 - The keep-awake power assertions belong to the `caffeinate` plugin's
   process, never the resident's. A status-bound child that has run a
   `perform` stays up when its surfaces or mappings go: only a reload, a
@@ -308,7 +305,13 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   one line (a reminder adds its list and creation time), nothing else. The
   resident alone wires `LiveAppItems`, inert under XCTest; a test injects
   `AppItemProviding` and never reads a real note, reminder or contact, runs
-  a script or shows a prompt.
+  a script or shows a prompt. The rows of `@notes`, `@reminders` and
+  `@contacts`, their order and the `open` and `refresh` commands belong to
+  the plugins of those names, one each; when they relist and which request
+  may ask macOS is the SDK's `ItemCatalog`
+  (`Plugins/_flash_plugin_rust/src/catalog.rs`), shared by the three: an
+  event relists what Flash may already read, and only a query or `refresh`
+  asks.
 - A `listen` beside live sources keeps no process
   (`PluginManifest.isLiveBound`): the events feed rows nobody reads until a
   query asks, and the child hears them from its first search or perform on.

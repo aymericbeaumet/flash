@@ -36,7 +36,7 @@ extension URLEventHandler {
       .other,
       [
         "updates", "status", "menu", "about", "alert", "notify", "metrics", "clipboard",
-        "register", "notes", "reminders", "contacts", "resident", "config",
+        "register", "resident", "config",
         "startup", "cli", "events",
       ]
     ),

@@ -278,8 +278,8 @@ Handed to every handler; cheap to clone. Key surface:
   shows a card by), plus a reminder's `list`, `list_index` and `created`:
   nothing else of an item reaches a plugin.
 - `ItemCatalog` keeps such a listing as flashlight rows: one per plugin,
-  built from an `ItemCatalogSpec` (the app, its bundle id, the source name
-  and the function that shapes and orders the rows), and handed
+  built from an `ItemCatalogSpec` (the app, its bundle id, the source name,
+  the row kind and the function that shapes and orders the rows), and handed
   `on_event`, `on_search` (`search`), `on_resolve` (`resolve`) and
   `on_command` (`command`: `open` and `refresh`). It answers a search from
   its last good rows, lists only while the app runs, and relists when the

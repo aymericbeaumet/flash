@@ -1373,8 +1373,6 @@ extension AppDelegate {
       performMacroCommand(command, repeatCount: repeatCount) { outcome, _ in
         completion?(outcome)
       }
-    case .appleCatalog(let command):
-      performAppleCatalogCommand(command)
     case .marks(let command):
       performMarkCommand(command)
     case .functionKey(let index):

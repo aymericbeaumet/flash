@@ -156,7 +156,7 @@ final class HostAppItemsTests: XCTestCase {
 
   func testAListWithoutTheGrantAnswersTheAccessAloneAndNeverAsks() {
     for (access, name) in [
-      (AppleCatalogAccess.denied, "denied"), (.undetermined, "undetermined"),
+      (GrantAccess.denied, "denied"), (.undetermined, "undetermined"),
     ] {
       let stub = AppItemStub(access: access, items: [HostAppItem(id: "N", title: "Secret")])
       XCTAssertEqual(
@@ -282,7 +282,7 @@ final class HostAppItemsTests: XCTestCase {
 
     // Without the grant nothing is sent to the app: a Notes script would
     // raise macOS's prompt.
-    for access in [AppleCatalogAccess.undetermined, .denied] {
+    for access in [GrantAccess.undetermined, .denied] {
       let refused = AppItemStub(access: access)
       XCTAssertEqual(
         reply(
@@ -291,6 +291,25 @@ final class HostAppItemsTests: XCTestCase {
       XCTAssertEqual(refused.shown, [])
       XCTAssertEqual(refused.asks, 0)
     }
+  }
+
+  /// A pick never waits behind a listing in flight: Notes' script can run
+  /// for seconds on the app's queue.
+  func testAShowNeverWaitsBehindAListingInFlight() {
+    let notes = AppItemStub.corpus(.notes)
+    let gate = DispatchSemaphore(value: 0)
+    notes.gate = gate
+    let rpc = dispatcher(.notes, notes)
+    let listed = expectation(description: "notes listed")
+    call(rpc, .notes, ["operation": "list"]) { _ in listed.fulfill() }
+    waitUntilTrue("the listing began") { notes.lists == 1 }
+    XCTAssertEqual(
+      reply(rpc, .notes, ["operation": "show", "id": "x-coredata://4F1C/ICNote/p12"]),
+      ["ok": true] as NSDictionary)
+    XCTAssertEqual(notes.shown, ["x-coredata://4F1C/ICNote/p12"])
+    XCTAssertFalse(notes.calledOnMain)
+    gate.signal()
+    wait(for: [listed], timeout: 5)
   }
 
   /// The URL a reminder or a card opens by takes its identifier whole: one
@@ -342,6 +361,47 @@ final class HostAppItemsTests: XCTestCase {
     XCTAssertEqual(LiveNotesItems.listing(of: timedOut), .failed(timedOut.failure ?? ""))
     XCTAssertEqual(LiveNotesItems.listTimeout, 30)
     XCTAssertEqual(LiveNotesItems.showTimeout, 10)
+  }
+
+  /// Each Apple Event is a round trip Notes answers on its main thread: a
+  /// per-note loop over a few hundred notes took 10–30 s per listing (the
+  /// resident logged a slow refresh at 18 s p50 and hit the 30 s timeout)
+  /// and left Notes unresponsive meanwhile. The listing reads the ids and
+  /// names of `every note` of an account in bulk and pairs them by index,
+  /// and never asks a single note for a property.
+  func testNotesListingReadsEveryNoteInBulkNotOnePerNote() {
+    let script = NotesScripts.list
+    XCTAssertTrue(script.contains("set ids to id of every note of acc"), script)
+    XCTAssertTrue(script.contains("set names to name of every note of acc"), script)
+    XCTAssertTrue(script.contains("repeat with i from 1 to count of ids"), script)
+    XCTAssertFalse(script.contains("repeat with n in notes of acc"), script)
+    XCTAssertFalse(script.contains("id of n"), script)
+    XCTAssertFalse(script.contains("name of n"), script)
+    // The output contract the reader takes is unchanged: id, tab, name.
+    XCTAssertTrue(script.contains("& tab &"), script)
+    XCTAssertTrue(script.contains("set AppleScript's text item delimiters to linefeed"), script)
+    // A listing never launches Notes.
+    XCTAssertTrue(script.hasPrefix("if application \"Notes\" is not running then return \"\""))
+  }
+
+  /// The identifier a plugin sends reaches the script as a literal.
+  func testTheShowScriptQuotesItsIdentifier() {
+    XCTAssertTrue(NotesScripts.show(id: "x\"y\\z").contains("show note id \"x\\\"y\\\\z\""))
+    let hostile = NotesScripts.show(id: "p1\"\ndelete every note\n\"")
+    XCTAssertTrue(hostile.contains(#"show note id "p1\"\ndelete every note\n\"""#), hostile)
+    XCTAssertEqual(
+      hostile.components(separatedBy: "\n").count,
+      NotesScripts.show(id: "p1").components(separatedBy: "\n").count,
+      "no line of the plugin's own")
+  }
+
+  func testAutomationConsentReadsMacOSAnswer() {
+    XCTAssertEqual(AutomationConsent.access(status: noErr), .granted)
+    XCTAssertEqual(AutomationConsent.access(status: OSStatus(errAEEventNotPermitted)), .denied)
+    XCTAssertEqual(
+      AutomationConsent.access(status: OSStatus(errAEEventWouldRequireUserConsent)),
+      .undetermined)
+    XCTAssertEqual(AutomationConsent.access(status: OSStatus(procNotFound)), .undetermined)
   }
 
   // MARK: - The contract
@@ -414,6 +474,33 @@ final class HostAppItemsTests: XCTestCase {
     XCTAssertFalse(LiveNotesItems().canRequestAccess())
   }
 
+  /// macOS kills an app that reads Contacts or Reminders without saying why
+  /// (macOS 14 reads the full-access Reminders key, macOS 13 the original
+  /// one), and the hardened runtime denies them without the entitlements.
+  func testTheBundleExplainsAndEntitlesTheReads() throws {
+    let resources = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Resources")
+    func plist(_ name: String) throws -> [String: Any] {
+      let data = try Data(contentsOf: resources.appendingPathComponent(name))
+      return try XCTUnwrap(
+        try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    }
+    let info = try plist("Info.plist")
+    XCTAssertNotNil(info["NSContactsUsageDescription"] as? String)
+    XCTAssertNotNil(info["NSRemindersFullAccessUsageDescription"] as? String)
+    XCTAssertEqual(
+      info["NSRemindersUsageDescription"] as? String,
+      info["NSRemindersFullAccessUsageDescription"] as? String)
+    XCTAssertTrue(
+      (info["NSAppleEventsUsageDescription"] as? String)?.contains("Notes") == true)
+    let entitlements = try plist("Flash.entitlements")
+    XCTAssertEqual(
+      entitlements["com.apple.security.personal-information.addressbook"] as? Bool, true)
+    XCTAssertEqual(
+      entitlements["com.apple.security.personal-information.calendars"] as? Bool, true)
+  }
+
   func testAppItemsContractMatchesSpec() throws {
     let url = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -424,7 +511,7 @@ final class HostAppItemsTests: XCTestCase {
     XCTAssertEqual(contract["methods"] as? [String], HostAppItemKind.allCases.map(\.method))
     XCTAssertEqual(
       contract["operations"] as? [String], PluginHostRequest.AppItems.operations.map(\.name))
-    XCTAssertEqual(contract["access"] as? [String], AppleCatalogAccess.wireNames)
+    XCTAssertEqual(contract["access"] as? [String], GrantAccess.wireNames)
     XCTAssertEqual(contract["max_items"] as? Int, HostAppItems.maxItems)
     XCTAssertEqual(contract["reply_bytes"] as? Int, HostAppItems.maxReplyBytes)
     XCTAssertEqual(contract["max_id_bytes"] as? Int, HostAppItems.maxIDBytes)

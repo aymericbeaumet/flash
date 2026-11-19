@@ -1,0 +1,38 @@
+{
+  "id": "contacts",
+  "name": "Contacts",
+  "version": "0.1.0",
+  "description": "Your contacts as `@contacts` rows in the flashlight, listed while Contacts runs: pick one to show its card in Contacts. `contacts open` opens Contacts and `contacts refresh` relists them now.",
+  "exec": [
+    "./flash-plugin-contacts"
+  ],
+  "commands": [
+    {
+      "command": "contacts",
+      "subcommand": "open",
+      "description": "Open Contacts"
+    },
+    {
+      "command": "contacts",
+      "subcommand": "refresh",
+      "description": "Relist your contacts in @contacts now"
+    }
+  ],
+  "listen": [
+    "core:apps.launched",
+    "core:apps.terminated",
+    "core:focus.changed",
+    "core:session.opened"
+  ],
+  "sources": [
+    {
+      "name": "contacts.cards",
+      "type": "contacts",
+      "live": "per_scope"
+    }
+  ],
+  "capabilities": [
+    "contacts",
+    "open"
+  ]
+}

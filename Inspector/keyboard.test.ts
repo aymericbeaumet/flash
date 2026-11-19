@@ -223,7 +223,8 @@ test("an action falls in a category by what it does", () => {
       categories.some((known) => known.id === category),
       `${topic}: ${category}`,
     );
-  assert.ok(Object.keys(topicCategories).length > 50);
+  // Flash's own topics alone: a plugin's command words are not in it.
+  assert.ok(Object.keys(topicCategories).length > 40);
 });
 
 test("a keycap names its action briefly", () => {

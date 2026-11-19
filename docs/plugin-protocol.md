@@ -898,7 +898,8 @@ returned (`id` is 1 to 1,024 bytes without control characters); without the
 grant it answers `{"ok": false, "error"}` and asks nothing. Notes is read
 and shown by the host's own fixed AppleScript, the `id` an escaped literal.
 `protocol.json` `app_items` and `app_item` pin the operations, the bounds
-and the shape.
+and the shape. The bundled `notes`, `reminders` and `contacts` plugins are
+their readers, one each.
 `host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL
@@ -1456,10 +1457,9 @@ time, and Flash checks again when it loads a plugin.
 - A type is one lowercase word: a letter, then letters or digits
   (`^[a-z][a-z0-9]*$`). No dots: `emojis.glyphs` is a source name, `emojis`
   its type.
-- Flash feeds some types itself (`apps`, `windows`, `clipboard`, `notes`,
-  `reminders`, `contacts`, `files`): their
-  rows carry behaviour only the host provides. A plugin declaring one fails
-  to load.
+- Flash feeds some types itself (`apps`, `windows`, `clipboard`, `files`):
+  their rows carry behaviour only the host provides. A plugin declaring one
+  fails to load.
 - A shared type has one contract: every source of it declares the same
   `kind`, and its rows are what the type says. A source of another kind fails
   to load.
@@ -1481,6 +1481,9 @@ time, and Flash checks again when it loads a plugin.
 | `system` | `default` | a system action (lock, sleep, restart…); selecting it runs it, after asking when nothing undoes it |
 | `processes` | `default` | a running process; selecting it terminates it, after asking |
 | `menus` | `default` | a menu item of the app that owns the menu bar; selecting it presses it |
+| `notes` | `default` | a note in Notes; selecting it shows it in Notes |
+| `reminders` | `default` | an open reminder; selecting it shows it in Reminders |
+| `contacts` | `default` | a contact card; selecting it shows it in Contacts |
 
 Prefer an existing type when your rows are what it describes: a new browser
 plugin's tabs are `tabs`, so `@tabs` lists them beside Safari's. A new type

@@ -45,7 +45,7 @@ which took the same start from 29 MiB. Those figures predate the move of its
 list download to `host.fetch`, which removed its HTTP and TLS stack; the
 footprint has not been measured again since.
 
-Those counts describe the plugin set of their dates. Seventeen plugins are
+Those counts describe the plugin set of their dates. Twenty-one plugins are
 bundled today, seven of them resident by default
 ([what starts at launch](architecture.md#what-starts-at-launch)), so the 28
 and 33 resident children above no longer exist as such. The figures also
@@ -173,6 +173,29 @@ host's encode, two frames and the row decode: 4 ms for 500 elements and
 back in another. A menu bar of 2,500 elements therefore lists in 110 to
 220 ms, against the 1 s `search` deadline. The first `@menus` after launch
 adds the spawn: 33 to 84 ms in all on those three apps.
+
+`notes`, `reminders` and `contacts` are `per_scope` over a list the plugin
+keeps: the items of an app only the host may read (`host.notes`,
+`host.reminders`, `host.contacts`). Each answers `search` from the last list
+it read and reads again on events: the app launching, focus leaving it, the
+flashlight opening on a list a minute old. A manifest whose sources are live
+keeps no process for the events it listens to, so the three cost nothing
+until the first query or command, and hear their events from then on.
+Measured on an Apple M4 Pro, macOS 26.6.2, with synthetic contacts served
+by a stub in place of the Contacts framework (medians, from the query to
+the rows on the main thread):
+
+| Contacts | Listing reply | Search reply | First query (spawn, list, answer) | Later queries |
+| --- | --- | --- | --- | --- |
+| 1,000 | 93 KB | 175 KB | 18–19 ms | 6 ms |
+| 5,000 | 469 KB | 879 KB | 61–74 ms | 31–33 ms |
+
+A listing holds at most 10,000 items and 2 MiB, and a search reply 10,000
+rows and 4 MiB: 10,000 such contacts are 0.94 MB and 1.76 MB. The time the
+framework or Notes' script takes to read the real list is added to the
+first query only; a query that meets a listing in flight waits for it up to
+0.2 s, then answers from the previous one, and up to 0.7 s when it has
+none.
 
 ## Publish-then-exit plugins
 

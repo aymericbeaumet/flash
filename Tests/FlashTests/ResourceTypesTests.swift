@@ -139,9 +139,6 @@ final class ResourceTypesTests: XCTestCase {
           ResourceTypes.byName[descriptor.type]?.kind, descriptor.kind, descriptor.name)
       }
     }
-    for catalog in AppleCatalog.allCases {
-      XCTAssertEqual(ResourceTypes.byName[catalog.rawValue]?.owner, .core, catalog.rawValue)
-    }
     let plugins = Self.root.appendingPathComponent("Plugins")
     var checked = 0
     for entry in try FileManager.default.contentsOfDirectory(atPath: plugins.path).sorted() {

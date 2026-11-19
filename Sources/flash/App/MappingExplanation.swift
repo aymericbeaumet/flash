@@ -399,8 +399,6 @@ extension URLCommand {
       return command.explanation
     case .startup(let command):
       return command.explanation
-    case .appleCatalog(let command):
-      return command.explanation
     case .marks(let command):
       return command.explanation
     case .systemKey(let key):

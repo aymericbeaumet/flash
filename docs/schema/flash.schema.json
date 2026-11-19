@@ -1656,6 +1656,17 @@
           },
           "type" : "object"
         },
+        "contacts" : {
+          "additionalProperties" : false,
+          "description" : "The contacts plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "defaults" : {
           "additionalProperties" : false,
           "description" : "The defaults plugin's settings.",
@@ -1741,6 +1752,17 @@
           },
           "type" : "object"
         },
+        "notes" : {
+          "additionalProperties" : false,
+          "description" : "The notes plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "processes" : {
           "additionalProperties" : false,
           "description" : "The processes plugin's settings.",
@@ -1755,6 +1777,17 @@
               "maximum" : 20,
               "minimum" : 1,
               "type" : "integer"
+            }
+          },
+          "type" : "object"
+        },
+        "reminders" : {
+          "additionalProperties" : false,
+          "description" : "The reminders plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
             }
           },
           "type" : "object"

@@ -321,9 +321,6 @@ indirect enum URLCommand: Hashable, Sendable {
   case startup(StartupCommand)
   /// `updates check` and `updates install`; see `UpdateController`.
   case updates(UpdatesCommand)
-  /// `notes open`, `notes refresh` and their reminders and contacts twins:
-  /// open the app, or relist its flashlight catalog. See `AppleCatalogs`.
-  case appleCatalog(AppleCatalogCommand)
   /// `mark set --letter=<x>` and `mark jump --letter=<x>`: save the
   /// focused app under a letter or digit, or bring it back. See `MarkStore`.
   case marks(MarkCommand)

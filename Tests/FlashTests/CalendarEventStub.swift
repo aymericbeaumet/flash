@@ -7,7 +7,7 @@ import Foundation
 /// asks macOS nothing and reads no calendar of the Mac's.
 final class CalendarEventStub: CalendarEventProviding {
   private let lock = NSLock()
-  private var currentAccess: AppleCatalogAccess
+  private var currentAccess: GrantAccess
   private let grants: Bool
   private var listing: HostCalendarListing
   private var askCount = 0
@@ -22,7 +22,7 @@ final class CalendarEventStub: CalendarEventProviding {
   /// `grants`: what the user answers the prompt. `holdsAnswer`: the prompt
   /// stays open until `answer()`.
   init(
-    access: AppleCatalogAccess, grants: Bool = true, events: [HostCalendarEvent] = [],
+    access: GrantAccess, grants: Bool = true, events: [HostCalendarEvent] = [],
     holdsAnswer: Bool = false
   ) {
     currentAccess = access
@@ -63,7 +63,7 @@ final class CalendarEventStub: CalendarEventProviding {
     set { locked { listing = newValue } }
   }
 
-  func access() -> AppleCatalogAccess {
+  func access() -> GrantAccess {
     locked {
       mainCalls = mainCalls || Thread.isMainThread
       return currentAccess

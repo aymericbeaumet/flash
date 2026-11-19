@@ -368,9 +368,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     activity.holdingButton = modeStore.mode.isHold
     return activity
   }
-  /// `@notes`, `@reminders`, `@contacts` and the
-  /// `<catalog> open` / `<catalog> refresh` commands; see `AppleCatalogs`.
-  let appleCatalogs = AppleCatalogs(readers: AppleCatalogReaders.live())
   /// The 36 app marks behind `mark set` and `mark jump`; see
   /// `performMarkCommand`. Lazy, so a delegate that never launches (a test)
   /// never reads or migrates the file.
@@ -502,7 +499,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     registry = SourceRegistry(
       flashlight: config.flashlight,
       pluginSourcesProvider: { manager.sources },
-      appleCatalogs: appleCatalogs,
       clipboard: clipboardFlashlight,
       windows: WindowListSource(
         rows: { [weak self] in self?.windowListRows() ?? ([], nil) },
@@ -649,11 +645,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     let launchApplications = Self.runningApplicationsSnapshot()
     pluginManager.cacheRunningApplicationsSnapshot(launchApplications)
     launchStages.measure("plugins") { pluginManager.start(config: config) }
-    appleCatalogs.onChange = { [weak self] catalog in
-      self?.refreshLiveCandidates(sourceID: catalog.sourceID)
-    }
-    appleCatalogs.start(
-      runningBundleIDs: Set(launchApplications.compactMap { $0["bundle_id"] as? String }))
     // Made at launch so it loads, and moves the retired plugin's file, on
     // its queue before the first jump.
     _ = markStore
@@ -1076,8 +1067,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           self?.overlay.displayBanner(text.split(separator: "\n").first.map(String.init) ?? text)
         }
       }
-    case .appleCatalog(let command):
-      performAppleCatalogCommand(command)
     case .marks(let command):
       performMarkCommand(command)
     case .macro(let command):
@@ -1318,7 +1307,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
               "pid": Int(app.processIdentifier),
             ],
             bundleID: app.bundleIdentifier))
-        self.appleCatalogs.appLaunched(bundleID: app.bundleIdentifier)
       }
       self.emitRunningApplicationsChanged()
       if self.flashMode == .normal {
@@ -1370,7 +1358,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
               "pid": Int(app.processIdentifier),
             ],
             bundleID: app.bundleIdentifier))
-        self.appleCatalogs.appTerminated(bundleID: app.bundleIdentifier)
       }
       self.emitRunningApplicationsChanged()
     }
@@ -1586,7 +1573,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             "pid": Int(app.processIdentifier),
           ],
           bundleID: app.bundleIdentifier))
-      appleCatalogs.focusChanged(bundleID: app.bundleIdentifier)
       emitRunningApplicationsChanged()
       recordAppActivation(app.processIdentifier)
       followFocusWithPointer(pid: app.processIdentifier)

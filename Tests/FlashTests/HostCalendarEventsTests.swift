@@ -190,7 +190,7 @@ final class HostCalendarEventsTests: XCTestCase {
 
   func testAListWithoutTheGrantAnswersTheAccessAloneAndNeverAsks() {
     for (access, name) in [
-      (AppleCatalogAccess.denied, "denied"), (.undetermined, "undetermined"),
+      (GrantAccess.denied, "denied"), (.undetermined, "undetermined"),
     ] {
       let stub = CalendarEventStub(access: access, events: [])
       XCTAssertEqual(
@@ -199,7 +199,7 @@ final class HostCalendarEventsTests: XCTestCase {
       XCTAssertEqual(stub.asks, 0)
       XCTAssertEqual(stub.reads, 0)
     }
-    XCTAssertEqual(AppleCatalogAccess.wireNames, ["granted", "denied", "undetermined"])
+    XCTAssertEqual(GrantAccess.wireNames, ["granted", "denied", "undetermined"])
   }
 
   func testAFailedReadIsTheReplysError() {
@@ -471,7 +471,7 @@ final class HostCalendarEventsTests: XCTestCase {
     let contract = try XCTUnwrap(spec["calendar_events"] as? [String: Any])
     XCTAssertEqual(
       contract["operations"] as? [String], PluginHostRequest.Calendar.operations.map(\.name))
-    XCTAssertEqual(contract["access"] as? [String], AppleCatalogAccess.wireNames)
+    XCTAssertEqual(contract["access"] as? [String], GrantAccess.wireNames)
     XCTAssertEqual(contract["max_window_seconds"] as? Int, HostCalendarEvents.maxWindowSeconds)
     XCTAssertEqual(contract["max_time"] as? Int, HostCalendarEvents.maxTime)
     XCTAssertEqual(contract["max_calendars"] as? Int, HostCalendarEvents.maxCalendars)

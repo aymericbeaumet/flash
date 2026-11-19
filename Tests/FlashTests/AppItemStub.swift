@@ -8,7 +8,7 @@ import Foundation
 /// the Mac's.
 final class AppItemStub: AppItemProviding {
   private let lock = NSLock()
-  private var currentAccess: AppleCatalogAccess
+  private var currentAccess: GrantAccess
   private let grants: Bool
   private var nextListing: HostAppItemListing
   private var running = true
@@ -24,7 +24,7 @@ final class AppItemStub: AppItemProviding {
   /// `grants`: what the user answers the prompt. `holdsAnswer`: the prompt
   /// stays open until `answer()`.
   init(
-    access: AppleCatalogAccess, grants: Bool = true, items: [HostAppItem] = [],
+    access: GrantAccess, grants: Bool = true, items: [HostAppItem] = [],
     holdsAnswer: Bool = false
   ) {
     currentAccess = access
@@ -76,7 +76,7 @@ final class AppItemStub: AppItemProviding {
     set { locked { nextListing = newValue } }
   }
   /// What macOS answers without asking.
-  var granted: AppleCatalogAccess {
+  var granted: GrantAccess {
     get { locked { currentAccess } }
     set { locked { currentAccess = newValue } }
   }
@@ -96,7 +96,7 @@ final class AppItemStub: AppItemProviding {
     set { locked { showFailure = newValue } }
   }
 
-  func access() -> AppleCatalogAccess {
+  func access() -> GrantAccess {
     locked {
       mainCalls = mainCalls || Thread.isMainThread
       return currentAccess

@@ -37,7 +37,8 @@ Notes' scripts, the reminders and the contact cards per `host.notes`,
 `host.reminders` or `host.contacts` request of one holding that capability. A
 plugin whose manifest declares only `status` runs while a visible surface
 reads one of its segments; a plugin with only commands and live sources
-(`system`, `menus`) starts on its first `perform` or `search`; a manifest without
+(`system`, `menus`, and `notes`, `reminders` and `contacts`, whose events
+keep no process) starts on its first `perform` or `search`; a manifest without
 `exec` never spawns. A mapping that runs a
 plugin command asks for that plugin: ten seconds after each reconcile it is
 spawned if still idle, and it outlives its status surfaces
@@ -56,7 +57,6 @@ The rest starts with the process, whatever the configuration says:
 | Window switcher catalog (`WindowSwitcherCatalog`) | `window switch` draws from memory within a frame of its chord | `kAXWindows` plus one batched read per window, per regular app at launch and on each Space change; one app again after its window events settle (250 ms) or when an unknown window of it gains focus; app names and icons once per app |
 | Clipboard, network, volume and power monitors | A bundled manifest listens for them | A 500 ms pasteboard poll, one SCDynamicStore session, notification observers |
 | `ApplicationSource`, frecency and command history | Flashlight catalogs and ranking | An installed-apps scan with kqueue watchers, two files read on main |
-| `AppleCatalogs` (Notes, Reminders, Contacts) | A scoped query reads the last good rows from memory, never the app | One listing per running app Flash may already read, at launch and on that app's launch, its loss of focus and a flashlight open once a minute; nothing before access is granted |
 | Built-in monitors (`battery`, `disk`, `memory`, `plugin_errors`, `plugin_spawn`) | A full disk, a low battery or a crash-looping plugin should alert without configuration | The status controller; the `sysinfo` plugin's power domain (event-driven), disks domain (a 3 s I/O sample) and memory domain (a 1 s sample) the battery, disk and memory monitors observe. `enabled = false` drops each |
 
 Making the resident plugins and the window catalog configuration-driven (spawn
@@ -80,8 +80,7 @@ table above supports.
 | `KeyboardLayoutMonitor` | `[app] keyboard_layout`'s reference table, rebuilt on input-source changes and config loads |
 | `CandidateFinderSession` | Catalog, query, source context and selection for one finder session |
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
-| `AppleCatalogs` / `AppleCatalogSource` | `@notes`, `@reminders`, `@contacts`: last good rows, the running-app gate, event-driven relists on one serial queue per catalog, and macOS access asked only when a query or a refresh command uses the catalog |
-| `HostAppItems` | Notes, Reminders and Contacts for `host.notes`, `host.reminders` and `host.contacts`: the access macOS grants, the one request for it, the items as an identifier and one line, and one item shown in its app, each app on its own serial queue for a plugin holding its capability; macOS asked only while the user is using the plugin, and Notes never launched to answer |
+| `HostAppItems` | Notes, Reminders and Contacts for `host.notes`, `host.reminders` and `host.contacts`: the access macOS grants, the one request for it, the items as an identifier and one line, and one item shown in its app, each app on its own serial queue (a pick beside it) for a plugin holding its capability; macOS asked only while the user is using the plugin, and Notes never launched to answer. The rows of `@notes`, `@reminders` and `@contacts`, their order, when they are read again and the `open` and `refresh` commands are the `notes`, `reminders` and `contacts` plugins' |
 | `HostCalendarEvents` | EventKit for `host.calendar_events`: the access macOS grants, the one request for it and the events of a window, read on one serial queue for a plugin holding `calendar_events`; `EKEventStoreChanged` observed only while such a plugin listens to `core:calendar.changed`, one event per burst; macOS asked only while the user is using the plugin. The next-meeting values, `calendar join` and `calendar next` are the `calendar` plugin's |
 | `AppleScriptRunner` | The resident's AppleScript, in process: one serialized OSA lifetime from component open through compile, execute, display, disposal, close and autorelease-pool drain. At most eight background workers wait or run; admission and Apple Events share the caller's deadline. Results must arrive before that deadline, even if a late semaphore signal is already buffered when the caller resumes. A timed-out caller never releases a component that is still alive; callers stay off main |
 | `ClipboardHistoryStore` / `ClipboardFlashlight` | Clipboard history on one serial queue (pins never trimmed, image sizes read from file headers); its listing, published after every change, becomes `!clip`/`@clipboard` rows prepared once per entry on the flashlight catalog's queue, so a query reads them from memory; register rows are built on main when pulled |

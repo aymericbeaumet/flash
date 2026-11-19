@@ -30,7 +30,6 @@ extension AppDelegate {
     if pluginManager.hasListener(for: .sessionOpened) {
       pluginManager.emit(PluginEvent(.sessionOpened))
     }
-    appleCatalogs.sessionOpened()
     finder.precedenceTable = buildCandidateFinderPrecedenceTable()
     finder.selectorContext = pluginSelectorContext()
     finder.scope = scope

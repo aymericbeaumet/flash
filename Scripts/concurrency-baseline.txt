@@ -4,7 +4,6 @@
 8	Sources/flash/App/AppActivation.swift
 66	Sources/flash/App/AppDelegate.swift
 16	Sources/flash/App/AppDelegate/Activation.swift
-1	Sources/flash/App/AppDelegate/AppleCatalogCommands.swift
 6	Sources/flash/App/AppDelegate/BigramActivation.swift
 58	Sources/flash/App/AppDelegate/CandidateFinderCoordinator.swift
 1	Sources/flash/App/AppDelegate/ClickChainRefresh.swift
@@ -47,8 +46,6 @@
 13	Sources/flash/App/AppMonitor/ModelScheduling.swift
 10	Sources/flash/App/AppMonitor/Observers.swift
 8	Sources/flash/App/AppMonitor/SteppedWalk.swift
-8	Sources/flash/App/AppleCatalogs/AppleCatalogReaders.swift
-23	Sources/flash/App/AppleCatalogs/AppleCatalogs.swift
 3	Sources/flash/App/AppleScriptRunner.swift
 4	Sources/flash/App/ApplicationLauncher.swift
 9	Sources/flash/App/ApplicationSource.swift
@@ -96,7 +93,7 @@
 1	Sources/flash/App/Overlay/WidgetSurface.swift
 11	Sources/flash/App/OverlayPanel.swift
 6	Sources/flash/App/Plugins/CommandBinding.swift
-3	Sources/flash/App/Plugins/HostCalendarEvents.swift
+3	Sources/flash/App/Plugins/HostGrants.swift
 2	Sources/flash/App/Plugins/PluginFlashSource.swift
 5	Sources/flash/App/Plugins/PluginHostAppleScript.swift
 3	Sources/flash/App/Plugins/PluginHostRPC.swift

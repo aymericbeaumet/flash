@@ -103,8 +103,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `commands show` | Open the command catalog |
 | `config edit` | Open the configuration file in its default app |
 | `config reload` | Re-read the configuration file now |
-| `contacts open` | Open Contacts |
-| `contacts refresh` | Relist your contacts in @contacts now |
 | `controlcenter hide` | Close Control Center |
 | `controlcenter show` | Open Control Center |
 | `controlcenter toggle` | Open or close Control Center |
@@ -235,8 +233,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `move up` | Move up: the caret in text, the selection in a list, else scroll |
 | `movement back` | Jump back through Flash's movement history |
 | `movement forward` | Jump forward through Flash's movement history |
-| `notes open` | Open Notes |
-| `notes refresh` | Relist your notes in @notes now |
 | `notificationcenter hide` | Close Notification Center |
 | `notificationcenter show` | Open Notification Center |
 | `notificationcenter toggle` | Open or close Notification Center |
@@ -253,8 +249,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `popup restart [--name=<popup>]` | Restart the focused or named popup's process |
 | `register paste [--register=<name>] [--after]` | Paste a register with the app's own paste; --after first steps past the character under the cursor, as vim's p |
 | `register yank [--register=<name>]` | Copy the focused app's selection into a register |
-| `reminders open` | Open Reminders |
-| `reminders refresh` | Relist your open reminders in @reminders now |
 | `resident quit` | Quit Flash |
 | `resource archive` | Archive the current item in the focused app |
 | `resource next` | Go to the next item in the focused app |
@@ -565,7 +559,7 @@ flash system restart                         # asks first; y restarts (system sh
 flash process kill --pid=4242                # asks, then sends SIGTERM to one process (the processes plugin)
 flash caffeinate toggle                      # keep the Mac awake, or let it sleep; #{flash.plugin.caffeinate.state} is on meanwhile
 flash caffeinate on --minutes=30             # keep the Mac awake for 30 minutes (caffeinate off ends it early)
-flash notes refresh                          # relist @notes now (reminders refresh, contacts refresh)
+flash notes refresh                          # relist @notes now (reminders refresh, contacts refresh; the notes, reminders and contacts plugins)
 flash contacts open                          # open Contacts (notes open, reminders open)
 flash calendar join                          # open the next or current event's meeting link, in its app (the calendar plugin)
 flash calendar next                          # show and print the next event: Standup in 12m · 09:30–09:45 · Zoom
@@ -975,14 +969,22 @@ write). The topic is plural because `:up[date]` is vim's save. See
 
 ## Notes, Reminders and Contacts
 
-`notes refresh`, `reminders refresh` and `contacts refresh` relist the
-flashlight's `@notes`, `@reminders` or `@contacts` now and
-say so in a banner; the lists are otherwise kept fresh by events
-([flashlight](flashlight.md)). A refresh while the app is not running
-empties its list. The first one, like the first search, asks macOS for
-access (Automation of Notes, Reminders, Contacts); a refusal leaves the list
-empty without a banner. `notes open`, `reminders open` and `contacts open`
-open the app.
+`notes`, `reminders` and `contacts` are the command words of the bundled
+plugins of those names, so the reference table above, which lists Flash's
+own, leaves them out. `notes refresh`, `reminders refresh` and `contacts
+refresh` relist the flashlight's `@notes`, `@reminders` or `@contacts` now
+and answer `notes refreshed`, on a banner from a key; the lists are
+otherwise kept fresh by events ([flashlight](flashlight.md)). A refresh
+while the app is not running empties its list. The first one, like the
+first search, asks macOS for access (Automation of Notes, Reminders,
+Contacts); a refusal leaves the list empty and says nothing. One whose
+listing fails exits 1 (`notes refresh failed`), and one still reading, or
+still waiting on macOS's prompt, after eight seconds says `notes refresh is
+still running` and finishes on its own. `notes open`, `reminders open` and
+`contacts open` open the app. None takes an argument: one fails with `usage:
+notes open` when the command runs. With a plugin in `[plugins] disabled`
+its two commands do nothing and its list is empty; the other two are
+unaffected.
 
 ## Calendar
 

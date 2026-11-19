@@ -38,7 +38,7 @@ enum HostCalendarListing: Equatable {
 /// and no test reads the Mac's calendars or shows a prompt.
 protocol CalendarEventProviding: AnyObject {
   /// Whether Flash may read events now, as macOS answers without asking.
-  func access() -> AppleCatalogAccess
+  func access() -> GrantAccess
   /// Ask macOS (its prompt names Flash); `done` gets whether access was
   /// granted, on any queue.
   func requestAccess(_ done: @escaping (Bool) -> Void)
@@ -49,44 +49,6 @@ protocol CalendarEventProviding: AnyObject {
   /// until `stopObservingChanges`.
   func observeChanges(_ onChange: @escaping @Sendable () -> Void)
   func stopObservingChanges()
-}
-
-extension AppleCatalogAccess {
-  /// The name a host RPC reports the grant by (`protocol.json`
-  /// `calendar_events.access`).
-  var wireName: String {
-    switch self {
-    case .granted: return "granted"
-    case .denied: return "denied"
-    case .undetermined: return "undetermined"
-    }
-  }
-
-  /// In contract order.
-  static let wireNames = [granted, denied, undetermined].map(\.wireName)
-}
-
-/// One macOS prompt for one grant: a request made while the prompt is open
-/// joins it and gets its answer. Confined to its owner's queue.
-struct PendingGrantRequest {
-  private var waiters: [(Bool) -> Void]?
-
-  /// Wait for the answer. True when no prompt is open: the caller asks, and
-  /// hands the answer to `finish`.
-  mutating func join(_ done: @escaping (Bool) -> Void) -> Bool {
-    if waiters != nil {
-      waiters?.append(done)
-      return false
-    }
-    waiters = [done]
-    return true
-  }
-
-  /// The user answered: everyone who waited, in order.
-  mutating func finish() -> [(Bool) -> Void] {
-    defer { waiters = nil }
-    return waiters ?? []
-  }
 }
 
 /// EventKit for `host.calendar_events`: plugins never reach the calendar
@@ -118,7 +80,7 @@ final class HostCalendarEvents: @unchecked Sendable {
     /// The events as written on the wire, and whether later ones were left
     /// out of the reply.
     case events([[String: Any]], truncated: Bool)
-    case noAccess(AppleCatalogAccess)
+    case noAccess(GrantAccess)
     case failed(String)
   }
 
@@ -165,12 +127,12 @@ final class HostCalendarEvents: @unchecked Sendable {
   }
 
   /// Runs on `queue`.
-  func access() -> AppleCatalogAccess { provider.access() }
+  func access() -> GrantAccess { provider.access() }
 
   /// Ask macOS when Flash never asked; `done` gets the access once the user
   /// answered, on `queue`. Runs on `queue`, which stays free while the
   /// prompt is up.
-  func requestAccess(_ done: @escaping (AppleCatalogAccess) -> Void) {
+  func requestAccess(_ done: @escaping (GrantAccess) -> Void) {
     let access = provider.access()
     guard access == .undetermined else { return done(access) }
     guard prompt.join({ done($0 ? .granted : .denied) }) else { return }
@@ -324,7 +286,7 @@ final class LiveCalendarEvents: CalendarEventProviding {
     if let observer { NotificationCenter.default.removeObserver(observer) }
   }
 
-  func access() -> AppleCatalogAccess {
+  func access() -> GrantAccess {
     guard Self.mechanismsAllowed else { return .denied }
     return EventKitAccess.access(EKEventStore.authorizationStatus(for: .event))
   }
@@ -385,40 +347,5 @@ final class LiveCalendarEvents: CalendarEventProviding {
     observer = NotificationCenter.default.addObserver(
       forName: .EKEventStoreChanged, object: store, queue: nil
     ) { _ in onChange() }
-  }
-}
-
-/// macOS's EventKit authorization, as Flash reads it for events and for
-/// reminders: only full access lets it read.
-enum EventKitAccess {
-  /// Asks macOS for full access to `entity`. macOS 13 has one level of
-  /// access, which `requestAccess(to:)` asks for (its usage descriptions
-  /// are `NSCalendarsUsageDescription` and `NSRemindersUsageDescription`);
-  /// macOS 14 split it and asks through `requestFullAccessTo…`.
-  static func request(_ entity: EKEntityType, _ done: @escaping (Bool) -> Void) {
-    let asking = EKEventStore()
-    let completion: EKEventStoreRequestAccessCompletionHandler = { granted, _ in
-      withExtendedLifetime(asking) { done(granted) }
-    }
-    if #available(macOS 14.0, *) {
-      if entity == .reminder {
-        asking.requestFullAccessToReminders(completion: completion)
-      } else {
-        asking.requestFullAccessToEvents(completion: completion)
-      }
-    } else {
-      asking.requestAccess(to: entity, completion: completion)
-    }
-  }
-
-  /// macOS 13's `.authorized` is `.fullAccess`'s raw value, so the same
-  /// switch reads both.
-  static func access(_ status: EKAuthorizationStatus) -> AppleCatalogAccess {
-    switch status {
-    case .fullAccess: return .granted
-    case .notDetermined: return .undetermined
-    case .writeOnly, .denied, .restricted: return .denied
-    @unknown default: return .denied
-    }
   }
 }

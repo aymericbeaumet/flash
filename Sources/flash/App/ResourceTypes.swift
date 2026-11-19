@@ -49,15 +49,6 @@ enum ResourceTypes {
       name: "clipboard", owner: .core, kind: .standard,
       rows: "a clipboard history entry, pinned entry or named register; selecting it pastes it"),
     Contract(
-      name: "notes", owner: .core, kind: .standard,
-      rows: "a note in Notes; selecting it opens it"),
-    Contract(
-      name: "reminders", owner: .core, kind: .standard,
-      rows: "a reminder in Reminders; selecting it opens it"),
-    Contract(
-      name: "contacts", owner: .core, kind: .standard,
-      rows: "a contact card; selecting it opens it in Contacts"),
-    Contract(
       name: "files", owner: .core, kind: .standard,
       rows: "a file found by name through Spotlight; selecting it opens it"),
     Contract(
@@ -97,6 +88,15 @@ enum ResourceTypes {
     Contract(
       name: "menus", owner: .shared, kind: .standard,
       rows: "a menu item of the app that owns the menu bar; selecting it presses it"),
+    Contract(
+      name: "notes", owner: .shared, kind: .standard,
+      rows: "a note in Notes; selecting it shows it in Notes"),
+    Contract(
+      name: "reminders", owner: .shared, kind: .standard,
+      rows: "an open reminder; selecting it shows it in Reminders"),
+    Contract(
+      name: "contacts", owner: .shared, kind: .standard,
+      rows: "a contact card; selecting it shows it in Contacts"),
   ]
 
   static let byName: [String: Contract] = Dictionary(

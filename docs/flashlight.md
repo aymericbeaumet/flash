@@ -47,14 +47,25 @@ some minutes away), so a first read can list those as they were; the next
 one is right. A menu bar of a few hundred items lists in 10 to 40 ms, and
 the first `@menus` after launch also starts the plugin.
 
-`@notes`, `@reminders` and `@contacts` list your notes,
-open reminders and contact cards while Notes, Reminders or Contacts runs;
-picking a row shows it in its app. Flash keeps the last list in memory, so a
-query never waits on the app, and relists it when the app launches, when you
-leave it, and when the flashlight opens if the app is focused or the list is
-a minute old; `notes refresh`, `reminders refresh` and `contacts refresh`
-relist one at once. The first search of each asks macOS for access
-(Automation of Notes, Reminders, Contacts); a refusal leaves it empty.
+`@notes`, `@reminders` and `@contacts` list your notes, open reminders and
+contact cards while Notes, Reminders or Contacts runs, from the `notes`,
+`reminders` and `contacts` plugins; picking a row shows it in its app. They
+are live as well. Each plugin keeps the last list it read in memory and
+answers from it, so a query does not wait on the app: it reads the list
+again when the app launches, when you leave it, and when the flashlight
+opens if the app is focused or the list is a minute old, and `notes
+refresh`, `reminders refresh` and `contacts refresh` read one at once. A
+query that arrives while a list is being read waits for it up to 0.2 s,
+then shows the previous list (0.7 s when there is none yet). The first
+`@notes`, `@reminders` or `@contacts` after launch starts that plugin,
+which reads its list then: besides the read itself, 20 ms for a thousand
+contacts and 60 to 75 ms for five thousand, and 6 and 30 ms on later
+queries. Notes is read by script and can take longer than a query waits;
+its rows then show when you type the scope again. The first search of each
+asks macOS for access (Automation of Notes, Reminders, Contacts) and lists
+nothing while that prompt is up: type the scope again once you have
+answered. A refusal leaves it empty. A row that cannot be shown says so in
+the centred alert.
 
 Browser history and bookmarks never join the default result pool: they reach
 the flashlight through `@history` and `@bookmarks`, which read every
@@ -143,7 +154,6 @@ reads Firefox's history alone, where `@history` reads every browser's.
 | `apps` | Flash | an installed or running app; selecting it opens or activates it |
 | `windows` | Flash | a window of a running app; selecting it focuses that window |
 | `clipboard` | Flash | a clipboard history entry, pinned entry or named register; selecting it pastes it |
-| `notes`, `reminders`, `contacts` | Flash | a note, an open reminder or a contact card; selecting it opens it in its app |
 | `files` | Flash | a file found by name through Spotlight; selecting it opens it |
 | `tabs` | browsers plugin | an open browser tab, with its URL; selecting it switches to it |
 | `history`, `bookmarks` | browsers plugin | a visited page or a bookmark, with its URL; selecting it opens it |
@@ -151,6 +161,7 @@ reads Firefox's history alone, where `@history` reads every browser's.
 | `system` | system plugin | a system action (lock, sleep, restart…); selecting it runs it, after asking when nothing undoes it |
 | `processes` | processes plugin | a running process; selecting it terminates it, after asking |
 | `menus` | menus plugin | a menu item of the app that owns the menu bar; selecting it presses it |
+| `notes`, `reminders`, `contacts` | notes, reminders, contacts plugins | a note, an open reminder or a contact card; selecting it shows it in its app |
 | `emojis` | emojis plugin | an emoji or symbol, by its Unicode name, shortcode, CLDR keyword (`idk`, `hooray`) or emoticon (`:)`, `<3`); selecting it types it |
 | `bangs` | searchproviders plugin | a `!token` search shortcut; selecting it completes the bang |
 | `snippets`, `shortcuts` | snippets, shortcuts plugins | a text snippet to type, or a Shortcuts app shortcut to run |

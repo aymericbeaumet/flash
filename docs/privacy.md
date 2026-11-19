@@ -87,9 +87,9 @@ running plugins with `:plugins show`.
 | Automation: the app holding a stuck secure-input flag, and System Events | Flash | The first time a stuck hold is released by blurring a browser or sending its address-bar shortcut. A real password field does not ask. |
 | Automation: System Events, Finder | Flash, for `system` | The first `system restart`, `system shutdown`, `system logout` or `appearance toggle` (System Events), or `trash empty` (Finder), from a command or a `@system` row. |
 | Automation: Shortcuts Events | Flash, for `shortcuts` | The first listing or invocation of a shortcut. |
-| Automation: Notes | Flash | The first `@notes` search or `notes refresh` while Notes runs. |
-| Reminders | Flash | The first `@reminders` search or `reminders refresh` while Reminders runs. |
-| Contacts | Flash | The first `@contacts` search or `contacts refresh` while Contacts runs. |
+| Automation: Notes | Flash, for `notes` | The first `@notes` search or `notes refresh` while Notes runs. Never from the background: Flash asks for the plugin only while a query is scoped to its rows or one of its commands runs. |
+| Reminders | Flash, for `reminders` | The first `@reminders` search or `reminders refresh` while Reminders runs, under the same rule. |
+| Contacts | Flash, for `contacts` | The first `@contacts` search or `contacts refresh` while Contacts runs, under the same rule. |
 | Calendars | Flash, for `calendar` | The first time a status format (the bar, a text popup, a widget) or a monitor reads a `#{flash.plugin.calendar.next…}` value, or the first `calendar join` or `calendar next`. The default configuration reads none. Never from the background: Flash asks for the plugin only while one of its values is shown or one of its commands runs. |
 | Automation: Spotify, Music, TV, Podcasts | Flash, for `media` | The first `media status` while that app runs. Flash never asks an app that is not running. |
 | Automation: System Events | Flash, for `aiproviders` | Sending Return after a chat bang pre-fills a query, while the opened app remains focused. |
@@ -184,18 +184,28 @@ stored as separate register files.
   memory, never copied or stored.
 - **Browser history and bookmarks:** local Chrome and Firefox profiles
   (`browsers`).
-- **Notes, Reminders, Contacts:** while each app runs, Flash lists the
-  titles of its notes (AppleScript run inside Flash, since Notes has no
-  framework), of its open reminders with their list names (EventKit), and
-  the names on its contact cards (the Contacts framework). It relists one
-  when its app launches, when you leave the app, when you run its
-  `<app> refresh` command, and when the flashlight opens if the app is focused or
-  its list is a minute old; a quit app's rows are dropped. The rows stay in
-  Flash's memory, only a flashlight query scoped to them (`@notes`,
-  `@reminders`, `@contacts`) shows them, and none of it is
-  written to disk. Flash reads none of them before macOS grants it access,
-  and asks only when you first scope a query to one or run its refresh
-  command; a refused access leaves it empty, without a message.
+- **Notes, Reminders, Contacts** (`notes`, `reminders`, `contacts`): Flash
+  reads the apps, in process, for the three bundled plugins, each of which
+  receives one app's list and nothing of the other two. `notes` receives
+  each note's identifier and name (fixed AppleScript run inside Flash, since
+  Notes has no framework; never a note's text); `reminders` each open
+  reminder's identifier, title, list name and position, and creation time
+  (EventKit; never its notes or dates due); `contacts` each card's
+  identifier and the name Contacts shows it by (the Contacts framework;
+  never a phone number, an address or another field). A plugin asks for its
+  list only once you have used it (a query scoped to `@notes`, `@reminders`
+  or `@contacts`, or one of its commands), and from then on while the app
+  runs: when the app launches, when you leave it, when you run its `<app>
+  refresh` command, and when the flashlight opens if the app is focused or
+  the list is a minute old; a quit app's rows are dropped. The rows stay in
+  the plugin's memory, and in Flash's while a query scoped to them is open;
+  neither writes them to disk. Flash reads none of them before macOS grants
+  it access, and asks only when you first scope a query to one or run its
+  refresh command; a refused access leaves it empty, without a message.
+  Picking a row hands its identifier back to Flash, which shows the item in
+  its app. The log lines count the items and the rows and the time a
+  listing took, and name none; a listing that fails is logged with macOS's
+  error.
 - **Calendar events:** only while a status format or a monitor reads a
   `#{flash.plugin.calendar.next…}` value, and when you run `calendar join` or
   `calendar next`, Flash reads the events of your calendars (all of them, or
@@ -597,7 +607,11 @@ text, a reminder's notes and dates, and a card's phone numbers, addresses
 and other fields never leave Flash. One capability reads one app: `notes`
 reads no contact. macOS's prompt for each comes up only while you are using
 that plugin (a query is scoped to its rows, or one of its commands is
-running). Flash's log counts the items of a listing and names none.
+running). Flash's log counts the items of a listing and names none. `notes`,
+`reminders` and `contacts` are the bundled plugins that declare them, each
+beside `open` for the app its `open` command launches: they are sandboxed
+with no allowance, read no file and store nothing, and each can be turned
+off on its own in `[plugins] disabled`.
 
 Third-party plugins load only when listed in `[plugins] third_party`, and GitHub
 references must pin a full commit SHA. They get the same sandbox: one runs

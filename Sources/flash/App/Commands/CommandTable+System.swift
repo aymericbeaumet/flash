@@ -1,24 +1,9 @@
 import AppKit
 import FlashCore
 
-/// macOS: Apple's catalogs and system surfaces.
+/// macOS: the system surfaces.
 extension URLEventHandler {
   static let systemCommands: [String: CommandDefinition] = [
-    "notes open": .init(
-      AppleCatalogCommand.open(.notes).summary, parse: { _ in .appleCatalog(.open(.notes)) }),
-    "notes refresh": .init(
-      AppleCatalogCommand.refresh(.notes).summary, parse: { _ in .appleCatalog(.refresh(.notes)) }),
-    "reminders open": .init(
-      AppleCatalogCommand.open(.reminders).summary, parse: { _ in .appleCatalog(.open(.reminders)) }
-    ),
-    "reminders refresh": .init(
-      AppleCatalogCommand.refresh(.reminders).summary,
-      parse: { _ in .appleCatalog(.refresh(.reminders)) }),
-    "contacts open": .init(
-      AppleCatalogCommand.open(.contacts).summary, parse: { _ in .appleCatalog(.open(.contacts)) }),
-    "contacts refresh": .init(
-      AppleCatalogCommand.refresh(.contacts).summary,
-      parse: { _ in .appleCatalog(.refresh(.contacts)) }),
     "desktop show": surface(.desktop, .show),
     "desktop hide": surface(.desktop, .hide),
     "desktop toggle": surface(.desktop, .toggle),
