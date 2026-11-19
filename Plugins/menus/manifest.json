@@ -1,0 +1,20 @@
+{
+  "id": "menus",
+  "name": "Menus",
+  "version": "0.1.0",
+  "description": "The menu-bar commands of the app you are in, as `@menus` rows in the flashlight: find a menu item by name (`File › Export…`) and press it without opening a menu.",
+  "exec": [
+    "./flash-plugin-menus"
+  ],
+  "sources": [
+    {
+      "name": "menus.items",
+      "type": "menus",
+      "priority": "high",
+      "live": "per_scope"
+    }
+  ],
+  "capabilities": [
+    "accessibility"
+  ]
+}

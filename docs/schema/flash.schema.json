@@ -1718,6 +1718,17 @@
           },
           "type" : "object"
         },
+        "menus" : {
+          "additionalProperties" : false,
+          "description" : "The menus plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "processes" : {
           "additionalProperties" : false,
           "description" : "The processes plugin's settings.",

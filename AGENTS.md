@@ -291,6 +291,15 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   samples only while `core:status.observed` lists a segment, and its first
   CPU reading waits on the host clock (`ctx.wait`), never a sleep
   ([top processes](docs/status-plugins.md#top-processes)).
+- The menu bar reaches a plugin only through the broker's `root:
+  "menu_bar"` snapshot (`AXBroker`): the host names the owning app, never
+  itself, walks on the menu-bar queue, apart from window walks and from
+  Gecko's lock, and runs a handle's calls on its snapshot's queue. Which
+  items `@menus` lists, their titles, order and bounds belong to the plugin
+  (`menus`, `Plugins/menus/src/bar.rs`), which keeps no state. The menu-item
+  bindings and `mouse menubar` stay core, on `AXMenuBar`. A test injects the
+  broker's trees and its press (`MenuBarFixture`) and never reads or presses
+  a real app's menu ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
 - Read the window list only through `WindowSnapshot.windowList`
   (guardrail-enforced), and never make main wait on a queue that calls it
   ([the deadlock](docs/input-internals.md#input-capture-and-latency)).

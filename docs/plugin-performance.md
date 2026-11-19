@@ -45,7 +45,7 @@ which took the same start from 29 MiB. Those figures predate the move of its
 list download to `host.fetch`, which removed its HTTP and TLS stack; the
 footprint has not been measured again since.
 
-Those counts describe the plugin set of their dates. Fifteen plugins are
+Those counts describe the plugin set of their dates. Seventeen plugins are
 bundled today, seven of them resident by default
 ([what starts at launch](architecture.md#what-starts-at-launch)), so the 28
 and 33 resident children above no longer exist as such. The figures also
@@ -150,6 +150,29 @@ behind `@system` and nine commands, no process until the first of either.
 changes, the plugin answers from one read of the process table per two
 seconds, so the CPU and memory shares on screen follow the typing, and the
 host ranks the rows either way.
+
+`menus` is `per_scope` with rows that cost something to read: `@menus`
+needs the menu bar of the app you are in, which only the host may walk. Its
+one `search` asks the host for a snapshot (`host.ax_snapshot`, `root:
+"menu_bar"`), builds the rows from the flat nodes and answers; `per_scope`
+is what keeps that walk off the keystrokes that follow. Measured on an
+Apple M4 Pro, macOS 26.6.2, warm, from the query to the rows on the main
+thread (medians):
+
+| Menu bar | Elements read | Rows | Query to rows |
+| --- | --- | --- | --- |
+| Finder | 332 | 60 | 12 ms |
+| Firefox | 489 | 279 | 20–29 ms |
+| Notes | 392 | 35 | 38 ms |
+
+The walk is most of it: 35 to 80 µs per element, one batched Accessibility
+read each, the Apple menu's 75 to 85 elements included, which the plugin
+then leaves out (about 3 ms). Around the walk, the plugin path costs the
+host's encode, two frames and the row decode: 4 ms for 500 elements and
+18 ms for 2,500, whose snapshot is a 308 KB frame and whose 2,000 rows come
+back in another. A menu bar of 2,500 elements therefore lists in 110 to
+220 ms, against the 1 s `search` deadline. The first `@menus` after launch
+adds the spawn: 33 to 84 ms in all on those three apps.
 
 ## Publish-then-exit plugins
 

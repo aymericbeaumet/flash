@@ -312,8 +312,7 @@
       "notes",
       "reminders",
       "contacts",
-      "files",
-      "menus"
+      "files"
     ],
     "shared": {
       "tabs": "locations",
@@ -326,7 +325,8 @@
       "terminals": "locations",
       "network": "default",
       "system": "default",
-      "processes": "default"
+      "processes": "default",
+      "menus": "default"
     }
   },
   "hint_target": {

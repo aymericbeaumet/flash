@@ -216,7 +216,8 @@ Handed to every handler; cheap to clone. Key surface:
   does not define (`invalid host.post_keys params`). A snapshot walks an
   app's windows (`{"pid": …}`) or, with `"root":
   ax_snapshot_roots::MENU_BAR` and no `pid`, the menu bar of the app that
-  owns it, whose `pid` the result then carries beside `nodes`. `ax_perform`
+  owns it, whose `pid` the result then carries beside `nodes` (the `menus`
+  plugin, `Plugins/menus/src/bar.rs`). `ax_perform`
   answers whether the action ran; call `call_host("host.ax_perform", …)`
   to read why it did not (`stale ax handle`).
   `wifi_ssid(false)` is a passive authorized-only read; pass `true` only from

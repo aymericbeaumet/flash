@@ -35,6 +35,18 @@ empty-Trash row, or a process, asks first in the centred alert (`Kill Safari
 (pid 4242)?`): `y` runs it (a process gets SIGTERM), any other key cancels.
 A row that fails says why in the centred alert.
 
+`@menus` lists the menu-bar commands of the app you are in, each under the
+menus that lead to it (`File › Export › PDF…`), from the `menus` plugin: the
+enabled items that open no submenu, the Apple menu aside. Picking one
+presses that menu item through Accessibility, without opening a menu, and
+brings its app forward. It is live as well: the menus are read once, when
+the query names `@menus`, and Flash filters the rows as you type; typing the
+scope again reads them afresh. Some apps settle which items are enabled
+only once their menus have been read (Firefox, for a few of its items after
+some minutes away), so a first read can list those as they were; the next
+one is right. A menu bar of a few hundred items lists in 10 to 40 ms, and
+the first `@menus` after launch also starts the plugin.
+
 `@notes`, `@reminders` and `@contacts` list your notes,
 open reminders and contact cards while Notes, Reminders or Contacts runs;
 picking a row shows it in its app. Flash keeps the last list in memory, so a
@@ -133,12 +145,12 @@ reads Firefox's history alone, where `@history` reads every browser's.
 | `clipboard` | Flash | a clipboard history entry, pinned entry or named register; selecting it pastes it |
 | `notes`, `reminders`, `contacts` | Flash | a note, an open reminder or a contact card; selecting it opens it in its app |
 | `files` | Flash | a file found by name through Spotlight; selecting it opens it |
-| `menus` | Flash | a menu item of the frontmost app; selecting it presses it |
 | `tabs` | browsers plugin | an open browser tab, with its URL; selecting it switches to it |
 | `history`, `bookmarks` | browsers plugin | a visited page or a bookmark, with its URL; selecting it opens it |
 | `terminals` | terminals plugin | a tmux window; selecting it switches to it |
 | `system` | system plugin | a system action (lock, sleep, restart…); selecting it runs it, after asking when nothing undoes it |
 | `processes` | processes plugin | a running process; selecting it terminates it, after asking |
+| `menus` | menus plugin | a menu item of the app that owns the menu bar; selecting it presses it |
 | `emojis` | emojis plugin | an emoji or symbol, by its Unicode name, shortcode, CLDR keyword (`idk`, `hooray`) or emoticon (`:)`, `<3`); selecting it types it |
 | `bangs` | searchproviders plugin | a `!token` search shortcut; selecting it completes the bang |
 | `snippets`, `shortcuts` | snippets, shortcuts plugins | a text snippet to type, or a Shortcuts app shortcut to run |

@@ -127,7 +127,7 @@ final class ResourceTypesTests: XCTestCase {
   func testBuiltInAndBundledSourcesDeclareValidTypes() throws {
     let core: [FlashSource] = [
       WindowListSource(rows: { ([], nil) }, focus: { _ in }),
-      FileSearchSource(), MenuBarSource(),
+      FileSearchSource(),
       ClipboardFlashlightSource(flashlight: ClipboardFlashlight { [] }),
     ]
     for source in core {

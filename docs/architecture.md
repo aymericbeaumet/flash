@@ -33,7 +33,7 @@ holding `system_actions`, and `kill(2)` per confirmed `host.process_signal`
 request of one holding `process_signal`. A
 plugin whose manifest declares only `status` runs while a visible surface
 reads one of its segments; a plugin with only commands and live sources
-(`system`) starts on its first `perform` or `search`; a manifest without
+(`system`, `menus`) starts on its first `perform` or `search`; a manifest without
 `exec` never spawns. A mapping that runs a
 plugin command asks for that plugin: ten seconds after each reconcile it is
 spawned if still idle, and it outlives its status surfaces

@@ -88,6 +88,17 @@ monitors read that no plugin publishes any more, with its replacement.
   opens on current figures. With `processes` in `[plugins] disabled` the
   values are empty, `@processes` lists nothing and `process kill` does
   nothing.
+- **`@menus` is the `menus` plugin's.** It lists the same items under the
+  same titles, in the same order. The menus are read once, when the query
+  names `@menus`, where they were read again every three seconds while you
+  typed: type the scope again to read them afresh. A picked item that is no
+  longer there says so in the centred alert (`menu item is gone: search
+  @menus again`), where it failed silently. A menu bar of more than 2,500
+  items is cut where it was, and one of more than 3,000 elements (items,
+  menus and the bar) also loses its deepest submenus, since Flash reads the
+  bar breadth first up to that bound. The first `@menus` after launch
+  starts the plugin, some tens of milliseconds. With `menus` in `[plugins]
+  disabled`, `@menus` lists nothing.
 - **The system commands are the `system` plugin's.** `screen lock`,
   `system sleep`, `system restart`, `system shutdown`, `system logout`,
   `display sleep`, `trash empty`, `appearance toggle` and `screensaver start`
@@ -443,6 +454,14 @@ monitors read that no plugin publishes any more, with its replacement.
   its values, a query names `@processes` or the command runs. A kill that
   fails says why (`process kill failed: Operation not permitted`) in the
   alert and on the CLI.
+- The menu-bar commands of the app you are in (`@menus`) are a bundled
+  plugin, `menus`, sandboxed. It reads no app: when a query names `@menus`
+  it asks Flash for one snapshot of the menu bar, lists the enabled items
+  under the menus that lead to them, and asks Flash to press the one you
+  pick. No process runs until the first `@menus` query. Listing takes 12 ms
+  for Finder's menus and 20 to 29 ms for Firefox's 279 items, against 8 and
+  14 ms inside Flash
+  ([live sources](docs/plugin-performance.md#live-sources)).
 - A flashlight row a plugin fails to act on says why in the centred alert,
   in the plugin's words, where it failed silently.
 - `feed` and `searchproviders` no longer open network connections: Flash

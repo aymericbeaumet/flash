@@ -835,6 +835,8 @@ browser's window walk, nor a hint provider's window snapshot on a menu bar.
 The menu bar is AppKit's own in a Gecko app too, so reading or pressing it
 takes no part in Gecko's process lock.
 `protocol.json` `ax_snapshot` pins the roots, the default cap and the budget.
+The bundled `menus` plugin is the menu bar's reader: one snapshot per
+`@menus` scope, and a row's handle pressed when the row is picked.
 Snapshots have a host-side five-second budget including queue admission.
 Expiry, a revoked child, or an unresponsive AX batch fails the whole snapshot;
 it never returns partial nodes or leaves their handles actionable. The budget
@@ -1083,7 +1085,8 @@ Section semantics:
   live source is never `kind: "locations"`, since location rows belong to
   the default pool, and a `publish_then_exit` plugin declares none.
   `protocol.json` `source_live` pins the values. The bundled `system`
-  plugin's `system.actions` (`@system`) is `per_scope`; the `processes`
+  plugin's `system.actions` (`@system`) and the `menus` plugin's
+  `menus.items` (`@menus`) are `per_scope`; the `processes`
   plugin's `processes.processes` (`@processes`) is `per_query`, answered
   from one read of the process table per two seconds.
 - **`query`** — registers the per-input evaluator. `prefixes` are exact
@@ -1347,7 +1350,7 @@ time, and Flash checks again when it loads a plugin.
   (`^[a-z][a-z0-9]*$`). No dots: `emojis.glyphs` is a source name, `emojis`
   its type.
 - Flash feeds some types itself (`apps`, `windows`, `clipboard`, `notes`,
-  `reminders`, `contacts`, `files`, `menus`): their
+  `reminders`, `contacts`, `files`): their
   rows carry behaviour only the host provides. A plugin declaring one fails
   to load.
 - A shared type has one contract: every source of it declares the same
@@ -1370,6 +1373,7 @@ time, and Flash checks again when it loads a plugin.
 | `network` | `default` | a network address of this Mac; selecting it copies it |
 | `system` | `default` | a system action (lock, sleep, restart…); selecting it runs it, after asking when nothing undoes it |
 | `processes` | `default` | a running process; selecting it terminates it, after asking |
+| `menus` | `default` | a menu item of the app that owns the menu bar; selecting it presses it |
 
 Prefer an existing type when your rows are what it describes: a new browser
 plugin's tabs are `tabs`, so `@tabs` lists them beside Safari's. A new type

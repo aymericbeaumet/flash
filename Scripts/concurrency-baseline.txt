@@ -81,7 +81,6 @@
 1	Sources/flash/App/MainThreadHopper.swift
 2	Sources/flash/App/MainThreadWatchdog.swift
 8	Sources/flash/App/MarkStore.swift
-17	Sources/flash/App/MenuBarSource.swift
 2	Sources/flash/App/MissionControlSurface.swift
 3	Sources/flash/App/MonitorRuns.swift
 2	Sources/flash/App/NativeMenuBarAutoHide.swift

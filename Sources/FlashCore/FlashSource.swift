@@ -491,10 +491,10 @@ public protocol FlashSource: AnyObject {
     completion: @escaping ([Candidate]) -> Void
   )
   /// Whether this source answers per-query `liveCandidates` pulls instead of
-  /// keeping a warm catalog: catalogs that cannot be kept warm, such as the
-  /// frontmost app's menus or file search, and a plugin's sources declared
-  /// `live`. Live sources are excluded from the default pool, the warm
-  /// fan-outs, and the first-paint barrier.
+  /// keeping a warm catalog: catalogs that cannot be kept warm, such as
+  /// file search, and a plugin's sources declared `live` (the menus of the
+  /// app that owns the menu bar). Live sources are excluded from the
+  /// default pool, the warm fan-outs, and the first-paint barrier.
   var servesLiveCandidates: Bool { get }
   /// Whether `liveCandidates` reads its `text`. A source that answers every
   /// query with the same in-memory rows returns false: the flashlight then

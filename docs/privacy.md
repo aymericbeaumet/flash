@@ -272,6 +272,15 @@ stored as separate register files.
   arguments and its geometry configuration (at most 256 KiB), without retaining
   the arguments or configuration text. Cell sizes come from the attached tmux
   client rather than font files.
+- **Menu items** (`menus`): `@menus` reads the menu bar of the app you are
+  in through Accessibility, which Flash walks on the plugin's behalf: each
+  element's role, its title, whether it is enabled and what it holds, the
+  Apple menu included. Titles can name your documents, tabs or pages (Open
+  Recent, a browser's History menu). The walk runs only when a query names
+  `@menus`, never for Flash's own menus. The plugin keeps nothing once it
+  has answered; Flash keeps the rows while that query is open, and neither
+  writes them to disk. Its log line counts the elements and the rows, and
+  names none.
 - **Menu bar and Notification Center:** `mouse menubar` reads the focused
   app's menu titles through Accessibility, and where the status items sit from
   WindowServer geometry. `mouse notifications` reads the banners, alerts and
@@ -540,7 +549,11 @@ one fixed script to System Events or Finder. Flash restarts, shuts down, logs
 out or empties the Trash only for a request you just answered `y` to in its
 confirmation alert, one action per answer; the same request from the plugin
 at any other moment is refused, so a faulty plugin cannot run one unprompted.
-The plugin reads and stores nothing. `processes` is the one bundled plugin
+The plugin reads and stores nothing. `menus` is sandboxed with no allowance either,
+and reads no app itself: behind the `accessibility` capability its manifest
+declares it asks Flash for the menu bar of the app that owns it, and presses
+an item only by the handle Flash gave that snapshot, which a later snapshot
+or the app quitting retires. `processes` is the one bundled plugin
 declaring `process_info`: its profile lets it list processes and read their
 CPU time, memory, disk I/O, thread counts, open-descriptor lists and
 executable paths, which is what its tables, the focused app's summary and

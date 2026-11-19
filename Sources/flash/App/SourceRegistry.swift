@@ -66,9 +66,6 @@ final class SourceRegistry {
             ignoredApps: flashlight.ignoredApps,
             appDirectories: flashlight.appDirectories)
         },
-        SourceDescriptor(identifier: "core.menus", activationPolicy: .always) {
-          MenuBarSource()
-        },
         SourceDescriptor(identifier: FileSearchSource.sourceID, activationPolicy: .always) {
           FileSearchSource()
         },
