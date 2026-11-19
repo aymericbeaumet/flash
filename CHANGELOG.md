@@ -29,6 +29,11 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Development and getting started
 
+- `mise run bench:help -- --site` measures a build of the published site,
+  and `Inspector/site-budget.test.ts` holds its size. The help UI's snapshot
+  types and topic categories are generated (`mise run build:schema`), and
+  `mise run check:concurrency` holds the app's strict-concurrency
+  diagnostics to a count that only falls.
 - Refresh the Rust and browser-tooling dependencies, including SQLite through
   rusqlite 0.42, the pinned Ghostty terminal library and the Electron 45
   integration fixture. TypeScript stays on
@@ -319,6 +324,19 @@ monitors read that no plugin publishes any more, with its replacement.
   seconds). `flash config check` reports a `[plugins.feed] url` that is not
   an `https://` URL. The Rust SDK's `fetch` returns the body of a 2xx
   response alone; another status is an error.
+- The runtime page's configuration editor has line numbers and checks the
+  text as you type, as `flash config check` does: diagnostics are listed
+  with their line (selecting one moves the caret there) and marked in the
+  gutter, and Save waits while the text has errors, with an explicit Save
+  anyway. It shows what the schema says about the key under the caret (type,
+  values, description), and the resolved configuration has an Overrides only
+  filter.
+- The published documentation's search answers by page title and heading
+  from an 11 KB outline, then completes from the text of every section, and
+  says while results are still arriving. A page is a quarter of its former
+  weight: the article ships as plain HTML and the navigation once. Links
+  prepare the page they lead to (speculation rules, with a fetch-on-intent
+  fallback), and the site no longer publishes `docs.json` or `search.json`.
 - The plugin wire has a schema for every frame (`docs/schema/plugin/`) and
   a conformance corpus both the host and the Rust SDK run, and the host
   holds plugins to it. For a third-party plugin: `host.ping` answers

@@ -319,7 +319,9 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   Flash asks of the focused app (`URLEventHandler.sourceCommandNames`) and
   never registers for dispatch or completion.
 - A new command adds its `"<topic> <action>"` entry to `URLEventHandler`'s
-  table, `docs/commands.md` and the inspector's `topicCategories`; one that
+  table and `docs/commands.md`, and a new topic its category in
+  `URLEventHandler.topicsByCategory` (`mise run build:schema` rewrites the
+  inspector's `topic-categories.json`); one that
   asks the focused app for something marks `URLCommand.sourceCommand`, whose
   words are its argv tail. `CommandGrammarTests` and the guardrail enforce
   the grammar.

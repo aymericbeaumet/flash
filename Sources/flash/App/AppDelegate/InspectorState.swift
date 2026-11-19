@@ -107,6 +107,8 @@ extension AppDelegate {
   ) {
     let type = "application/json; charset=utf-8"
     if operation == .check {
+      // The server's completion runs on any queue (`ConfigHTTPHandler`).
+      nonisolated(unsafe) let completion = completion
       Self.configCheckQueue.async {
         guard let text = String(data: body, encoding: .utf8) else {
           completion(

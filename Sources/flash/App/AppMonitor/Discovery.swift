@@ -703,6 +703,12 @@ extension AppMonitor {
   ) {
     let cfg = snapshotConfig()
     let primaryH = ScreenSpace.primaryHeight
+    // Called on `axQueue` alone; it hands the result to main.
+    nonisolated(unsafe) let deliver: (DiscoveryResult) -> Void = { result in
+      DispatchQueue.main.async {
+        completion(result)
+      }
+    }
     axQueue.async { [weak self] in
       guard let self else { return }
       self.runAndAssign(
@@ -711,12 +717,8 @@ extension AppMonitor {
         cfg: cfg,
         primaryH: primaryH,
         providers: providers,
-        targetFilter: targetFilter
-      ) { result in
-        DispatchQueue.main.async {
-          completion(result)
-        }
-      }
+        targetFilter: targetFilter,
+        completion: deliver)
     }
   }
 
@@ -1086,6 +1088,9 @@ extension AppMonitor {
       }
     }
     if let deferred = provider as? DeferredHintProvider {
+      // The answer arrives on the provider's queue and is settled on `queue`
+      // alone: the hop is what confines it.
+      nonisolated(unsafe) let settle = settle
       deferred.discover(in: focused) { results in queue.async { settle(results) } }
     } else {
       settle(discoverLogged(provider, in: focused))
