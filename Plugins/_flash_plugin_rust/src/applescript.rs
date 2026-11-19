@@ -33,6 +33,14 @@ pub enum AppleScriptOperation {
     ChatSubmit {
         bundle_id: String,
     },
+    /// What a media player plays: its player state, a line feed and the
+    /// current track's name, with the artist after an em dash when `artist`.
+    /// An app that is not running answers an empty result and is never
+    /// launched; ask only the players among the running applications.
+    NowPlaying {
+        bundle_id: String,
+        artist: bool,
+    },
 }
 
 #[cfg(test)]
@@ -65,6 +73,10 @@ mod tests {
                 name: "A\\B\"C".into(),
             },
             AppleScriptOperation::ChatSubmit { bundle_id },
+            AppleScriptOperation::NowPlaying {
+                bundle_id: "com.apple.Music".into(),
+                artist: true,
+            },
         ];
         let values: Vec<serde_json::Value> = operations
             .iter()

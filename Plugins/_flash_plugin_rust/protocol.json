@@ -145,7 +145,7 @@
     "max_ticks": 16
   },
   "applescript": {
-    "$comment": "Typed host-owned AppleScript templates; no source code, script field, raw terminology or evaluated strings are accepted. Requests carry operation, timeout_ms and the operation-specific data fields. All strings enter templates only as escaped literals. Supported browser IDs use fixed Chromium/Safari dialects. Every operation checks its actual target against manifest apple_events_targets; shortcuts use com.apple.shortcuts.events and chat_submit uses com.apple.systemevents. The plugin needs apple_events. script_bytes bounds generated source; result_bytes bounds the UTF-8 result; deadlines and per-plugin concurrency include queue admission. The host returns {ok:true,result} or {ok:false,error,status?}; source/results never enter diagnostics.",
+    "$comment": "Typed host-owned AppleScript templates; no source code, script field, raw terminology or evaluated strings are accepted. Requests carry operation, timeout_ms and the operation-specific data fields. All strings enter templates only as escaped literals. Supported browser IDs use fixed Chromium/Safari dialects. Every operation checks its actual target against manifest apple_events_targets; shortcuts use com.apple.shortcuts.events, chat_submit uses com.apple.systemevents and now_playing uses the bundle_id it names. now_playing {bundle_id, artist} asks one media player (an app whose scripting has player state and current track) what it plays, never launching it: the result is the player state, a line feed and the current track's name, with its artist after an em dash when artist is true; an app that is not running answers an empty result. The plugin needs apple_events. script_bytes bounds generated source; result_bytes bounds the UTF-8 result; deadlines and per-plugin concurrency include queue admission. The host returns {ok:true,result} or {ok:false,error,status?}; source/results never enter diagnostics.",
     "script_bytes": 65536,
     "result_bytes": 1048576,
     "default_timeout_ms": 10000,
@@ -158,7 +158,8 @@
       "browser_tab_move",
       "shortcuts_list",
       "shortcut_run",
-      "chat_submit"
+      "chat_submit",
+      "now_playing"
     ]
   },
   "perform_kinds": [

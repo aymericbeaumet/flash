@@ -6,6 +6,7 @@ import XCTest
 final class PluginAppleScriptOperationTests: XCTestCase {
   private let targets = [
     "com.apple.Safari", "com.google.Chrome", "com.apple.shortcuts.events", "com.apple.systemevents",
+    "com.spotify.client", "com.apple.TV",
   ]
   private func script(
     _ params: [String: Any], browsers: BrowserEngineTable = .sample
@@ -122,6 +123,66 @@ final class PluginAppleScriptOperationTests: XCTestCase {
       "com.apple.Terminal", "com.apple.ScriptEditor2", "com.apple.finder", "unknown.browser",
     ] {
       XCTAssertThrowsError(try script(["operation": "chat_submit", "bundle_id": bundle]))
+    }
+  }
+
+  /// `now_playing` asks the app the plugin names, held to its declared
+  /// targets, and never launches it.
+  func testNowPlayingAsksADeclaredPlayerWithoutLaunchingIt() throws {
+    let spotify = try script([
+      "operation": "now_playing", "bundle_id": "com.spotify.client", "artist": true,
+    ])
+    XCTAssertEqual(
+      spotify,
+      """
+      if application id "com.spotify.client" is not running then return ""
+      with timeout of 10 seconds
+        tell application id "com.spotify.client"
+          set playerState to player state as text
+          set trackText to ""
+          try
+            set trackText to name of current track & " — " & artist of current track
+          end try
+          return playerState & linefeed & trackText
+        end tell
+      end timeout
+      """)
+    let tv = try script(["operation": "now_playing", "bundle_id": "com.apple.TV", "artist": false])
+    XCTAssertTrue(tv.contains("set trackText to name of current track\n"))
+    XCTAssertFalse(tv.contains("artist"))
+    XCTAssertTrue(tv.hasPrefix("if application id \"com.apple.TV\" is not running then return"))
+    let refusals: [([String: Any], String)] = [
+      (
+        ["operation": "now_playing", "bundle_id": "com.apple.Music", "artist": true],
+        "operation target is outside apple_events_targets"
+      ),
+      (
+        ["operation": "now_playing", "bundle_id": "com.apple.TV"],
+        "now_playing requires boolean artist"
+      ),
+      (
+        ["operation": "now_playing", "bundle_id": "com.apple.TV", "artist": "yes"],
+        "now_playing requires boolean artist"
+      ),
+      (["operation": "now_playing", "artist": true], "operation requires bundle_id"),
+      (
+        ["operation": "now_playing", "bundle_id": "com.apple.TV", "artist": true, "track": 1],
+        "unsupported AppleScript operation or field"
+      ),
+      (
+        [
+          "operation": "now_playing", "artist": true,
+          "bundle_id": "com.apple.TV\" to quit\ntell application id \"com.apple.TV",
+        ],
+        "operation target is outside apple_events_targets"
+      ),
+    ]
+    for (params, message) in refusals {
+      XCTAssertThrowsError(try script(params), "\(params)") { error in
+        XCTAssertEqual(
+          error as? PluginAppleScriptOperation.Refusal,
+          PluginAppleScriptOperation.Refusal(message: message), "\(params)")
+      }
     }
   }
 

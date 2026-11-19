@@ -325,7 +325,9 @@ monitors read that no plugin publishes any more, with its replacement.
   what `flash <command>` prints, where both used to say only that the
   command failed. A plugin holding the new `audio_devices` capability lists
   the audio devices, selects the default input or output, steps the output
-  volume and toggles its mute through `host.audio_devices`.
+  volume and toggles its mute through `host.audio_devices`, and
+  `host.applescript` has a `now_playing` operation that asks a running
+  media player what it plays.
 - `feed` and `searchproviders` no longer open network connections: Flash
   downloads the feed and DuckDuckGo's bang list for them through
   `host.fetch`, and their sandboxes deny the network like every other bundled

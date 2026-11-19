@@ -380,7 +380,8 @@ final class PluginSchemaTests: XCTestCase {
       capabilities: Set(PluginCapability.allCases),
       fetchURLs: ["https://api.example.com/"],
       appleEventsTargets: [
-        "com.apple.Safari", "com.apple.shortcuts.events", "com.apple.systemevents",
+        "com.apple.Safari", "com.apple.Music", "com.apple.shortcuts.events",
+        "com.apple.systemevents",
       ],
       scope: PluginHostRequestScope(isCurrent: { true })
     ) { result in

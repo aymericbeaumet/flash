@@ -175,12 +175,13 @@ Handed to every handler; cheap to clone. Key surface:
   sysctl and IOKit samplers are `Plugins/sysinfo/src/sys/`).
 - AppleScript: `ctx.applescript(&AppleScriptOperation::…, timeout)` returns
   `Result<String, String>` through `host.applescript`. Named operations cover
-  browser tab listing/selection/moves, listing/running shortcuts and sending
-  Return to a chat's focused browser. The host owns every script template and
+  browser tab listing/selection/moves, listing/running shortcuts, sending
+  Return to a chat's focused browser and asking a running media player what
+  it plays (`NowPlaying`). The host owns every script template and
   escapes string values; no plugin-supplied source is accepted. Declare
   `apple_events` together with `apple_events_targets`: supported browser IDs
-  for browser operations, `com.apple.shortcuts.events` for shortcuts, or
-  `com.apple.systemevents` for chat submit. The resident owns the OSA runtime,
+  for browser operations, `com.apple.shortcuts.events` for shortcuts,
+  `com.apple.systemevents` for chat submit, or the players asked. The resident owns the OSA runtime,
   so plugin senders can remain sandboxed. Generated source is limited to
   64 KiB, results to 1 MiB, timeouts to 30 seconds, and outstanding requests
   to four per plugin. Complete OSA lifetimes execute one at a time in the

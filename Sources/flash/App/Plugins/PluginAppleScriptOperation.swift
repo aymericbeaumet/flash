@@ -40,6 +40,7 @@ enum PluginAppleScriptOperation {
       "browser_tab_index": ["bundle_id", "index"],
       "browser_tab_move": ["bundle_id", "forward"],
       "shortcuts_list": [], "shortcut_run": ["name"], "chat_submit": ["bundle_id"],
+      "now_playing": ["bundle_id", "artist"],
     ]
     guard let allowed = fields[operation],
       Set(params.keys).isSubset(of: allowed.union(["operation", "timeout_ms"]))
@@ -65,6 +66,10 @@ enum PluginAppleScriptOperation {
       target = "com.apple.shortcuts.events"
     } else if operation == "chat_submit" {
       target = "com.apple.systemevents"
+    } else if operation == "now_playing" {
+      // Which apps are media players is the plugin's knowledge: the target
+      // is the app it names, held to its declared targets below.
+      target = try string("bundle_id")!
     } else {
       // Chromium and WebKit browsers script their tabs; Gecko has no
       // AppleScript dictionary for them.
@@ -103,6 +108,31 @@ enum PluginAppleScriptOperation {
       }
       return
         "tell application id \(app) to if bundle identifier of (first application process whose frontmost is true) is \(quote(bundle)) then key code 36"
+    case "now_playing":
+      guard let artist = PluginJSON.boolean(params["artist"]) else {
+        throw refuse("now_playing requires boolean artist")
+      }
+      // The player state, then the current track, one per line. A stopped
+      // player has no current track; the `try` keeps that from losing the
+      // state. The `is running` check keeps a player that quit since the
+      // plugin listed it from being launched to answer.
+      let track =
+        artist
+        ? "name of current track & \" — \" & artist of current track"
+        : "name of current track"
+      return """
+        if application id \(app) is not running then return ""
+        with timeout of 10 seconds
+          tell application id \(app)
+            set playerState to player state as text
+            set trackText to ""
+            try
+              set trackText to \(track)
+            end try
+            return playerState & linefeed & trackText
+          end tell
+        end timeout
+        """
     case "browser_tabs":
       return """
         set out to ""

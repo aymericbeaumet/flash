@@ -668,8 +668,13 @@ It accepts no `script` field or executable source. The fixed operations are
 `browser_tabs` (`bundle_id`), `browser_select` (`bundle_id`, optional `url`,
 `title`, paired positive `window`/`tab`), `browser_tab_index` (`bundle_id`,
 positive `index`), `browser_tab_move` (Safari `bundle_id`, boolean `forward`),
-`shortcuts_list`, `shortcut_run` (`name`), and `chat_submit` (`bundle_id` of the
-browser that must still be frontmost, Firefox included). A browser is an app
+`shortcuts_list`, `shortcut_run` (`name`), `chat_submit` (`bundle_id` of the
+browser that must still be frontmost, Firefox included), and `now_playing`
+(`bundle_id` of a media player, boolean `artist`). `now_playing` answers the
+player state, a line feed and the current track's name, followed by its
+artist after an em dash when `artist` is true (`playing\nOne More Time —
+Daft Punk`); a stopped player answers its state alone, and an app that is
+not running answers an empty result and is never launched. A browser is an app
 some manifest declares in [`browser_engines`](#manifest): the tab operations
 serve `chromium` and `webkit` browsers, each in its engine's dialect
 (`browser_tab_move` is `webkit` alone), and `chat_submit` serves any engine.
@@ -678,7 +683,8 @@ rejected.
 Each operation selects a host-owned template; every supplied string becomes
 an escaped literal. Declare `apple_events` with nonempty
 `apple_events_targets`: declared browser IDs, `com.apple.shortcuts.events`
-for shortcut operations, or `com.apple.systemevents` for chat submit.
+for shortcut operations, `com.apple.systemevents` for chat submit, or the
+players `now_playing` asks.
 Templates run in the resident off its main thread, so plugin senders retain
 their sandbox and Automation belongs to Flash. `protocol.json` bounds source
 to 64 KiB, result to 1 MiB and concurrency to four per plugin. Timeout defaults

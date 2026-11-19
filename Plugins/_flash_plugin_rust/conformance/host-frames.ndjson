@@ -69,6 +69,8 @@
 {"name": "host.applescript.reply.invalid-timeout", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"host.applescript timeout_ms must be an integer 1-30000"}}}
 {"name": "host.applescript.reply.unsupported", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"unsupported AppleScript operation or field"}}}
 {"name": "host.applescript.reply.without-an-operation", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"host.applescript requires a supported operation"}}}
+{"name": "host.applescript.reply.without-the-artist-flag", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"now_playing requires boolean artist"}}}
+{"name": "host.applescript.reply.outside-the-targets", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"operation target is outside apple_events_targets"}}}
 {"name": "host.applescript.reply.invalid-index", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"operation requires a positive integer index"}}}
 {"name": "host.applescript.reply.script-failed", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"execution error: no such tab (-1728)","status":1}}}
 {"name": "host.applescript.reply.status-not-an-integer", "expect": "reject", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"applescript timed out timeout_ms=10000","status":"124"}}}

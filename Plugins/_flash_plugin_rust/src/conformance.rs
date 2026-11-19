@@ -561,6 +561,14 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
             .await,
         ),
         (
+            "host.applescript.now-playing",
+            script(AppleScriptOperation::NowPlaying {
+                bundle_id: "com.apple.Music".to_string(),
+                artist: true,
+            })
+            .await,
+        ),
+        (
             "host.audio_devices.list",
             request(|ctx| async move { ctx.audio_devices(AudioDirection::Output).await }).await,
         ),

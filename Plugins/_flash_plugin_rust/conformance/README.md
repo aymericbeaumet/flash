@@ -55,8 +55,8 @@ The lines describe one plugin and one moment:
 - Focused app `com.example.app`, pid 512, window 4021, front window
   `{x: 0, y: 25, width: 1440, height: 875}` on a 2x display.
 - Wi-Fi network `Atelier`; fetch allowlist `https://api.example.com/`;
-  Apple Events targets `com.apple.Safari`, `com.apple.shortcuts.events` and
-  `com.apple.systemevents`; `https:` URLs open in `com.apple.Safari`; a script
+  Apple Events targets `com.apple.Safari`, `com.apple.Music`,
+  `com.apple.shortcuts.events` and `com.apple.systemevents`; `https:` URLs open in `com.apple.Safari`; a script
   prints `Focus\nRest\n`.
 - Output devices `MacBook Pro Speakers` (`built-in`, the default) and
   `USB Audio` (`usb-1`), the same two as inputs; the output at 38%, not
