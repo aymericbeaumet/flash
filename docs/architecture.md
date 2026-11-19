@@ -30,9 +30,11 @@ touched per `host.audio_devices` request of a plugin holding the
 `audio_devices` capability, and the lock chord, power management and the
 System Events and Finder scripts per `host.system_action` request of one
 holding `system_actions`, `kill(2)` per confirmed `host.process_signal`
-request of one holding `process_signal`, and EventKit per
+request of one holding `process_signal`, EventKit per
 `host.calendar_events` request of one holding `calendar_events`, its database
-observed only while such a plugin listens to `core:calendar.changed`. A
+observed only while such a plugin listens to `core:calendar.changed`, and
+Notes' scripts, the reminders and the contact cards per `host.notes`,
+`host.reminders` or `host.contacts` request of one holding that capability. A
 plugin whose manifest declares only `status` runs while a visible surface
 reads one of its segments; a plugin with only commands and live sources
 (`system`, `menus`) starts on its first `perform` or `search`; a manifest without
@@ -48,7 +50,7 @@ The rest starts with the process, whatever the configuration says:
 | `AppMonitor` AX observer and prepared model for the focused app | Hints must show without a walk on the key path (see the prepared-model guide) | One AXObserver per focused app, a complete walk per focus change, maintenance walks while the user is active |
 | `KeyboardCaptureTap` | The swallow decision must exist before the first mapped key; the no-tap fallback is slower | A session tap on main, plus the 2 s secure-input probe |
 | `IPCServer` socket | `flash <command>` and scripts must reach the resident without starting anything | One Unix domain socket and an accept source, idle until a client connects; no timer |
-| Resident plugins: every manifest with `sources`, `query` or `hints`, or with `listen` and no `status`; a status plugin while a surface shows its segments | Catalogs and hint providers are kept warm so the flashlight and terminal hints are complete on first open; a listener hears what it follows (`media`, which players run) | One child process each (seven bundled plugins by default, plus each status plugin a surface shows), three queues and a root-directory watcher per plugin, `core:ax.changed` fan-out to the listeners |
+| Resident plugins: every manifest with pushed `sources`, `query` or `hints`, or with `listen` and neither `status` nor live sources; a status plugin while a surface shows its segments | Catalogs and hint providers are kept warm so the flashlight and terminal hints are complete on first open; a listener hears what it follows (`media`, which players run) | One child process each (seven bundled plugins by default, plus each status plugin a surface shows), three queues and a root-directory watcher per plugin, `core:ax.changed` fan-out to the listeners |
 | Dock view observer (`SystemSurfaceController`) | `missioncontrol hide` must know a view that opened before it ran, which only an observer installed before that has seen; `f` labels Mission Control and NORMAL lets its unmapped keys reach the Dock from the same reports | One AXObserver on the Dock for four notifications it posts only as Mission Control, App Exposé or Show Desktop opens or closes |
 | Window navigation catalog (`WindowMover`) | Directional focus reads a prepared catalog rather than walking on the key path | `kAXWindows` per regular app at launch and on app launch/terminate |
 | Window switcher catalog (`WindowSwitcherCatalog`) | `window switch` draws from memory within a frame of its chord | `kAXWindows` plus one batched read per window, per regular app at launch and on each Space change; one app again after its window events settle (250 ms) or when an unknown window of it gains focus; app names and icons once per app |
@@ -79,6 +81,7 @@ table above supports.
 | `CandidateFinderSession` | Catalog, query, source context and selection for one finder session |
 | `CandidateLiveQuery` | Generation-scoped live results, separate from warmed catalog rows |
 | `AppleCatalogs` / `AppleCatalogSource` | `@notes`, `@reminders`, `@contacts`: last good rows, the running-app gate, event-driven relists on one serial queue per catalog, and macOS access asked only when a query or a refresh command uses the catalog |
+| `HostAppItems` | Notes, Reminders and Contacts for `host.notes`, `host.reminders` and `host.contacts`: the access macOS grants, the one request for it, the items as an identifier and one line, and one item shown in its app, each app on its own serial queue for a plugin holding its capability; macOS asked only while the user is using the plugin, and Notes never launched to answer |
 | `HostCalendarEvents` | EventKit for `host.calendar_events`: the access macOS grants, the one request for it and the events of a window, read on one serial queue for a plugin holding `calendar_events`; `EKEventStoreChanged` observed only while such a plugin listens to `core:calendar.changed`, one event per burst; macOS asked only while the user is using the plugin. The next-meeting values, `calendar join` and `calendar next` are the `calendar` plugin's |
 | `AppleScriptRunner` | The resident's AppleScript, in process: one serialized OSA lifetime from component open through compile, execute, display, disposal, close and autorelease-pool drain. At most eight background workers wait or run; admission and Apple Events share the caller's deadline. Results must arrive before that deadline, even if a late semaphore signal is already buffered when the caller resumes. A timed-out caller never releases a component that is still alive; callers stay off main |
 | `ClipboardHistoryStore` / `ClipboardFlashlight` | Clipboard history on one serial queue (pins never trimmed, image sizes read from file headers); its listing, published after every change, becomes `!clip`/`@clipboard` rows prepared once per entry on the flashlight catalog's queue, so a query reads them from memory; register rows are built on main when pulled |

@@ -63,6 +63,13 @@ final class PluginHostRPC {
   /// inside the test runner unless a test injects one over a stub: an
   /// unwired host answers every call with a failure.
   var calendarEvents: HostCalendarEvents?
+  /// Notes, Reminders and Contacts behind `host.notes`, `host.reminders` and
+  /// `host.contacts`: plugins never reach those apps or their frameworks
+  /// themselves, and the grants stay Flash's. Empty until the resident
+  /// wires its own at launch (over `LiveAppItems`), and empty inside the
+  /// test runner unless a test injects one over a stub: an unwired kind
+  /// answers every call with a failure.
+  var appItems: [HostAppItemKind: HostAppItems] = [:]
 
   // Testability seams for the arms whose production bodies fire
   // irreversible side effects (LaunchServices open). Tests swap these to
@@ -168,6 +175,8 @@ final class PluginHostRPC {
       hostProcessSignal(signal, pid: pid, pluginID: pluginID, scope: scope, reply: reply)
     case .calendar(let operation):
       hostCalendarEvents(operation, pluginID: pluginID, scope: scope, reply: reply)
+    case .appItems(let kind, let operation):
+      hostAppItems(kind, operation, pluginID: pluginID, scope: scope, reply: reply)
     case .appleScript(let params):
       PluginHostAppleScript.handle(
         params, targets: appleEventsTargets, browsers: browserEngines(), pluginID: pluginID,
@@ -434,6 +443,83 @@ final class PluginHostRPC {
           reply(["ok": true, "access": access.wireName])
         case .failed(let reason):
           reply(["ok": false, "error": reason])
+        }
+      }
+    }
+  }
+
+  /// `host.notes`, `host.reminders` and `host.contacts`: the access macOS
+  /// grants Flash to one app, a request for it, its items or one of them
+  /// shown, each on that app's queue. Nothing but `request_access` asks
+  /// macOS, and only while the user is using the plugin: a prompt never
+  /// comes up from a background refresh.
+  private func hostAppItems(
+    _ kind: HostAppItemKind, _ operation: PluginHostRequest.AppItems, pluginID: String,
+    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let items = appItems[kind] else {
+      reply(["ok": false, "error": "\(kind.rawValue) unavailable"])
+      return
+    }
+    // Read as the request arrives, in the order of the plugin's frames: the
+    // search that made it ask may be answered before the app's queue runs.
+    let servesUser = operation == .requestAccess && scope.servesUser()
+    scope.enqueue(on: items.queue) {
+      switch operation {
+      case .access:
+        reply(["ok": true, "access": items.access().wireName])
+      case .requestAccess:
+        let access = items.access()
+        // Nobody to ask about: Notes answers only while it runs.
+        guard access == .undetermined, items.canRequestAccess() else {
+          reply(["ok": true, "access": access.wireName])
+          return
+        }
+        guard servesUser else {
+          FlashLog.warn(
+            "[plugin] \(kind.rawValue) access request refused: the user is not using the plugin",
+            fields: ["plugin": pluginID])
+          reply(["ok": false, "error": PluginProtocol.userRequestRequiredError])
+          return
+        }
+        items.requestAccess { access in
+          reply(["ok": true, "access": access.wireName])
+        }
+      case .list:
+        let startedAt = DispatchTime.now()
+        let listing = items.list()
+        let elapsedMs = Int(
+          (DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000)
+        switch listing {
+        case .items(let listed, let truncated):
+          var result: [String: Any] = [
+            "ok": true, "access": AppleCatalogAccess.granted.wireName, "items": listed,
+          ]
+          if truncated { result["truncated"] = true }
+          // The count and the time, never an item.
+          let fields = [
+            "plugin": pluginID, "items": "\(listed.count)", "truncated": "\(truncated)",
+            "elapsed_ms": "\(elapsedMs)",
+          ]
+          FlashLog.debug("[plugin] \(kind.rawValue) listed", fields: fields)
+          if elapsedMs >= HostAppItems.slowListMs {
+            FlashLog.warn("[plugin] \(kind.rawValue) list slow", fields: fields)
+          }
+          reply(result)
+        case .noAccess(let access):
+          reply(["ok": true, "access": access.wireName])
+        case .failed(let reason):
+          reply(["ok": false, "error": reason])
+        }
+      case .show(let id):
+        items.show(id: id) { failure in
+          guard let failure else {
+            reply(["ok": true])
+            return
+          }
+          FlashLog.warn(
+            "[plugin] \(kind.rawValue) show failed: \(failure)", fields: ["plugin": pluginID])
+          reply(["ok": false, "error": failure])
         }
       }
     }

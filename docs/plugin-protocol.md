@@ -126,7 +126,8 @@ seeded one.
 
 **Activation.** Unless it declares `publish_then_exit` (below), a plugin is
 *resident* — spawned at startup and kept running — iff its manifest declares
-pushed `sources`, `query`, `hints`, `status`, or `listen`.
+pushed `sources`, `query`, `hints`, `status`, or `listen` without live
+sources.
 A plugin declaring only on-demand surfaces (`commands`, `bangs`,
 `navigation`, live `sources`) is *on-demand*: it stays unspawned until its
 first `perform` or `search`, which launches it, and then it stays running
@@ -135,6 +136,13 @@ normally. The `perform` deadline comfortably absorbs the startup budget. A
 own deadline starts when the request is written: the first query scoped to
 a cold plugin is answered, and while the child starts only the newest query
 of a source waits. Manifest-only plugins (no `exec`) never spawn at all.
+
+A *live-bound* plugin — live `sources` with no pushed `sources`, `query`,
+`hints` or `status`, its `listen` subscriptions presumed to feed those rows
+— is on-demand too: nothing reads its rows until a query is scoped to them,
+so the events keep no process. It hears them from its first `search` or
+`perform` on, starting from the running-apps snapshot every new child gets.
+The bundled `notes`, `reminders` and `contacts` plugins run this way.
 
 An on-demand plugin is *warm* when a configured mapping (any mode or app
 scope, an enabled status-bar click, or a plugin's `mappings`) runs one of
@@ -713,7 +721,8 @@ can name a window without asking the user to pick one) +
 `host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`),
 `host.audio_devices` (`audio_devices`), `host.system_action`
 (`system_actions`), `host.process_signal` (`process_signal`),
-`host.calendar_events` (`calendar_events`),
+`host.calendar_events` (`calendar_events`), `host.notes` (`notes`),
+`host.reminders` (`reminders`), `host.contacts` (`contacts`),
 `host.post_keys` + `host.ax_snapshot` /
 `host.ax_perform` / `host.ax_set` / `host.ax_select_child`
 (`accessibility`). A denied call answers `{"ok": false, "error": "missing
@@ -821,8 +830,8 @@ carries `operation` and exactly the fields it takes. Every success carries
 `{"operation": "access"}` reads it. `{"operation": "request_access"}` reads
 it too and, when it is undetermined, asks macOS first and answers once the
 user did. The host shows that prompt only while the user is using the
-plugin: one of its performs is in flight, or a status surface shows one of
-its segments. Anywhere else an undetermined access answers `{"ok": false,
+plugin: one of its performs or searches is in flight, or a status surface
+shows one of its segments. Anywhere else an undetermined access answers `{"ok": false,
 "error": "requires the user to be using the plugin"}` and nothing is shown,
 so a plugin never raises a prompt from a background refresh. Requests made
 while the prompt is open share its answer, and the host sends
@@ -856,6 +865,40 @@ and `truncated` is `true`. An EventKit failure answers `{"ok": false,
 operations, the bounds and the shape. The bundled `calendar` plugin is its
 reader: it lists from now to twice its look-ahead while one of its segments
 is observed, again on `core:calendar.changed`, and for each of its commands.
+`host.notes`, `host.reminders` and `host.contacts` read the items of an
+Apple app whose grant Flash holds (Automation of Notes, Reminders,
+Contacts), each behind the capability of its name. The three take the same
+requests and answer `access` as `host.calendar_events` does:
+`{"operation": "access"}` reads it, and `{"operation": "request_access"}`
+asks macOS first when it is undetermined, under the same rule (only while
+the user is using the plugin, one shared answer per prompt). Notes answers
+an Automation request only while it runs, so its access reads
+`"undetermined"` while it does not, and nothing is asked then.
+`{"operation": "list"}` reads every item in the app's own order: every note
+of every account, every open reminder, every contact card. It never asks
+and never launches Notes; without the grant its reply is the `access`
+alone. With it, `items` holds one object per item:
+
+```json
+{"id": "5F8A…", "title": "Buy milk", "list": "Inbox", "list_index": 0,
+ "created": 1800000000}
+```
+
+`id` selects the item again and `title` is a note's name, a reminder's
+title or the name Contacts shows a card by, cut at a character boundary to
+4 KiB. A reminder adds its list's title, that list's position among
+Reminders' lists (absent once Reminders no longer names it) and its
+creation time in Unix seconds; a note and a contact carry `id` and `title`
+alone. Nothing else of an item crosses the wire: no note text, no due date,
+no phone number or address. Which rows these make, and in what order, is
+the plugin's to decide. A reply holds at most 10,000 items and 2 MiB of
+them; later ones are left out and `truncated` is `true`.
+`{"operation": "show", "id"}` brings the app forward on an item a list
+returned (`id` is 1 to 1,024 bytes without control characters); without the
+grant it answers `{"ok": false, "error"}` and asks nothing. Notes is read
+and shown by the host's own fixed AppleScript, the `id` an escaped literal.
+`protocol.json` `app_items` and `app_item` pin the operations, the bounds
+and the shape.
 `host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
 names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
 plugin can confirm that app still has focus before acting on it. A `file:` URL
@@ -926,7 +969,10 @@ logs out or empties the Trash. `process_signal` sends SIGTERM to one
 process, only inside a perform the user confirmed. `calendar_events` reads
 the access macOS grants Flash to the user's calendars, asks for it while the
 user is using the plugin, lists the events of a window of at most 14 days
-without their notes, and delivers `core:calendar.changed`. `process_info`
+without their notes, and delivers `core:calendar.changed`. `notes`,
+`reminders` and `contacts` each read one app's access, ask for it while the
+user is using the plugin, list its items as an identifier and one line, and
+show one in the app. `process_info`
 grants no host RPC: like
 `network` it only composes the sandbox profile, so only a sandboxed plugin
 declares it. The profile lets a plugin ask the kernel about its own process
@@ -1147,7 +1193,9 @@ Section semantics:
   plugin's `system.actions` (`@system`) and the `menus` plugin's
   `menus.items` (`@menus`) are `per_scope`; the `processes`
   plugin's `processes.processes` (`@processes`) is `per_query`, answered
-  from one read of the process table per two seconds.
+  from one read of the process table per two seconds. A `listen` beside
+  live sources keeps no process (see
+  [activation](#process-model-and-lifecycle)).
 - **`query`** — registers the per-input evaluator. `prefixes` are exact
   literal markers (never regexes) that route matching input only to this
   evaluator; without one, evaluators are additive. Evaluator ordering is the
@@ -1465,7 +1513,7 @@ content, or config values.
 | `host_call_capacity` | `host call capacity exceeded` | More concurrent host RPCs than the bound allows |
 | `deadline_exceeded` | `deadline exceeded` | A `hints`, `text_grid` or `search` handler dropped before its deadline |
 | `confirmation_required` | `requires a perform the user confirmed` | A destructive `host.system_action` or a `host.process_signal` asked outside a confirmed perform |
-| `user_request_required` | `requires the user to be using the plugin` | A `host.calendar_events` `request_access` that would show macOS's prompt while none of the plugin's performs is in flight and no surface shows its segments |
+| `user_request_required` | `requires the user to be using the plugin` | A `request_access` (`host.calendar_events`, `host.notes`, `host.reminders`, `host.contacts`) that would show macOS's prompt while none of the plugin's performs or searches is in flight and no surface shows its segments |
 
 ## Limits and deadlines
 

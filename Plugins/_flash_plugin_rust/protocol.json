@@ -39,6 +39,9 @@
       "host.system_action": "system_actions",
       "host.process_signal": "process_signal",
       "host.calendar_events": "calendar_events",
+      "host.notes": "notes",
+      "host.reminders": "reminders",
+      "host.contacts": "contacts",
       "host.normal_mode_target": "app_control",
       "host.activate": "app_control",
       "host.open": "open",
@@ -179,7 +182,7 @@
     "min_pid": 2
   },
   "calendar_events": {
-    "$comment": "host.calendar_events: EventKit and the Calendars grant stay in the host, and macOS names Flash in its prompt. Requests carry operation and exactly the fields it takes; any other key refuses the call. Every success carries `access`, what macOS answers without asking: granted, denied (refused, restricted or write-only) or undetermined (Flash never asked). access {} -> {ok, access} reads it. request_access {} -> {ok, access} reads it too, and when it is undetermined asks macOS first and answers once the user did (granted or denied). The host asks only while the user is using the plugin, that is while one of its performs is in flight or a status surface shows one of its segments; an undetermined access asked about anywhere else answers errors.user_request_required and shows no prompt. Requests made while the prompt is open share its answer, and once the user answered the host sends core:calendar.changed, so a caller that stopped waiting still hears of it. list {start, end, calendars?} -> {ok, access, events?, truncated?} reads the occurrences overlapping start..<end, both Unix seconds from 0 to max_time, start < end, the window at most max_window_seconds long; calendars is at most max_calendars calendar titles as Calendar shows them, each non-empty and at most quotas.title_bytes, and absent or empty reads every event calendar. It never asks: without the grant it answers the access alone, with no events key. events are in start order (then end, then id), each one calendar_event shape. The reply holds at most max_events events and at most reply_bytes of them, counted from their compact encoding; later events are left out and `truncated` is true, and is absent otherwise. An EventKit failure answers {ok:false, error}.",
+    "$comment": "host.calendar_events: EventKit and the Calendars grant stay in the host, and macOS names Flash in its prompt. Requests carry operation and exactly the fields it takes; any other key refuses the call. Every success carries `access`, what macOS answers without asking: granted, denied (refused, restricted or write-only) or undetermined (Flash never asked). access {} -> {ok, access} reads it. request_access {} -> {ok, access} reads it too, and when it is undetermined asks macOS first and answers once the user did (granted or denied). The host asks only while the user is using the plugin, that is while one of its performs or searches is in flight or a status surface shows one of its segments; an undetermined access asked about anywhere else answers errors.user_request_required and shows no prompt. Requests made while the prompt is open share its answer, and once the user answered the host sends core:calendar.changed, so a caller that stopped waiting still hears of it. list {start, end, calendars?} -> {ok, access, events?, truncated?} reads the occurrences overlapping start..<end, both Unix seconds from 0 to max_time, start < end, the window at most max_window_seconds long; calendars is at most max_calendars calendar titles as Calendar shows them, each non-empty and at most quotas.title_bytes, and absent or empty reads every event calendar. It never asks: without the grant it answers the access alone, with no events key. events are in start order (then end, then id), each one calendar_event shape. The reply holds at most max_events events and at most reply_bytes of them, counted from their compact encoding; later events are left out and `truncated` is true, and is absent otherwise. An EventKit failure answers {ok:false, error}.",
     "operations": [
       "access",
       "request_access",
@@ -213,6 +216,40 @@
       "url",
       "location",
       "links"
+    ]
+  },
+  "app_items": {
+    "$comment": "host.notes, host.reminders and host.contacts (`methods`), each behind the capability of its own name: the items of an Apple app whose grant Flash holds (Automation of Notes, Reminders, Contacts), read by the host; macOS names Flash in its prompt and the plugin's sandbox gains nothing. The three take the same requests. Requests carry operation and exactly the fields it takes; any other key refuses the call. Every success but a show carries `access`, what macOS answers without asking: granted, denied or undetermined (Flash never asked; Notes also reads so while it is not running, since macOS has nobody to ask about). access {} -> {ok, access} reads it. request_access {} -> {ok, access} reads it too, and when it is undetermined and can be asked (Notes: only while Notes runs) asks macOS first and answers once the user did (granted or denied). The host asks only while the user is using the plugin, that is while one of its performs or searches is in flight or a status surface shows one of its segments; an undetermined access asked about anywhere else answers errors.user_request_required and shows no prompt. Requests made while the prompt is open share its answer. list {} -> {ok, access, items?, truncated?} reads every item in the app's own order: every note of every account, every open reminder of every list, every contact card. It never asks: without the grant it answers the access alone, with no items key, and Notes is never launched to answer. Each item is one app_item shape. The reply holds at most max_items items and at most reply_bytes of them, counted from their compact encoding; later items are left out and `truncated` is true, and is absent otherwise. show {id} -> {ok} brings the app forward on the item whose identifier a list returned: id is 1 to max_id_bytes bytes without control characters. It answers {ok:false, error} without the grant, and never asks. Notes is read and shown through the host's own fixed AppleScript, with the id as an escaped literal: no script, terminology or source is accepted from a plugin. A failure of the app, its framework or its script answers {ok:false, error}.",
+    "methods": [
+      "host.notes",
+      "host.reminders",
+      "host.contacts"
+    ],
+    "operations": [
+      "access",
+      "request_access",
+      "list",
+      "show"
+    ],
+    "access": [
+      "granted",
+      "denied",
+      "undetermined"
+    ],
+    "max_items": 10000,
+    "reply_bytes": 2097152,
+    "max_id_bytes": 1024
+  },
+  "app_item": {
+    "$comment": "One item of a host.notes, host.reminders or host.contacts list reply. id selects the item in its app again (show). title is a note's name, a reminder's title or the name Contacts shows a card by (the person's full name, or a company card's company), cut at a character boundary to quotas.title_bytes; it may be empty. A reminder also carries list, the title of its list (cut the same way), list_index, that list's position among Reminders' lists from 0 (absent when Reminders no longer names the list), and created, the Unix seconds it was created at (absent when it has none); a note and a contact carry none of the three. Nothing else of an item crosses the wire: no note text, no reminder notes or dates due, no phone number, address or other field of a card. Which rows these make, and in what order, is the plugin's to decide.",
+    "required": [
+      "id",
+      "title"
+    ],
+    "optional": [
+      "list",
+      "list_index",
+      "created"
     ]
   },
   "ax_snapshot": {
@@ -336,7 +373,7 @@
     }
   },
   "source_live": {
-    "$comment": "The manifest sources[].live key. Absent, the source is a pushed catalog (`publish`). `per_query` and `per_scope` make it live: it stays out of the default pool and of the catalog store, and the host pulls it with `search` only while a flashlight query is scoped to it (`@<type>`, or a bang bound to it). per_query is pulled on every change of the query text. per_scope is pulled once per scope with an empty query: its rows are the same whatever is typed, and the host filters them itself. A manifest's sources all declare the same `live`, or none does, and a live source is never `kind: locations` (location rows belong to the default pool). A plugin with live sources and none of pushed sources, query, hints, listen or an observed status is on demand: its first search or perform spawns it, and a search waits out that startup before its own deadline starts.",
+    "$comment": "The manifest sources[].live key. Absent, the source is a pushed catalog (`publish`). `per_query` and `per_scope` make it live: it stays out of the default pool and of the catalog store, and the host pulls it with `search` only while a flashlight query is scoped to it (`@<type>`, or a bang bound to it). per_query is pulled on every change of the query text. per_scope is pulled once per scope with an empty query: its rows are the same whatever is typed, and the host filters them itself. A manifest's sources all declare the same `live`, or none does, and a live source is never `kind: locations` (location rows belong to the default pool). A plugin with live sources and none of pushed sources, query, hints or an observed status is on demand: its first search or perform spawns it, and a search waits out that startup before its own deadline starts. A `listen` beside live sources feeds their rows and keeps no process: the events are delivered from that first search or perform on.",
     "values": [
       "per_query",
       "per_scope"
@@ -459,11 +496,14 @@
     "apple_events",
     "audio_devices",
     "calendar_events",
+    "contacts",
     "network",
     "network_fetch",
+    "notes",
     "open",
     "process_info",
     "process_signal",
+    "reminders",
     "system_actions",
     "wifi_info"
   ],

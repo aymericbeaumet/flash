@@ -888,6 +888,24 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(bound.isStatusBound)
     XCTAssertEqual(bound.activation(statusObserved: false), .onDemand)
     XCTAssertEqual(bound.activation(statusObserved: true), .resident)
+    XCTAssertFalse(bound.isLiveBound)
+
+    // Events that feed live rows keep no process: nothing reads the rows
+    // until a query asks, and the child hears its events from then on.
+    let listening = try manifest(
+      #"{"name": "a.items", "type": "items", "live": "per_scope"}"#,
+      #", "listen": ["core:apps.changed", "core:focus.changed"]"#)
+    XCTAssertTrue(listening.isLiveBound)
+    XCTAssertEqual(listening.activation, .onDemand)
+    XCTAssertEqual(listening.activation(statusObserved: false), .onDemand)
+    // Beside a surface that answers on its own, the events keep it running.
+    for extra in [#", "query": {}"#, #", "hints": {}"#] {
+      let other = try manifest(
+        #"{"name": "a.items", "type": "items", "live": "per_scope"}"#,
+        #", "listen": ["core:apps.changed"]"# + extra)
+      XCTAssertFalse(other.isLiveBound, extra)
+      XCTAssertEqual(other.activation, .resident, extra)
+    }
 
     for live in [#""always""#, "true", "null", #""""#, "1"] {
       let error = failure(#"{"name": "a.items", "type": "items", "live": \#(live)}"#)

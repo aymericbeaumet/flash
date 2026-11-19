@@ -53,6 +53,15 @@
       "$ref": "host.calendar_events.reply.schema.json"
     },
     {
+      "$ref": "host.notes.reply.schema.json"
+    },
+    {
+      "$ref": "host.reminders.reply.schema.json"
+    },
+    {
+      "$ref": "host.contacts.reply.schema.json"
+    },
+    {
       "$ref": "host.normal_mode_target.reply.schema.json"
     },
     {

@@ -3,9 +3,8 @@
 //! capability reads the access macOS grants Flash, asks for it, and lists
 //! the events of a bounded window through these typed calls.
 //!
-//! macOS names Flash in its prompt. The host shows it only while the user
-//! is using the plugin (one of its performs is in flight, or a status
-//! surface shows one of its segments), so ask from `on_command` or when
+//! macOS names Flash in its prompt, and the host shows it only while the
+//! user is using the plugin ([`GrantAccess`]): ask from `on_command` or when
 //! `core:status.observed` first lists a segment, never from a background
 //! refresh. The same capability delivers `core:calendar.changed`
 //! ([`host_events::CALENDAR_CHANGED`](crate::host_events::CALENDAR_CHANGED))
@@ -19,6 +18,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::context::Context;
+use crate::grant::{GrantAccess, access_from_response as access_of};
+
+const METHOD: &str = "host.calendar_events";
 
 /// Every `operation` of `host.calendar_events` (`protocol.json`
 /// `calendar_events.operations`).
@@ -30,42 +32,9 @@ pub(crate) const OPERATIONS: [&str; 3] = ["access", "request_access", "list"];
 pub const MAX_CALENDAR_WINDOW_SECONDS: i64 = 1_209_600;
 /// The most calendar titles one read names (`calendar_events.max_calendars`).
 pub const MAX_CALENDARS: usize = 64;
-/// What the host answers a [`Context::request_calendar_access`] that would
-/// show macOS's prompt while the user is not using the plugin
-/// (`errors.user_request_required`).
-pub const USER_REQUEST_REQUIRED_ERROR: &str = "requires the user to be using the plugin";
-
 /// How long a read waits for its reply: EventKit opens its database on the
 /// first one.
 const LIST_TIMEOUT: Duration = Duration::from_secs(8);
-
-/// What macOS answers about Flash's Calendars grant, without asking.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CalendarAccess {
-    Granted,
-    /// The user refused, a policy did, or the grant is write-only.
-    Denied,
-    /// Flash never asked.
-    Undetermined,
-}
-
-impl CalendarAccess {
-    /// In `protocol.json` order.
-    pub const ALL: [Self; 3] = [Self::Granted, Self::Denied, Self::Undetermined];
-
-    /// The name on the wire.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Granted => "granted",
-            Self::Denied => "denied",
-            Self::Undetermined => "undetermined",
-        }
-    }
-
-    fn from_wire(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|access| access.as_str() == name)
-    }
-}
 
 /// One occurrence of an event (`protocol.json` `calendar_event`).
 #[derive(Clone, Debug, PartialEq)]
@@ -102,29 +71,12 @@ pub enum CalendarListing {
         truncated: bool,
     },
     /// macOS grants no access: nothing was read.
-    NoAccess(CalendarAccess),
-}
-
-/// The host's error, or `fallback` for a failure that carries none.
-fn failure(response: &Value, fallback: &str) -> String {
-    response
-        .get("error")
-        .and_then(Value::as_str)
-        .filter(|error| !error.is_empty())
-        .unwrap_or(fallback)
-        .to_string()
+    NoAccess(GrantAccess),
 }
 
 /// The `access` of any successful reply.
-pub(crate) fn access_from_response(response: &Value) -> Result<CalendarAccess, String> {
-    if response.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err(failure(response, "host.calendar_events failed"));
-    }
-    response
-        .get("access")
-        .and_then(Value::as_str)
-        .and_then(CalendarAccess::from_wire)
-        .ok_or_else(|| "host.calendar_events response missing access".to_string())
+pub(crate) fn access_from_response(response: &Value) -> Result<GrantAccess, String> {
+    access_of(response, METHOD)
 }
 
 fn event_from_value(value: &Value) -> Option<CalendarEvent> {
@@ -166,7 +118,7 @@ fn event_from_value(value: &Value) -> Option<CalendarEvent> {
 /// A `list` reply; one malformed event refuses them all.
 pub(crate) fn listing_from_response(response: &Value) -> Result<CalendarListing, String> {
     let access = access_from_response(response)?;
-    if access != CalendarAccess::Granted {
+    if access != GrantAccess::Granted {
         return Ok(CalendarListing::NoAccess(access));
     }
     let events = response
@@ -187,7 +139,7 @@ impl Context {
     /// What macOS answers about Flash's Calendars grant, without asking
     /// (`host.calendar_events` `access`). Requires the `calendar_events`
     /// capability, as every call here does.
-    pub async fn calendar_access(&self) -> Result<CalendarAccess, String> {
+    pub async fn calendar_access(&self) -> Result<GrantAccess, String> {
         let params = json!({ "operation": "access" });
         access_from_response(&self.call_host("host.calendar_events", params).await)
     }
@@ -195,14 +147,11 @@ impl Context {
     /// The same, asking macOS first when Flash never asked
     /// (`request_access`): the answer is then `Granted` or `Denied`, once
     /// the user gave it. The host shows the prompt only while the user is
-    /// using the plugin and answers [`USER_REQUEST_REQUIRED_ERROR`]
+    /// using the plugin and answers [`USER_REQUEST_REQUIRED_ERROR`](crate::USER_REQUEST_REQUIRED_ERROR)
     /// otherwise. A prompt left open longer than `timeout` is the host-call
     /// timeout error; the host sends `core:calendar.changed` when the user
     /// answers, so read again then.
-    pub async fn request_calendar_access(
-        &self,
-        timeout: Duration,
-    ) -> Result<CalendarAccess, String> {
+    pub async fn request_calendar_access(&self, timeout: Duration) -> Result<GrantAccess, String> {
         let params = json!({ "operation": "request_access" });
         access_from_response(
             &self
@@ -319,11 +268,13 @@ mod tests {
         );
     }
 
+    use crate::USER_REQUEST_REQUIRED_ERROR;
+
     #[test]
     fn a_reply_without_the_grant_is_the_access_alone() {
         for (name, access) in [
-            ("denied", CalendarAccess::Denied),
-            ("undetermined", CalendarAccess::Undetermined),
+            ("denied", GrantAccess::Denied),
+            ("undetermined", GrantAccess::Undetermined),
         ] {
             let reply = json!({ "ok": true, "access": name });
             assert_eq!(access_from_response(&reply), Ok(access));
@@ -334,7 +285,7 @@ mod tests {
         }
         assert_eq!(
             access_from_response(&json!({ "ok": true, "access": "granted" })),
-            Ok(CalendarAccess::Granted)
+            Ok(GrantAccess::Granted)
         );
         for reply in [
             json!({ "ok": true }),
@@ -380,7 +331,7 @@ mod tests {
             assert!(harness.reply_host(id, json!({ "ok": true, "access": "denied" })));
             assert_eq!(
                 task.await.unwrap(),
-                Ok(CalendarListing::NoAccess(CalendarAccess::Denied))
+                Ok(CalendarListing::NoAccess(GrantAccess::Denied))
             );
         }
     }
@@ -407,8 +358,6 @@ mod tests {
         let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
         let calendar = &contract["calendar_events"];
         assert_eq!(calendar["operations"], json!(OPERATIONS));
-        let access: Vec<&str> = CalendarAccess::ALL.iter().map(|a| a.as_str()).collect();
-        assert_eq!(calendar["access"], json!(access));
         assert_eq!(calendar["max_window_seconds"], MAX_CALENDAR_WINDOW_SECONDS);
         assert_eq!(calendar["max_calendars"], MAX_CALENDARS);
         assert_eq!(

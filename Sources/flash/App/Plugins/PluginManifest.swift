@@ -69,6 +69,20 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// and the grant stay in the resident, macOS names Flash in its prompt,
   /// and an event's notes never cross the wire.
   case calendarEvents = "calendar_events"
+  /// Read the access macOS grants Flash to Notes (Automation), ask for it,
+  /// list every note as its identifier and name, and show one in Notes,
+  /// through the host (`host.notes`). The scripts are the host's own and
+  /// fixed; a note's text never crosses the wire.
+  case notes
+  /// The same for the open reminders, through EventKit in the resident
+  /// (`host.reminders`): each one's identifier, title, list and creation
+  /// time, and nothing else of it.
+  case reminders
+  /// The same for the contact cards, through the Contacts framework in the
+  /// resident (`host.contacts`): each card's identifier and the name
+  /// Contacts shows it by, never a phone number, an address or any other
+  /// field.
+  case contacts
 }
 
 /// A macOS privacy grant a plugin's work depends on, declared in its
@@ -737,18 +751,27 @@ struct PluginManifest: Decodable, Equatable {
 
   /// A plugin is resident — spawned at startup and kept running — iff its
   /// manifest declares pushed `sources`, `query`, `hints`, `status`, or
-  /// `listen`. On-demand surfaces alone (`commands`, `bangs`, `navigation`,
-  /// live `sources`) defer the spawn to the first `perform` or `search`, or
-  /// to the settled-startup prewarm when a configured mapping runs one of
-  /// the plugin's commands (`PluginWarmPolicy`). No `exec` means no process
-  /// ever.
+  /// `listen` without live sources. On-demand surfaces alone (`commands`,
+  /// `bangs`, `navigation`, live `sources`) defer the spawn to the first
+  /// `perform` or `search`, or to the settled-startup prewarm when a
+  /// configured mapping runs one of the plugin's commands
+  /// (`PluginWarmPolicy`). No `exec` means no process ever.
   var activation: PluginActivation {
     if exec == nil { return .manifestOnly }
     if lifecycle == .publishThenExit { return .publishThenExit }
     let resident =
       !pushedSources.isEmpty || query != nil || hints != nil || !status.isEmpty
-      || !listen.isEmpty
+      || (!listen.isEmpty && !isLiveBound)
     return resident ? .resident : .onDemand
+  }
+
+  /// A plugin whose sources are live and which declares no pushed source,
+  /// `query`, `hints` or `status` — its `listen` subscriptions, if any, feed
+  /// the rows of those sources. Nothing reads the rows until a query is
+  /// scoped to them, so the events keep no process: such a plugin waits for
+  /// its first `search` or `perform`, and hears its events from then on.
+  var isLiveBound: Bool {
+    liveSources != nil && query == nil && hints == nil && status.isEmpty
   }
 
   /// A plugin whose only resident surface is `status` — its `listen`

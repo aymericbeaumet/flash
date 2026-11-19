@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use flash_plugin::status::Published;
 use flash_plugin::{
-    CalendarAccess, CalendarEvent, CalendarListing, CommandRequest, Context, Deadline, Event,
+    CalendarEvent, CalendarListing, CommandRequest, Context, Deadline, Event, GrantAccess,
     MAX_CALENDARS, PerformAlert, PerformResponse, PollPriority, host_events, run,
 };
 
@@ -259,13 +259,13 @@ impl Shared {
                         .collect();
                     return Read::Agenda(Agenda::new(events, settings.lookahead()));
                 }
-                Ok(CalendarListing::NoAccess(CalendarAccess::Undetermined)) => {
+                Ok(CalendarListing::NoAccess(GrantAccess::Undetermined)) => {
                     let Some(timeout) = ask.take() else {
                         return Read::Denied;
                     };
                     match ctx.request_calendar_access(timeout).await {
                         // Read again, once: the grant is there now.
-                        Ok(CalendarAccess::Granted) => {}
+                        Ok(GrantAccess::Granted) => {}
                         Ok(_) => return Read::Denied,
                         Err(_) => return Read::Unanswered,
                     }

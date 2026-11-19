@@ -10,8 +10,8 @@ import Foundation
 ///
 /// A host action that shows one of macOS's privacy prompts asks whether the
 /// user is using the plugin: `servesUser` answers true while one of the
-/// child's performs is in flight or a status surface shows one of its
-/// segments, so a plugin never raises a prompt from the background.
+/// child's performs or searches is in flight or a status surface shows one
+/// of its segments, so a plugin never raises a prompt from the background.
 struct PluginHostRequestScope {
   let isCurrent: () -> Bool
   var claimConfirmedPerform: () -> Bool = { false }

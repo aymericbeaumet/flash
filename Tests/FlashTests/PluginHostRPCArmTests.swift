@@ -70,7 +70,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 16, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 19, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -84,7 +84,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 15, "15 gated + host.ping ungated")
+    XCTAssertEqual(gated, 18, "18 gated + host.ping ungated")
     // The ungated arm answers without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
   }

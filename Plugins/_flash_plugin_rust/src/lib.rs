@@ -9,6 +9,7 @@
 mod applescript;
 mod audio;
 mod calendar;
+mod catalog;
 #[cfg(test)]
 mod conformance;
 mod context;
@@ -16,6 +17,8 @@ mod deadline;
 mod emit;
 mod events;
 mod framing;
+mod grant;
+mod items;
 mod observed;
 mod poll;
 pub mod process;
@@ -58,8 +61,11 @@ pub use types::{
 
 pub use applescript::AppleScriptOperation;
 pub use audio::{AudioDevice, AudioDirection, MAX_VOLUME_TICKS, OutputVolume};
-pub use calendar::{
-    CalendarAccess, CalendarEvent, CalendarListing, MAX_CALENDAR_WINDOW_SECONDS, MAX_CALENDARS,
-    USER_REQUEST_REQUIRED_ERROR,
+pub use calendar::{CalendarEvent, CalendarListing, MAX_CALENDAR_WINDOW_SECONDS, MAX_CALENDARS};
+pub use catalog::{
+    CatalogOutcome, CatalogRequest, CatalogRow, CatalogSchedule, CatalogStep, ItemCatalog,
+    ItemCatalogSpec,
 };
+pub use grant::{GrantAccess, USER_REQUEST_REQUIRED_ERROR};
+pub use items::{AppItem, AppItemListing, AppItems, MAX_APP_ITEM_ID_BYTES};
 pub use system::{CONFIRMATION_REQUIRED_ERROR, SystemAction, SystemActionOutcome};

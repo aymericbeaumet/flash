@@ -376,6 +376,9 @@ final class PluginSchemaTests: XCTestCase {
     rpc.processSignals = ProcessSignalStub()
     rpc.calendarEvents = HostCalendarEvents(
       provider: CalendarEventStub.corpus(), scheduler: PollScheduler(), changed: {})
+    for kind in HostAppItemKind.allCases {
+      rpc.appItems[kind] = AppItemStub.host(kind, AppItemStub.corpus(kind))
+    }
     rpc.appleScriptRunner = { _, _ in
       AppleScriptOutput(status: 0, stdout: "Focus\nRest\n", stderr: "")
     }

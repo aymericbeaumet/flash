@@ -218,6 +218,10 @@ final class PluginProcess {
   /// (`PluginHostRequestScope.servesUser`). Guarded by
   /// `confirmedPerformsLock`.
   private var performsInFlight = 0
+  /// The searches written to the child and not yet answered: a flashlight
+  /// query scoped to one of its live sources is the user using the plugin
+  /// too. Guarded by `confirmedPerformsLock`.
+  private var searchesInFlight = 0
   /// The search each live source waits to send, by source name: a newer
   /// query of the same source replaces the one still waiting. Queue-confined.
   private var deferredSearches: [String: DeferredSearch] = [:]
@@ -1256,12 +1260,22 @@ final class PluginProcess {
     completion: @escaping ([Candidate]) -> Void
   ) {
     let sourceID = "plugin:\(manifest.id)"
+    // In flight from here to its reply, its deadline or the child's end:
+    // each of them completes the request below, exactly once.
+    confirmedPerformsLock.lock()
+    searchesInFlight += 1
+    confirmedPerformsLock.unlock()
     sendRequest(
       method: "search",
       params: ["source": source, "query": query],
       timeout: .milliseconds(Self.searchDeadlineMs),
       trace: trace
     ) { [weak self] response in
+      if let self {
+        self.confirmedPerformsLock.lock()
+        self.searchesInFlight -= 1
+        self.confirmedPerformsLock.unlock()
+      }
       let rows = PluginWireCodec.searchRows(from: response, source: source, sourceID: sourceID)
       if rows == nil, PluginWireCodec.okPayload(response) != nil, let self {
         FlashLog.plugin(
@@ -1411,14 +1425,14 @@ final class PluginProcess {
     return confirmedPerforms.claim()
   }
 
-  /// Whether the user is using the plugin now: one of its performs is in
-  /// flight, or a status surface shows one of its segments. Safe from any
-  /// queue.
+  /// Whether the user is using the plugin now: one of its performs or of
+  /// its searches is in flight, or a status surface shows one of its
+  /// segments. Safe from any queue.
   private func servesUser() -> Bool {
     confirmedPerformsLock.lock()
-    let performing = performsInFlight > 0
+    let serving = performsInFlight > 0 || searchesInFlight > 0
     confirmedPerformsLock.unlock()
-    if performing { return true }
+    if serving { return true }
     lock.lock()
     defer { lock.unlock() }
     return !observedStatusSegments.isEmpty

@@ -250,12 +250,12 @@ Handed to every handler; cheap to clone. Key surface:
   the host never signals itself, launchd or a process group.
   The `calendar_events` capability reads the user's calendar through the
   host, which keeps EventKit and the Calendars grant: `calendar_access()`
-  answers `CalendarAccess::Granted`, `Denied` or `Undetermined` without
+  answers `GrantAccess::Granted`, `Denied` or `Undetermined` without
   asking; `request_calendar_access(timeout)` asks macOS first when Flash
   never asked, and the host shows that prompt only while the user is using
-  the plugin (a perform in flight, or a surface showing one of its
-  segments), answering `USER_REQUEST_REQUIRED_ERROR` anywhere else: call it
-  from `on_command`, or when `core:status.observed` first lists a segment.
+  the plugin (a perform or a search in flight, or a surface showing one of
+  its segments), answering `USER_REQUEST_REQUIRED_ERROR` anywhere else: call
+  it from `on_command`, or when `core:status.observed` first lists a segment.
   `calendar_events(start, end, &calendars)` lists the occurrences of a
   window of whole Unix seconds, at most `MAX_CALENDAR_WINDOW_SECONDS` (14
   days) long, in the calendars titled so (none: every calendar), and never
@@ -266,6 +266,30 @@ Handed to every handler; cheap to clone. Key surface:
   `links`, the link-shaped runs of its notes: the notes themselves never
   reach a plugin. Listen for `host_events::CALENDAR_CHANGED` to read again
   when the database changes or the user answers the prompt.
+  The `notes`, `reminders` and `contacts` capabilities read one Apple app
+  each through the host, which keeps the app's grant, under the same
+  `GrantAccess` and the same asking rule: `app_items_access(app)`,
+  `request_app_items_access(app, timeout)` (call it from `on_search` or
+  `on_command`), `app_items(app)` and `show_app_item(app, id)`, with `app`
+  one of `AppItems::Notes`, `Reminders` or `Contacts`. A listing never asks:
+  it answers `AppItemListing::NoAccess(access)` without the grant, else
+  `Items { items, truncated }` in the app's own order. An `AppItem` is an
+  `id` and a `title` (a note's name, a reminder's title, the name Contacts
+  shows a card by), plus a reminder's `list`, `list_index` and `created`:
+  nothing else of an item reaches a plugin.
+- `ItemCatalog` keeps such a listing as flashlight rows: one per plugin,
+  built from an `ItemCatalogSpec` (the app, its bundle id, the source name
+  and the function that shapes and orders the rows), and handed
+  `on_event`, `on_search` (`search`), `on_resolve` (`resolve`) and
+  `on_command` (`command`: `open` and `refresh`). It answers a search from
+  its last good rows, lists only while the app runs, and relists when the
+  app launches, when focus leaves it, when the flashlight opens (the app
+  focused, or the listing a minute old) and on `refresh`. An event relists
+  what Flash may already read; only a query or `refresh` has the host ask
+  macOS. The manifest declares one live `per_scope` source and listens to
+  `core:apps.launched`, `core:apps.terminated`, `core:focus.changed` and
+  `core:session.opened`: events beside live sources keep no process, so
+  nothing runs until the first query or command (`Plugins/notes`).
 - Host clock: a plugin never arms a timer or sleeps to schedule work.
   `ctx.interval(period, priority, callback)` registers a cadence with the
   host, which drives every poller in Flash — core watchers included — from one

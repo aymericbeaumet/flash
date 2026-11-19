@@ -287,8 +287,9 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   `host.calendar_events` and the `calendar_events` capability, on the
   calendar queue, never on main. Only `request_access` asks macOS, and only
   while `PluginHostRequestScope.servesUser` says the user is using the
-  plugin (a perform in flight, a surface showing one of its segments). An
-  event's notes never cross the wire, only their link-shaped runs.
+  plugin (a perform or a search in flight, a surface showing one of its
+  segments). An event's notes never cross the wire, only their link-shaped
+  runs.
   `core:calendar.changed` reaches plugins holding the capability alone
   (`HostEvent.requiredCapability`). The resident alone wires
   `LiveCalendarEvents`, inert under XCTest; a test injects
@@ -298,6 +299,19 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   and `links.rs`), which reads only while `core:status.observed` lists a
   segment or a command runs, and wakes on the host clock for the next change
   ([next meeting](docs/status-plugins.md#next-meeting)).
+- Notes, Reminders and Contacts are the host's (`HostAppItems.swift`),
+  behind `host.notes`, `host.reminders` and `host.contacts` and the
+  capability of each name, each app on its own queue, never on main. Only
+  `request_access` asks macOS, under `servesUser`, read as the request
+  arrives; a listing never asks and never launches Notes, whose scripts are
+  the host's own and fixed. An item crosses the wire as an identifier and
+  one line (a reminder adds its list and creation time), nothing else. The
+  resident alone wires `LiveAppItems`, inert under XCTest; a test injects
+  `AppItemProviding` and never reads a real note, reminder or contact, runs
+  a script or shows a prompt.
+- A `listen` beside live sources keeps no process
+  (`PluginManifest.isLiveBound`): the events feed rows nobody reads until a
+  query asks, and the child hears them from its first search or perform on.
 - The process table belongs to the `processes` plugin
   (`Plugins/processes/src/sys.rs`, libproc under `process_info`), never the
   resident: the top tables, the focused app's summary, `@processes` and

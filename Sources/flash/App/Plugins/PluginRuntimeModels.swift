@@ -61,13 +61,14 @@ enum PluginRuntimeState: String {
 /// How (and whether) a plugin's child process is scheduled. Derived from the
 /// manifest and, for a status-bound plugin, whether a status surface shows it.
 enum PluginActivation: String {
-  /// Spawned at startup and kept running: the manifest declares `sources`,
-  /// `query`, `hints`, `status`, or `listen` — a status-bound plugin
-  /// (`PluginManifest.isStatusBound`) only while the enabled bar or a desktop
-  /// widget shows it.
+  /// Spawned at startup and kept running: the manifest declares pushed
+  /// `sources`, `query`, `hints`, `status`, or `listen` — a status-bound
+  /// plugin (`PluginManifest.isStatusBound`) only while the enabled bar or a
+  /// desktop widget shows it, and never for the `listen` of a live-bound one
+  /// (`PluginManifest.isLiveBound`).
   case resident
-  /// Stays unspawned until its first `perform` (the perform deadline absorbs
-  /// the startup budget), then remains running. One whose command a
+  /// Stays unspawned until its first `perform` or `search` (the perform
+  /// deadline absorbs the startup budget), then remains running. One whose command a
   /// configured mapping runs is spawned once startup has settled instead
   /// (`PluginWarmPolicy`).
   case onDemand = "on_demand"

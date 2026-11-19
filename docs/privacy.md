@@ -587,6 +587,18 @@ those plugins that the calendar changed. `calendar` is the bundled plugin
 that declares it, beside `open` for the meeting link it hands Flash to open:
 it is sandboxed with no allowance, reads no file and stores nothing.
 
+The same holds for Notes, Reminders and Contacts. Flash holds the grants
+(Automation of Notes, Reminders, Contacts) and reads the apps itself; a
+plugin declaring the `notes`, `reminders` or `contacts` capability asks
+Flash for that one app's list and receives, per item, an identifier and one
+line: a note's name, an open reminder's title with its list's title and
+position and its creation time, the name Contacts shows a card by. A note's
+text, a reminder's notes and dates, and a card's phone numbers, addresses
+and other fields never leave Flash. One capability reads one app: `notes`
+reads no contact. macOS's prompt for each comes up only while you are using
+that plugin (a query is scoped to its rows, or one of its commands is
+running). Flash's log counts the items of a listing and names none.
+
 Third-party plugins load only when listed in `[plugins] third_party`, and GitHub
 references must pin a full commit SHA. They get the same sandbox: one runs
 unsandboxed only when its manifest declares `"sandbox": false`.

@@ -24,6 +24,7 @@ enum PluginHostRequest {
   /// refused when the request is decoded.
   case processSignal(pid: pid_t, signal: HostProcessSignal)
   case calendar(Calendar)
+  case appItems(HostAppItemKind, AppItems)
   case ax(AX)
 
   typealias Chord = (key: CGKeyCode, flags: CGEventFlags)
@@ -68,6 +69,22 @@ enum PluginHostRequest {
     ]
   }
 
+  /// One `host.notes`, `host.reminders` or `host.contacts` operation
+  /// (`protocol.json` `app_items`).
+  enum AppItems: Equatable {
+    case access
+    case requestAccess
+    case list
+    /// An identifier `list` returned: `HostAppItems.isShowableID`.
+    case show(id: String)
+
+    /// The operation names, in contract order, each with the params it
+    /// takes besides `operation`.
+    static let operations: [(name: String, params: Set<String>)] = [
+      ("access", []), ("request_access", []), ("list", []), ("show", ["id"]),
+    ]
+  }
+
   /// The most ticks one `step_volume` moves: the whole scale.
   static let maxVolumeTicks = CoreAudioDevices.volumeTicks
 
@@ -104,6 +121,9 @@ enum PluginHostRequest {
     case systemAction = "host.system_action"
     case processSignal = "host.process_signal"
     case calendarEvents = "host.calendar_events"
+    case notes = "host.notes"
+    case reminders = "host.reminders"
+    case contacts = "host.contacts"
     case normalModeTarget = "host.normal_mode_target"
     case activate = "host.activate"
     case open = "host.open"
@@ -125,6 +145,9 @@ enum PluginHostRequest {
       case .systemAction: return .systemActions
       case .processSignal: return .processSignal
       case .calendarEvents: return .calendarEvents
+      case .notes: return .notes
+      case .reminders: return .reminders
+      case .contacts: return .contacts
       case .normalModeTarget, .activate: return .appControl
       case .open: return .open
       case .postKeys, .axSnapshot, .axPerform, .axSet, .axSelectChild: return .accessibility
@@ -143,6 +166,7 @@ enum PluginHostRequest {
       case .systemAction: return ["action"]
       case .processSignal: return ["pid", "signal"]
       case .calendarEvents: return ["operation", "start", "end", "calendars"]
+      case .notes, .reminders, .contacts: return ["operation", "id"]
       case .activate: return ["pid"]
       case .open: return ["url", "bundle_id", "if_handled"]
       case .postKeys: return ["pid", "keys", "interval_ms"]
@@ -202,6 +226,12 @@ enum PluginHostRequest {
       self = .processSignal(pid: pid, signal: signal)
     case .calendarEvents:
       self = .calendar(try Self.calendar(params, malformed: malformed))
+    case .notes:
+      self = .appItems(.notes, try Self.appItems(.notes, params, malformed: malformed))
+    case .reminders:
+      self = .appItems(.reminders, try Self.appItems(.reminders, params, malformed: malformed))
+    case .contacts:
+      self = .appItems(.contacts, try Self.appItems(.contacts, params, malformed: malformed))
     case .activate:
       guard let pid = PluginJSON.pid(params["pid"]) else {
         throw Refusal(message: "host.activate requires pid")
@@ -358,6 +388,31 @@ enum PluginHostRequest {
     return .list(
       start: Date(timeIntervalSince1970: TimeInterval(start)),
       end: Date(timeIntervalSince1970: TimeInterval(end)), calendars: calendars)
+  }
+
+  /// `host.notes`, `host.reminders` and `host.contacts`: a known operation
+  /// with exactly its own params.
+  private static func appItems(
+    _ kind: HostAppItemKind, _ params: [String: Any], malformed: Refusal
+  ) throws(Refusal) -> AppItems {
+    guard let name = params["operation"] as? String,
+      let operation = AppItems.operations.first(where: { $0.name == name })
+    else { throw Refusal(message: "\(kind.method) requires a supported operation") }
+    guard Set(params.keys).isSubset(of: operation.params.union(["operation"])) else {
+      throw malformed
+    }
+    switch name {
+    case "access": return .access
+    case "request_access": return .requestAccess
+    case "list": return .list
+    default: break
+    }
+    guard let id = params["id"] as? String, HostAppItems.isShowableID(id) else {
+      throw Refusal(
+        message: "\(kind.method) show requires an id of 1 to \(HostAppItems.maxIDBytes) bytes "
+          + "without control characters")
+    }
+    return .show(id: id)
   }
 
   /// `host.open` names one thing: a URL or an app.

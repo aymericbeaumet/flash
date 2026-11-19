@@ -73,6 +73,10 @@ The lines describe one plugin and one moment:
   `Room 4` and a Zoom link in its notes, and `Lunch` at 10:00 in `Home`.
 - Only `https:` URLs have an application: `host.open` with `if_handled`
   refuses a `zoommtg:` link.
+- macOS grants Notes, Reminders and Contacts access. Notes holds `Groceries`
+  and `Taxes 2026`; Reminders holds `Buy milk` in `Inbox`, created at
+  1800000000, and `Ship release` in `Work`; Contacts holds `Ada Lovelace`
+  and `Grace Hopper`. A `show` brings no app forward.
 - Evaluating `2+2` answers `4`; any other query answers nothing.
 - Searching the live source `example.live` for `ro` answers two rows; any
   other query answers none. The corpus pins frames, so its one plugin answers

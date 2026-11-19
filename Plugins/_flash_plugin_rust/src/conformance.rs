@@ -18,10 +18,10 @@ use crate::runtime::decode_event;
 use crate::status::{Preview, StatusCarousel, StatusSegment, StatusValue};
 use crate::testing::{Harness, WireHarness};
 use crate::{
-    AppleScriptOperation, AudioDirection, Candidate, Context, EvaluateRequest, EvaluateResponse,
-    Frame, HintsRequest, HintsResponse, JumpTarget, Perform, PerformResponse, Plugin, PollPriority,
-    Priority, QueryAnswer, SearchRequest, SearchResponse, TextGridLine, TextGridRequest,
-    TextGridResponse,
+    AppItems, AppleScriptOperation, AudioDirection, Candidate, Context, EvaluateRequest,
+    EvaluateResponse, Frame, HintsRequest, HintsResponse, JumpTarget, Perform, PerformResponse,
+    Plugin, PollPriority, Priority, QueryAnswer, SearchRequest, SearchResponse, TextGridLine,
+    TextGridRequest, TextGridResponse,
 };
 
 const HOST_FRAMES: &str = include_str!("../conformance/host-frames.ndjson");
@@ -661,6 +661,75 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
             "host.calendar_events.list.calendars",
             request(|ctx| async move {
                 ctx.calendar_events(1_800_000_000, 1_800_172_800, &["Work".to_string()])
+                    .await
+            })
+            .await,
+        ),
+        (
+            "host.notes.access",
+            request(|ctx| async move { ctx.app_items_access(AppItems::Notes).await }).await,
+        ),
+        (
+            "host.notes.request-access",
+            request(|ctx| async move {
+                ctx.request_app_items_access(AppItems::Notes, Duration::from_secs(5))
+                    .await
+            })
+            .await,
+        ),
+        (
+            "host.notes.list",
+            request(|ctx| async move { ctx.app_items(AppItems::Notes).await }).await,
+        ),
+        (
+            "host.notes.show",
+            request(|ctx| async move {
+                ctx.show_app_item(AppItems::Notes, "x-coredata://4F1C/ICNote/p12")
+                    .await
+            })
+            .await,
+        ),
+        (
+            "host.reminders.access",
+            request(|ctx| async move { ctx.app_items_access(AppItems::Reminders).await }).await,
+        ),
+        (
+            "host.reminders.request-access",
+            request(|ctx| async move {
+                ctx.request_app_items_access(AppItems::Reminders, Duration::from_secs(5))
+                    .await
+            })
+            .await,
+        ),
+        (
+            "host.reminders.list",
+            request(|ctx| async move { ctx.app_items(AppItems::Reminders).await }).await,
+        ),
+        (
+            "host.reminders.show",
+            request(|ctx| async move { ctx.show_app_item(AppItems::Reminders, "5F8A-R1").await })
+                .await,
+        ),
+        (
+            "host.contacts.access",
+            request(|ctx| async move { ctx.app_items_access(AppItems::Contacts).await }).await,
+        ),
+        (
+            "host.contacts.request-access",
+            request(|ctx| async move {
+                ctx.request_app_items_access(AppItems::Contacts, Duration::from_secs(5))
+                    .await
+            })
+            .await,
+        ),
+        (
+            "host.contacts.list",
+            request(|ctx| async move { ctx.app_items(AppItems::Contacts).await }).await,
+        ),
+        (
+            "host.contacts.show",
+            request(|ctx| async move {
+                ctx.show_app_item(AppItems::Contacts, "5F8A-C1:ABPerson")
                     .await
             })
             .await,

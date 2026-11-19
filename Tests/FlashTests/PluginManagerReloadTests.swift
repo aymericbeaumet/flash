@@ -870,6 +870,92 @@ final class PluginManagerReloadTests: XCTestCase {
     XCTAssertEqual(observedCalendar.asks, 1)
   }
 
+  /// A flashlight query scoped to a live source is the user using the
+  /// plugin: a request for access made while its `search` is in flight is
+  /// honoured, and the same request made once the search was answered is
+  /// refused. The plugin listens to events, which feed its rows: nothing of
+  /// it runs until the first query. Notes is a stub; nothing here reaches
+  /// macOS.
+  func testAPrivacyPromptIsHonouredWhileALiveSearchIsInFlight() throws {
+    let request = #"{"id":%s,"method":"host.notes","params":{"operation":"request_access"}}"#
+    let ask = """
+      printf '\(request)\\n' "$n"
+      n=$((n + 1))
+      while IFS= read -r reply; do
+        case "$reply" in *'"result"'*) break ;; esac
+      done
+      printf '%s\\n' "$reply" >> "$D/replies"
+      """
+    let rows = #"printf '{"id":%s,"result":{"ok":true,"rows":[]}}\n' "$id""#
+    let fixture = try PluginFixtureKit.make(
+      id: "mgrsearchprompt",
+      manifest: PluginFixtureKit.manifest(
+        id: "mgrsearchprompt",
+        extra: """
+          "capabilities": ["notes"],
+          "listen": ["core:focus.changed", "core:session.opened"],
+          "sources": [{ "name": "mgrsearchprompt.items", "type": "promptitems", "live": "per_scope" }]
+          """),
+      script: PluginFixtureKit.script(
+        prologue: "n=1; s=0",
+        // The first search is answered before it asks, the second after.
+        onSearch: """
+          s=$((s + 1))
+          if [ "$s" = 1 ]; then
+            \(rows)
+            \(ask)
+          else
+            \(ask)
+            \(rows)
+          fi
+          """))
+    defer { fixture.cleanup() }
+    func replies() -> [NSDictionary] {
+      let text =
+        (try? String(
+          contentsOf: fixture.dataDir.appendingPathComponent("replies"), encoding: .utf8)) ?? ""
+      return text.split(separator: "\n").compactMap {
+        (try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])?["result"]
+          as? NSDictionary
+      }
+    }
+    let manager = PluginManager(baseDataDir: fixture.baseDataDir)
+    defer { manager.stop() }
+    let notes = AppItemStub(access: .undetermined)
+    manager.hostRPC.appItems[.notes] = AppItemStub.host(.notes, notes)
+    manager.start(config: testConfig(thirdParty: ["file:\(fixture.root.path)"]))
+    waitUntilTrue("registered") {
+      self.status(manager, "mgrsearchprompt")?.activation == "on_demand"
+    }
+    XCTAssertTrue(manager.hasListener(for: .focusChanged))
+    settleRunLoop(0.2)
+    XCTAssertEqual(fixture.spawnCount(), 0, "events that feed live rows keep no process")
+
+    let registry = SourceRegistry(
+      descriptors: [], runningApplications: [], pluginSourcesProvider: { manager.sources })
+    let source = try XCTUnwrap(
+      registry.liveCandidateSources(matching: .type("promptitems")).first)
+    func search() {
+      let answered = expectation(description: "search")
+      source.liveCandidates(matching: "", in: registry.environment, scope: .all) { _ in
+        answered.fulfill()
+      }
+      wait(for: [answered], timeout: 8)
+    }
+    let refused: NSDictionary = [
+      "ok": false, "error": "requires the user to be using the plugin",
+    ]
+    search()
+    waitUntilTrue("the late request was answered") { replies().count == 1 }
+    XCTAssertEqual(replies(), [refused])
+    XCTAssertEqual(notes.asks, 0, "no prompt once the search was answered")
+
+    search()
+    XCTAssertEqual(replies(), [refused, ["ok": true, "access": "granted"] as NSDictionary])
+    XCTAssertEqual(notes.asks, 1)
+    XCTAssertEqual(fixture.spawnCount(), 1)
+  }
+
   func testManifestFileChangeReconcilesWithoutExplicitReload() throws {
     let fixture = try residentFixture(id: "definitionwatch")
     defer { fixture.cleanup() }

@@ -548,6 +548,167 @@
           }
         }
       ]
+    },
+    "app_items_params": {
+      "description": "The params of host.notes, host.reminders and host.contacts: one operation with exactly its own fields.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "access"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "request_access"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "list"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "id"
+          ],
+          "properties": {
+            "operation": {
+              "const": "show"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$",
+              "description": "An identifier a list returned."
+            }
+          }
+        }
+      ]
+    },
+    "app_items_result": {
+      "description": "The result of host.notes, host.reminders and host.contacts: the access alone (for access, request_access, and a list without the grant), the items of a granted list in the app's order, a show that happened, or why the host could not answer.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "access"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "access": {
+              "enum": [
+                "granted",
+                "denied",
+                "undetermined"
+              ],
+              "description": "What macOS answers about Flash's grant, without asking."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "access",
+            "items"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "access": {
+              "const": "granted"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 10000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "title"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Selects the item in its app again."
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "A note's name, a reminder's title, the name Contacts shows a card by."
+                  },
+                  "list": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "The title of a reminder's list."
+                  },
+                  "list_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The position of a reminder's list among Reminders' lists."
+                  },
+                  "created": {
+                    "type": "number",
+                    "description": "When a reminder was created, in Unix seconds."
+                  }
+                }
+              }
+            },
+            "truncated": {
+              "const": true,
+              "description": "Later items were left out: the reply holds at most 10000 items and 2097152 bytes of them."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            }
+          },
+          "description": "A show: the app was brought forward on the item."
+        },
+        {
+          "$ref": "#/definitions/failure"
+        }
+      ]
     }
   }
 }

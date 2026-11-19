@@ -641,6 +641,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       changed: { [weak self] in
         DispatchQueue.main.async { self?.emitHostEvent(PluginEvent(.calendarChanged)) }
       })
+    // Notes, Reminders and Contacts for `host.notes`, `host.reminders` and
+    // `host.contacts`, wired here alone too.
+    for (kind, provider) in LiveAppItems.providers() {
+      pluginManager.hostRPC.appItems[kind] = HostAppItems(kind: kind, provider: provider)
+    }
     let launchApplications = Self.runningApplicationsSnapshot()
     pluginManager.cacheRunningApplicationsSnapshot(launchApplications)
     launchStages.measure("plugins") { pluginManager.start(config: config) }

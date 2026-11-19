@@ -435,6 +435,18 @@ monitors read that no plugin publishes any more, with its replacement.
   status surface shows one of its values), and `core:calendar.changed`
   tells such a plugin, and nobody else, that the calendar changed
   ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
+- A plugin holding the new `notes`, `reminders` or `contacts` capability
+  lists that app's items through Flash, which keeps the grant:
+  `host.notes`, `host.reminders` and `host.contacts` report the access macOS
+  grants, ask for it, list every note, open reminder or contact card as an
+  identifier and one line (a reminder adds its list and creation time, and
+  nothing else of an item crosses), and show one in its app. macOS's prompt
+  comes up only while you are using that plugin, which now includes a
+  flashlight query scoped to one of its live sources
+  ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
+- A plugin whose sources are live keeps no process for the events it
+  listens to: it starts on its first query or command and hears them from
+  then on ([activation](docs/plugin-protocol.md#process-model-and-lifecycle)).
 - `host.open` takes `"if_handled": true` beside a URL: Flash then opens it
   only when an application is registered for it, so a plugin tries an app's
   own link (`zoommtg:`) before the web one.

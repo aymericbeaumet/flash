@@ -130,6 +130,35 @@
 {"name": "host.calendar_events.reply.with-notes", "expect": "accept", "reply_to": "host.calendar_events", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"granted","events":[{"id":"E2@1800007200","title":"Lunch","start":1800007200,"end":1800010800,"all_day":false,"calendar":"Home","declined":false,"canceled":false,"notes":"Bring the slides"}]}}}
 {"name": "host.calendar_events.reply.unknown-access", "expect": "accept", "reply_to": "host.calendar_events", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"limited"}}}
 {"name": "host.calendar_events.reply.events-without-the-grant", "expect": "accept", "reply_to": "host.calendar_events", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"denied","events":[]}}}
+{"name": "host.notes.reply.access", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted"}}}
+{"name": "host.notes.reply.list", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"x-coredata://4F1C/ICNote/p12","title":"Groceries"},{"id":"x-coredata://4F1C/ICNote/p27","title":"Taxes 2026"}]}}}
+{"name": "host.notes.reply.show", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.notes.reply.without-an-operation", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"host.notes requires a supported operation"}}}
+{"name": "host.notes.reply.invalid-id", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"host.notes show requires an id of 1 to 1024 bytes without control characters"}}}
+{"name": "host.notes.reply.params-refused", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.notes params"}}}
+{"name": "host.notes.reply.denied", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"denied"}}}
+{"name": "host.notes.reply.undetermined", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"undetermined"}}}
+{"name": "host.notes.reply.list.empty", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[]}}}
+{"name": "host.notes.reply.list.truncated", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"x-coredata://4F1C/ICNote/p12","title":"Groceries"}],"truncated":true}}}
+{"name": "host.notes.reply.user-required", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"requires the user to be using the plugin"}}}
+{"name": "host.notes.reply.show-without-access", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"host.notes show requires access"}}}
+{"name": "host.notes.reply.failed", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"notes unavailable"}}}
+{"name": "host.notes.reply.with-a-body", "expect": "accept", "reply_to": "host.notes", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"x-coredata://4F1C/ICNote/p12","title":"Groceries","body":"Milk, eggs"}]}}}
+{"name": "host.notes.reply.unknown-access", "expect": "accept", "reply_to": "host.notes", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"limited"}}}
+{"name": "host.notes.reply.items-without-the-grant", "expect": "accept", "reply_to": "host.notes", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"denied","items":[]}}}
+{"name": "host.reminders.reply.access", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":true,"access":"granted"}}}
+{"name": "host.reminders.reply.list", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"5F8A-R1","title":"Buy milk","list":"Inbox","list_index":0,"created":1800000000},{"id":"5F8A-R2","title":"Ship release","list":"Work","list_index":1}]}}}
+{"name": "host.reminders.reply.show", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.reminders.reply.without-an-operation", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":false,"error":"host.reminders requires a supported operation"}}}
+{"name": "host.reminders.reply.invalid-id", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":false,"error":"host.reminders show requires an id of 1 to 1024 bytes without control characters"}}}
+{"name": "host.reminders.reply.params-refused", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.reminders params"}}}
+{"name": "host.contacts.reply.access", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":true,"access":"granted"}}}
+{"name": "host.contacts.reply.list", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"5F8A-C1:ABPerson","title":"Ada Lovelace"},{"id":"5F8A-C2:ABPerson","title":"Grace Hopper"}]}}}
+{"name": "host.contacts.reply.show", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.contacts.reply.without-an-operation", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":false,"error":"host.contacts requires a supported operation"}}}
+{"name": "host.contacts.reply.invalid-id", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":false,"error":"host.contacts show requires an id of 1 to 1024 bytes without control characters"}}}
+{"name": "host.contacts.reply.params-refused", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.contacts params"}}}
+{"name": "host.contacts.reply.with-a-phone", "expect": "accept", "reply_to": "host.contacts", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"5F8A-C1:ABPerson","title":"Ada Lovelace","phone":"+1 555 0100"}]}}}
 {"name": "host.open.reply", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true,"bundle_id":"com.apple.Safari"}}}
 {"name": "host.open.reply.app", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true}}}
 {"name": "host.open.reply.local-file", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"host.open does not open local files"}}}
