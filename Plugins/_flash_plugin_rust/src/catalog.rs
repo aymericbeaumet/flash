@@ -355,21 +355,25 @@ impl ItemCatalog {
     }
 
     /// The rows of the catalog's source: the last good ones, after a
-    /// listing in flight when it lands in time. A query names the catalog,
-    /// so this is where macOS is first asked for access; once macOS
-    /// answered and the rows are loaded, a query costs nothing.
+    /// listing in flight when it lands within `SEARCH_WAIT`. A query names
+    /// the catalog, so this is where macOS is first asked for access; once
+    /// macOS answered and the rows are loaded, a query costs nothing.
     pub async fn search(&self, ctx: &Context, request: &SearchRequest) -> SearchResponse {
         let inner = &self.inner;
         if request.source != inner.spec.source {
             return SearchResponse::default();
         }
+        let deadline = tokio::time::Instant::now() + SEARCH_WAIT;
         inner.wait_until(SEED_WAIT, |state| state.seeded).await;
+        // A listing in flight says what macOS grants: it lands first.
+        inner.wait_until_idle(deadline).await;
         let ask = {
             let state = inner.lock();
             if !state.running {
                 return SearchResponse::default();
             }
-            let settled = state.asking.is_some()
+            let settled = state.draining
+                || state.asking.is_some()
                 || state.known_access == Some(GrantAccess::Denied)
                 || (state.known_access == Some(GrantAccess::Granted) && state.loaded);
             // A query never relists what is loaded; with nothing loaded it
@@ -384,8 +388,8 @@ impl ItemCatalog {
         };
         if let Some(request) = ask {
             inner.request(ctx, request, Vec::new());
+            inner.wait_until_idle(deadline).await;
         }
-        inner.wait_until(SEARCH_WAIT, |state| !state.draining).await;
         SearchResponse::rows(self.rows())
     }
 
@@ -499,6 +503,12 @@ impl Inner {
             }
         })
         .await;
+    }
+
+    /// Wait until no queued request is running, at most until `deadline`.
+    async fn wait_until_idle(&self, deadline: tokio::time::Instant) {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        self.wait_until(left, |state| !state.draining).await;
     }
 
     /// Queue `request`, or merge it into the one already queued.
@@ -1303,6 +1313,31 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].payload_str(), Some("note-0"));
         assert_eq!(host.lists, 1, "the snapshot's listing answers the query");
+    }
+
+    /// A query that arrives while the first listing is in flight is
+    /// answered by it: nothing is listed twice.
+    #[tokio::test]
+    async fn a_query_during_the_first_listing_reads_it_once() {
+        let mut host = Host::new(GrantAccess::Granted);
+        host.snapshot(true);
+        let (id, _, params) = host.harness.next_host_request().await.unwrap();
+        assert_eq!(params, json!({ "operation": "list" }));
+        let (catalog, ctx) = (host.catalog.clone(), host.ctx());
+        let request = SearchRequest {
+            source: SOURCE.to_string(),
+            query: String::new(),
+        };
+        let search = tokio::spawn(async move { catalog.search(&ctx, &request).await });
+        settle().await;
+        assert!(!search.is_finished());
+        let listed = json!({
+            "ok": true, "access": "granted", "items": [{ "id": "note-0", "title": "Groceries" }],
+        });
+        assert!(host.harness.reply_host(id, listed));
+        assert_eq!(search.await.unwrap().rows.len(), 1);
+        host.serve().await;
+        assert_eq!((host.lists, host.accesses), (0, 0), "no second read");
     }
 
     // -- Commands and picks -------------------------------------------------
