@@ -18,6 +18,11 @@ final class CommandLineResolverTests: XCTestCase {
       "tmux": ["session", "window"],
       "calc": ["*"],
     ],
+    pluginArguments: [
+      "tmux session": DeclaredArguments(parameters: [
+        CommandParameter(name: "name", kind: .text("name"), required: true, positional: true)
+      ])
+    ],
     helpTopics: ["plugins", "config", "commands", "normal-mode"])
 
   private func resolve(_ line: String) -> Resolution {
@@ -103,6 +108,15 @@ final class CommandLineResolverTests: XCTestCase {
     XCTAssertEqual(
       resolve(":tm ses main"), .plugin(command: "tmux", subcommand: "session", args: ["main"]))
     XCTAssertEqual(resolve(":tmux w"), .plugin(command: "tmux", subcommand: "window", args: []))
+    // A command is held to the arguments it declares: the words after
+    // `session` are its one name, and `window` here declares none.
+    XCTAssertEqual(
+      resolve(":tmux session Daft Punk"),
+      .plugin(command: "tmux", subcommand: "session", args: ["Daft Punk"]))
+    XCTAssertEqual(resolve(":tmux session"), .unknown)
+    XCTAssertEqual(resolve(":tmux session --name=main"), .unknown)
+    XCTAssertEqual(resolve(":tmux window main:1"), .unknown)
+    XCTAssertEqual(resolve(":screen lock --now"), .unknown)
     XCTAssertEqual(resolve(":tmux x"), .unknown)
     XCTAssertEqual(resolve(":tmux"), .incomplete("tmux"))
     // A wildcard subcommand takes the words as typed.

@@ -13,11 +13,13 @@ final class PluginManager {
 
   /// A resolved command target: the owning plugin. `selector` carries the
   /// plugin root gate, applied at lookup against the focused app; `confirm`
-  /// is the question its registration asks first.
+  /// is the question its registration asks first and `arguments` what it
+  /// declares it takes (nil for a `*` wildcard, whose words are its own).
   private struct CommandTarget {
     let plugin: PluginProcess
     let selector: PluginSelectorStack
     var confirm: String? = nil
+    var arguments: DeclaredArguments? = nil
 
     func specificity(in context: PluginSelectorContext) -> Int? {
       selector.specificity(in: context)
@@ -315,7 +317,8 @@ final class PluginManager {
         let command = registration.command.lowercased()
         let subcommand = registration.subcommand.lowercased()
         let target = CommandTarget(
-          plugin: plugin, selector: rootSelector, confirm: registration.prompt)
+          plugin: plugin, selector: rootSelector, confirm: registration.prompt,
+          arguments: registration.arguments)
         registrationRows.append(
           CommandRegistrationTarget(
             selector: rootSelector,
@@ -623,7 +626,9 @@ final class PluginManager {
   /// `count` is the NORMAL count typed before the command's key: the plugin
   /// gets it in one `perform`, never as that many. `confirmed` says the
   /// user answered a question first; the caller asks
-  /// (`ownCommandConfirmation`), this only dispatches.
+  /// (`ownCommandConfirmation`), this only dispatches. A named command gets
+  /// its arguments in the spelling its declaration gives them; words the
+  /// declaration does not accept reach no plugin and settle as a failure.
   @discardableResult
   func invoke(
     command: String,
@@ -649,7 +654,15 @@ final class PluginManager {
     {
       // The registration matched case-insensitively; the plugin gets the
       // name it registered, not the typed case (`:tmux Session`).
-      resolved = (target, key.subcommand, args)
+      guard let declared = (target.arguments ?? .none).canonical(args) else {
+        onResult?(
+          PluginCommandResult(
+            ok: false,
+            error: Self.invalidArgumentsMessage(
+              command: lcCommand, subcommand: key.subcommand, args: args)))
+        return true
+      }
+      resolved = (target, key.subcommand, declared)
     } else if let target = Self.bestTarget(
       snapshot.wildcardCommandIndex[lcCommand] ?? [],
       in: context,
@@ -683,6 +696,29 @@ final class PluginManager {
     return Self.bestTarget(
       readHotSnapshot().commandIndex[key] ?? [], in: context,
       specificity: { $0.specificity(in: $1) })?.confirm
+  }
+
+  /// Why words the declaration refuses run nothing, in the words the
+  /// command line and the CLI use for a core command's.
+  static func invalidArgumentsMessage(command: String, subcommand: String, args: [String])
+    -> String
+  {
+    "unknown command or invalid arguments: "
+      + ([command, subcommand] + args).joined(separator: " ")
+  }
+
+  /// What a plugin's own command declares it takes (`args` on its
+  /// `commands[]` entry; none without the key), resolved as `invoke`
+  /// resolves its target. Nil when the words reach a `*` wildcard, which
+  /// takes them as typed, or no plugin here.
+  func ownCommandArguments(
+    command: String, subcommand: String,
+    in context: PluginSelectorContext = PluginSelectorContext()
+  ) -> DeclaredArguments? {
+    let key = CommandKey(command: command.lowercased(), subcommand: subcommand.lowercased())
+    return Self.bestTarget(
+      readHotSnapshot().commandIndex[key] ?? [], in: context,
+      specificity: { $0.specificity(in: $1) })?.arguments
   }
 
   /// The params of one `perform {kind: "command"}` for a plugin's own

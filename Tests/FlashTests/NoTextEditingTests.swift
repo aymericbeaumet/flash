@@ -226,6 +226,8 @@ final class NoTextEditingTests: XCTestCase {
         let values = placeholder.split(separator: "|").map(String.init)
         guard values.count > 1 else { continue }
         variants += values.map { [parameter.name: $0] }
+      case .choice(let values):
+        variants += values.map { [parameter.name: $0] }
       }
     }
     return variants

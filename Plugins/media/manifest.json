@@ -25,12 +25,26 @@
     {
       "command": "audio",
       "subcommand": "input",
-      "description": "List the audio inputs, or select one with --device=<name or UID>"
+      "description": "List the audio inputs, or select one with --device",
+      "args": [
+        {
+          "name": "device",
+          "type": "string",
+          "description": "The input to select, by name or UID"
+        }
+      ]
     },
     {
       "command": "audio",
       "subcommand": "output",
-      "description": "List the audio outputs, or select one with --device=<name or UID>"
+      "description": "List the audio outputs, or select one with --device",
+      "args": [
+        {
+          "name": "device",
+          "type": "string",
+          "description": "The output to select, by name or UID"
+        }
+      ]
     },
     {
       "command": "media",

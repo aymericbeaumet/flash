@@ -553,7 +553,10 @@ key sends F1–F12. A later mapping replaces one key.
 
 A plugin command is the same words as the command bar, and both are required:
 `flash screenshot window`, `flash tmux session main`.
-Words after the subcommand are the command's arguments. A one-word plugin name,
+Words after the subcommand are the command's arguments, each one element of
+the array (`["flash", "tmux", "session", "Daft Punk"]`), and only the ones
+its plugin declares: `flash config check` reports any other, a value outside
+its type or a missing required one, as it does for Flash's own commands. A one-word plugin name,
 a command with no subcommand, or a word outside `[a-z][a-z0-9_]*` (the `*`
 wildcard subcommand aside) is rejected at plugin load. A command named after
 another plugin's command is an error: every plugin that claims it fails to

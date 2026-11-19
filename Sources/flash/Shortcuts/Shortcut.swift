@@ -127,20 +127,28 @@ func parseMappingCommand(argv: [String]) -> MappingCommand? {
   return .shellCommand(argv)
 }
 
-/// `flash <command> <subcommand> [word ...]`, the same words as
-/// `:command subcommand word …`. Both words are required. Nil when the
-/// command is one of Flash's topics or not declared, or the subcommand is
-/// neither an exact registration nor a `*` wildcard.
+/// `flash <command> <subcommand> [argument ...]`, the same words as
+/// `:command subcommand argument …`. Both words are required. Nil when the
+/// command is one of Flash's topics or not declared, the subcommand is
+/// neither an exact registration nor a `*` wildcard, or the arguments are
+/// not the ones the registration declares (``DeclaredArguments``): an entry
+/// without `args` takes none. The command carries them in their canonical
+/// spelling; a wildcard's words pass as written.
 enum PluginGitInvocation {
   static func command(argvAfterFlash tail: [String]) -> URLCommand? {
     guard let name = tail.first?.lowercased(), !name.isEmpty,
-      !URLEventHandler.isTopic(name),
-      PluginRepository.declaresCommand(name)
+      !URLEventHandler.isTopic(name)
     else { return nil }
     let rest = Array(tail.dropFirst())
-    guard let subcommand = rest.first, !subcommand.isEmpty else { return nil }
-    guard PluginRepository.declaresCommand(name, subcommand: subcommand) else { return nil }
-    return .pluginCommand(command: name, subcommand: subcommand, args: Array(rest.dropFirst()))
+    guard let subcommand = rest.first, !subcommand.isEmpty,
+      let registration = PluginRepository.declaredCommand(name, subcommand: subcommand)
+    else { return nil }
+    let words = Array(rest.dropFirst())
+    guard let arguments = registration.arguments else {
+      return .pluginCommand(command: name, subcommand: subcommand, args: words)
+    }
+    guard let canonical = arguments.canonical(words) else { return nil }
+    return .pluginCommand(command: name, subcommand: registration.subcommand, args: canonical)
   }
 }
 

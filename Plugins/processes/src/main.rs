@@ -327,8 +327,12 @@ mod tests {
             manifest["commands"],
             json!([{
                 "command": "process", "subcommand": "kill",
-                "description": "Terminate the process --pid=<pid> names, after asking",
-                "confirm": "Kill this process?"
+                "description": "Terminate one process, after asking",
+                "confirm": "Kill this process?",
+                "args": [{
+                    "name": "pid", "type": "integer", "min": 2, "max": i32::MAX,
+                    "required": true, "description": "The process to terminate"
+                }]
             }])
         );
         assert_eq!(

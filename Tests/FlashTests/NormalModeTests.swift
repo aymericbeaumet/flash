@@ -1949,8 +1949,12 @@ final class NormalModeTests: XCTestCase {
     let inventory = NormalModeDispatcher.CommandLineInventory.core(
       pluginCommands: ["screenshot": ["window", "screen"], "calc": ["*"]])
     XCTAssertEqual(
+      NormalModeDispatcher.resolveCommandLine(":screenshot window", inventory: inventory),
+      .plugin(command: "screenshot", subcommand: "window", args: []))
+    // A command that declares no arguments takes none.
+    XCTAssertEqual(
       NormalModeDispatcher.resolveCommandLine(":screenshot window quiet now", inventory: inventory),
-      .plugin(command: "screenshot", subcommand: "window", args: ["quiet", "now"]))
+      .unknown)
     // A plugin command needs its subcommand, as a mapping and the CLI do; a
     // wildcard takes the words as typed.
     XCTAssertEqual(

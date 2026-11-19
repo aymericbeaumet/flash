@@ -25,8 +25,10 @@ The same commands work from a terminal and in a mapping:
 `flash audio input` and `flash audio output` without `--device` list the
 devices. From a terminal they print the list, as `flash media status` prints
 what is playing and `flash volume up` the new volume; from a mapping the list
-shows in a banner. `--device=` is the only argument these commands take:
-anything else fails with the command's usage.
+shows in a banner. `--device=` is the only argument these commands take, and
+it is never blank: Flash refuses anything else before the command runs, in a
+mapping when the configuration loads (`flash config check`) and on the
+command line and the CLI with `unknown command or invalid arguments`.
 
 `flash volume up` and `flash volume down` move one macOS volume-key tick, the
 same 16 steps the keyboard uses between silence and full volume. A value

@@ -152,6 +152,22 @@ enum PluginProtocol {
   /// answered a question first (`confirmation.perform_kinds`).
   static let confirmablePerformKinds = ["resolve", "command"]
 
+  // MARK: - Declared command arguments (`command_args` in protocol.json)
+
+  /// The `type` of one `commands[].args` entry.
+  static let commandArgTypes = ["integer", "string", "enum", "flag"]
+  /// The keys of one `commands[].args` entry.
+  static let commandArgRequiredKeys = ["name", "type"]
+  static let commandArgOptionalKeys = [
+    "description", "required", "positional", "min", "max", "values",
+  ]
+  /// The most arguments one command declares.
+  static let maxCommandArgs = 16
+  /// The most words an `enum` argument lists.
+  static let maxCommandArgValues = 64
+  /// UTF-8 bytes of an argument's one-line `description`.
+  static let maxCommandArgDescriptionBytes = 256
+
   /// A `confirm` as the host asks it: trimmed, or nil when it is blank or
   /// longer than `maxConfirmBytes`.
   static func confirmPrompt(_ raw: String) -> String? {

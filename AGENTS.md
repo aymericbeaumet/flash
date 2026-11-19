@@ -395,6 +395,16 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   declares a core command the plugin performs in its context, must name one
   Flash asks of the focused app (`URLEventHandler.sourceCommandNames`) and
   never registers for dispatch or completion.
+- A plugin's named own command takes exactly the `args` its `commands[]`
+  entry declares, none without the key (`DeclaredArguments`,
+  `protocol.json` `command_args`); only `*` takes its words as typed. The
+  host holds the words to the declaration before anything else, with the
+  wording of a core command's bad arguments: `PluginGitInvocation`
+  (mappings, `flash config check`), `resolveCommandWords` (command line,
+  CLI) and `PluginManager.invoke`, and `performPluginCommand` before it
+  asks a `confirm`. The plugin receives one canonical spelling and checks
+  only what it alone can know. Never validate a declared argument in a
+  plugin instead, or add an accept-anything path.
 - A new command adds its `"<topic> <action>"` entry to `URLEventHandler`'s
   table and `docs/commands.md`, and a new topic its category in
   `URLEventHandler.topicsByCategory` (`mise run build:schema` rewrites the

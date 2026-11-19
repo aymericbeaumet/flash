@@ -92,8 +92,14 @@ extension AppDelegate {
   func makeCommandLineInventory() -> NormalModeDispatcher.CommandLineInventory {
     let registrations = pluginManager.commandRegistrations(in: pluginSelectorContext())
     var commands: [String: [String]] = [:]
+    var arguments: [String: DeclaredArguments] = [:]
     for registration in registrations {
       let key = registration.command.lowercased()
+      // The first registration listed is the one a dispatch here reaches.
+      if let declared = registration.arguments {
+        let name = "\(key) \(registration.subcommand.lowercased())"
+        if arguments[name] == nil { arguments[name] = declared }
+      }
       var subcommands = commands[key] ?? []
       // `"*"` marks a wildcard command (whole remainder is args, e.g.
       // `:calc 2 + 2`): the resolver passes its words through, and
@@ -112,7 +118,7 @@ extension AppDelegate {
       + HelpDocs.pluginTopics(pluginManager.pluginHelpTopics(), reserved: manualTopicNames)
       .map(\.name)
     return NormalModeDispatcher.CommandLineInventory.core(
-      pluginCommands: commands, helpTopics: topics)
+      pluginCommands: commands, pluginArguments: arguments, helpTopics: topics)
   }
 
   /// `:wq` and the other sequences: each step dispatches as a typed command

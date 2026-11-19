@@ -261,6 +261,22 @@ final class PluginProtocolParityTests: XCTestCase {
       Set(PluginWireCodec.contextJSON(Self.sampleContext).keys))
   }
 
+  /// The arguments a `commands[]` entry declares: the types, the keys of an
+  /// entry and its bounds.
+  func testCommandArgsMatchSpec() throws {
+    let contract = try XCTUnwrap(try spec()["command_args"] as? [String: Any])
+    XCTAssertEqual(contract["types"] as? [String], PluginProtocol.commandArgTypes)
+    XCTAssertEqual(contract["required"] as? [String], PluginProtocol.commandArgRequiredKeys)
+    XCTAssertEqual(contract["optional"] as? [String], PluginProtocol.commandArgOptionalKeys)
+    XCTAssertEqual(
+      Set(PluginCommandArgument.CodingKeys.allCases.map(\.stringValue)),
+      Set(PluginProtocol.commandArgRequiredKeys + PluginProtocol.commandArgOptionalKeys))
+    XCTAssertEqual(contract["max_args"] as? Int, PluginProtocol.maxCommandArgs)
+    XCTAssertEqual(contract["max_values"] as? Int, PluginProtocol.maxCommandArgValues)
+    XCTAssertEqual(
+      contract["description_bytes"] as? Int, PluginProtocol.maxCommandArgDescriptionBytes)
+  }
+
   /// A plugin's own command carries its two words, its argument words and,
   /// above 1, the NORMAL count: one `perform`, never that many.
   func testACommandsCountRidesItsOnePerformAndIsLeftOutForOne() throws {

@@ -98,9 +98,9 @@ final class BundledMediaPluginTests: XCTestCase {
     XCTAssertEqual(
       run("audio", "output").message,
       "* MacBook Pro Speakers [built-in]\n  USB Audio [usb-1]")
-    // The command line hands the name over in the words it was typed in.
+    // The name is one argument, whatever words it holds.
     XCTAssertEqual(
-      run("audio", "input", ["--device=USB", "Audio"]),
+      run("audio", "input", ["--device=USB Audio"]),
       PluginCommandResult(ok: true, message: "input device: USB Audio"))
     XCTAssertEqual(devices.devices[.input]?.first { $0.isDefault }?.uid, "usb-1")
     XCTAssertEqual(devices.devices[.output]?.first { $0.isDefault }?.uid, "built-in")
@@ -109,9 +109,18 @@ final class BundledMediaPluginTests: XCTestCase {
     XCTAssertEqual(
       missing, PluginCommandResult(ok: false, error: "audio device not found: Studio"))
     XCTAssertEqual(missing.failureAlert, "audio device not found: Studio")
-    XCTAssertEqual(
-      run("volume", "up", ["--steps=2"]),
-      PluginCommandResult(ok: false, error: "usage: volume up"))
+    // What the commands do not declare reaches no device.
+    for (command, subcommand, args) in [
+      ("volume", "up", ["--steps=2"]), ("audio", "input", ["--device=USB", "Audio"]),
+      ("audio", "output", ["--device="]), ("media", "status", ["--json"]),
+    ] {
+      XCTAssertEqual(
+        run(command, subcommand, args),
+        PluginCommandResult(
+          ok: false,
+          error: "unknown command or invalid arguments: "
+            + ([command, subcommand] + args).joined(separator: " ")), "\(args)")
+    }
     XCTAssertEqual(
       devices.calls, ["list output", "list input", "select input usb-1", "list output"])
   }

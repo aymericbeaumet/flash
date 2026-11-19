@@ -53,10 +53,11 @@ enum CLIReference {
   }
 
   static func option(_ parameter: CommandParameter) -> Option {
-    let flag = "--" + parameter.name.replacingOccurrences(of: "_", with: "-")
+    let flag = parameter.flagName
     switch parameter.kind {
     case .flag: return Option(name: flag, values: nil, syntax: parameter.syntax)
     case .integer: return Option(name: flag, values: [], syntax: parameter.syntax)
+    case .choice(let values): return Option(name: flag, values: values, syntax: parameter.syntax)
     case .text(let placeholder):
       let choices = placeholder.split(separator: "|").map(String.init)
       let enumerates =

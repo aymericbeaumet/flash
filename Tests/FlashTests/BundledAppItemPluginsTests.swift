@@ -173,7 +173,7 @@ final class BundledAppItemPluginsTests: XCTestCase {
       XCTAssertEqual(manifest.activation, .onDemand, "\(id): its events keep no process")
       // The command word is the plugin's: no core topic shadows it.
       XCTAssertFalse(URLEventHandler.isTopic(id), id)
-      XCTAssertTrue(PluginRepository.declaresCommand(id), id)
+      XCTAssertNotNil(PluginRepository.declaredCommand(id, subcommand: "open"), id)
     }
   }
 
@@ -201,10 +201,14 @@ final class BundledAppItemPluginsTests: XCTestCase {
     XCTAssertEqual(stubs.values.map(\.lists), [0, 0, 0])
     XCTAssertEqual(stubs.values.map(\.asks), [0, 0, 0])
 
-    // A refused argument spawns the one plugin it names, and reads nothing.
+    // An argument the command does not declare is refused by the host: it
+    // spawns nothing. A command spawns the one plugin it names.
     XCTAssertEqual(
       run("notes", "open", ["--now"]),
-      PluginCommandResult(ok: false, error: "usage: notes open"))
+      PluginCommandResult(
+        ok: false, error: "unknown command or invalid arguments: notes open --now"))
+    XCTAssertTrue(Self.ids.allSatisfy { status($0)?.pid == nil }, "a refusal spawns nothing")
+    XCTAssertEqual(run("notes", "open"), PluginCommandResult(ok: true))
     XCTAssertNotNil(status("notes")?.pid)
     XCTAssertNil(status("contacts")?.pid)
     XCTAssertEqual(notes.asks, 0)

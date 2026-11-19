@@ -216,8 +216,9 @@ final class PluginManagerReloadTests: XCTestCase {
     wait(for: [performed], timeout: 10)
   }
 
-  /// A command or bang perform carries the command, its subcommand and the
-  /// whitespace-split args, and nothing else.
+  /// A command or bang perform carries the command, its subcommand and its
+  /// args, and nothing else: an own command's as its declaration spells
+  /// them, a bang's query split on whitespace.
   func testCommandAndBangPerformsCarryOnlyTheirWordsAndArgs() throws {
     let fixture = try PluginFixtureKit.make(
       id: "wireperform",
@@ -226,7 +227,14 @@ final class PluginManagerReloadTests: XCTestCase {
         extra: Self.residentSurfaces
           + """
           ,
-          "commands": [{ "command": "wired", "subcommand": "echo", "description": "test" }],
+          "commands": [{
+            "command": "wired", "subcommand": "echo", "description": "test",
+            "args": [
+              { "name": "word", "type": "string", "positional": true },
+              { "name": "times", "type": "integer", "min": 1 },
+              { "name": "loud", "type": "flag" }
+            ]
+          }],
           "bangs": [{ "token": "wb", "description": "test bang" }]
           """),
       script: PluginFixtureKit.script(
@@ -242,9 +250,19 @@ final class PluginManagerReloadTests: XCTestCase {
     let performed = expectation(description: "both performs answered")
     performed.expectedFulfillmentCount = 2
     XCTAssertTrue(
-      manager.invoke(command: "wired", subcommand: "echo", args: ["a", "b"]) { result in
+      manager.invoke(
+        command: "wired", subcommand: "echo", args: ["--loud=true", "--times=+2", "a b"]
+      ) { result in
         XCTAssertTrue(result.ok)
         performed.fulfill()
+      })
+    // Words the declaration refuses are answered by the host: no perform.
+    XCTAssertTrue(
+      manager.invoke(command: "wired", subcommand: "echo", args: ["a", "b"]) { result in
+        XCTAssertEqual(
+          result,
+          PluginCommandResult(
+            ok: false, error: "unknown command or invalid arguments: wired echo a b"))
       })
     XCTAssertTrue(
       manager.invokeBang(token: "wb", query: "hello  world") { result in
@@ -266,7 +284,7 @@ final class PluginManagerReloadTests: XCTestCase {
     }
     let command = try XCTUnwrap(params.first { $0["subcommand"] as? String == "echo" })
     XCTAssertEqual(command["command"] as? String, "wired")
-    XCTAssertEqual(command["args"] as? [String], ["a", "b"])
+    XCTAssertEqual(command["args"] as? [String], ["a b", "--times=2", "--loud"])
     let bang = try XCTUnwrap(params.first { $0["subcommand"] as? String == "wb" })
     XCTAssertEqual(bang["command"] as? String, fixture.pluginID)
     XCTAssertEqual(bang["args"] as? [String], ["hello", "world"])

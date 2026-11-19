@@ -15,7 +15,16 @@
     {
       "command": "caffeinate",
       "subcommand": "on",
-      "description": "Keep the Mac awake, for --minutes=<n> or until caffeinate off"
+      "description": "Keep the Mac awake, for --minutes or until caffeinate off",
+      "args": [
+        {
+          "name": "minutes",
+          "type": "integer",
+          "min": 1,
+          "max": 4294967295,
+          "description": "How long to keep the Mac awake"
+        }
+      ]
     },
     {
       "command": "caffeinate",
@@ -25,7 +34,16 @@
     {
       "command": "caffeinate",
       "subcommand": "toggle",
-      "description": "Keep the Mac awake, for --minutes=<n> or until toggled again, or let it sleep again"
+      "description": "Keep the Mac awake, for --minutes or until toggled again, or let it sleep again",
+      "args": [
+        {
+          "name": "minutes",
+          "type": "integer",
+          "min": 1,
+          "max": 4294967295,
+          "description": "How long to keep the Mac awake"
+        }
+      ]
     },
     {
       "command": "caffeinate",

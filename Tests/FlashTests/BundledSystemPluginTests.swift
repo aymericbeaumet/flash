@@ -156,10 +156,12 @@ final class BundledSystemPluginTests: XCTestCase {
 
     XCTAssertEqual(
       run("screen", "lock", ["--now"]),
-      PluginCommandResult(ok: false, error: "usage: screen lock"))
+      PluginCommandResult(
+        ok: false, error: "unknown command or invalid arguments: screen lock --now"))
     XCTAssertEqual(
       run("system", "restart", ["now"], confirmed: true),
-      PluginCommandResult(ok: false, error: "usage: system restart"))
+      PluginCommandResult(
+        ok: false, error: "unknown command or invalid arguments: system restart now"))
     XCTAssertEqual(mechanisms.executions, [.sleepSystem], "a refused command reaches no mechanism")
   }
 

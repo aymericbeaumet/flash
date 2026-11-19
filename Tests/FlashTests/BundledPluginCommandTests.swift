@@ -18,6 +18,18 @@ final class BundledPluginCommandTests: XCTestCase {
     return commands
   }
 
+  /// The arguments every bundled command declares, as the command line
+  /// reads them from the loaded plugins.
+  private func bundledArguments() throws -> [String: DeclaredArguments] {
+    var arguments: [String: DeclaredArguments] = [:]
+    for root in PluginRepository.officialPluginRoots() {
+      for registration in try PluginManifest.load(from: root).pluginCommands {
+        arguments["\(registration.command) \(registration.subcommand)"] = registration.arguments
+      }
+    }
+    return arguments
+  }
+
   private func owner(of command: String) throws -> [String] {
     try PluginRepository.officialPluginRoots().compactMap { root in
       let manifest = try PluginManifest.load(from: root)
@@ -325,7 +337,7 @@ final class BundledPluginCommandTests: XCTestCase {
     XCTAssertNil(parseMappingCommand(argv: ["flash", "process"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "process", "renice"]))
     let inventory = NormalModeDispatcher.CommandLineInventory.core(
-      pluginCommands: try bundledCommands())
+      pluginCommands: try bundledCommands(), pluginArguments: try bundledArguments())
     XCTAssertEqual(
       NormalModeDispatcher.resolveCommandLine(":proc kill --pid=42", inventory: inventory),
       .plugin(command: "process", subcommand: "kill", args: ["--pid=42"]), "proc is process")
@@ -479,11 +491,11 @@ final class BundledPluginCommandTests: XCTestCase {
     }
   }
 
-  /// The command line resolves the words by prefix and hands the rest to
-  /// the plugin, which reads `--device=` and the words after it as one name.
+  /// The command line resolves the words by prefix and holds the rest to
+  /// the command's arguments: `--device=` and the words after it are one name.
   func testTheCommandLineResolvesAndCompletesTheWords() throws {
     let inventory = NormalModeDispatcher.CommandLineInventory.core(
-      pluginCommands: try bundledCommands())
+      pluginCommands: try bundledCommands(), pluginArguments: try bundledArguments())
     func resolve(_ line: String) -> NormalModeDispatcher.CommandLineResolution {
       NormalModeDispatcher.resolveCommandLine(line, inventory: inventory)
     }
@@ -493,7 +505,10 @@ final class BundledPluginCommandTests: XCTestCase {
       resolve(":media status"), .plugin(command: "media", subcommand: "status", args: []))
     XCTAssertEqual(
       resolve(":audio output --device=Studio Speakers"),
-      .plugin(command: "audio", subcommand: "output", args: ["--device=Studio", "Speakers"]))
+      .plugin(command: "audio", subcommand: "output", args: ["--device=Studio Speakers"]))
+    XCTAssertEqual(resolve(":audio output --device="), .unknown)
+    XCTAssertEqual(resolve(":audio output Studio Speakers"), .unknown)
+    XCTAssertEqual(resolve(":volume up 2"), .unknown)
     XCTAssertEqual(resolve(":media volumedown"), .unknown)
     XCTAssertEqual(resolve(":volume"), .incomplete("volume"))
 

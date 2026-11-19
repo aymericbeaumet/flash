@@ -47,6 +47,12 @@ pub fn plugin(input: TokenStream) -> TokenStream {
         "flash_plugin::plugin!: manifest.json {}",
         lifecycle_errors.join("; ")
     );
+    let args_errors = command_args_errors(&manifest);
+    assert!(
+        args_errors.is_empty(),
+        "flash_plugin::plugin!: manifest.json {}",
+        args_errors.join("; ")
+    );
     let exits_after_start = manifest_exits_after_start(&manifest);
 
     let on_start_decl = on_start_decl(manifest_has_warm_sources(&manifest));
@@ -445,6 +451,176 @@ fn lifecycle_errors(manifest: &Value) -> Vec<String> {
     }
 }
 
+/// One lowercase ASCII letter, then lowercase letters, digits and `_`: the
+/// shape of a command word and of an argument name.
+fn is_word(word: &str) -> bool {
+    let mut chars = word.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// The `commands[].args` rules the host applies at load (`protocol.json`
+/// `command_args`), checked at build time: only a named own command declares
+/// arguments, each of a known type with the keys that type takes. One
+/// message per offending command. Which first words are Flash's topics is
+/// the host's to know, so a core entry's `args` is refused at load alone.
+fn command_args_errors(manifest: &Value) -> Vec<String> {
+    let protocol: Value = serde_json::from_str(include_str!("../../protocol.json"))
+        .expect("protocol.json is valid JSON");
+    let contract = &protocol["command_args"];
+    let strings = |key: &str| -> Vec<&str> {
+        contract[key]
+            .as_array()
+            .map(|items| items.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
+    };
+    let bound = |key: &str| contract[key].as_u64().unwrap_or(0) as usize;
+    let types = strings("types");
+    let keys: Vec<&str> = strings("required")
+        .into_iter()
+        .chain(strings("optional"))
+        .collect();
+    let commands = manifest
+        .get("commands")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut errors = Vec::new();
+    for command in commands {
+        let Some(args) = command.get("args") else {
+            continue;
+        };
+        let word = |key: &str| command.get(key).and_then(Value::as_str).unwrap_or("?");
+        let name = format!("commands {} {}", word("command"), word("subcommand"));
+        if let Some(error) = command_args_error(
+            args,
+            word("subcommand") == "*",
+            &types,
+            &keys,
+            bound("max_args"),
+            bound("max_values"),
+            bound("description_bytes"),
+        ) {
+            errors.push(format!("{name} {error}"));
+        }
+    }
+    errors
+}
+
+/// Why one command's `args` is malformed, or `None`.
+fn command_args_error(
+    args: &Value,
+    wildcard: bool,
+    types: &[&str],
+    keys: &[&str],
+    max_args: usize,
+    max_values: usize,
+    description_bytes: usize,
+) -> Option<String> {
+    let Some(args) = args.as_array() else {
+        return Some("args must be an array".to_string());
+    };
+    if args.is_empty() {
+        return None;
+    }
+    if wildcard {
+        return Some("the * wildcard takes its words as typed: remove args".to_string());
+    }
+    if args.len() > max_args {
+        return Some(format!("declares more than {max_args} args"));
+    }
+    let mut names = Vec::new();
+    let mut positionals = 0;
+    for arg in args {
+        let Some(arg) = arg.as_object() else {
+            return Some("args entries must be objects".to_string());
+        };
+        let name = arg.get("name").and_then(Value::as_str).unwrap_or("");
+        let fail = |error: String| Some(format!("args {name}: {error}"));
+        if let Some(unknown) = arg.keys().find(|key| !keys.contains(&key.as_str())) {
+            return fail(format!("unknown field {unknown}"));
+        }
+        if !is_word(name) {
+            return fail("name must be a word of [a-z][a-z0-9_]*".to_string());
+        }
+        let ty = arg.get("type").and_then(Value::as_str).unwrap_or("");
+        if !types.contains(&ty) {
+            return fail(format!("type must be {}", types.join(", ")));
+        }
+        let flag = |key: &str| match arg.get(key) {
+            None => Some(false),
+            Some(value) => value.as_bool(),
+        };
+        let (Some(required), Some(positional)) = (flag("required"), flag("positional")) else {
+            return fail("required and positional are booleans".to_string());
+        };
+        if let Some(description) = arg.get("description") {
+            let valid = description.as_str().is_some_and(|text| {
+                !text.trim().is_empty()
+                    && !text.contains(['\n', '\r'])
+                    && text.len() <= description_bytes
+            });
+            if !valid {
+                return fail(format!(
+                    "description must be one non-empty line of at most {description_bytes} bytes"
+                ));
+            }
+        }
+        let bounds = [arg.get("min"), arg.get("max")];
+        if bounds.iter().flatten().any(|bound| !bound.is_i64()) {
+            return fail("min and max are integers".to_string());
+        }
+        if ty != "integer" && bounds.iter().any(Option::is_some) {
+            return fail("min and max come with an integer".to_string());
+        }
+        if let [Some(min), Some(max)] = bounds
+            && min.as_i64() > max.as_i64()
+        {
+            return fail("min is above max".to_string());
+        }
+        match (ty, arg.get("values")) {
+            ("enum", values) => {
+                let words: Option<Vec<&str>> = values
+                    .and_then(Value::as_array)
+                    .and_then(|values| values.iter().map(Value::as_str).collect());
+                let valid = words.is_some_and(|words| {
+                    !words.is_empty()
+                        && words.len() <= max_values
+                        && words.iter().all(|word| {
+                            !word.is_empty()
+                                && !word.starts_with("--")
+                                && !word.contains(char::is_whitespace)
+                        })
+                        && words
+                            .iter()
+                            .enumerate()
+                            .all(|(index, word)| !words[..index].contains(word))
+                });
+                if !valid {
+                    return fail(format!(
+                        "an enum lists 1 to {max_values} distinct values, each one word that \
+                         does not start with --"
+                    ));
+                }
+            }
+            (_, Some(_)) => return fail("values come with an enum".to_string()),
+            _ => {}
+        }
+        if ty == "flag" && required {
+            return fail("a flag is on or off: it cannot be required".to_string());
+        }
+        if positional && ty != "string" {
+            return fail("only a string can be positional".to_string());
+        }
+        if names.contains(&name) {
+            return Some("args repeat a name".to_string());
+        }
+        names.push(name);
+        positionals += usize::from(positional);
+    }
+    (positionals > 1).then(|| "takes one positional at most".to_string())
+}
+
 fn manifest_has_query_evaluator(manifest: &Value) -> bool {
     matches!(manifest.get("query"), Some(Value::Object(_)))
 }
@@ -721,6 +897,120 @@ mod tests {
         })));
         assert!(!manifest_has_command_surface(&json!({ "commands": [] })));
         assert!(!manifest_has_command_surface(&json!({})));
+    }
+
+    /// `commands[].args` follows `protocol.json` `command_args`: the four
+    /// types with the keys each takes, on a named command alone.
+    #[test]
+    fn command_args_follow_the_protocol_rules() {
+        let declare = |subcommand: &str, args: Value| {
+            command_args_errors(&json!({ "commands": [
+                { "command": "example", "subcommand": subcommand, "args": args }
+            ] }))
+        };
+        let ok = json!([
+            { "name": "target", "type": "string", "positional": true, "required": true },
+            { "name": "pid", "type": "integer", "min": 2, "max": 99, "required": true,
+              "description": "The process to terminate" },
+            { "name": "mode", "type": "enum", "values": ["fast", "slow"] },
+            { "name": "dry_run", "type": "flag" },
+        ]);
+        assert_eq!(declare("run", ok), Vec::<String>::new());
+        assert_eq!(declare("run", json!([])), Vec::<String>::new());
+        assert_eq!(declare("*", json!([])), Vec::<String>::new());
+        assert_eq!(
+            command_args_errors(&json!({ "commands": [{ "command": "x", "subcommand": "go" }] })),
+            Vec::<String>::new()
+        );
+        let first = |subcommand: &str, args: Value| declare(subcommand, args).remove(0);
+        let cases = [
+            (
+                json!({ "name": "pid" }),
+                "type must be integer, string, enum, flag",
+            ),
+            (json!({ "name": "pid", "type": "number" }), "type must be"),
+            (
+                json!({ "name": "Pid", "type": "integer" }),
+                "name must be a word",
+            ),
+            (json!({ "type": "integer" }), "name must be a word"),
+            (
+                json!({ "name": "pid", "type": "integer", "minimum": 1 }),
+                "unknown field minimum",
+            ),
+            (
+                json!({ "name": "pid", "type": "integer", "min": 1.5 }),
+                "min and max are integers",
+            ),
+            (
+                json!({ "name": "pid", "type": "integer", "min": 9, "max": 1 }),
+                "min is above max",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "max": 9 }),
+                "come with an integer",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum" }),
+                "an enum lists 1 to 64",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": [] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": ["a", "a"] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": ["a b"] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": ["--a"] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "values": ["a"] }),
+                "come with an enum",
+            ),
+            (
+                json!({ "name": "now", "type": "flag", "required": true }),
+                "cannot be required",
+            ),
+            (
+                json!({ "name": "now", "type": "flag", "required": "yes" }),
+                "are booleans",
+            ),
+            (
+                json!({ "name": "n", "type": "integer", "positional": true }),
+                "only a string",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "description": " " }),
+                "one non-empty line",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "description": "a\nb" }),
+                "one non-empty line",
+            ),
+        ];
+        for (arg, expected) in cases {
+            let error = first("run", json!([arg]));
+            assert!(error.contains(expected), "{arg}: {error}");
+            assert!(error.starts_with("commands example run "), "{error}");
+        }
+        let who = json!({ "name": "who", "type": "string" });
+        assert!(first("run", json!([who, who])).contains("args repeat a name"));
+        let bare = |name: &str| json!({ "name": name, "type": "string", "positional": true });
+        assert!(first("run", json!([bare("a"), bare("b")])).contains("one positional at most"));
+        assert!(first("*", json!([who])).contains("the * wildcard takes its words as typed"));
+        assert!(first("run", json!({})).contains("args must be an array"));
+        assert!(first("run", json!(["pid"])).contains("args entries must be objects"));
+        let many: Vec<Value> = (0..17)
+            .map(|index| json!({ "name": format!("a{index}"), "type": "flag" }))
+            .collect();
+        assert!(first("run", json!(many)).contains("declares more than 16 args"));
     }
 
     /// `lifecycle: publish_then_exit` ends the run after `on_start`; it needs

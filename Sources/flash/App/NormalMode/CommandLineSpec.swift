@@ -264,18 +264,28 @@ extension NormalModeDispatcher {
     var topics: [String: [String]]
     /// `command → subcommands` of the loaded plugins; `*` marks a wildcard.
     var pluginCommands: [String: [String]]
+    /// The arguments each named plugin command declares, by
+    /// `"<command> <subcommand>"`; one that is not listed takes none.
+    var pluginArguments: [String: DeclaredArguments] = [:]
     /// The manual's pages and the plugins' guides, for `:help <topic>`.
     var helpTopics: [String]
 
     static func core(
-      pluginCommands: [String: [String]] = [:], helpTopics: [String] = []
+      pluginCommands: [String: [String]] = [:],
+      pluginArguments: [String: DeclaredArguments] = [:], helpTopics: [String] = []
     ) -> CommandLineInventory {
       var topics: [String: [String]] = [:]
       for name in URLEventHandler.commandNames + FlashQuery.allCases.map(\.name) {
         topics[name.topic, default: []].append(name.action)
       }
       return CommandLineInventory(
-        topics: topics, pluginCommands: pluginCommands, helpTopics: helpTopics)
+        topics: topics, pluginCommands: pluginCommands, pluginArguments: pluginArguments,
+        helpTopics: helpTopics)
+    }
+
+    /// What the plugin command `command subcommand` accepts.
+    func arguments(ofPlugin command: String, _ subcommand: String) -> DeclaredArguments {
+      pluginArguments["\(command) \(subcommand)"] ?? .none
     }
 
     /// Every word a line may start with, besides the ex commands.
@@ -416,7 +426,7 @@ extension NormalModeDispatcher {
         return resolveTopic(word, actions: actions, rest: rest, inventory: inventory)
       }
       if let subcommands = inventory.pluginCommands[word] {
-        return resolvePlugin(word, subcommands: subcommands, rest: rest)
+        return resolvePlugin(word, subcommands: subcommands, rest: rest, inventory: inventory)
       }
       switch word {
       case "doctor": return query(.doctor, rest[...])
@@ -475,20 +485,25 @@ extension NormalModeDispatcher {
   }
 
   private static func resolvePlugin(
-    _ command: String, subcommands: [String], rest: [String]
+    _ command: String, subcommands: [String], rest: [String], inventory: CommandLineInventory
   ) -> CommandLineResolution {
     guard let second = rest.first else { return .incomplete(command) }
     let declared = subcommands.filter { !$0.isEmpty && $0 != "*" }
-    let args = Array(rest.dropFirst())
     switch matchCommandLineWord(second, among: declared) {
     case .exact(let subcommand), .unique(let subcommand):
+      // The words are held to what the command declares before anything
+      // runs, as a core command's are; the plugin gets one spelling.
+      guard
+        let args = inventory.arguments(ofPlugin: command, subcommand).canonical(
+          commandLineArgumentWords(rest.dropFirst()))
+      else { return .unknown }
       return .plugin(command: command, subcommand: subcommand, args: args)
     case .ambiguous(let candidates):
       return .ambiguous(candidates)
     case .none:
       // A wildcard command takes the words as typed (`:calc 2 + 2`).
       guard subcommands.contains("*") else { return .unknown }
-      return .plugin(command: command, subcommand: second, args: args)
+      return .plugin(command: command, subcommand: second, args: Array(rest.dropFirst()))
     }
   }
 
@@ -578,6 +593,13 @@ extension NormalModeDispatcher {
   /// argument continues the value before it, so `--device=Studio Speakers`
   /// keeps the device name whole. Nil when they do not parse.
   static func commandLineArguments(_ words: ArraySlice<String>) -> [String: String]? {
+    try? CommandArguments.parse(commandLineArgumentWords(words))
+  }
+
+  /// The words after an action as its arguments, one element each: a word
+  /// that does not start an argument continues the one before it (`--device=Studio
+  /// Speakers`, `tmux session my session`).
+  static func commandLineArgumentWords(_ words: ArraySlice<String>) -> [String] {
     var arguments: [String] = []
     for word in words {
       if word.hasPrefix("--") || arguments.isEmpty {
@@ -586,7 +608,7 @@ extension NormalModeDispatcher {
         arguments[arguments.count - 1] += " " + word
       }
     }
-    return try? CommandArguments.parse(arguments)
+    return arguments
   }
 
   /// The line's words, without the prompt's colon.

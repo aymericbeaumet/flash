@@ -123,10 +123,12 @@ final class BundledCalendarPluginTests: XCTestCase {
     settleRunLoop(0.2)
     XCTAssertEqual(calendar.asks, 0)
     XCTAssertEqual(calendar.reads, 0)
-    // An argument is refused before anything is read.
+    // An argument is refused by the host: nothing is spawned or read.
     XCTAssertEqual(
-      run("next", ["--now"]), PluginCommandResult(ok: false, error: "usage: calendar next"))
-    XCTAssertNotNil(status?.pid, "the first command spawned it")
+      run("next", ["--now"]),
+      PluginCommandResult(
+        ok: false, error: "unknown command or invalid arguments: calendar next --now"))
+    XCTAssertNil(status?.pid, "a refused command starts no process")
     XCTAssertEqual(calendar.asks, 0)
     XCTAssertEqual(calendar.reads, 0)
   }

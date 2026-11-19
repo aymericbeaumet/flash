@@ -133,7 +133,12 @@ final class BundledProcessesPluginTests: XCTestCase {
       "Kill this process?")
     XCTAssertEqual(
       run(["--pid=1"], confirmed: true),
-      PluginCommandResult(ok: false, error: "refusing pid 1"))
+      PluginCommandResult(
+        ok: false, error: "unknown command or invalid arguments: process kill --pid=1"))
+    XCTAssertNil(status?.pid, "a pid the declaration refuses starts nothing")
+    XCTAssertEqual(
+      run(["--pid=2147483646"], confirmed: true),
+      PluginCommandResult(ok: false, error: "no process with pid 2147483646"))
     XCTAssertNotNil(status?.pid, "the first command spawned it")
   }
 
@@ -266,24 +271,28 @@ final class BundledProcessesPluginTests: XCTestCase {
       PluginCommandResult(ok: false, error: "no process with pid \(child.processIdentifier)"))
   }
 
-  /// What no confirmation reaches: a malformed pid, launchd and the
+  /// What no confirmation reaches: arguments the command's declaration
+  /// refuses, launchd among them, which never reach the plugin, and the
   /// resident itself, which here is the test runner.
   func testAKillTheHostOrThePluginRefusesSignalsNothing() throws {
     let child = try spawnChild()
     let signals = ChildProcessSignals(child: child)
     try start(signals: signals)
-    for (args, error) in [
-      ([], "usage: process kill --pid=<pid>"),
-      (["4242"], "usage: process kill --pid=<pid>"),
-      (["--pid=sleep"], "usage: process kill --pid=<pid>"),
-      (["--pid=\(child.processIdentifier)", "--force"], "usage: process kill --pid=<pid>"),
-      (["--pid=1"], "refusing pid 1"),
-      (["--pid=0"], "refusing pid 0"),
-      (["--pid=\(getpid())"], "process kill failed: refusing to signal Flash itself"),
+    for args in [
+      [], ["4242"], ["--pid=sleep"], ["--pid=\(child.processIdentifier)", "--force"],
+      ["--pid=1"], ["--pid=0"], ["--pid=-\(child.processIdentifier)"],
     ] {
       XCTAssertEqual(
-        run(args, confirmed: true), PluginCommandResult(ok: false, error: error), "\(args)")
+        run(args, confirmed: true),
+        PluginCommandResult(
+          ok: false,
+          error: "unknown command or invalid arguments: "
+            + (["process", "kill"] + args).joined(separator: " ")), "\(args)")
     }
+    XCTAssertNil(status?.pid, "refused arguments start no plugin")
+    XCTAssertEqual(
+      run(["--pid=\(getpid())"], confirmed: true),
+      PluginCommandResult(ok: false, error: "process kill failed: refusing to signal Flash itself"))
     XCTAssertTrue(child.isRunning)
     XCTAssertEqual(signals.refused, [], "no refusal reached the mechanism")
   }

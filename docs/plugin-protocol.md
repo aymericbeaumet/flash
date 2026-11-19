@@ -486,8 +486,10 @@ never asks the host what it supports. See the
   "context": {…}}`), the plugin's own command (`{"command": "tmux",
   "subcommand": "session", "args": ["main"]}`), or a bang (the plugin id as
   `command`, the typed token as `subcommand`, the query words as `args`).
-  `args` are the argument words as a mapping writes them: `--key=value` for
-  a value, `--flag` for a bool flag, bare words for a plugin's own command.
+  `args` are the argument words: a core command's as a mapping writes them
+  (`--key=value`, `--flag`), a bang's query, and for an own command the
+  arguments its entry declares, already validated and in one spelling (see
+  `args` under [`commands`](#manifest)).
   `context` is the focused app, and it is sent exactly for a core command:
   an own command or a bang runs from any surface, the flashlight and the
   CLI included, so it has no focused app (`host.normal_mode_target` asks
@@ -549,7 +551,8 @@ nothing is sent.
 
 - A manifest `commands[]` entry carries `confirm`: the host asks before it
   dispatches that command's `perform`, whether a key, the command line or
-  the CLI ran it (see [`commands`](#manifest)).
+  the CLI ran it, and only once its arguments passed their declaration (see
+  [`commands`](#manifest)).
 - A row carries `confirm`: the host asks before it acts on the row, which
   means before it sends the row's resolve, or before it runs its `effect`.
   A row another key would commit (`<tab>`, `<cmd+cr>`) asks the same way.
@@ -1227,9 +1230,10 @@ Section semantics:
   word decides what an entry is:
   - outside Flash's topics it is one of the **plugin's own commands**
     (`tmux session`, `screenshot window`): it registers for dispatch and
-    command-line completion, subcommand `"*"` consumes the remainder as args,
+    command-line completion, takes the arguments its `args` declares (below),
     and a name another plugin's own command uses fails the load of every
-    plugin that claims it;
+    plugin that claims it; subcommand `"*"` takes every other second word
+    with the words after it as typed, undeclared and unchecked;
   - under one of Flash's topics (`tab`, `pane`, `scroll`, `app`, …) it is a
     **core command the plugin performs** where its root selector matches
     (`{"command": "tab", "subcommand": "close"}`), and it must name one Flash
@@ -1241,6 +1245,39 @@ Section semantics:
     binding (see **Resolution** under `bindings` below). `description` is
     allowed on a core entry but unused: the host's catalog describes its
     own commands.
+
+  `args` on a named own entry lists what the command takes, in the order
+  its syntax shows; an entry without it takes no argument:
+
+  ```json
+  { "command": "process", "subcommand": "kill", "confirm": "Kill this process?",
+    "args": [{ "name": "pid", "type": "integer", "min": 2, "required": true,
+               "description": "The process to terminate" }] }
+  ```
+
+  | `type` | Written | Accepts |
+  | --- | --- | --- |
+  | `integer` | `--pid=4242` | a whole number, within `min` and `max` when given |
+  | `string` | `--device=Studio Speakers` | any text that is not blank |
+  | `enum` | `--mode=fast` | one of `values`, 1 to 64 words |
+  | `flag` | `--force` | on (also `=1`, `=true`) or absent (also `=0`, `=false`) |
+
+  `name` is `[a-z][a-z0-9_]*`, unique in its command, each `_` written `-`.
+  `required: true` refuses an invocation without the argument; a flag cannot
+  be required. `positional: true` makes a string the command's one bare word
+  (`tmux session main`). `description` is one line of at most 256 bytes. A
+  command declares at most 16 arguments, and neither a core entry (Flash
+  holds those to its own table) nor `*` declares any; any other key, type or
+  combination rejects the manifest. The host holds every invocation to the
+  declaration before anything else: a mapping when the configuration loads
+  (`flash config check` reports it), the command line and the CLI when the
+  words resolve (`unknown command or invalid arguments: …`, exit 2), and
+  before `confirm` is asked. Words it refuses send nothing and start no
+  process. The plugin receives `args` in declaration order and one spelling:
+  the positional as a bare word, `--name=value` with a number in plain
+  decimal, `--name` for a flag that is on. What only the plugin knows (a pid
+  that is gone) stays its own check. `protocol.json` `command_args` pins the
+  rules, and the SDK's `plugin!` applies them at build time.
 
   `confirm` on an entry is the question the host asks before the command
   (`{"command": "tab", "subcommand": "close", "confirm": "Close this tmux

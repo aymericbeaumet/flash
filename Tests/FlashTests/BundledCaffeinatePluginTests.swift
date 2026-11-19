@@ -122,14 +122,21 @@ final class BundledCaffeinatePluginTests: XCTestCase {
     XCTAssertEqual(try assertions(of: pid), [])
   }
 
+  /// A bound the command's declaration refuses never reaches the plugin: no
+  /// process starts, so nothing is held.
   func testAMalformedBoundTakesNothing() throws {
+    for args in [["--minutes=0"], ["5"], ["--minutes=1h"], ["--minutes=5", "--force"]] {
+      XCTAssertEqual(
+        run("on", args),
+        PluginCommandResult(
+          ok: false,
+          error: "unknown command or invalid arguments: "
+            + (["caffeinate", "on"] + args).joined(separator: " ")), "\(args)")
+    }
     XCTAssertEqual(
-      run("on", ["--minutes=0"]),
-      PluginCommandResult(ok: false, error: "usage: caffeinate on [--minutes=<n>]"))
-    XCTAssertEqual(
-      run("on", ["5"]),
-      PluginCommandResult(ok: false, error: "usage: caffeinate on [--minutes=<n>]"))
-    let pid = try XCTUnwrap(status?.pid)
-    XCTAssertEqual(try assertions(of: pid), [])
+      run("off", ["--minutes=5"]),
+      PluginCommandResult(
+        ok: false, error: "unknown command or invalid arguments: caffeinate off --minutes=5"))
+    XCTAssertNil(status?.pid, "a refused command starts no process")
   }
 }

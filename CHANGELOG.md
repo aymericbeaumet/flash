@@ -69,10 +69,7 @@ monitors read that no plugin publishes any more, with its replacement.
   subcommand: type `:media status` (or `:media s`) where `:media` used to
   show what is playing. `volume`, `audio`, `media` and `caffeinate` commands
   keep their words everywhere else; with their plugin in
-  `[plugins] disabled` they do nothing. An argument these commands do not
-  take (`volume up --steps=2`, `caffeinate on 5`, `--minutes=0`) is refused
-  when the command runs, with its usage, where `flash config check` used to
-  report it.
+  `[plugins] disabled` they do nothing.
 - **`processes` asks before it terminates a process.** Its values keep
   their names (`#{flash.plugin.processes.top_cpu}`, `top_mem`,
   `focused_app_details`) and the tables' row count is `[plugins.processes]
@@ -81,9 +78,8 @@ monitors read that no plugin publishes any more, with its replacement.
   has since been reused is refused. The `!kill` bang and `processes refresh`
   are gone: `process kill --pid=<pid>` terminates one process from a
   mapping, the command line or the CLI, after asking (`Kill this
-  process?`). It names no process in its question, refuses pids 0 and 1, a
-  pid that is gone and Flash's own, and anything but `--pid=<pid>` fails
-  with its usage when the command runs. A text popup that reads one of the
+  process?`). It names no process in its question and refuses a pid that is
+  gone and Flash's own. A text popup that reads one of the
   values keeps them sampled while the bar is enabled, open or not, so it
   opens on current figures. With `processes` in `[plugins] disabled` the
   values are empty, `@processes` lists nothing and `process kill` does
@@ -109,9 +105,8 @@ monitors read that no plugin publishes any more, with its replacement.
   when it has no list to show yet; a longer read (a large Notes library)
   shows when it ends, and a list read again while its rows are on screen
   replaces them where you are. A row that
-  cannot be shown says so in the centred alert, and an argument these
-  commands do not take (`notes open --now`) is refused when the command
-  runs, with its usage. With one of the three in `[plugins] disabled`, its
+  cannot be shown says so in the centred alert. With one of the three in
+  `[plugins] disabled`, its
   list is empty and its commands do nothing
   ([flashlight](docs/flashlight.md)).
 - **`@menus` is the `menus` plugin's.** It lists the same items under the
@@ -131,9 +126,22 @@ monitors read that no plugin publishes any more, with its replacement.
   keep their words in mappings, the CLI and the command line, the four that
   cannot be undone still ask first, and `@system` still lists them. With
   `system` in `[plugins] disabled` they do nothing and `@system` is empty.
-  An argument these commands do not take (`screen lock --now`) is refused
-  when the command runs, with its usage, where `flash config check` used to
-  report it.
+- **A plugin command takes only the arguments its plugin declares.** Flash
+  holds a plugin command's words to the arguments its manifest lists, as it
+  holds its own commands to theirs: `flash config check` reports a mapping
+  such as `process kill --pid=abc`, `caffeinate on --minutes=0` or `screen
+  lock --now`, the command line and the CLI answer `unknown command or
+  invalid arguments` (exit 2), and `process kill` asks its question only
+  for a pid it could terminate. A command that declares no argument takes
+  none, so stray words after `screenshot window` or `notes open`, which
+  used to be ignored, are now refused. `tmux session` and `tmux window`
+  take exactly one name: write a name that holds a space as one element of
+  the mapping (`["flash", "tmux", "session", "Daft Punk"]`, where only
+  `Daft` was read before), and `:tmux session Daft Punk` on the command
+  line. A third-party plugin lists what its commands take under `args` in
+  `commands[]` ([plugin protocol](docs/plugin-protocol.md#manifest));
+  without it they take nothing, and only a `*` subcommand still receives
+  its words as typed.
 - **A status link opens only `http`, `https` and `mailto` URLs.** A
   `#[link=…]` on the bar, hinted or clicked, or a hyperlink in a popup, is
   text a plugin, a source or a program wrote, so any other scheme is now

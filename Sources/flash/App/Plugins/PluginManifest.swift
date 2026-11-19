@@ -250,28 +250,136 @@ struct PluginSelectorStack: Hashable, Equatable {
   }
 }
 
+/// One argument a plugin's own command declares (an entry of
+/// `commands[].args`): `--name=value` of a closed set of types, or the one
+/// bare word a command takes. The host holds every invocation to the
+/// declaration before the command runs or its question is asked, and
+/// completion and the catalog read it.
+struct PluginCommandArgument: Decodable, Hashable {
+  var name: String
+  /// `integer`, `string`, `enum` or `flag` (`PluginProtocol.commandArgTypes`).
+  var type: String
+  var description: String?
+  var required: Bool
+  /// A bare word instead of `--name=value`; a string, one per command.
+  var positional: Bool
+  /// Inclusive bounds of an `integer`.
+  var min: Int?
+  var max: Int?
+  /// The words an `enum` accepts.
+  var values: [String]?
+
+  init(
+    name: String, type: String, description: String? = nil, required: Bool = false,
+    positional: Bool = false, min: Int? = nil, max: Int? = nil, values: [String]? = nil
+  ) {
+    self.name = name
+    self.type = type
+    self.description = description
+    self.required = required
+    self.positional = positional
+    self.min = min
+    self.max = max
+    self.values = values
+  }
+
+  enum CodingKeys: String, CodingKey, CaseIterable {
+    case name, type, description, required, positional, min, max, values
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.name = try c.decode(String.self, forKey: .name)
+    self.type = try c.decode(String.self, forKey: .type)
+    self.description = try c.decodeIfPresent(String.self, forKey: .description)
+    self.required = try c.decodeIfPresent(Bool.self, forKey: .required) ?? false
+    self.positional = try c.decodeIfPresent(Bool.self, forKey: .positional) ?? false
+    self.min = try c.decodeIfPresent(Int.self, forKey: .min)
+    self.max = try c.decodeIfPresent(Int.self, forKey: .max)
+    self.values = try c.decodeIfPresent([String].self, forKey: .values)
+  }
+
+  /// Why the declaration is malformed, or nil. `protocol.json`
+  /// `command_args` states the rules; the SDK's `plugin!` checks the same
+  /// ones at build time.
+  var validationError: String? {
+    guard CommandName.isWord(name) else { return "name must be a word of [a-z][a-z0-9_]*" }
+    guard PluginProtocol.commandArgTypes.contains(type) else {
+      return "type must be \(PluginProtocol.commandArgTypes.joined(separator: ", "))"
+    }
+    if let description {
+      guard !description.trimmed.isEmpty, !description.contains(where: \.isNewline),
+        description.utf8.count <= PluginProtocol.maxCommandArgDescriptionBytes
+      else {
+        return "description must be one non-empty line of at most "
+          + "\(PluginProtocol.maxCommandArgDescriptionBytes) bytes"
+      }
+    }
+    if type != "integer", min != nil || max != nil { return "min and max come with an integer" }
+    if let min, let max, min > max { return "min is above max" }
+    if type == "enum" {
+      guard let values, !values.isEmpty, values.count <= PluginProtocol.maxCommandArgValues,
+        Set(values).count == values.count,
+        values.allSatisfy({ value in
+          !value.isEmpty && !value.hasPrefix("--") && !value.contains(where: \.isWhitespace)
+        })
+      else {
+        return "an enum lists 1 to \(PluginProtocol.maxCommandArgValues) distinct values, each "
+          + "one word that does not start with --"
+      }
+    } else if values != nil {
+      return "values come with an enum"
+    }
+    if type == "flag", required { return "a flag is on or off: it cannot be required" }
+    if positional, type != "string" { return "only a string can be positional" }
+    return nil
+  }
+
+  /// The argument as the command grammar reads it.
+  var parameter: CommandParameter {
+    let kind: CommandParameter.Kind
+    switch type {
+    case "integer": kind = .integer(min: min, max: max)
+    case "enum": kind = .choice(values ?? [])
+    case "flag": kind = .flag
+    default: kind = .text(name)
+    }
+    return CommandParameter(
+      name: name, kind: kind, required: required, positional: positional,
+      summary: description ?? "")
+  }
+}
+
 /// One `commands[]` entry. Outside Flash's topics it is one of the plugin's
 /// own **commands** (the first word the user types after `:`, e.g.
 /// `spotify`) with one of its **subcommands** (e.g. `play`): the
 /// denormalized pair the command-line completion engine and the dispatch
-/// index are built from. Under one of Flash's topics (`tab close`) it is a
-/// core command the plugin performs where its selector matches. `confirm`
-/// is the question the host asks first when either is destructive.
+/// index are built from, with the `args` it takes. Under one of Flash's
+/// topics (`tab close`) it is a core command the plugin performs where its
+/// selector matches. `confirm` is the question the host asks first when
+/// either is destructive.
 struct PluginCommandRegistration: Decodable, Hashable {
   var command: String
   var subcommand: String
   var description: String
   var confirm: String?
+  /// The arguments of the plugin's own command. Without any, the command
+  /// takes none.
+  var args: [PluginCommandArgument]
 
-  init(command: String, subcommand: String = "", description: String = "", confirm: String? = nil) {
+  init(
+    command: String, subcommand: String = "", description: String = "", confirm: String? = nil,
+    args: [PluginCommandArgument] = []
+  ) {
     self.command = command
     self.subcommand = subcommand
     self.description = description
     self.confirm = confirm
+    self.args = args
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case command, subcommand, description, confirm
+    case command, subcommand, description, confirm, args
   }
 
   init(from decoder: Decoder) throws {
@@ -280,6 +388,7 @@ struct PluginCommandRegistration: Decodable, Hashable {
     self.subcommand = try c.decodeIfPresent(String.self, forKey: .subcommand) ?? ""
     self.description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
     self.confirm = try c.decodeIfPresent(String.self, forKey: .confirm)
+    self.args = try c.decodeIfPresent([PluginCommandArgument].self, forKey: .args) ?? []
   }
 
   /// Whether this entry declares a core command (a Flash topic) rather than
@@ -290,6 +399,31 @@ struct PluginCommandRegistration: Decodable, Hashable {
   var prompt: String? { confirm.flatMap(PluginProtocol.confirmPrompt) }
 
   var name: CommandName { CommandName(command, subcommand) }
+
+  /// Whether the entry is the `*` wildcard, whose words are the plugin's.
+  var isWildcard: Bool { subcommand == "*" }
+
+  /// What the command accepts: its declared `args`, or nil for the `*`
+  /// wildcard, which takes the words after the command as typed.
+  var arguments: DeclaredArguments? {
+    isWildcard ? nil : DeclaredArguments(parameters: args.map(\.parameter))
+  }
+
+  /// Why the entry's `args` are malformed, or nil.
+  var argsValidationError: String? {
+    guard !args.isEmpty else { return nil }
+    if isCoreCommand { return "a core command's arguments are Flash's: remove args" }
+    if isWildcard { return "the * wildcard takes its words as typed: remove args" }
+    guard args.count <= PluginProtocol.maxCommandArgs else {
+      return "declares more than \(PluginProtocol.maxCommandArgs) args"
+    }
+    for argument in args {
+      if let error = argument.validationError { return "args \(argument.name): \(error)" }
+    }
+    guard Set(args.map(\.name)).count == args.count else { return "args repeat a name" }
+    guard args.filter(\.positional).count <= 1 else { return "takes one positional at most" }
+    return nil
+  }
 }
 
 /// One flashlight bang a plugin registers (an entry of manifest `bangs`).
@@ -1132,6 +1266,11 @@ struct PluginManifest: Decodable, Equatable {
     try rejectArrayObjects(
       dictionary["commands"], allowed: keys(PluginCommandRegistration.CodingKeys.self),
       path: "manifest.json commands")
+    for (index, command) in ((dictionary["commands"] as? [[String: Any]]) ?? []).enumerated() {
+      try rejectArrayObjects(
+        command["args"], allowed: keys(PluginCommandArgument.CodingKeys.self),
+        path: "manifest.json commands[\(index)].args")
+    }
     try rejectArrayObjects(
       dictionary["mappings"], allowed: keys(PluginMappingRegistration.CodingKeys.self),
       path: "manifest.json mappings")
@@ -1377,6 +1516,10 @@ struct PluginManifest: Decodable, Equatable {
         throw PluginError.failure(
           "manifest.json commands \(command.command) \(subcommand) confirm needs a non-empty "
             + "prompt of at most \(PluginProtocol.maxConfirmBytes) bytes")
+      }
+      if let error = command.argsValidationError {
+        throw PluginError.failure(
+          "manifest.json commands \(command.command) \(subcommand) \(error)")
       }
     }
     if let conflict = Self.commandClaimFailures([self])[id] {

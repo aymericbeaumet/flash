@@ -133,31 +133,43 @@ struct PluginRepository {
     return roots
   }
 
-  /// `(command, subcommand)` pairs from bundled manifests. `subcommand` is
-  /// `*` for a wildcard. Config and the CLI accept `flash <command> <subcommand>`
-  /// for these, the same shape as `:command subcommand`.
-  static let declaredCommandPairs: Set<PluginCommandPair> = {
-    var pairs = Set<PluginCommandPair>()
+  /// The bundled plugins' own commands by `(command, subcommand)`, with the
+  /// arguments each declares; `subcommand` is `*` for a wildcard. Config and
+  /// the CLI accept `flash <command> <subcommand>` for these, the same shape
+  /// as `:command subcommand`, and hold their arguments to the declaration.
+  static let declaredCommands: [PluginCommandPair: PluginCommandRegistration] = {
+    struct Commands: Decodable {
+      var commands: [PluginCommandRegistration]?
+    }
+    var declared: [PluginCommandPair: PluginCommandRegistration] = [:]
     for root in manifestRoots(in: officialPluginRoots() + [sourceTreePluginsDirectory]) {
       let url = root.appendingPathComponent("manifest.json")
       guard let data = try? Data(contentsOf: url),
-        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let commands = json["commands"] as? [[String: Any]]
+        let manifest = try? JSONDecoder().decode(Commands.self, from: data)
       else { continue }
-      for command in commands {
-        guard let name = command["command"] as? String else { continue }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      for var command in manifest.commands ?? [] {
+        command.command = command.command.trimmed.lowercased()
+        command.subcommand = command.subcommand.trimmed.lowercased()
         // An entry under one of Flash's topics is a core command the plugin
         // performs, never a plugin command the CLI could name.
-        guard !trimmed.isEmpty, !URLEventHandler.isTopic(trimmed) else { continue }
-        let sub =
-          (command["subcommand"] as? String)?
-          .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        pairs.insert(PluginCommandPair(command: trimmed, subcommand: sub))
+        guard !command.command.isEmpty, !command.isCoreCommand else { continue }
+        let pair = PluginCommandPair(command: command.command, subcommand: command.subcommand)
+        if declared[pair] == nil { declared[pair] = command }
       }
     }
-    return pairs
+    return declared
   }()
+
+  /// The bundled registration `flash <command> <subcommand>` names: that
+  /// pair, else the `*` wildcard of the same command.
+  static func declaredCommand(_ command: String, subcommand: String)
+    -> PluginCommandRegistration?
+  {
+    let command = command.lowercased()
+    return declaredCommands[
+      PluginCommandPair(command: command, subcommand: subcommand.lowercased())]
+      ?? declaredCommands[PluginCommandPair(command: command, subcommand: "*")]
+  }
 
   /// Lowercased bang token → the bundled plugin whose manifest declares it,
   /// the `*` catch-all left out. `[flashlight.bangs]` may not take one.
@@ -188,18 +200,6 @@ struct PluginRepository {
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .appendingPathComponent("Plugins")
-
-  /// True when some manifest registers `command`. With a subcommand, true
-  /// only for that pair or a `*` wildcard on the same command.
-  static func declaresCommand(_ command: String, subcommand: String? = nil) -> Bool {
-    let command = command.lowercased()
-    guard declaredCommandPairs.contains(where: { $0.command == command }) else { return false }
-    guard let subcommand else { return true }
-    let normalized = subcommand.lowercased()
-    return declaredCommandPairs.contains(
-      PluginCommandPair(command: command, subcommand: normalized))
-      || declaredCommandPairs.contains(PluginCommandPair(command: command, subcommand: "*"))
-  }
 
   static func officialPluginRoots(
     bundleURL: URL = Bundle.main.bundleURL,

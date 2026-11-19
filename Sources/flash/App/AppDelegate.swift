@@ -1094,17 +1094,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Run a plugin's own command. `count` is the NORMAL count typed before
   /// its key, sent in the one `perform`. Its alert shows wherever it ran;
   /// its output goes to `completion`, or on a banner without one. False when
-  /// no loaded plugin owns the command here. A command whose manifest entry
-  /// declares `confirm` asks first, from a key, the command line and the
-  /// CLI alike, unless the user already said `y` (`confirmed`); the perform
-  /// that follows a `y` says so.
+  /// no loaded plugin owns the command here. The words are held to the
+  /// arguments the command's manifest entry declares before anything else:
+  /// ones it does not accept run nothing and ask nothing. A command whose
+  /// entry declares `confirm` then asks first, from a key, the command line
+  /// and the CLI alike, unless the user already said `y` (`confirmed`); the
+  /// perform that follows a `y` says so.
   @discardableResult
   func performPluginCommand(
     _ cmd: URLCommand, count: Int = 1, confirmed: Bool = false,
     completion: ((NormalModeCommandOutcome, String?) -> Void)? = nil
   ) -> Bool {
-    guard case .pluginCommand(let command, let subcommand, let args) = cmd else { return false }
+    guard case .pluginCommand(let command, let subcommand, var args) = cmd else { return false }
     let context = pluginSelectorContext()
+    if let declared = pluginManager.ownCommandArguments(
+      command: command, subcommand: subcommand, in: context)
+    {
+      guard let canonical = declared.canonical(args) else {
+        warnUnsupportedCommand(cmd.diagnosticDescription)
+        completion?(
+          .failed,
+          PluginManager.invalidArgumentsMessage(
+            command: command, subcommand: subcommand, args: args))
+        return true
+      }
+      args = canonical
+    }
     if !confirmed,
       let prompt = pluginManager.ownCommandConfirmation(
         command: command, subcommand: subcommand, in: context)

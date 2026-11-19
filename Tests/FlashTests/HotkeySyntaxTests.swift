@@ -511,7 +511,7 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "screenshot", "window"])?.diagnosticDescription,
       "flash screenshot window")
     XCTAssertEqual(
-      parseMappingCommand(argv: ["flash", "tmux", "session", "Daft", "Punk"])?
+      parseMappingCommand(argv: ["flash", "tmux", "session", "Daft Punk"])?
         .diagnosticDescription,
       "flash tmux session Daft Punk")
     XCTAssertNil(
@@ -541,13 +541,17 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(subcommand, "window")
     XCTAssertEqual(args, [])
 
-    // The tail is the command bar's words: `:tmux session Daft Punk`.
-    let positioned = parseMappingCommand(argv: ["flash", "tmux", "session", "Daft", "Punk"])
+    // The session is the command's one declared word, an element of its own
+    // whatever it holds: `:tmux session Daft Punk` on the command line.
+    let positioned = parseMappingCommand(argv: ["flash", "tmux", "session", "Daft Punk"])
     guard case .flashCommand(.pluginCommand(_, let session, let queryArgs)) = positioned else {
       return XCTFail("expected tmux session, got \(String(describing: positioned))")
     }
     XCTAssertEqual(session, "session")
-    XCTAssertEqual(queryArgs, ["Daft", "Punk"])
+    XCTAssertEqual(queryArgs, ["Daft Punk"])
+    for tail in [["Daft", "Punk"], [], ["--name=Daft"], ["Daft", "--force"]] {
+      XCTAssertNil(parseMappingCommand(argv: ["flash", "tmux", "session"] + tail), "\(tail)")
+    }
 
     let clipboard = parseMappingCommand(argv: ["flash", "clipboard", "show"])
     guard case .flashCommand(.clipboardHistory(let action, let id, let offset)) = clipboard else {

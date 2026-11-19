@@ -41,8 +41,17 @@ operations — print, save as, export, revert, settings, a browser's
 bookmarks and history — and `menu press`, which presses any menu item by
 its titles, are in [app operations](normal-mode.md#app-operations).
 
-Plugin commands have the same shape, `flash <command> <subcommand> [word ...]`
-(`flash tmux session main`, `flash screenshot window`, `flash volume up`), and
+Plugin commands have the same shape, `flash <command> <subcommand>` and the
+arguments the plugin's manifest declares for it
+(`flash tmux session main`, `flash screenshot window`,
+`flash process kill --pid=4242`). Flash holds the words to that declaration
+as it holds its own commands to theirs: `flash config check` reports a
+mapping whose arguments the command does not take, the command line and the
+CLI answer `unknown command or invalid arguments` (exit 2), and a command
+that asks first asks only once its arguments passed. A command that declares
+none takes none. On the command line the words after an argument continue
+its value (`:tmux session Daft Punk`, `:audio output --device=Studio
+Speakers`); in a mapping each argument is one element of the array. They
 share the topic namespace: a plugin may own several command words (`media`
 owns `volume`, `audio` and `media`), a topic word never becomes a plugin's
 own command, and a manifest
@@ -841,8 +850,8 @@ lock`, `system sleep`, `display sleep`, `screensaver start` and
 `appearance toggle` act at once. `system restart`, `system shutdown`,
 `system logout` and `trash empty` cannot be undone, so each asks first in
 the centred alert: `y` runs it, any other key cancels. None of the plugin's
-commands takes an argument: one given any fails with its usage (`usage:
-screen lock`).
+commands takes an argument: Flash refuses one given any before it runs or
+asks (`unknown command or invalid arguments: screen lock --now`).
 
 The plugin holds no power over the Mac: it asks Flash for each action, and
 Flash carries it out. `screen lock` posts macOS's Lock Screen shortcut
@@ -862,13 +871,14 @@ these commands do nothing.
 `process kill --pid=<pid>` is the command of the bundled `processes`
 plugin, so the reference table leaves it out too. It asks first (`Kill this
 process?`), then sends SIGTERM to that process: the plugin asks Flash, and
-Flash signals only for a request you just answered `y` to. It refuses pids 0
-and 1, a pid it cannot find (`no process with pid 4242`) and Flash's own,
-and says the kernel's reason when the signal is not allowed (`process kill
-failed: Operation not permitted` for another user's process). `--pid` is
-its one argument; anything else fails with `usage: process kill
---pid=<pid>` when the command runs. With `processes` in `[plugins]
-disabled` it does nothing. In the flashlight, `@system` and `@processes`
+Flash signals only for a request you just answered `y` to. `--pid`, a whole
+number from 2, is its one argument and is required: Flash refuses anything
+else, pids 0 and 1 included, before the question is asked, and
+`flash config check` reports it in a mapping. The plugin refuses a pid it
+cannot find (`no process with pid 4242`) and Flash's own, and says the
+kernel's reason when the signal is not allowed (`process kill failed:
+Operation not permitted` for another user's process). With `processes` in
+`[plugins] disabled` it does nothing. In the flashlight, `@system` and `@processes`
 list the same actions and every process ([flashlight](flashlight.md)).
 
 `caffeinate on`, `off`, `toggle` and `status` are the commands of the bundled
@@ -880,9 +890,10 @@ accepts the same bound, and `caffeinate off` ends it early. Each of these
 commands shows a `caffeinate` alert with `on` or `off` under it and prints
 `caffeinate on` or `caffeinate off` in a terminal; `flash caffeinate status`
 only prints the state, and shows it on a banner when a mapping runs it.
-`--minutes=N`, a whole number from 1, is the only argument: anything else
-fails with the command's usage. `#{flash.plugin.caffeinate.state}` is `on` in
-a status format while the hold lasts.
+`--minutes=N`, a whole number from 1, is the only argument, and only `on`
+and `toggle` take it: Flash refuses anything else before the command runs.
+`#{flash.plugin.caffeinate.state}` is `on` in a status format while the hold
+lasts.
 
 The plugin takes the power assertions in its own sandboxed process. That
 process starts with the first `caffeinate` command, a mapping bound to one
@@ -981,8 +992,8 @@ Contacts); a refusal leaves the list empty and says nothing. One whose
 listing fails exits 1 (`notes refresh failed`), and one still reading, or
 still waiting on macOS's prompt, after eight seconds says `notes refresh is
 still running` and finishes on its own. `notes open`, `reminders open` and
-`contacts open` open the app. None takes an argument: one fails with `usage:
-notes open` when the command runs. With a plugin in `[plugins] disabled`
+`contacts open` open the app. None takes an argument: Flash refuses one
+before the command runs. With a plugin in `[plugins] disabled`
 its two commands do nothing and its list is empty; the other two are
 unaffected.
 
@@ -999,8 +1010,8 @@ A Zoom or Teams link opens in its app when it is installed. It answers
 event in the centred alert, and prints it from the CLI as well. With no
 event in the look-ahead, an event without a link for `calendar join`, or no
 access to your calendars, either exits 1 and says why, in the centred alert
-too. Neither takes an argument: one fails with `usage: calendar join` when
-the command runs. The first one asks macOS for Calendars access if Flash
+too. Neither takes an argument: Flash refuses one before the command runs.
+The first one asks macOS for Calendars access if Flash
 never asked, and says so if the prompt is still open eight seconds later.
 With `calendar` in `[plugins] disabled` they do nothing. See
 [calendar](calendar.md#next-meeting) for which event is next and the

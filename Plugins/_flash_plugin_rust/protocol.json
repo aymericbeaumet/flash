@@ -307,7 +307,7 @@
     "min_interval_ms": 500
   },
   "perform_command": {
-    "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words as a mapping writes them (--index=3, --force, or a bang's query words). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang. count is the NORMAL count typed before the key of the plugin's own command (5 then the key is one perform with count 5), an integer from 1 to count_max; absent means 1, and the host leaves it out for 1, for a core command (which it repeats itself) and for a bang. confirmed is `true` on a command the user confirmed (see `confirmation`), and absent otherwise.",
+    "$comment": "The perform {kind: command} shape. command and subcommand are the two words (a bang: the plugin id and the token); args are the argument words: a core command's as a mapping writes them (--index=3, --force), a bang's query words, and for the plugin's own command the arguments its commands[] entry declares, already held to that declaration by the host and in one spelling (see `command_args`). context is the focused app and is present exactly for a core command the manifest's commands[] declares under one of Flash's topics, never for a plugin's own command or a bang. count is the NORMAL count typed before the key of the plugin's own command (5 then the key is one perform with count 5), an integer from 1 to count_max; absent means 1, and the host leaves it out for 1, for a core command (which it repeats itself) and for a bang. confirmed is `true` on a command the user confirmed (see `confirmation`), and absent otherwise.",
     "required": [
       "command",
       "subcommand",
@@ -324,6 +324,30 @@
       "pid",
       "front_window_frame"
     ]
+  },
+  "command_args": {
+    "$comment": "The manifest commands[].args key: the arguments one of the plugin's own commands takes, in the order its syntax shows them. An entry without `args` takes no arguments. Only a named own command declares them: a core command the plugin performs takes Flash's (the host validates them against its own table), and the `*` wildcard takes the words after the command exactly as typed, undeclared and unchecked. Each entry has a `name` ([a-z][a-z0-9_]*, unique in its command, written --name with each _ as -) and a `type`: integer (a whole number in plain decimal, within the inclusive `min` and `max` when present), string (any text that is not blank), enum (one of `values`: 1 to max_values distinct words, none starting with --) or flag (--name or --name=1|true turns it on, --name=0|false and absence leave it off). `required` (default false) fails an invocation that leaves the argument out; a flag cannot be required. `positional` (default false) makes a string the command's one bare word instead of --name=value (tmux session main); a command has at most one. `description` is one non-blank line of at most description_bytes, shown by completion. A command declares at most max_args arguments; any other key, type or combination rejects the manifest. The host holds every invocation to the declaration before it does anything else, from a mapping when the configuration loads, from the command line and the CLI when the words resolve, and before it asks the entry's `confirm`: an unknown, repeated or malformed argument, a value outside its type, a missing required one or a bare word without a positional runs nothing and starts no process. The plugin then receives the arguments in declaration order and one spelling: the positional as a bare word, --name=value with an integer in plain decimal, and --name for a flag that is on. What only the plugin can know (a pid that does not exist, a device no longer connected) stays its own check.",
+    "types": [
+      "integer",
+      "string",
+      "enum",
+      "flag"
+    ],
+    "required": [
+      "name",
+      "type"
+    ],
+    "optional": [
+      "description",
+      "required",
+      "positional",
+      "min",
+      "max",
+      "values"
+    ],
+    "max_args": 16,
+    "max_values": 64,
+    "description_bytes": 256
   },
   "confirmation": {
     "$comment": "Confirmed destructive actions. A manifest commands[] entry and a row may carry `confirm`: a non-blank question of at most quotas.confirm_bytes. The host asks it through its one confirmation alert before it dispatches that command's perform, or before it acts on that row (its resolve, or its effect), from a key, the command line and the CLI alike, and sends nothing unless the user answers y; a plugin never asks itself. On an own commands[] entry it gates that one pair (never the `*` wildcard); on a core command the plugin performs it gates the command in the apps the plugin's selector matches. A perform sent after the user answered y, to a declared `confirm` or to an `alert confirm` wrapping the command, carries `confirmed: true`; the key is absent otherwise and never false, and a navigate never carries it. The host remembers a confirmed perform until its reply or its deadline, and a host action that needs the user's consent is honoured only while one is in flight for that plugin: each confirmed perform covers one such action.",

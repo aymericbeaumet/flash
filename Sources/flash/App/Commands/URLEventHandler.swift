@@ -37,7 +37,13 @@ enum URLEventHandler {
   static func suggestedCommands(for words: [String]) -> [String] {
     let typed = words.filter { !$0.hasPrefix("-") }
     guard !typed.isEmpty else { return [] }
-    if typed.count >= 2, commands[typed.prefix(2).joined(separator: " ")] != nil { return [] }
+    // Words that name a command already: its arguments are what is wrong.
+    if typed.count >= 2,
+      commands[typed.prefix(2).joined(separator: " ")] != nil
+        || PluginRepository.declaredCommand(typed[0], subcommand: typed[1]) != nil
+    {
+      return []
+    }
     let typedWords = suggestionWords(typed.joined(separator: "_"))
     guard !typedWords.isEmpty else { return [] }
     let names = commandNames.map(\.description)
@@ -128,7 +134,8 @@ enum URLEventHandler {
   /// Nil for an unknown command or arguments it does not accept.
   ///
   /// Plugin commands are not in this table. They are
-  /// `flash <command> <subcommand>`, parsed by ``PluginGitInvocation``.
+  /// `flash <command> <subcommand>`, parsed by ``PluginGitInvocation``
+  /// against the arguments their manifest entry declares.
   static func parse(topic: String, action: String, args: [String: String]) -> URLCommand? {
     commands["\(topic) \(action)"]?.command(arguments: args)
   }

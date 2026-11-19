@@ -60,12 +60,30 @@
     {
       "command": "tmux",
       "subcommand": "session",
-      "description": "Switch the active tmux client to a session by name and raise its terminal."
+      "description": "Switch the active tmux client to a session by name and raise its terminal.",
+      "args": [
+        {
+          "name": "name",
+          "type": "string",
+          "positional": true,
+          "required": true,
+          "description": "The session to switch to"
+        }
+      ]
     },
     {
       "command": "tmux",
       "subcommand": "window",
-      "description": "Switch the active tmux client to a session:window target and raise its terminal."
+      "description": "Switch the active tmux client to a session:window target and raise its terminal.",
+      "args": [
+        {
+          "name": "target",
+          "type": "string",
+          "positional": true,
+          "required": true,
+          "description": "The window, as session:index"
+        }
+      ]
     },
     {
       "command": "tab",
