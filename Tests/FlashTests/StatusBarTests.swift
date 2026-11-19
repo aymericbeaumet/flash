@@ -1183,14 +1183,16 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(message.sublayers?.count, 1, "a message is one line")
     panel.hide()
     XCTAssertNil(panel.toast)
-    XCTAssertEqual(StatusAlert.volume(6).value, "6%")
-    XCTAssertEqual(StatusAlert.volume(50).value, "50%")
-    XCTAssertEqual(StatusAlert.volume(100).value, "100%")
-    XCTAssertEqual(StatusAlert.volume(6).title, "volume")
-    panel.displayAlert(StatusAlert.volume(6))
+    // A plugin's alert names the widest value it shows, so `6%` and `100%`
+    // share one box.
+    func volume(_ percent: Int) -> StatusAlert {
+      PluginAlert(title: "volume", value: "\(percent)%", widestValue: "100%").statusAlert
+    }
+    XCTAssertEqual(volume(6), StatusAlert(title: "volume", value: "6%", valueAnchor: "100%"))
+    panel.displayAlert(volume(6))
     let volumeNarrow = try XCTUnwrap(panel.toast?.layer.frame.width)
     XCTAssertEqual(panel.toast?.layer.sublayers?.count, 2, "a value is its own line")
-    panel.displayAlert(StatusAlert.volume(100))
+    panel.displayAlert(volume(100))
     let volumeWide = try XCTUnwrap(panel.toast?.layer.frame.width)
     XCTAssertEqual(
       StatusAlert.caffeinate(on: true),

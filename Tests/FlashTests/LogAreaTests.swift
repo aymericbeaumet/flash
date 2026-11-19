@@ -17,7 +17,7 @@ final class LogAreaTests: XCTestCase {
     "calendar", "capture", "click", "clipboard", "command", "commit", "config", "confirm",
     "cursor", "debug", "discover", "dock", "doctor", "drag", "events", "files", "flashlight",
     "focus", "frecency", "gesture", "history", "input", "ipc", "keyboard", "latency",
-    "macro", "mappings", "marks", "media", "menu", "menubar", "menus", "missioncontrol", "mode",
+    "macro", "mappings", "marks", "menu", "menubar", "menus", "missioncontrol", "mode",
     "monitors", "move", "movement", "multi", "navigation", "normal", "notifications", "notify",
     "overlay", "placement", "plugin", "plugins", "pointer", "poll", "popup", "positions",
     "processes", "query", "repeat", "resident", "screen", "screens", "scroll", "search", "source",

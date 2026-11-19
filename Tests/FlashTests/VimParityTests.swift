@@ -165,7 +165,7 @@ final class VimParityTests: XCTestCase {
       implied,
       [
         "about show", "commands show", "help show", "logs show", "mappings show",
-        "media status", "monitors show", "telemetry show",
+        "monitors show", "telemetry show",
       ])
     for words in [
       ["display", "sleep"], ["screen", "lock"], ["screensaver", "start"], ["trash", "empty"],

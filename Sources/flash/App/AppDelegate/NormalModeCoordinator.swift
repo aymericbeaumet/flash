@@ -1372,8 +1372,6 @@ extension AppDelegate {
       performSystemAction(action, confirmed: confirmed)
     case .processKill(let pid):
       performProcessKill(pid, confirmed: confirmed)
-    case .media(let media):
-      performMediaCommand(media, repeatCount: repeatCount)
     case .caffeinate(let request):
       performCaffeinate(request)
     case .macro(let command):

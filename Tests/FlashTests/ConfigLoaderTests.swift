@@ -2015,10 +2015,13 @@ final class ConfigLoaderTests: XCTestCase {
     let keys = Set(c.mode.hyper.map(\.key))
     XCTAssertTrue(keys.isSuperset(of: ["+", "-"]))
     XCTAssertEqual(c.mode.hyper.filter { $0.key == "-" }.count, 1)
+    // `volume` is a bundled plugin's command, bound word for word.
     XCTAssertEqual(
-      c.mode.compiledHyper.mapping(for: "-")?.action.command, .media(.volumeDown))
+      c.mode.compiledHyper.mapping(for: "-")?.action.command,
+      .pluginCommand(command: "volume", subcommand: "down", args: []))
     XCTAssertEqual(
-      c.mode.compiledHyper.mapping(for: "+")?.action.command, .media(.volumeUp))
+      c.mode.compiledHyper.mapping(for: "+")?.action.command,
+      .pluginCommand(command: "volume", subcommand: "up", args: []))
     XCTAssertNil(c.mode.hyper.first { $0.key.contains("<leader>") || $0.key.contains("space") })
     XCTAssertEqual(c.mode.resolvedHyperKey, "space")
   }

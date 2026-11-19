@@ -41,8 +41,10 @@ bookmarks and history — and `menu press`, which presses any menu item by
 its titles, are in [app operations](normal-mode.md#app-operations).
 
 Plugin commands have the same shape, `flash <command> <subcommand> [word ...]`
-(`flash tmux session main`, `flash screenshot window`), and share the topic
-namespace: a topic word never becomes a plugin's own command, and a manifest
+(`flash tmux session main`, `flash screenshot window`, `flash volume up`), and
+share the topic namespace: a plugin may own several command words (`media`
+owns `volume`, `audio` and `media`), a topic word never becomes a plugin's
+own command, and a manifest
 whose command or subcommand is not a `[a-z][a-z0-9_]*` word (or the `*`
 wildcard subcommand) fails to load. A plugin may instead list one of Flash's
 own commands in its `commands[]` (`tab close`) to perform it where its
@@ -91,8 +93,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `appwindows hide` | Close App Exposé |
 | `appwindows show` | Show the focused app's windows (App Exposé) |
 | `appwindows toggle` | Show the focused app's windows, or close App Exposé |
-| `audio input [--device=<name-or-uid>]` | List the input devices, or select one with --device |
-| `audio output [--device=<name-or-uid>]` | List the output devices, or select one with --device |
 | `caffeinate off` | Let the Mac sleep again |
 | `caffeinate on [--minutes=<n>]` | Keep the Mac awake, for --minutes or until caffeinate off |
 | `caffeinate status` | Show whether the Mac is kept awake |
@@ -199,7 +199,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `mappings show` | Open the mappings page for the focused app |
 | `mark jump --letter=<a-z|0-9>` | Bring back the app saved under a letter or digit |
 | `mark set --letter=<a-z|0-9>` | Save the focused app under one letter or digit |
-| `media status` | Show what the media apps are playing and the volume |
 | `menu choose --file=<path> [--prompt=<label>]` | Pick a line of --file in the flashlight and answer with it; for scripts, like dmenu |
 | `menu press --path=<Menu,Item,...>` | Press a menu-bar item of the focused app by its titles, comma-separated |
 | `metrics record --name=<metric> --value=<number> [--kind=<gauge|counter|histogram>] [--unit=<unit>] [--attributes=<key=value,...>]` | Record a gauge, counter or histogram value into Flash's metrics |
@@ -327,9 +326,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `url bookmark` | Bookmark the focused page |
 | `url copy` | Copy the focused page's URL |
 | `url edit` | Focus the focused browser's address bar |
-| `volume down` | Lower the output volume one step |
-| `volume mute` | Mute or unmute the output |
-| `volume up` | Raise the output volume one step |
 | `window close` | Close the focused window |
 | `window close_all` | Close every window of the focused app, after asking |
 | `window focus --direction=<left|right|up|down|next|previous|behind>` | Focus the nearest window in a direction, or cycle the stack |
@@ -452,7 +448,7 @@ registers, which leaves the words after it to the `display` topic. Beside
 them, the grammar keeps one word of its own: `doctor` is `resident doctor`.
 A topic alone runs the one of its actions that only shows a page or a
 surface (`:logs` is `logs show`, never `logs write`; `:commands` is
-`commands show`, `:media` is `media status`) or is a query; an action that
+`commands show`) or is a query; an action that
 changes anything never runs implied, so `:screen` runs nothing where
 `screen lock` would lock the screen, and `:display` is the registers, never
 `display sleep`. A topic with one action still takes its arguments right
@@ -850,7 +846,9 @@ lists every window of every app, most recently used first, minimized,
 hidden and on other Spaces included, and focuses the one you pick; `:ls`
 opens it from the command line. See [window navigation and placement](windows.md#switch-to-any-window)
 for the switcher and for automatic placement rules. `flash audio input` and `flash audio output`
-list or select the default device; see [audio devices](audio.md).
+list or select the default device; they, `volume` and `media status` are the
+bundled `media` plugin's commands, so the reference table above, which lists
+Flash's own, leaves them to [audio devices](audio.md).
 
 ## System and processes
 

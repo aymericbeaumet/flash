@@ -51,6 +51,14 @@ that your configuration still uses is reported with its file position. Then
 run `flash resident doctor`: it names each plugin value your bar, widgets or
 monitors read that no plugin publishes any more, with its replacement.
 
+- **`:media` alone runs nothing.** The audio commands belong to the bundled
+  `media` plugin, and a plugin's command word typed alone waits for its
+  subcommand: type `:media status` (or `:media s`) where `:media` used to
+  show what is playing. `volume`, `audio` and `media` commands keep their
+  words everywhere else; with `media` in `[plugins] disabled` they do
+  nothing. An argument these commands do not take (`volume up --steps=2`) is
+  refused when the command runs, with its usage, where `flash config check`
+  used to report it.
 - **A status link opens only `http`, `https` and `mailto` URLs.** A
   `#[link=…]` on the bar, hinted or clicked, or a hyperlink in a popup, is
   text a plugin, a source or a program wrote, so any other scheme is now
@@ -316,18 +324,22 @@ monitors read that no plugin publishes any more, with its replacement.
 
 ### New
 
-- A plugin's command can show Flash's centred alert: a `perform` reply's
-  `alert` is a one-line message or a title over a value (`volume` over
-  `38%`), drawn wherever the command ran, a key, the CLI and the command
-  line alike. A count before a plugin command's key reaches the plugin in
-  its one request (`count`), where the count used to be dropped. A plugin
-  command that fails says why: its reason is the failure alert's text and
-  what `flash <command>` prints, where both used to say only that the
-  command failed. A plugin holding the new `audio_devices` capability lists
-  the audio devices, selects the default input or output, steps the output
-  volume and toggles its mute through `host.audio_devices`, and
-  `host.applescript` has a `now_playing` operation that asks a running
-  media player what it plays.
+- The volume, audio-device and now-playing commands are a bundled plugin,
+  `media`: `volume up`, `volume down`, `volume mute`, `audio input`,
+  `audio output [--device=…]` and `media status` keep their words in
+  mappings, the CLI and the command line, and
+  `[plugins] disabled = ["media"]` removes them. The plugin is sandboxed and
+  holds no audio access: Flash keeps CoreAudio and the players' AppleScript
+  and serves them through `host.audio_devices` (the new `audio_devices`
+  capability) and the `host.applescript` operation `now_playing`. Two
+  additions any plugin command can use came with it: a `perform` reply's
+  `alert` shows Flash's centred alert, a one-line message or a title over a
+  value (`volume` over `38%`), wherever the command ran; and a count before
+  a plugin command's key reaches the plugin in its one request (`count`),
+  where the count used to be dropped, so `5` then volume-up is one move of
+  five ticks. A plugin command that fails says why: its reason is the
+  failure alert's text and what `flash <command>` prints, where both used to
+  say only that the command failed.
 - `feed` and `searchproviders` no longer open network connections: Flash
   downloads the feed and DuckDuckGo's bang list for them through
   `host.fetch`, and their sandboxes deny the network like every other bundled

@@ -1,23 +1,9 @@
 import AppKit
 import FlashCore
 
-/// macOS: sound, Apple's catalogs, system surfaces, power, appearance and processes.
+/// macOS: Apple's catalogs, system surfaces, power, appearance and processes.
 extension URLEventHandler {
   static let systemCommands: [String: CommandDefinition] = [
-    "volume up": .init(
-      "Raise the output volume one step", parse: { _ in .media(.volumeUp) }),
-    "volume down": .init(
-      "Lower the output volume one step", parse: { _ in .media(.volumeDown) }),
-    "volume mute": .init(
-      "Mute or unmute the output", parse: { _ in .media(.volumeMute) }),
-    "audio input": .init(
-      "List the input devices, or select one with --device", [.text("device", "name-or-uid")],
-      parse: { audioDeviceCommand(.input, $0) }),
-    "audio output": .init(
-      "List the output devices, or select one with --device", [.text("device", "name-or-uid")],
-      parse: { audioDeviceCommand(.output, $0) }),
-    "media status": .init(
-      "Show what the media apps are playing and the volume", parse: { _ in .media(.status) }),
     "notes open": .init(
       AppleCatalogCommand.open(.notes).summary, parse: { _ in .appleCatalog(.open(.notes)) }),
     "notes refresh": .init(
@@ -98,15 +84,5 @@ extension URLEventHandler {
   ) -> CommandDefinition {
     let command = SystemSurfaceCommand(surface, visibility)
     return .init(command.summary, parse: { _ in .systemSurface(command) })
-  }
-
-  /// `audio input` / `audio output`: no `--device` lists the devices; a device
-  /// is a name or UID, never blank.
-  static func audioDeviceCommand(_ direction: AudioDeviceDirection, _ a: CommandArgs) -> URLCommand?
-  {
-    guard let device = a.value("device") else { return .media(.device(direction, query: nil)) }
-    let query = device.trimmed
-    guard !query.isEmpty else { return nil }
-    return .media(.device(direction, query: query))
   }
 }

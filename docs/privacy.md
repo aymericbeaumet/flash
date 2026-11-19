@@ -91,7 +91,7 @@ running plugins with `:plugins show`.
 | Reminders | Flash | The first `@reminders` search or `reminders refresh` while Reminders runs. |
 | Contacts | Flash | The first `@contacts` search or `contacts refresh` while Contacts runs. |
 | Calendars | Flash | The first time a status format (the bar, a text popup, a widget) or a monitor reads a `#{flash.calendar.next…}` value, or the first `calendar join` or `calendar next`. The default configuration reads none. |
-| Automation: Spotify, Music, TV, Podcasts | Flash | The first `media status` while that app runs. Flash never asks an app that is not running. |
+| Automation: Spotify, Music, TV, Podcasts | Flash, for `media` | The first `media status` while that app runs. Flash never asks an app that is not running. |
 | Automation: System Events | Flash, for `aiproviders` | Sending Return after a chat bang pre-fills a query, while the opened app remains focused. |
 | Notifications | Flash | The first `notify send`, or the first rise of a monitor with `notify = true`. Never at launch; refusing leaves `notify send` failing with a reason. |
 | Screen Recording | `screenshot` | The first `:screenshot screen`; macOS `screencapture` takes the picture. The plugin's manifest declares the grant (`permissions`), which is what makes `flash resident doctor` report it. |
@@ -507,11 +507,15 @@ sandbox.
 Three bundled plugins opt out: `screenshot` and `terminals` execute helpers
 (the system screenshot utility, tmux and ssh), while `aiproviders` reads the
 provider credentials and runs the installed Codex app-server, `security` and
-`curl` for quota reads. AppleScript for `browsers`, `shortcuts` and
+`curl` for quota reads. AppleScript for `browsers`, `shortcuts`, `media` and
 `aiproviders` runs inside Flash through a declared `apple_events` capability
-and `apple_events_targets` allowlist. `browsers` and `shortcuts` remain
-sandboxed; no plugin process loads an AppleScript runtime. macOS attributes
-Automation prompts to Flash. The RPC accepts only named operations with fixed host templates and escaped
+and `apple_events_targets` allowlist. `browsers`, `shortcuts` and `media`
+remain sandboxed; no plugin process loads an AppleScript runtime. macOS
+attributes Automation prompts to Flash. `media` reaches no audio device
+itself either: Flash lists the devices, selects the default input or output
+and changes the output volume for it through CoreAudio, behind the
+`audio_devices` capability its manifest declares, and the plugin stores
+nothing. The RPC accepts only named operations with fixed host templates and escaped
 string values; it accepts no script source, shell command or file operation.
 Each operation checks its target against the declared app IDs. Chat submission
 can send Return only to a supported browser that is still frontmost. Credentials for

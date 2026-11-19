@@ -337,8 +337,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var pasteboardLoanSerial: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
-  /// `volume_*`, `audio_*` and `media status`; see `performMediaCommand`.
-  let mediaController = MediaController()
   /// `caffeinate_*`, made by the first one; see `performCaffeinate`.
   var caffeinateController: CaffeinateController?
   /// `desktop`, `missioncontrol`, `appwindows`, `launchpad`,
@@ -1012,12 +1010,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       windowLayoutManager.performWorkspace(command) { [weak self] outcome in
         self?.finishTiling(outcome, completion: completion)
       }
-    case .media(let command):
-      completesLater = true
-      // A caller presents an answer itself: the CLI prints it.
-      performMediaCommand(command, presents: completion == nil) { outcome, output in
-        completion?(outcome, output)
-      }
     case .caffeinate(let request):
       completesLater = true
       performCaffeinate(request, presents: completion == nil) { outcome, output in
@@ -1172,7 +1164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func presentPluginResult(_ result: PluginCommandResult, callerPresentsOutput: Bool = false) {
     switch result.presentation(callerPresentsOutput: callerPresentsOutput) {
     case .alert(let alert): overlay.displayAlert(alert)
-    case .banner(let text): overlay.displayBanner(text)
+    case .banner(let text): presentPluginResult(text)
     case .nothing: break
     }
   }

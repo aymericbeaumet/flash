@@ -190,9 +190,10 @@ final class PluginManager {
   private let runningApplicationsLock = NSLock()
   private var latestRunningApplicationsSnapshot: [[String: Any]] = []
   /// The plugin→host RPC router + implementations (AX broker, activation,
-  /// input synthesis, fetch). The manager only wires each plugin's
-  /// `onHostRequest` to it with that plugin's frozen authorization.
-  private let hostRPC = PluginHostRPC()
+  /// input synthesis, fetch, CoreAudio, AppleScript). The manager only wires
+  /// each plugin's `onHostRequest` to it with that plugin's frozen
+  /// authorization. Tests swap its seams before any plugin starts.
+  let hostRPC = PluginHostRPC()
 
   /// `pid` quit: drop the Accessibility handles plugins hold into it.
   func appTerminated(pid: pid_t) {

@@ -255,12 +255,15 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
 - App-scoped mappings select by the focused app's exact bundle ID. Refresh the
   effective mapping table on focus changes; defer Carbon registration work off
   the key event path.
-- CoreAudio, now-playing Apple Events, the `caffeinate` power assertions and
-  the Notes, Reminders, Contacts and Calendar reads run on their owners' serial
-  queues (`MediaController`, `CaffeinateController`, `AppleCatalogs`,
-  `CalendarEvents`), never on main, and ask macOS for access only when a
-  query, command, surface or monitor uses them
+- The `caffeinate` power assertions and the Notes, Reminders, Contacts and
+  Calendar reads run on their owners' serial queues (`CaffeinateController`,
+  `AppleCatalogs`, `CalendarEvents`), never on main, and ask macOS for access
+  only when a query, command, surface or monitor uses them
   ([boundaries](docs/architecture.md#boundaries)).
+- CoreAudio is the host's (`CoreAudioDevices`): a plugin reaches the audio
+  devices only through `host.audio_devices`, behind its declared
+  `audio_devices` capability, on the host's audio queue, never on main.
+  Device matching, reports and wording belong to the plugin (`media`).
 - Read the window list only through `WindowSnapshot.windowList`
   (guardrail-enforced), and never make main wait on a queue that calls it
   ([the deadlock](docs/input-internals.md#input-capture-and-latency)).

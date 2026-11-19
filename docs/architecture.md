@@ -26,7 +26,8 @@ on its first showing, the inspector listens only on demand or with
 with `[telemetry.receiver] enabled` and the exporter only with an
 `[telemetry.exporter] endpoint`, `[startup] run`'s commands run once after
 the first configuration load and only when it lists some, and CoreAudio is
-touched per request. A
+touched per `host.audio_devices` request of a plugin holding the
+`audio_devices` capability. A
 plugin whose manifest declares only `status` runs while a visible surface
 reads one of its segments; a plugin with only commands starts on its first
 `perform`; a manifest without `exec` never spawns. A mapping that runs a
@@ -41,7 +42,7 @@ The rest starts with the process, whatever the configuration says:
 | `AppMonitor` AX observer and prepared model for the focused app | Hints must show without a walk on the key path (see the prepared-model guide) | One AXObserver per focused app, a complete walk per focus change, maintenance walks while the user is active |
 | `KeyboardCaptureTap` | The swallow decision must exist before the first mapped key; the no-tap fallback is slower | A session tap on main, plus the 2 s secure-input probe |
 | `IPCServer` socket | `flash <command>` and scripts must reach the resident without starting anything | One Unix domain socket and an accept source, idle until a client connects; no timer |
-| Resident plugins: every manifest with `sources`, `query` or `hints`, or with `listen` and no `status`; a status plugin while a surface shows its segments | Catalogs and hint providers are kept warm so the flashlight and terminal hints are complete on first open | One child process each (eight bundled plugins by default, plus each status plugin a surface shows), three queues and a root-directory watcher per plugin, `core:ax.changed` fan-out to the listeners |
+| Resident plugins: every manifest with `sources`, `query` or `hints`, or with `listen` and no `status`; a status plugin while a surface shows its segments | Catalogs and hint providers are kept warm so the flashlight and terminal hints are complete on first open | One child process each (seven bundled plugins by default, plus each status plugin a surface shows), three queues and a root-directory watcher per plugin, `core:ax.changed` fan-out to the listeners |
 | Dock view observer (`SystemSurfaceController`) | `missioncontrol hide` must know a view that opened before it ran, which only an observer installed before that has seen; `f` labels Mission Control and NORMAL lets its unmapped keys reach the Dock from the same reports | One AXObserver on the Dock for four notifications it posts only as Mission Control, App Exposé or Show Desktop opens or closes |
 | Window navigation catalog (`WindowMover`) | Directional focus reads a prepared catalog rather than walking on the key path | `kAXWindows` per regular app at launch and on app launch/terminate |
 | Window switcher catalog (`WindowSwitcherCatalog`) | `window switch` draws from memory within a frame of its chord | `kAXWindows` plus one batched read per window, per regular app at launch and on each Space change; one app again after its window events settle (250 ms) or when an unknown window of it gains focus; app names and icons once per app |

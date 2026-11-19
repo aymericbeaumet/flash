@@ -4,7 +4,6 @@
   "app": "tabs",
   "appearance": "system",
   "appwindows": "windows",
-  "audio": "system",
   "caffeinate": "system",
   "calendar": "other",
   "cli": "other",
@@ -28,7 +27,6 @@
   "macro": "modes",
   "mappings": "modes",
   "mark": "tabs",
-  "media": "system",
   "menu": "other",
   "metrics": "other",
   "missioncontrol": "windows",
@@ -61,7 +59,6 @@
   "trash": "system",
   "updates": "other",
   "url": "tabs",
-  "volume": "system",
   "window": "windows",
   "workspace": "windows"
 }

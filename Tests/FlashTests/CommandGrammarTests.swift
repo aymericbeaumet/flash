@@ -253,19 +253,19 @@ final class CommandGrammarTests: XCTestCase {
 
   private static let topicKinds: [String: TopicKind] = [
     "about": .one, "alert": .one, "app": .one, "appearance": .one, "appwindows": .many,
-    "audio": .one, "caffeinate": .verb, "calendar": .one, "cli": .one, "clipboard": .one,
+    "caffeinate": .verb, "calendar": .one, "cli": .one, "clipboard": .one,
     "commands": .many, "config": .one, "contacts": .many, "controlcenter": .one,
     "cursor": .one, "desktop": .one, "display": .one, "document": .one, "events": .many,
     "help": .one, "hints": .many, "history": .one, "input": .one, "key": .one,
     "launchpad": .one, "logs": .many, "macro": .one, "mappings": .many,
-    "mark": .one, "media": .one, "menu": .one, "metrics": .many, "missioncontrol": .one,
+    "mark": .one, "menu": .one, "metrics": .many, "missioncontrol": .one,
     "mode": .one, "monitors": .many, "mouse": .one, "move": .verb, "movement": .one,
     "notes": .many, "notificationcenter": .one, "notify": .verb, "pane": .one,
     "plugins": .many, "popup": .one, "process": .one, "register": .one, "reminders": .many,
     "resident": .one, "resource": .one, "screen": .one, "screensaver": .one, "scroll": .verb,
     "selection": .one, "startup": .one, "status": .one, "system": .one, "tab": .one,
     "telemetry": .one,
-    "tile": .verb, "trash": .one, "updates": .many, "url": .one, "volume": .one,
+    "tile": .verb, "trash": .one, "updates": .many, "url": .one,
     "window": .one, "workspace": .one,
   ]
 

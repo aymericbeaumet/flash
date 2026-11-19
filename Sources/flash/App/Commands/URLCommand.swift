@@ -295,10 +295,6 @@ indirect enum URLCommand: Hashable, Sendable {
   /// `workspace …`: emulated workspaces over the displays. See
   /// `TilingWorkspaces`.
   case workspace(WorkspaceCommand)
-  /// The default audio devices and what is playing: `volume up`,
-  /// `volume down`, `volume mute`, `audio input`, `audio output` and
-  /// `media status`. See `MediaController`.
-  case media(MediaCommand)
   /// The resident's keep-awake power assertions: `caffeinate on`,
   /// `caffeinate off`, `caffeinate toggle` and `caffeinate status`. See
   /// `CaffeinateController`.
@@ -366,7 +362,7 @@ extension URLCommand {
   var impliedByItsTopic: Bool {
     switch self {
     case .showMappings, .showLogs, .showCommands, .showMonitors, .showTelemetry, .showAbout,
-      .showUsage(topic: nil), .media(.status):
+      .showUsage(topic: nil):
       return true
     default:
       return false

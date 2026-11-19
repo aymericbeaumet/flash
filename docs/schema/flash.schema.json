@@ -1696,6 +1696,17 @@
           "description" : "Hard kill for a third-party plugin's install script — a cold cargo build on a slow machine can legitimately take minutes.",
           "type" : "integer"
         },
+        "media" : {
+          "additionalProperties" : false,
+          "description" : "The media plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            }
+          },
+          "type" : "object"
+        },
         "screenshot" : {
           "additionalProperties" : false,
           "description" : "The screenshot plugin's settings.",

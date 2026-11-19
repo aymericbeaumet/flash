@@ -45,8 +45,8 @@ which took the same start from 29 MiB. Those figures predate the move of its
 list download to `host.fetch`, which removed its HTTP and TLS stack; the
 footprint has not been measured again since.
 
-Those counts describe the plugin set of their dates. The bundled plugins have
-since merged into twelve, eight of them resident by default
+Those counts describe the plugin set of their dates. Thirteen plugins are
+bundled today, seven of them resident by default
 ([what starts at launch](architecture.md#what-starts-at-launch)), so the 28
 and 33 resident children above no longer exist as such. The figures also
 predate status-bound activation. A status-only plugin such as

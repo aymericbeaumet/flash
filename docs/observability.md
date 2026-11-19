@@ -44,7 +44,7 @@ holds the sources and this table to the same set.
 | --- | --- |
 | Modes and keys | `mode`, `normal`, `visual`, `pointer`, `input`, `keyboard`, `tap`, `mappings`, `command`, `history`, `macro`, `confirm`, `cursor`, `text`, `move`, `movement`, `marks`, `frecency` |
 | Hints and the pointer | `activation`, `discover`, `ax`, `overlay`, `commit`, `click`, `drag`, `multi`, `words`, `screen`, `scroll`, `bigram`, `search`, `gesture`, `warp`, `step`, `repeat`, `button`, `positions`, `screens`, `dock`, `menubar`, `notifications`, `menus`, `menu`, `focus`, `capture`, `latency` |
-| Apps, windows and sources | `app`, `window`, `placement`, `switcher`, `tiling`, `navigation`, `source`, `query`, `flashlight`, `files`, `apple`, `calendar`, `clipboard`, `url`, `processes`, `system`, `missioncontrol`, `surfaces`, `media`, `caffeinate` |
+| Apps, windows and sources | `app`, `window`, `placement`, `switcher`, `tiling`, `navigation`, `source`, `query`, `flashlight`, `files`, `apple`, `calendar`, `clipboard`, `url`, `processes`, `system`, `missioncontrol`, `surfaces`, `caffeinate` |
 | Status, popups and events | `statusbar`, `widgets`, `popup`, `monitors`, `notify`, `telemetry`, `events`, `ipc` |
 | Plugins | `plugin`, `plugins` |
 | The resident | `resident`, `startup`, `config`, `autolaunch`, `updates`, `doctor`, `about`, `debug`, `trace`, `watchdog`, `poll` |

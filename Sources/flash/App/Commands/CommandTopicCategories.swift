@@ -31,7 +31,7 @@ extension URLEventHandler {
     (
       .system,
       [
-        "key", "volume", "audio", "media", "system", "display", "screen", "screensaver",
+        "key", "system", "display", "screen", "screensaver",
         "appearance", "caffeinate", "launchpad", "notificationcenter", "controlcenter", "trash",
         "process",
       ]

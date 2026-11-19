@@ -377,8 +377,6 @@ extension URLCommand {
       return command.explanation
     case .workspace(let command):
       return command.explanation
-    case .media(let command):
-      return mediaExplanation(command)
     case .caffeinate(let request):
       return caffeinateExplanation(request)
     case .statusPush(let push):
@@ -646,18 +644,6 @@ private func windowStateExplanation(_ action: WindowStateAction) -> String {
     case .on: return "Enters full screen for the focused window."
     case .off: return "Leaves full screen for the focused window."
     }
-  }
-}
-
-private func mediaExplanation(_ command: MediaCommand) -> String {
-  switch command {
-  case .volumeUp: return "Raises the output volume one step and shows the percent."
-  case .volumeDown: return "Lowers the output volume one step and shows the percent."
-  case .volumeMute: return "Mutes or unmutes the output."
-  case .device(let direction, nil): return "Lists the audio \(direction.rawValue) devices."
-  case .device(let direction, let query?):
-    return "Makes \(query) the default audio \(direction.rawValue)."
-  case .status: return "Shows what the media apps are playing and the volume."
   }
 }
 

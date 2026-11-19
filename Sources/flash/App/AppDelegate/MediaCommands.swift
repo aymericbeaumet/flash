@@ -1,36 +1,9 @@
 import AppKit
 import FlashCore
 
-/// The audio and keep-awake commands: `MediaController` and
-/// `CaffeinateController` do the work off the main thread; this shows the
-/// result.
+/// The keep-awake commands: `CaffeinateController` does the work off the
+/// main thread; this shows the result.
 extension AppDelegate {
-  /// `volume up`, `volume down`, `volume mute`, `audio input`,
-  /// `audio output`, `media status`. A volume step shows the percent alert
-  /// wherever it ran; a list, a selection and what is playing are a banner
-  /// when `presents`, and otherwise `completion`'s output, which its caller
-  /// presents (the CLI prints it, the command line shows it).
-  func performMediaCommand(
-    _ command: MediaCommand, repeatCount: Int = 1, presents: Bool = true,
-    completion: ((NormalModeCommandOutcome, String?) -> Void)? = nil
-  ) {
-    mediaController.perform(command, repeatCount: normalizedRepeatCount(repeatCount)) {
-      [weak self] outcome in
-      guard let self else { return }
-      switch outcome {
-      case .volume(let percent): self.overlay.displayAlert(.volume(percent))
-      case .message(let text): if presents { self.overlay.displayBanner(text) }
-      case .done: break
-      case .failed(let reason): self.displayCommandFailure(command.name, reason: reason)
-      }
-      if case .failed = outcome {
-        completion?(.failed, outcome.output)
-      } else {
-        completion?(.performed, outcome.output)
-      }
-    }
-  }
-
   /// `caffeinate on`, `caffeinate off`, `caffeinate toggle`,
   /// `caffeinate status`: each answers with the `caffeinate on|off` alert,
   /// `status` only when `presents`; `completion` gets the state as output.
