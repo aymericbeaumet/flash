@@ -37,10 +37,13 @@ use crate::types::{
 /// How long a search waits for the snapshot of running apps the host sends
 /// a new child before anything else.
 const SEED_WAIT: Duration = Duration::from_millis(300);
-/// How long a search waits for a listing in flight before it answers with
-/// the last good rows: inside the 1 s `search` deadline, with room for the
-/// reply's rows.
+/// How long a search with nothing to show waits for a listing in flight:
+/// inside the 1 s `search` deadline, with room for the reply's rows.
 const SEARCH_WAIT: Duration = Duration::from_millis(700);
+/// How long a search waits for one when it has rows to show: long enough
+/// for a listing that is about to land, short enough that a slow app (a
+/// Notes script takes seconds) does not hold back the last good rows.
+const LOADED_SEARCH_WAIT: Duration = Duration::from_millis(200);
 /// How long the `refresh` command waits for its listing: inside the
 /// `perform` deadline.
 const REFRESH_WAIT: Duration = Duration::from_secs(8);
@@ -355,16 +358,24 @@ impl ItemCatalog {
     }
 
     /// The rows of the catalog's source: the last good ones, after a
-    /// listing in flight when it lands within `SEARCH_WAIT`. A query names
-    /// the catalog, so this is where macOS is first asked for access; once
-    /// macOS answered and the rows are loaded, a query costs nothing.
+    /// listing in flight when it lands within `LOADED_SEARCH_WAIT`, or
+    /// within `SEARCH_WAIT` when there is nothing to show yet. A query
+    /// names the catalog, so this is where macOS is first asked for
+    /// access; once macOS answered and the rows are loaded, a query costs
+    /// nothing.
     pub async fn search(&self, ctx: &Context, request: &SearchRequest) -> SearchResponse {
         let inner = &self.inner;
         if request.source != inner.spec.source {
             return SearchResponse::default();
         }
-        let deadline = tokio::time::Instant::now() + SEARCH_WAIT;
+        let started = tokio::time::Instant::now();
         inner.wait_until(SEED_WAIT, |state| state.seeded).await;
+        let wait = if inner.lock().loaded {
+            LOADED_SEARCH_WAIT
+        } else {
+            SEARCH_WAIT
+        };
+        let deadline = started + wait;
         // A listing in flight says what macOS grants: it lands first.
         inner.wait_until_idle(deadline).await;
         let ask = {
@@ -1245,8 +1256,8 @@ mod tests {
     }
 
     /// A query waits for a listing in flight, so the rows it answers are
-    /// the ones just read; one that takes too long answers with the last
-    /// good rows, and the listing lands for the next query.
+    /// the ones just read; one that takes longer than a moment answers with
+    /// the last good rows, and the listing lands for the next query.
     #[tokio::test]
     async fn a_query_waits_for_a_listing_in_flight_but_not_for_long() {
         let mut host = Host::new(GrantAccess::Granted);
@@ -1280,10 +1291,10 @@ mod tests {
         let (id, _, _) = host.harness.next_host_request().await.unwrap();
         let started = std::time::Instant::now();
         let rows = catalog.search(&ctx, &request).await.rows;
-        assert!(started.elapsed() >= SEARCH_WAIT);
+        assert!(started.elapsed() >= LOADED_SEARCH_WAIT);
         assert!(
-            started.elapsed() < Duration::from_millis(950),
-            "inside the deadline"
+            started.elapsed() < SEARCH_WAIT,
+            "the last good rows are not held back"
         );
         assert_eq!(rows[0].title, "Fresh");
         let later = json!({
@@ -1292,6 +1303,34 @@ mod tests {
         assert!(host.harness.reply_host(id, later));
         settle().await;
         assert_eq!(host.titles(), ["Later"]);
+    }
+
+    /// With nothing to show yet, a query gives a slow first listing most of
+    /// its deadline before it answers empty.
+    #[tokio::test]
+    async fn a_query_with_nothing_to_show_waits_longer() {
+        let mut host = Host::new(GrantAccess::Granted);
+        host.snapshot(true);
+        let (id, _, _) = host.harness.next_host_request().await.unwrap();
+        let request = SearchRequest {
+            source: SOURCE.to_string(),
+            query: String::new(),
+        };
+        let started = std::time::Instant::now();
+        let rows = host.catalog.search(&host.ctx(), &request).await.rows;
+        assert!(started.elapsed() >= SEARCH_WAIT);
+        assert!(
+            started.elapsed() < Duration::from_millis(950),
+            "inside the deadline"
+        );
+        assert_eq!(rows, []);
+        let listed = json!({
+            "ok": true, "access": "granted", "items": [{ "id": "note-0", "title": "Groceries" }],
+        });
+        assert!(host.harness.reply_host(id, listed));
+        host.serve().await;
+        assert_eq!(host.titles(), ["Groceries"], "it lands for the next query");
+        assert_eq!(host.lists, 0, "and is not read again");
     }
 
     /// A query on a cold child waits for the snapshot that says whether the
