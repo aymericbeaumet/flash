@@ -309,8 +309,6 @@ extension URLCommand {
       return named("key system", [kv("key", key.rawValue)])
     case .systemSurface(let command):
       return named(command.name.description)
-    case .processKill(let pid):
-      return named("process kill", [kv("pid", Int(pid))])
     case .functionKey(let index):
       return named("key function", [kv("key", "f\(index)")])
     case .arrow(let direction, let shift):

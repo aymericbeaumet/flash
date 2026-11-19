@@ -19,7 +19,7 @@ an alert when one of them crosses a line.
 | License, price | GPL-2.0-or-later, free | MIT, free |
 | Platforms | Linux, FreeBSD, OpenBSD, NetBSD, DragonFly, Solaris, macOS | macOS 13+ |
 | Permissions | None; `sudo htop` to see every process on macOS, per Homebrew | Accessibility; nothing more for the system figures, which a sandboxed plugin reads |
-| Processes | Every process, scrolled sideways for full command lines; tree view, search, filter, sort by any column; kill with any signal, renice, open files (`l`) | `@processes` in the flashlight: every visible process with its pid, CPU and memory share, searched by name; SIGTERM after a confirmation; `#{flash.top_cpu}` and `#{flash.top_mem}` tables |
+| Processes | Every process, scrolled sideways for full command lines; tree view, search, filter, sort by any column; kill with any signal, renice, open files (`l`) | `@processes` in the flashlight: every visible process with its pid, CPU and memory share, searched by name; SIGTERM after a confirmation; `#{flash.plugin.processes.top_cpu}` and `#{flash.plugin.processes.top_mem}` tables |
 | System meters | CPU per core, memory, swap, load, tasks, uptime, battery, disk and network I/O, GPU; bars, text, graphs or LEDs | CPU and GPU use, load, memory, disks, network, battery and its health, as bar and widget values with 20-sample charts |
 | Alerts | None | `[monitors.<name>]` warning and error thresholds; the centred alert, and a macOS notification with `notify = true` |
 | Surfaces | A terminal | Flash's own bar, desktop widgets, popups, including htop itself |
@@ -60,8 +60,8 @@ an alert when one of them crosses a line.
   Command-W hides it ([TERMINAL](../terminal-mode.md)).
 - `mode flashlight --query=@processes` to find and stop one process from
   the keyboard without opening htop ([flashlight](../flashlight.md)).
-- `#{flash.top_cpu}` in a text popup or a widget: conky's `${top}` table,
-  one row per process ([status format](../status-format.md)).
+- `#{flash.plugin.processes.top_cpu}` in a text popup or a widget: conky's
+  `${top}` table, one row per process ([status format](../status-format.md)).
 
 ## Moving from htop
 
@@ -73,7 +73,7 @@ Nothing moves; htop moves into a popup.
 | `sudo htop` for every process | `command = ["sudo", "htop"]` asks for your password in the popup; plain `htop` sees your own processes |
 | The CPU and memory meters | `#{flash.plugin.sysinfo.cpu_label}` and `#{flash.plugin.sysinfo.memory_label}` in the bar or a widget |
 | `/` to find a process, `k` to kill it | `@processes` in the flashlight: type its name, Return, `y` |
-| Sort by CPU or memory | `#{flash.top_cpu}`, `#{flash.top_mem}` |
+| Sort by CPU or memory | `#{flash.plugin.processes.top_cpu}`, `#{flash.plugin.processes.top_mem}` |
 | Watching for a runaway process | The built-in memory pressure monitor, or `[monitors.<name>]` on a value |
 | `htoprc` settings | Stay in `htoprc`; the popup is a real terminal |
 

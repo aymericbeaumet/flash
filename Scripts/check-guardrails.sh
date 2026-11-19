@@ -178,14 +178,12 @@ check_absent_except \
 # Blocking sleeps only inside one bounded operation, never as a loop's clock:
 # - ActionDispatcher.swift: the spacing of one synthesized mouse gesture on
 #   the click queue (down/up hold, drag steps);
-# - ProcessTable.swift: the CPU measurement window of a pid read for the
-#   first time, on the reader's background queue;
 # - TerminalSession.swift: the 1 ms back-off inside a bounded wait for one
 #   child's exit when the kqueue wait itself fails.
 check_absent_except \
   "blocking sleeps stay inside one bounded operation" \
   "Thread\\.sleep|usleep\\(|[^[:alnum:]_.]sleep\\(|nanosleep\\(" \
-  '^Sources/flash/App/ActionDispatcher\.swift:|^Sources/flash/App/ProcessTable\.swift:|^Sources/FlashTerminal/TerminalSession\.swift:' \
+  '^Sources/flash/App/ActionDispatcher\.swift:|^Sources/FlashTerminal/TerminalSession\.swift:' \
   "${RUNTIME_SWIFT[@]}"
 
 # Every production app AX element must carry a bounded messaging timeout, or a

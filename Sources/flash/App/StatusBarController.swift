@@ -65,8 +65,6 @@ final class FlashStatusBarController {
     /// `pluginCycles`: only a carousel some active surface reads rotates on a
     /// wake-up.
     var pluginSegments: Set<String> = []
-    /// The process values it read: only those are sampled.
-    var processValues: Set<ProcessStatusValue> = []
     /// The received-metric values it read (`#{flash.otel…}`): only their
     /// metrics wake it.
     var telemetryKeys: Set<String> = []
@@ -101,7 +99,6 @@ final class FlashStatusBarController {
       pluginSegments = Set(
         dependencies.values.lazy.filter { $0.hasPrefix(Self.pluginValuePrefix) }
           .map { String($0.dropFirst(Self.pluginValuePrefix.count)) })
-      processValues = Set(dependencies.values.compactMap(ProcessStatusValue.init(rawValue:)))
       telemetryKeys = dependencies.values.filter(TelemetryQuery.isTelemetryKey)
       readsCalendar = dependencies.values.contains(where: CalendarStatusValue.isCalendarValue)
     }
@@ -181,12 +178,6 @@ final class FlashStatusBarController {
   private var requiredSources: Set<String> = []
   /// Plugin segments (`<plugin>.<segment>`) an active surface reads.
   private var requiredPluginSegments: Set<String> = []
-  /// Process values an active surface of the running controller reads: what
-  /// `processValuesObserver` was last told to sample.
-  private var requiredProcessValues: Set<ProcessStatusValue> = []
-  /// The sampled process values, kept only while required.
-  private var processValues: [ProcessStatusValue: String] = [:]
-  private let processValuesObserver: (Set<ProcessStatusValue>) -> Void
   private var requiredJobs: [String: StatusFormatJobRequest] = [:]
   /// The jobs and sources a foreground surface requires; the rest are a
   /// monitor's alone and re-run at `.low`.
@@ -296,7 +287,6 @@ final class FlashStatusBarController {
     },
     environment: FlashProcessEnvironment = .shared,
     widgetSink: ((String, [StatusFormatDocument]) -> Void)? = nil,
-    processValuesObserver: @escaping (Set<ProcessStatusValue>) -> Void = { _ in },
     monitorSink: (([MonitorSnapshot]) -> Void)? = nil,
     monitorAlertSink: ((StatusAlert) -> Void)? = nil,
     monitorFireSink: ((MonitorFire) -> Void)? = nil,
@@ -313,7 +303,6 @@ final class FlashStatusBarController {
     self.monitorFireSink = monitorFireSink
     self.monitorNotifySink = monitorNotifySink
     self.monitorTriggerSink = monitorTriggerSink
-    self.processValuesObserver = processValuesObserver
     self.environment = environment
     self.scheduler = scheduler
     self.queue = queue
@@ -406,15 +395,10 @@ final class FlashStatusBarController {
     shellRecords.removeAll()
     pluginCycles.removeAll()
     requirementsChanged = true
-    processValues.removeAll()
     if !requiredTelemetryKeys.isEmpty { telemetry?.observe(keys: []) }
     requiredTelemetryKeys = []
     telemetryValues = [:]
     telemetryReadKeys = nil
-    if !requiredProcessValues.isEmpty {
-      requiredProcessValues = []
-      processValuesObserver([])
-    }
     calendarAgenda = nil
     if calendarPriority != nil {
       calendarPriority = nil
@@ -678,23 +662,6 @@ final class FlashStatusBarController {
     }
   }
 
-  /// Sampled process values; nil clears one. A value no active surface
-  /// requires any more is dropped rather than kept stale.
-  func updateProcessValues(_ values: [ProcessStatusValue: String?]) {
-    queue.async { [weak self] in
-      guard let self else { return }
-      var changed = false
-      for (value, text) in values {
-        let next = text.flatMap { self.requiredProcessValues.contains(value) ? $0 : nil }
-        if self.processValues[value] != next {
-          self.processValues[value] = next
-          changed = true
-        }
-      }
-      if changed { self.publishCurrentModel() }
-    }
-  }
-
   private func stopJobs(_ jobs: [any StatusCommandTask]) {
     let native = jobs.compactMap { $0 as? StatusFormatCommandJob }
     for job in jobs where !(job is StatusFormatCommandJob) { job.cancel() }
@@ -756,7 +723,6 @@ final class FlashStatusBarController {
     context.workspace = workspace
     context.workspaces = workspaces
     var values = sourceRecords.compactMapValues(\.value)
-    for (value, text) in processValues { values[value.rawValue] = text }
     if let telemetry, telemetryDirty || telemetryReadKeys != requiredTelemetryKeys {
       telemetryValues = telemetry.values(for: requiredTelemetryKeys)
       telemetryReadKeys = requiredTelemetryKeys
@@ -986,7 +952,6 @@ final class FlashStatusBarController {
     requirementsChanged = false
     var sources = Set<String>()
     var pluginSegments = Set<String>()
-    var processValues = Set<ProcessStatusValue>()
     var telemetryKeys = Set<String>()
     var calendar: PollScheduler.Priority?
     var jobs: [String: StatusFormatJobRequest] = [:]
@@ -997,7 +962,6 @@ final class FlashStatusBarController {
       let surface = active.surface
       sources.formUnion(surface.sources)
       pluginSegments.formUnion(surface.pluginSegments)
-      processValues.formUnion(surface.processValues)
       telemetryKeys.formUnion(surface.telemetryKeys)
       if surface.readsCalendar {
         calendar = active.foreground ? .high : calendar ?? .low
@@ -1029,13 +993,6 @@ final class FlashStatusBarController {
       calendarObserver(calendar != nil)
     }
     calendarPriority = calendar
-    // Sampling is a running controller's: a stopped one reads nothing.
-    if schedule == nil { processValues = [] }
-    if processValues != requiredProcessValues {
-      requiredProcessValues = processValues
-      self.processValues = self.processValues.filter { processValues.contains($0.key) }
-      processValuesObserver(processValues)
-    }
     requiredJobs = jobs
     let obsolete = shellRecords.keys.filter { requiredJobs[$0] == nil }
     var obsoleteJobs = obsolete.compactMap { shellRecords.removeValue(forKey: $0)?.job }

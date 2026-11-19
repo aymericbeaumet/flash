@@ -47,9 +47,10 @@ Control, keep it. This page covers what Flash adds next to it.
 ## Where Flash is stronger
 
 - **Why the fans are loud.** Fans spin because something works.
-  `#{flash.top_cpu}` lists the busiest processes, `#{flash.focused_app_details}`
-  sums the focused app's helpers, and `@processes` stops a runaway after a
-  confirmation ([process values](../status-format.md#process-values)).
+  `#{flash.plugin.processes.top_cpu}` lists the busiest processes,
+  `#{flash.plugin.processes.focused_app_details}` sums the focused app's
+  helpers, and `@processes` stops a runaway after a confirmation
+  ([process values](../status-format.md#process-values)).
 - **The rest of the machine** in the same bar: CPU, memory, disks,
   network, battery and your own commands.
 - **Thresholds and alerts** on any of those values, or on a temperature a
@@ -61,8 +62,8 @@ Control, keep it. This page covers what Flash adds next to it.
 - A named source running [macmon](https://github.com/vladkens/macmon), a
   sudoless monitor for Apple silicon, puts fan RPM or CPU temperature in the
   bar: its `pipe` output carries `fans[].rpm` and `temp.cpu_temp_avg`.
-- A desktop widget of `#{flash.top_cpu}`, so the culprit is on the desktop
-  before you open anything.
+- A desktop widget of `#{flash.plugin.processes.top_cpu}`, so the culprit is
+  on the desktop before you open anything.
 - `[monitors.<name>]` on `#{flash.plugin.sysinfo.cpu_percent}` warns when the
   CPU load crosses your threshold, the usual cause of a fan ramp.
 - `mouse menubar` labels Macs Fan Control's menu-bar display, so switching a
@@ -76,7 +77,7 @@ Control, keep it. This page covers what Flash adds next to it.
 | Fan speed in the menu bar | A named source over `macmon pipe` (Apple silicon), shown as `#{flash.source.fan}` |
 | Temperatures in the menu bar | The same source reading `.temp.cpu_temp_avg`; [TG Pro's page](tg-pro.md#moving-from-tg-pro) adds a temperature monitor |
 | Drive S.M.A.R.T. temperatures | Keep Macs Fan Control |
-| Finding what heats the Mac | `#{flash.top_cpu}` in a widget or popup, `@processes` |
+| Finding what heats the Mac | `#{flash.plugin.processes.top_cpu}` in a widget or popup, `@processes` |
 | Opening its window | `["flash", "app", "open", "--name=Macs Fan Control"]` on a key |
 
 ```toml
@@ -94,7 +95,7 @@ template = "#[align=right]#[label]FAN#[default] #{flash.source.fan} #[label]CPU#
 anchor = "bottom_right"
 template = """
 Busiest now
-#{flash.top_cpu}
+#{flash.plugin.processes.top_cpu}
 """
 
 [mode.all.mappings]

@@ -755,8 +755,6 @@ struct Config {
     /// margin overlaps the next cell by under a point on the 16-inch housing
     /// and the bar drops that whole glyph.
     var notchMargin: Double = 4
-    /// Rows of `#{flash.top_cpu}` and `#{flash.top_mem}`, 1 through 20.
-    var topCount: Int = ProcessStatusFormat.defaultTopCount
     /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
     /// URL schemes a `#[link]` may open beside `http`, `https` and `mailto`

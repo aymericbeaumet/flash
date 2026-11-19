@@ -27,7 +27,20 @@ plugins.
    user confirmed. The mechanisms stay in the host, so the plugin runs in the
    default sandbox with no allowance; a failure is the command's words and
    the host's reason, which the host shows.
-3. **Event-refreshed catalog + commands + host RPC — `Plugins/shortcuts`
+3. **Observed status + live source + sandbox capability —
+   `Plugins/processes`.** The busiest processes and the focused app's
+   resources as status segments, every process as `@processes` rows and
+   `process kill`. It reads the process table in its own process through
+   libproc, which its sandbox profile opens with the `process_info`
+   capability, and samples only while `core:status.observed` lists one of
+   its segments: one `ctx.interval` per group of segments, cancelled and
+   re-armed through its `PollHandle`, and a `ctx.wait` for the 150 ms a
+   first CPU reading brackets. The source is `"live": "per_query"`, answered
+   from a two-second cache. Killing is `ctx.signal_process` (the
+   `process_signal` capability), which the host honours only inside the
+   perform the user confirmed; each row carries its own `confirm`, naming
+   the process.
+4. **Event-refreshed catalog + commands + host RPC — `Plugins/shortcuts`
    (~290 LOC + unit tests).** A `sources` plugin that lists every macOS
    shortcut through `AppleScriptOperation::ShortcutsList` in the host (the
    faceless Shortcuts Events service), pushes the rows with `publish` only
@@ -42,7 +55,7 @@ plugins.
    permits only fixed host templates; `ShortcutRun` takes the picked name as
    literal data.
 
-4. **Push catalog from configuration — `Plugins/snippets` (~220 LOC +
+5. **Push catalog from configuration — `Plugins/snippets` (~220 LOC +
    tests).** A `sources` plugin reading the snippets file its
    `[plugins.snippets] file` setting names, building its complete row set with
    `insert_text` effects and pushing it with `publish` from `on_start`. It
@@ -53,7 +66,7 @@ plugins.
    child stays resident for data that rarely changes. No readiness dance:
    initialize replies immediately and the catalog lands when ready; a broken
    file publishes an authoritative empty catalog, warned.
-5. **Event-driven catalog + core commands + navigation — `Plugins/browsers`
+6. **Event-driven catalog + core commands + navigation — `Plugins/browsers`
    (~2,500 LOC).** Browser tabs behind one per-bundle engine table: a shared
    AppleScript skeleton with per-dialect phrases for Chromium-family browsers
    and Safari, and for Firefox the host Accessibility broker
@@ -65,7 +78,7 @@ plugins.
    trichotomy, what the plugin leaves unhandled falls back to its
    `bindings`, and every row's `navigation_url` route restores through
    `on_navigate`.
-6. **Query evaluator with background refresh — `Plugins/answers`
+7. **Query evaluator with background refresh — `Plugins/answers`
    (~1270 LOC).** Three synchronous, CPU-only answer engines (calculator,
    colors, timezones) behind one `evaluate` via an ordered engine table;
    the ECB snapshot loads from disk in `on_start` and refreshes in the

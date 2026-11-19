@@ -184,7 +184,6 @@ final class VimParityTests: XCTestCase {
       ])
     for words in [
       ["hints", "dismiss"], ["input", "focus"], ["resident", "quit"],
-      ["process", "kill", "--pid=77"],
       ["app", "quit"], ["tab", "close"], ["window", "close"],
     ] {
       let command = try XCTUnwrap(URLEventHandler.parse(words: words), words.joined())

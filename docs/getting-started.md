@@ -118,7 +118,7 @@ anchor = "top_right"
 template = """
 CPU #[meter=20]#{flash.plugin.sysinfo.cpu_percent}#[nometer] #[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]
 MEM #[meter=20]#{flash.plugin.sysinfo.memory_percent}#[nometer]
-#{flash.top_cpu}
+#{flash.plugin.processes.top_cpu}
 """
 ```
 

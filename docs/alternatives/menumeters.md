@@ -41,14 +41,15 @@ actively. They are heavily recommended."
 - `#[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]` and
   `#[spark]#{flash.plugin.sysinfo.network_down_history}#[nospark]`, the closest thing
   to its scrolling graphs ([status format](../status-format.md#meters-and-sparklines)).
-- `#{flash.top_cpu}` in a text popup for its CPU menu's process list.
+- `#{flash.plugin.processes.top_cpu}` in a text popup for its CPU menu's
+  process list.
 
 ## Moving from MenuMeters
 
 | MenuMeters | Flash |
 | --- | --- |
 | CPU meter, graph | `#[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]` |
-| CPU menu, top processes | `[popup.<name>]` with `text = "#{flash.top_cpu}"` |
+| CPU menu, top processes | `[popup.<name>]` with `text = "#{flash.plugin.processes.top_cpu}"` |
 | Disk meter | `#{flash.plugin.sysinfo.disks_read}`, `#{flash.plugin.sysinfo.disks_write}` |
 | Memory meter | `#[meter=10]#{flash.plugin.sysinfo.memory_percent}#[nometer]` |
 | Network meter | `#{flash.plugin.sysinfo.network_down_bps}`, `up_bps`, and their histories |
@@ -60,7 +61,7 @@ enabled = true
 template = "#[align=right]#[popup=top]CPU #[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]#[nopopup] MEM #[meter=10]#{flash.plugin.sysinfo.memory_percent}#[nometer] %H:%M"
 
 [popup.top]
-text = "#{flash.top_cpu}"
+text = "#{flash.plugin.processes.top_cpu}"
 ```
 
 *Checked 2026-10-20 against the MenuMeters

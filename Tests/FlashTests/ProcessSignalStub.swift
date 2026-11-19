@@ -45,18 +45,22 @@ final class ProcessSignalStub: ProcessSignalling {
   }
 }
 
-/// A mechanism that really signals, and only the one child process a test
+/// A mechanism that really signals, and only the child processes a test
 /// spawned and handed it: any other pid is refused and recorded.
 final class ChildProcessSignals: ProcessSignalling {
-  private let child: pid_t
+  private let children: Set<pid_t>
   private let lock = NSLock()
   private var strangers: [pid_t] = []
 
-  init(child: Process) {
-    self.child = child.processIdentifier
+  init(children: [Process]) {
+    self.children = Set(children.map(\.processIdentifier))
   }
 
-  /// Pids the mechanism was asked to signal that are not the child.
+  convenience init(child: Process) {
+    self.init(children: [child])
+  }
+
+  /// Pids the mechanism was asked to signal that are no child of the test.
   var refused: [pid_t] {
     lock.lock()
     defer { lock.unlock() }
@@ -64,7 +68,7 @@ final class ChildProcessSignals: ProcessSignalling {
   }
 
   func send(_ signal: HostProcessSignal, to pid: pid_t) -> String? {
-    guard pid == child, pid > 1, pid != getpid() else {
+    guard children.contains(pid), pid > 1, pid != getpid() else {
       lock.lock()
       strangers.append(pid)
       lock.unlock()

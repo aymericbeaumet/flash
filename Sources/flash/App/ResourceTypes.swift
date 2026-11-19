@@ -61,9 +61,6 @@ enum ResourceTypes {
       name: "files", owner: .core, kind: .standard,
       rows: "a file found by name through Spotlight; selecting it opens it"),
     Contract(
-      name: "processes", owner: .core, kind: .standard,
-      rows: "a running process; selecting it offers to quit it"),
-    Contract(
       name: "menus", owner: .core, kind: .standard,
       rows: "a menu item of the frontmost app; selecting it presses it"),
     Contract(
@@ -97,6 +94,9 @@ enum ResourceTypes {
       name: "system", owner: .shared, kind: .standard,
       rows: "a system action (lock, sleep, restart…); selecting it runs it, after asking when "
         + "nothing undoes it"),
+    Contract(
+      name: "processes", owner: .shared, kind: .standard,
+      rows: "a running process; selecting it terminates it, after asking"),
   ]
 
   static let byName: [String: Contract] = Dictionary(

@@ -17,7 +17,7 @@ who left conky behind on a Linux desktop.
 | Install | Build from source; XQuartz likely | `brew install --cask aymericbeaumet/tap/flash` |
 | Definition | Lua config with `${cpu}`-style variables and Lua drawing | `[widgets.<name>]` tables with tmux-format templates |
 | Rendering | X11 window, or console, file and HTTP output | Native click-through layers at desktop level |
-| Data | Built-in variables for CPU, memory, disks, network, battery, processes, and `${exec}` | Bundled plugins and core process values for the same, named sources and `#()` jobs |
+| Data | Built-in variables for CPU, memory, disks, network, battery, processes, and `${exec}` | Bundled plugins for the same, named sources and `#()` jobs |
 | Maintenance | 1.25.4, October 2026; active, Linux first | 1.1.0, October 2026 |
 
 ## Where conky is stronger
@@ -84,7 +84,7 @@ underneath it.
 | `${fs_used_perc /}` | `#{flash.plugin.sysinfo.disks_percent}` |
 | `${battery_percent}` | `#{flash.plugin.sysinfo.power_percent}` |
 | `${uptime_short}`, `${loadavg 1}` | `#{flash.plugin.sysinfo.cpu_uptime}`, `#{flash.plugin.sysinfo.cpu_load}` |
-| `${top name 1}` | `#{flash.top_cpu}` |
+| `${top name 1}` | `#{flash.plugin.processes.top_cpu}` |
 | `${exec cmd}` | `#(cmd)` |
 | `${execi 300 cmd}` | A named source running `cmd` with `interval = 300` |
 | `${time %H:%M}` | `%H:%M`, expanded by `strftime` in the template |
@@ -100,7 +100,7 @@ Uptime #{flash.plugin.sysinfo.cpu_uptime} · load #{flash.plugin.sysinfo.cpu_loa
 CPU #[meter=20]#{flash.plugin.sysinfo.cpu_percent}#[nometer] #{flash.plugin.sysinfo.cpu_percent}%%
 RAM #[meter=20]#{flash.plugin.sysinfo.memory_percent}#[nometer] #{flash.plugin.sysinfo.memory_percent}%%
 Mail #{flash.source.unread}
-#{flash.top_cpu}
+#{flash.plugin.processes.top_cpu}
 """
 anchor = "top_right"
 screen = "all"

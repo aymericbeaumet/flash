@@ -393,8 +393,6 @@ final class AppOperationCommandsTests: XCTestCase {
       XCTAssertEqual(resolve(line), .commands([.appVisibility(.hide)]), line)
     }
     XCTAssertEqual(resolve(":pr kill --pid=42"), .unknown, "pr is print, which takes nothing")
-    XCTAssertEqual(
-      resolve(":proc kill --pid=42"), .commands([.processKill(pid: 42)]), "proc is process")
     XCTAssertEqual(resolve(":pu"), .commands([.paste(register: nil)]), "pu stays put")
     XCTAssertEqual(
       resolve(":menu press --path=File,Export as PDF…"),

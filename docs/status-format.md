@@ -119,9 +119,7 @@ native case to the corpus and inspect the corresponding pinned parser branch.
 Flash supplies `flash.mode`, `flash.date`, `flash.focused_app_name`,
 `flash.focused_app_bundle_id`, `flash.secure_input`,
 the [tiling](tiling.md#the-bar-and-plugins) `flash.workspace` and
-`flash.workspaces`, the
-[process values](#process-values) `flash.top_cpu`, `flash.top_mem` and
-`flash.focused_app_details`, the three-month `flash.calendar` and the
+`flash.workspaces`, the three-month `flash.calendar` and the
 [next meeting](calendar.md#next-meeting)
 `flash.calendar.next` with its parts `next_title`, `next_in`, `next_minutes`,
 `next_start`, `next_end`, `next_ongoing` and `next_link`
@@ -168,23 +166,24 @@ macOS asks for Calendars access the first time; see
 
 ### Process values
 
-`flash.top_cpu` and `flash.top_mem` are conky's `${top}` tables, one row per
-process, busiest first:
+The bundled `processes` plugin publishes three segments.
+`flash.plugin.processes.top_cpu` and `flash.plugin.processes.top_mem` are
+conky's `${top}` tables, one row per process, busiest first:
 
 | Value | Rows ranked by | Value column |
 | --- | --- | --- |
-| `#{flash.top_cpu}` | CPU, as a share of one core averaged over the last sample period | `12.5%` |
-| `#{flash.top_mem}` | Resident memory | `1.2 GiB` |
+| `#{flash.plugin.processes.top_cpu}` | CPU, as a share of one core averaged over the last sample period | `12.5%` |
+| `#{flash.plugin.processes.top_mem}` | Resident memory | `1.2 GiB` |
 
 Each row is a name column 15 cells wide (longer names end in `…`) and a
 right-aligned value; ties rank by name, then pid, so equal figures never
 shuffle rows. The value is a multi-line table, so it reads best in a desktop
-widget or a text popup; the bar joins its lines. `[statusbar] top_count`
-sets the rows of each table, an integer from 1 to 20 (default 5); any other
-value is a configuration error.
+widget or a text popup; the bar joins its lines. `[plugins.processes]
+top_count` sets the rows of each table, an integer from 1 to 20 (default 5);
+any other value is a configuration error.
 
-`flash.focused_app_details` is a compact summary of the focused app, with
-bold section headings and the popup's own colours:
+`flash.plugin.processes.focused_app_details` is a compact summary of the
+focused app, with bold section headings and the popup's own colours:
 
 - **Identity:** the app name, version and build when available, bundle ID
   and main process ID.
@@ -199,10 +198,14 @@ Browser and Electron work lives mostly in helpers, so resource totals sum
 the app and its currently reachable descendants. Running time belongs to
 the main process alone. Disk figures are totals over each current process's
 lifetime, not rates; exited helpers are no longer included. The helper rows
-reuse the same sample and do not start another collector. App metadata is
-read off the main thread and cached for the process identity, including its
-start time so a reused PID cannot inherit old metadata. Names and paths are
-literal text, never status-format instructions or terminal controls.
+reuse the same sample and do not start another collector. The name is the
+one macOS shows for the app, the version and build come from the bundle's
+`Info.plist`, and the paths are the main process's executable and the bundle
+that wraps it, as the kernel names them, with symbolic links resolved. They
+are read once per process identity, start time included, so a reused PID
+cannot inherit old metadata.
+Names and paths are literal text, never status-format instructions or
+terminal controls.
 
 While figures are being read, or when they cannot be, the value shows the
 app's bundle and PID over a state line, never another app's figures. For
@@ -210,12 +213,16 @@ interactive process browsing, filtering and graphs, put a maintained TUI
 such as [btop](https://github.com/aristocratos/btop) in a
 [terminal popup](popups.md); this summary stays focused on the current app.
 
-Sampling is scoped to what is shown. Flash reads the process table through
-libproc on a background queue, never the main thread, and only while the bar
-(its template or one of its text popups) or a visible widget reads one of
-these values: the tables every 2 seconds, the focused app every 10 seconds
-and once a focus change settles. A value no surface reads is cleared, so
-showing it again never reads another moment's figures.
+Sampling is scoped to what reads a value. The plugin reads the process table
+itself, through libproc, in its own sandboxed process, and only while the
+enabled bar's template, one of its text popups (open or not), a visible
+widget or an enabled monitor reads one of these values: the tables every
+2 seconds, the focused app every 10 seconds and 300 ms after a focus change.
+A value nothing reads is cleared, so showing it again never reads another
+moment's figures, and with none of them read the plugin samples nothing; it
+runs no process at all until one is read, `@processes` is queried or
+`process kill` runs. With `processes` in `[plugins] disabled` the three
+values are empty and `flash resident doctor` says so.
 
 Flash has no implicit tmux session, window, pane, client, or pane-history
 inventory. Their missing values expand to empty strings, loops over absent

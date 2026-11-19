@@ -1,3 +1,4 @@
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -151,8 +152,12 @@ final class PluginSandboxExecTests: XCTestCase {
     return URL(fileURLWithPath: String(cString: resolved))
   }
 
-  private func boot(
-    manifest: PluginManifest, root: URL, executablePath: String, execTail: [String]
+  /// Spawn `executablePath` under the profile `manifest` resolves to, with
+  /// the scrubbed plugin environment, answer its handshake and hand the
+  /// running plugin to `body`; then close its stdin, which must end it.
+  private func launch(
+    manifest: PluginManifest, root: URL, executablePath: String, execTail: [String],
+    body: (SandboxBootDriver) throws -> Void
   ) throws {
     let dataDir = FileManager.default.temporaryDirectory
       .appendingPathComponent("flash-sandbox-boot/\(manifest.id)-\(UUID().uuidString)")
@@ -231,36 +236,7 @@ final class PluginSandboxExecTests: XCTestCase {
     XCTAssertEqual(
       reply?["protocol_version"] as? Int, PluginProtocol.version,
       "\(manifest.id): \(driver.stderrText())")
-    if !manifest.pushedSources.isEmpty {
-      XCTAssertTrue(
-        driver.waitForNotification(method: "publish", timeout: 10),
-        """
-        \(manifest.id): warm sources must publish under the profile — \
-        logs: \(driver.logText()) stderr: \(driver.stderrText())
-        """)
-    }
-    // A live source publishes nothing: it answers a search with its rows.
-    for (offset, source) in manifest.sources.filter({ $0.live != nil }).enumerated() {
-      let id = 100 + offset
-      driver.send([
-        "id": id, "method": "search", "params": ["source": source.name, "query": ""],
-        "deadline_ms": PluginProtocol.searchDeadlineMs,
-      ])
-      let found = driver.waitForResponse(id: id, timeout: 10)
-      XCTAssertNotNil(
-        PluginWireCodec.searchRows(
-          from: found, source: source.name, sourceID: "plugin:\(manifest.id)"),
-        """
-        \(manifest.id): live source \(source.name) must answer a search under the profile — \
-        logs: \(driver.logText()) stderr: \(driver.stderrText())
-        """)
-    }
-    if manifest.id == "browsers" {
-      XCTAssertTrue(
-        driver.waitForPublishedRow(
-          source: "chrome.bookmarks", url: Self.browserBookmarkURL, timeout: 10),
-        "browsers: seeded bookmark must publish under the profile — \(driver.logText())")
-    }
+    try body(driver)
 
     // Shutdown is stdin EOF, nothing else.
     stdin.fileHandleForWriting.closeFile()
@@ -272,16 +248,107 @@ final class PluginSandboxExecTests: XCTestCase {
         process.terminationStatus, 0, "\(manifest.id): exit status — \(driver.stderrText())")
     }
   }
+
+  /// The rows a live source answers one `search` with, nil when the reply
+  /// is no valid row list.
+  private func searchRows(
+    _ driver: SandboxBootDriver, manifest: PluginManifest, source: String, id: Int
+  ) -> [Candidate]? {
+    driver.send([
+      "id": id, "method": "search", "params": ["source": source, "query": ""],
+      "deadline_ms": PluginProtocol.searchDeadlineMs,
+    ])
+    return PluginWireCodec.searchRows(
+      from: driver.waitForResponse(id: id, timeout: 10), source: source,
+      sourceID: "plugin:\(manifest.id)")
+  }
+
+  private func boot(
+    manifest: PluginManifest, root: URL, executablePath: String, execTail: [String]
+  ) throws {
+    try launch(
+      manifest: manifest, root: root, executablePath: executablePath, execTail: execTail
+    ) { driver in
+      if !manifest.pushedSources.isEmpty {
+        XCTAssertTrue(
+          driver.waitForNotification(method: "publish", timeout: 10),
+          """
+          \(manifest.id): warm sources must publish under the profile — \
+          logs: \(driver.logText()) stderr: \(driver.stderrText())
+          """)
+      }
+      // A live source publishes nothing: it answers a search with its rows.
+      for (offset, source) in manifest.sources.filter({ $0.live != nil }).enumerated() {
+        XCTAssertNotNil(
+          searchRows(driver, manifest: manifest, source: source.name, id: 100 + offset),
+          """
+          \(manifest.id): live source \(source.name) must answer a search under the profile — \
+          logs: \(driver.logText()) stderr: \(driver.stderrText())
+          """)
+      }
+      if manifest.id == "browsers" {
+        XCTAssertTrue(
+          driver.waitForPublishedRow(
+            source: "chrome.bookmarks", url: Self.browserBookmarkURL, timeout: 10),
+          "browsers: seeded bookmark must publish under the profile — \(driver.logText())")
+      }
+    }
+  }
+
+  /// What `process_info` buys, measured under the real sandbox with one
+  /// binary and two profiles. Under its own manifest's, the plugin that
+  /// declares the capability lists other processes, this test runner among
+  /// them. Under the same manifest without the capability, the same binary
+  /// reads no process table at all: the profile's denial is what stands
+  /// between a sandboxed plugin and every other process.
+  func testProcessInfoIsWhatLetsASandboxedPluginReadOtherProcesses() throws {
+    let declaring = try sandboxedManifests().filter {
+      $0.manifest.capabilities.contains(.processInfo)
+    }
+    let (root, manifest) = try XCTUnwrap(declaring.first, "a bundled plugin reads processes")
+    XCTAssertEqual(declaring.count, 1, "one bundled plugin holds process_info")
+    let executable = try XCTUnwrap(manifest.exec?.first)
+    let executablePath = root.appendingPathComponent(executable).standardizedFileURL.path
+    guard FileManager.default.isExecutableFile(atPath: executablePath) else {
+      if ProcessInfo.processInfo.environment["FLASH_REQUIRE_PLUGIN_BINARIES"] == "1" {
+        XCTFail("\(manifest.id) must be built")
+      }
+      throw XCTSkip("\(manifest.id) is not built: run `mise run build:plugins`")
+    }
+    let source = try XCTUnwrap(manifest.sources.first { $0.live != nil }?.name)
+    let runner = "\(getpid()):"
+
+    var granted: [Candidate]?
+    try launch(manifest: manifest, root: root, executablePath: executablePath, execTail: []) {
+      granted = searchRows($0, manifest: manifest, source: source, id: 100)
+    }
+    let listed = try XCTUnwrap(granted, "the search answers under the profile")
+    XCTAssertGreaterThan(listed.count, 10, "other processes are listed")
+    XCTAssertTrue(
+      listed.contains { $0.sourcePayload?.hasPrefix(runner) == true && !$0.title.isEmpty },
+      "the test runner, another process, is read by name")
+
+    var withheld = manifest
+    withheld.capabilities.remove(.processInfo)
+    var denied: [Candidate]?
+    try launch(manifest: withheld, root: root, executablePath: executablePath, execTail: []) {
+      denied = searchRows($0, manifest: withheld, source: source, id: 100)
+    }
+    XCTAssertEqual(
+      denied?.map(\.title), [], "without the capability the profile denies the process table")
+  }
 }
 
 /// Minimal host side of the NDJSON protocol for the boot test: collects the
-/// plugin's frames, answers its host RPCs, and retains stderr for diagnostics.
+/// plugin's frames, answers its host RPCs, lands the one-shot deadlines it
+/// registers, and retains stderr for diagnostics.
 private final class SandboxBootDriver {
   private let lock = NSLock()
   private let stdin: FileHandle
   private let allowShortcutListing: Bool
   private var buffer = Data()
   private var frames: [[String: Any]] = []
+  private var landed: Set<String> = []
   private var stderr = Data()
 
   init(stdin: FileHandle, allowShortcutListing: Bool) {
@@ -300,6 +367,7 @@ private final class SandboxBootDriver {
   func ingestStdout(_ data: Data) {
     guard !data.isEmpty else { return }
     var requests: [[String: Any]] = []
+    var deadlines: [String] = []
     lock.lock()
     buffer.append(data)
     while let newline = buffer.firstIndex(of: 0x0A) {
@@ -310,9 +378,22 @@ private final class SandboxBootDriver {
       }
       frames.append(object)
       if object["id"] != nil, object["method"] is String { requests.append(object) }
+      // The host's clock, for one-shot deadlines: each lands at once, once.
+      if object["id"] == nil, object["method"] as? String == "poll",
+        let registrations = (object["params"] as? [String: Any])?["registrations"]
+          as? [String: [String: Any]]
+      {
+        for (name, registration) in registrations
+        where registration["after"] != nil && landed.insert(name).inserted {
+          deadlines.append(name)
+        }
+      }
     }
     lock.unlock()
     for request in requests { answer(request) }
+    for name in deadlines {
+      send(["method": "event", "params": ["name": "core:poll:\(name)", "payload": [:]]])
+    }
   }
 
   func ingestStderr(_ data: Data) {

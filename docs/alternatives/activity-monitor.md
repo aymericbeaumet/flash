@@ -61,8 +61,9 @@ keyboard.
 - `:sysinfo cpu`, `:sysinfo memory`, `:sysinfo disks`, `:sysinfo network`
   and `:sysinfo power` open the details pagers, the closest Flash comes to
   Activity Monitor's tabs ([status plugins](../status-plugins.md)).
-- `#{flash.top_cpu}` and `#{flash.top_mem}` in a widget: a live table of the
-  busiest processes ([status format](../status-format.md)).
+- `#{flash.plugin.processes.top_cpu}` and `#{flash.plugin.processes.top_mem}`
+  in a widget: a live table of the busiest processes
+  ([status format](../status-format.md)).
 - `app quit --force` force-quits the focused app, the Force Quit button for
   the window in front of you.
 - Hints work in Activity Monitor's own window: `f` clicks a tab, a column

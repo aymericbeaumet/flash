@@ -1,0 +1,48 @@
+{
+  "id": "processes",
+  "name": "Processes",
+  "version": "0.1.0",
+  "description": "The processes of this Mac: the busiest ones by CPU and by memory as status tables, the focused app's resource summary, every process as an `@processes` row in the flashlight, and `process kill --pid=<pid>`, which asks before it terminates one.",
+  "exec": [
+    "./flash-plugin-processes"
+  ],
+  "settings": {
+    "top_count": {
+      "type": "integer",
+      "description": "Rows of #{flash.plugin.processes.top_cpu} and #{flash.plugin.processes.top_mem}: aligned tables of the busiest processes by CPU and by resident memory (conky's ${top}), sampled every 2 seconds only while the bar, a popup or a widget shows one of them.",
+      "default": 5,
+      "min": 1,
+      "max": 20
+    }
+  },
+  "commands": [
+    {
+      "command": "process",
+      "subcommand": "kill",
+      "description": "Terminate the process --pid=<pid> names, after asking",
+      "confirm": "Kill this process?"
+    }
+  ],
+  "listen": [
+    "core:status.observed",
+    "core:focus.changed",
+    "core:apps.changed"
+  ],
+  "status": [
+    "focused_app_details",
+    "top_cpu",
+    "top_mem"
+  ],
+  "sources": [
+    {
+      "name": "processes.processes",
+      "type": "processes",
+      "live": "per_query"
+    }
+  ],
+  "capabilities": [
+    "app_control",
+    "process_info",
+    "process_signal"
+  ]
+}

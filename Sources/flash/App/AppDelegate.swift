@@ -53,11 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var appearanceObserver: AppearanceObserver?
   var fullScreenPresentationObserver: FullScreenPresentationObserver?
   var statusBarController: FlashStatusBarController?
-  /// Samples `flash.top_cpu`, `flash.top_mem` and `flash.focused_app_details`
-  /// while the status controller reports a surface showing one of them.
-  lazy var processStatusSampler = ProcessStatusSampler(publish: { [weak self] values in
-    DispatchQueue.main.async { self?.statusBarController?.updateProcessValues(values) }
-  })
   /// Desktop widget windows; the status controller evaluates their lines.
   var widgetController: WidgetController?
   /// Every `[monitors.<name>]` as the status controller last evaluated it:
@@ -513,8 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       clipboard: clipboardFlashlight,
       windows: WindowListSource(
         rows: { [weak self] in self?.windowListRows() ?? ([], nil) },
-        focus: { [weak self] key in self?.focusWindowSwitcherChoice(key) }),
-      perform: { [weak self] command in self?.performMappedCommand(command) })
+        focus: { [weak self] key in self?.focusWindowSwitcherChoice(key) }))
     monitor = AppMonitor(registry: registry, config: config)
     // A held mouse button enters HOLD:
     // whichever path presses or releases it, the mode follows the hold, from
@@ -687,7 +681,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self?.statusBarController?.setWidgetVisible(name: name, visible)
       self?.pluginManager.setWidgetVisible(name: name, visible)
     })
-    let processSampler = processStatusSampler
     let calendar = calendarEvents
     calendar.configure(config.calendar)
     let statusBarStartedAt = LatencyProbe.now
@@ -702,7 +695,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self?.pluginManager.statusBarInfos() ?? []
       },
       widgetSink: { [weak self] name, lines in self?.widgetController?.show(name, lines: lines) },
-      processValuesObserver: { [weak processSampler] values in processSampler?.observe(values) },
       monitorSink: { [weak self] snapshots in self?.monitorsDidChange(snapshots) },
       monitorAlertSink: { [weak self] alert in self?.presentMonitorAlert(alert) },
       monitorFireSink: { [weak self] fire in self?.monitorDidFire(fire) },
@@ -718,12 +710,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       stateChanged: { [weak self] in self?.debugStateDidChange() },
       observedChanged: { [weak statusBarController] in statusBarController?.telemetryDidChange() })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
-    if let front = NSWorkspace.shared.frontmostApplication,
-      front.processIdentifier != ProcessInfo.processInfo.processIdentifier
-    {
-      processSampler.focusChanged(
-        FocusedProcess(pid: front.processIdentifier, bundleID: front.bundleIdentifier ?? ""))
-    }
     // Once at launch; afterwards the tap, hint activations and the secure-input
     // poll refresh it. The poll is what notices a hold that starts while the
     // tap is blind.
@@ -896,7 +882,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .appStop, .appDownloads, .developerTools, .windowCloseAll, .windowZoom, .urlBookmark,
       .urlEdit, .historyShow, .tabDuplicate, .tabPin, .tabMute, .tabDetach, .appVisibility,
       .menuPress,
-      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow, .processKill:
+      .sendKey, .sendKeys, .systemKey, .functionKey, .arrow:
       if let completion {
         completesLater = true
         performMappedCommand(cmd, completion: { completion($0, nil) })
@@ -1589,8 +1575,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     debugStateDidChange()
     if emitFocusEvent, focusEmissionGate.shouldEmit(pid: app.processIdentifier) {
       overlay.relinquishShownStatusPopup(reason: "focus_changed")
-      processStatusSampler.focusChanged(
-        FocusedProcess(pid: app.processIdentifier, bundleID: app.bundleIdentifier ?? ""))
       emitHostEvent(
         PluginEvent(
           .focusChanged,

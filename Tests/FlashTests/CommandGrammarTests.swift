@@ -77,7 +77,6 @@ final class CommandGrammarTests: XCTestCase {
     "mouse nudge": ["direction": "down"],
     "mouse position": ["action": "save"],
     "mouse step": ["direction": "up"],
-    "process kill": ["pid": "4242"],
     "tile join": ["direction": "left"],
     "tile layout": ["type": "accordion"],
     "tile move": ["direction": "right"],
@@ -165,7 +164,8 @@ final class CommandGrammarTests: XCTestCase {
   /// Bundled plugin commands are two words of `[a-z][a-z0-9_]*`. An entry
   /// under one of Flash's topics is a core command the plugin performs, so it
   /// names a source command; any other entry is the plugin's own, and the
-  /// ones that ask first are the `system` plugin's four that nothing undoes.
+  /// ones that ask first are `process kill` and the `system` plugin's four
+  /// that nothing undoes.
   func testBundledPluginCommandsShareTheShapeAndCoreTopicsNameSourceCommands() throws {
     let plugins = Self.root.appendingPathComponent("Plugins")
     var commands: [(plugin: String, command: String, subcommand: String, confirm: String?)] = []
@@ -200,6 +200,7 @@ final class CommandGrammarTests: XCTestCase {
     XCTAssertEqual(
       asking,
       [
+        "processes: process kill",
         "system: system restart", "system: system shutdown", "system: system logout",
         "system: trash empty",
       ])
@@ -269,7 +270,7 @@ final class CommandGrammarTests: XCTestCase {
     "mark": .one, "menu": .one, "metrics": .many, "missioncontrol": .one,
     "mode": .one, "monitors": .many, "mouse": .one, "move": .verb, "movement": .one,
     "notes": .many, "notificationcenter": .one, "notify": .verb, "pane": .one,
-    "plugins": .many, "popup": .one, "process": .one, "register": .one, "reminders": .many,
+    "plugins": .many, "popup": .one, "register": .one, "reminders": .many,
     "resident": .one, "resource": .one, "scroll": .verb,
     "selection": .one, "startup": .one, "status": .one, "tab": .one,
     "telemetry": .one,
@@ -278,7 +279,7 @@ final class CommandGrammarTests: XCTestCase {
   ]
 
   /// Singular nouns that end in `s` anyway.
-  private static let singularNounsEndingInS: Set<String> = ["status", "process"]
+  private static let singularNounsEndingInS: Set<String> = ["status"]
 
   func testEveryTopicNamesItsNounKind() {
     XCTAssertEqual(

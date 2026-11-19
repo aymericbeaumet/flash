@@ -17,7 +17,7 @@ pages of their own.
 | Metrics | CPU per core with frequency, temperature and (with privileges) power, Apple silicon GPU, memory, disks with I/O, network, battery, every process | CPU and GPU use, load, memory, disk space and I/O, default-route network, battery and its health, top processes, any command's output |
 | History | Live graphs while it runs, nothing stored | 20-sample charts per plugin; a named source keeps up to 512 numbers |
 | Alerts | None | `[monitors.<name>]` warning and error thresholds; Flash's centred alert, and a macOS notification with `notify = true` |
-| Processes | Tree, sort, filter, signals, per-process detail | `#{flash.top_cpu}`, `#{flash.top_mem}`, `@processes` with a confirmed SIGTERM |
+| Processes | Tree, sort, filter, signals, per-process detail | `#{flash.plugin.processes.top_cpu}`, `#{flash.plugin.processes.top_mem}`, `@processes` with a confirmed SIGTERM |
 | Surfaces | A terminal | Flash's own bar, desktop widgets, popups, including btop itself |
 | Keyboard | Full keyboard and mouse; optional vim keys | Hints, mappings, `mode terminal --name=btop` |
 | Configuration | `btop.conf`, themes, layout presets | One TOML file, live reload, `flash config check` |

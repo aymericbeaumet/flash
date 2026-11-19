@@ -53,11 +53,11 @@ it measures far more than Flash does.
 
 ## Flash features you might like
 
-- `#{flash.top_cpu}` and `#{flash.top_mem}` tables in a widget or a text
-  popup, like the top-apps list in iStat's CPU and memory menus
-  ([process values](../status-format.md#process-values)).
-- `#{flash.focused_app_details}`: the focused app and all its helper
-  processes, summed.
+- `#{flash.plugin.processes.top_cpu}` and `#{flash.plugin.processes.top_mem}`
+  tables in a widget or a text popup, like the top-apps list in iStat's CPU
+  and memory menus ([process values](../status-format.md#process-values)).
+- `#{flash.plugin.processes.focused_app_details}`: the focused app and all its
+  helper processes, summed.
 - `:sysinfo cpu`, `:sysinfo memory`, `:sysinfo disks`, `:sysinfo network` and
   `:sysinfo power`: the details pager, from the keyboard.
 - The built-in monitors (low battery, a nearly full disk, memory pressure,

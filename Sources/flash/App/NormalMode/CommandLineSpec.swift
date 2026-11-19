@@ -434,7 +434,7 @@ extension NormalModeDispatcher {
     guard let second = rest.first else {
       // A topic alone runs the one of its actions that only shows (`:logs`
       // is `logs show`, never `logs write`) or reports (a query); one that
-      // changes anything (`hints dismiss`, `process kill`) waits for its
+      // changes anything (`hints dismiss`, `resident quit`) waits for its
       // action, and so does a topic with two that show or report (`:cli`).
       let implied = actions.filter { action in
         if FlashQuery(topic: topic, action: action) != nil { return true }

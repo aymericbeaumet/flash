@@ -284,6 +284,13 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   resident, launchd or a group. The resident alone wires
   `LiveProcessSignals`; a test injects `ProcessSignalling` and may only
   signal a child it spawned.
+- The process table belongs to the `processes` plugin
+  (`Plugins/processes/src/sys.rs`, libproc under `process_info`), never the
+  resident: the top tables, the focused app's summary, `@processes` and
+  `process kill` are its segments, its live source and its command. It
+  samples only while `core:status.observed` lists a segment, and its first
+  CPU reading waits on the host clock (`ctx.wait`), never a sleep
+  ([top processes](docs/status-plugins.md#top-processes)).
 - Read the window list only through `WindowSnapshot.windowList`
   (guardrail-enforced), and never make main wait on a queue that calls it
   ([the deadlock](docs/input-internals.md#input-capture-and-latency)).

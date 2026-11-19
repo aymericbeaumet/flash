@@ -303,7 +303,7 @@ enum ConfigLoader {
     "plugins": pluginsSettingKeys,
     "statusbar": [
       "enabled", "template", "monitor", "interval", "click", "font_size",
-      "command_timeout", "notch_margin", "top_count", "link_schemes", "sources",
+      "command_timeout", "notch_margin", "link_schemes", "sources",
     ],
     "flashlight": [
       "suggestion_count", "precedence_alive_bonus", "aliases", "bangs", "precedence",

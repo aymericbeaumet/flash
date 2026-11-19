@@ -56,8 +56,9 @@ most-starred open-source answer to iStat Menus.
 - The built-in monitors (low battery, a nearly full disk, memory pressure,
   plugin failures, slow process spawns), and `flash monitors show` for the
   help's monitors page ([monitors](../monitors.md)).
-- `#{flash.top_cpu}` and `#{flash.top_mem}`, Stats' top-process lists as a
-  table ([process values](../status-format.md#process-values)).
+- `#{flash.plugin.processes.top_cpu}` and `#{flash.plugin.processes.top_mem}`,
+  Stats' top-process lists as a table
+  ([process values](../status-format.md#process-values)).
 
 ## Moving from Stats
 

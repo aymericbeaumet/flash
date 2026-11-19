@@ -2,7 +2,7 @@
 # Written by `mise run check:concurrency -- --write`; never edited by hand.
 15	Sources/flash/App/ActionDispatcher.swift
 8	Sources/flash/App/AppActivation.swift
-72	Sources/flash/App/AppDelegate.swift
+69	Sources/flash/App/AppDelegate.swift
 16	Sources/flash/App/AppDelegate/Activation.swift
 1	Sources/flash/App/AppDelegate/AppleCatalogCommands.swift
 6	Sources/flash/App/AppDelegate/BigramActivation.swift
@@ -33,7 +33,7 @@
 4	Sources/flash/App/AppDelegate/PositionHints.swift
 4	Sources/flash/App/AppDelegate/Queries.swift
 7	Sources/flash/App/AppDelegate/StartupCommands.swift
-4	Sources/flash/App/AppDelegate/SystemCommands.swift
+1	Sources/flash/App/AppDelegate/SystemCommands.swift
 12	Sources/flash/App/AppDelegate/SystemSurfaceHints.swift
 39	Sources/flash/App/AppDelegate/TerminalPopup.swift
 2	Sources/flash/App/AppDelegate/TilingCommands.swift
@@ -110,14 +110,11 @@
 67	Sources/flash/App/Plugins/PluginProcess.swift
 1	Sources/flash/App/Plugins/PluginRepository.swift
 16	Sources/flash/App/PollScheduler.swift
-7	Sources/flash/App/ProcessListSource.swift
-3	Sources/flash/App/ProcessStatus.swift
-2	Sources/flash/App/ProcessTable.swift
 3	Sources/flash/App/SecureInputFixer.swift
 36	Sources/flash/App/SourceRegistry.swift
 9	Sources/flash/App/StartupRunner.swift
 2	Sources/flash/App/StatusBar.swift
-52	Sources/flash/App/StatusBarController.swift
+51	Sources/flash/App/StatusBarController.swift
 8	Sources/flash/App/StatusBarMarkup.swift
 1	Sources/flash/App/StatusFormat/StatusFormatDocumentCache.swift
 2	Sources/flash/App/StatusFormat/StatusFormatProgram.swift

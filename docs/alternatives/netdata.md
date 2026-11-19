@@ -55,8 +55,9 @@ number of charts displaying system metrics is limited".
 - The built-in monitors (low battery, a nearly full disk, memory pressure,
   plugin failures, slow process spawns), and `flash monitors show` for the
   help's monitors page ([monitors](../monitors.md)).
-- `#{flash.top_cpu}` and `#{flash.focused_app_details}` for a per-process
-  view in a widget or a popup.
+- `#{flash.plugin.processes.top_cpu}` and
+  `#{flash.plugin.processes.focused_app_details}` for a per-process view in a
+  widget or a popup.
 
 ## Moving from Netdata
 

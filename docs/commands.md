@@ -253,7 +253,6 @@ selector matches; see [source commands](normal-mode.md#source-commands).
 | `plugins show` | Open the plugins page |
 | `popup quit [--name=<popup>]` | Quit the focused or named popup's process; persistent popups restart |
 | `popup restart [--name=<popup>]` | Restart the focused or named popup's process |
-| `process kill --pid=<n>` | Terminate one process, after asking |
 | `register paste [--register=<name>] [--after]` | Paste a register with the app's own paste; --after first steps past the character under the cursor, as vim's p |
 | `register yank [--register=<name>]` | Copy the focused app's selection into a register |
 | `reminders open` | Open Reminders |
@@ -565,7 +564,7 @@ flash appwindows show                        # App Exposé: the focused app's wi
 flash launchpad toggle                       # the Apps view on macOS 26, Launchpad before
 flash notificationcenter show                # open Notification Center (controlcenter show opens Control Center)
 flash system restart                         # asks first; y restarts (system shutdown, system logout, trash empty too)
-flash process kill --pid=4242                # asks, then sends SIGTERM to one process
+flash process kill --pid=4242                # asks, then sends SIGTERM to one process (the processes plugin)
 flash caffeinate toggle                      # keep the Mac awake, or let it sleep; #{flash.plugin.caffeinate.state} is on meanwhile
 flash caffeinate on --minutes=30             # keep the Mac awake for 30 minutes (caffeinate off ends it early)
 flash notes refresh                          # relist @notes now (reminders refresh, contacts refresh)
@@ -848,10 +847,10 @@ Flash's own, leaves them to [audio devices](audio.md).
 reference table above, which lists Flash's own, leaves them out. `screen
 lock`, `system sleep`, `display sleep`, `screensaver start` and
 `appearance toggle` act at once. `system restart`, `system shutdown`,
-`system logout`, `trash empty` and Flash's own `process kill --pid=<pid>`
-cannot be undone, so each asks first in the centred alert: `y` runs it, any
-other key cancels. None of the plugin's commands takes an argument: one
-given any fails with its usage (`usage: screen lock`).
+`system logout` and `trash empty` cannot be undone, so each asks first in
+the centred alert: `y` runs it, any other key cancels. None of the plugin's
+commands takes an argument: one given any fails with its usage (`usage:
+screen lock`).
 
 The plugin holds no power over the Mac: it asks Flash for each action, and
 Flash carries it out. `screen lock` posts macOS's Lock Screen shortcut
@@ -868,10 +867,17 @@ an Automation prompt still open) the command answers `macOS has not
 answered yet` and the action goes on. With `system` in `[plugins] disabled`
 these commands do nothing.
 
-`process kill` sends SIGTERM to a process you may signal; it refuses pids 0
-and 1 and a pid it cannot find. In the flashlight, `@system` and
-`@processes` list the same actions and every process
-([flashlight](flashlight.md)).
+`process kill --pid=<pid>` is the command of the bundled `processes`
+plugin, so the reference table leaves it out too. It asks first (`Kill this
+process?`), then sends SIGTERM to that process: the plugin asks Flash, and
+Flash signals only for a request you just answered `y` to. It refuses pids 0
+and 1, a pid it cannot find (`no process with pid 4242`) and Flash's own,
+and says the kernel's reason when the signal is not allowed (`process kill
+failed: Operation not permitted` for another user's process). `--pid` is
+its one argument; anything else fails with `usage: process kill
+--pid=<pid>` when the command runs. With `processes` in `[plugins]
+disabled` it does nothing. In the flashlight, `@system` and `@processes`
+list the same actions and every process ([flashlight](flashlight.md)).
 
 `caffeinate on`, `off`, `toggle` and `status` are the commands of the bundled
 `caffeinate` plugin, so the reference table above, which lists Flash's own,

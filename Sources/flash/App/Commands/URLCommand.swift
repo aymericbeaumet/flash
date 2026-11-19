@@ -336,8 +336,6 @@ indirect enum URLCommand: Hashable, Sendable {
   /// `notificationcenter` and `controlcenter`, each `show`, `hide` or
   /// `toggle`. See `SystemSurfaceController`.
   case systemSurface(SystemSurfaceCommand)
-  /// `process kill --pid=<pid>`: SIGTERM one process, after asking.
-  case processKill(pid: pid_t)
   /// A plain F1–F20 keystroke, with no modifiers.
   case functionKey(Int)
   /// One arrow key, optionally shifted. HYPER binds the layout's ESDF positions here.
@@ -349,8 +347,8 @@ indirect enum URLCommand: Hashable, Sendable {
 extension URLCommand {
   /// Whether a topic typed alone may run this, the one action of its that
   /// does (`:mappings`, `flash logs`): a command that only shows a page or
-  /// a surface and changes nothing. Any other, `process kill` or
-  /// `resident quit` above all, runs only when its action is typed.
+  /// a surface and changes nothing. Any other, `resident quit` above
+  /// all, runs only when its action is typed.
   var impliedByItsTopic: Bool {
     switch self {
     case .showMappings, .showLogs, .showCommands, .showMonitors, .showTelemetry, .showAbout,

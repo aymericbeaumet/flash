@@ -1718,6 +1718,24 @@
           },
           "type" : "object"
         },
+        "processes" : {
+          "additionalProperties" : false,
+          "description" : "The processes plugin's settings.",
+          "properties" : {
+            "sandbox" : {
+              "description" : "false launches the plugin without its sandbox profile; a kill switch for a profile that blocks the plugin's work.",
+              "type" : "boolean"
+            },
+            "top_count" : {
+              "default" : 5,
+              "description" : "Rows of #{flash.plugin.processes.top_cpu} and #{flash.plugin.processes.top_mem}: aligned tables of the busiest processes by CPU and by resident memory (conky's ${top}), sampled every 2 seconds only while the bar, a popup or a widget shows one of them.",
+              "maximum" : 20,
+              "minimum" : 1,
+              "type" : "integer"
+            }
+          },
+          "type" : "object"
+        },
         "screenshot" : {
           "additionalProperties" : false,
           "description" : "The screenshot plugin's settings.",
@@ -2061,10 +2079,6 @@
         "template" : {
           "description" : "label/nolabel (the name colour, #EBCB8B), pill/nopill, cyc/nocyc, meter=W[/MAX]/nometer (a W-cell bar of the first number inside), spark[=MIN/MAX]/nospark (a sparkline of every number inside) and shrink/noshrink (the last marked span in a segment is cut first, ending in \"…\"; otherwise the left and centre end with \"…\" and the right starts with \"…\"), e.g. #[align=centre]#[shrink]#{flash.focused_app_name}#[noshrink]. Native range=user|name binds statusbar.click. Values stay plain text unless a plugin intentionally publishes rich status.",
           "type" : "string"
-        },
-        "top_count" : {
-          "description" : "Rows of #{flash.top_cpu} and #{flash.top_mem}, 1-20: aligned tables of the busiest processes by CPU and by resident memory (conky's ${top}), sampled every 2 seconds only while the bar, a popup or a widget shows one of them.",
-          "type" : "integer"
         }
       },
       "type" : "object"

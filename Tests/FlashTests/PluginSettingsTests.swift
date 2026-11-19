@@ -268,6 +268,7 @@ final class PluginSettingsTests: XCTestCase {
         "aiproviders": ["grok_auth_file"],
         "answers": ["target_currencies"],
         "feed": ["cycle_interval", "refresh_interval", "url"],
+        "processes": ["top_count"],
         "snippets": ["file"],
         "terminals": ["ssh_hosts"],
       ])

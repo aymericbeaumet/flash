@@ -49,9 +49,9 @@ command-line tool in a popup: Flash cleans nothing and uninstalls nothing.
 - **Memory pressure, not memory used.** The built-in `memory` monitor reads
   what the kernel does not count as available, so a Mac using its RAM for
   cache stays quiet.
-- **Processes from the keyboard.** `@processes` finds one by name and stops
-  it after a confirmation; `#{flash.top_cpu}` and `#{flash.top_mem}` show the
-  busiest.
+- **Processes from the keyboard.** `@processes` finds one by name and stops it
+  after a confirmation; `#{flash.plugin.processes.top_cpu}` and
+  `#{flash.plugin.processes.top_mem}` show the busiest.
 - **Free and open source, with no daemon**: Flash's system figures come from
   a sandboxed plugin that spawns no process.
 

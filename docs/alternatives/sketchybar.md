@@ -33,7 +33,7 @@ reference bar on macOS, and it does more as a bar than Flash does.
 ## Where Flash is stronger
 
 - **No scripts to maintain for the common values.** CPU, memory, disk,
-  network, battery and top processes come from plugins and Flash itself,
+  network, battery and top processes come from bundled plugins,
   sampled on one scheduler and paused when the display sleeps; the tips page
   of SketchyBar itself asks users to reduce polling and compile helpers for
   performance.

@@ -1,7 +1,7 @@
 import AppKit
 import FlashCore
 
-/// macOS: Apple's catalogs, system surfaces and processes.
+/// macOS: Apple's catalogs and system surfaces.
 extension URLEventHandler {
   static let systemCommands: [String: CommandDefinition] = [
     "notes open": .init(
@@ -39,12 +39,6 @@ extension URLEventHandler {
     "controlcenter show": surface(.controlCenter, .show),
     "controlcenter hide": surface(.controlCenter, .hide),
     "controlcenter toggle": surface(.controlCenter, .toggle),
-    "process kill": .init(
-      "Terminate one process, after asking", [.integer("pid", required: true)],
-      parse: { a in
-        guard let pid = a.int("pid").flatMap({ pid_t(exactly: $0) }), pid > 1 else { return nil }
-        return .processKill(pid: pid)
-      }),
   ]
 
   /// `<surface> show|hide|toggle`, which take no arguments.

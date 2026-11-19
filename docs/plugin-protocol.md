@@ -985,7 +985,8 @@ Section semantics:
   `browsers`, `shortcuts` and `media` keep the default sandbox: their fixed
   AppleScript operations run in the host through `apple_events`. `sysinfo`
   and `caffeinate` name powerd's `com.apple.PowerManagement.control`, the one
-  mach service a bundled plugin reaches. Any other sandbox value
+  mach service a bundled plugin reaches. `processes` is the one bundled
+  plugin declaring `process_info`. Any other sandbox value
   is rejected, and a
   manifest-only plugin cannot declare `sandbox`.
   `[plugins.<id>] sandbox = false` is the user's per-plugin fail-open kill
@@ -1060,7 +1061,9 @@ Section semantics:
   live source is never `kind: "locations"`, since location rows belong to
   the default pool, and a `publish_then_exit` plugin declares none.
   `protocol.json` `source_live` pins the values. The bundled `system`
-  plugin's `system.actions` (`@system`) is `per_scope`.
+  plugin's `system.actions` (`@system`) is `per_scope`; the `processes`
+  plugin's `processes.processes` (`@processes`) is `per_query`, answered
+  from one read of the process table per two seconds.
 - **`query`** — registers the per-input evaluator. `prefixes` are exact
   literal markers (never regexes) that route matching input only to this
   evaluator; without one, evaluators are additive. Evaluator ordering is the
@@ -1101,8 +1104,9 @@ Section semantics:
   across plugins, a matching selector beats an unscoped one, then the higher
   `priority`, then the plugin id. An empty prompt or one over 256 bytes
   rejects the manifest. The bundled terminals plugin gates `tab close` and
-  `pane close` this way, and the `system` plugin its own `system restart`,
-  `system shutdown`, `system logout` and `trash empty`; a mapping gates any
+  `pane close` this way, the `system` plugin its own `system restart`,
+  `system shutdown`, `system logout` and `trash empty`, and the `processes`
+  plugin its `process kill`; a mapping gates any
   command the same way with
   `["flash", "alert", "confirm", "--prompt=…", "--command=<topic> <action>
   [--arg=value]"]`, and a command asked through it is not asked again.
@@ -1321,7 +1325,7 @@ time, and Flash checks again when it loads a plugin.
   (`^[a-z][a-z0-9]*$`). No dots: `emojis.glyphs` is a source name, `emojis`
   its type.
 - Flash feeds some types itself (`apps`, `windows`, `clipboard`, `notes`,
-  `reminders`, `contacts`, `files`, `processes`, `menus`): their
+  `reminders`, `contacts`, `files`, `menus`): their
   rows carry behaviour only the host provides. A plugin declaring one fails
   to load.
 - A shared type has one contract: every source of it declares the same
@@ -1343,6 +1347,7 @@ time, and Flash checks again when it loads a plugin.
 | `terminals` | `locations` | a terminal session (a tmux window); selecting it switches to it |
 | `network` | `default` | a network address of this Mac; selecting it copies it |
 | `system` | `default` | a system action (lock, sleep, restart…); selecting it runs it, after asking when nothing undoes it |
+| `processes` | `default` | a running process; selecting it terminates it, after asking |
 
 Prefer an existing type when your rows are what it describes: a new browser
 plugin's tabs are `tabs`, so `@tabs` lists them beside Safari's. A new type

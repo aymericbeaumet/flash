@@ -5,7 +5,8 @@
 //! here instead of spawning `ps`. As with `process.rs` and `runtime.rs`, the
 //! unsafe FFI more than one plugin needs stays inside the SDK; readers only
 //! one plugin uses live in that plugin (the `sysinfo` monitors' kernel and
-//! IOKit samplers are `Plugins/sysinfo/src/sys/`).
+//! IOKit samplers are `Plugins/sysinfo/src/sys/`, the `processes` plugin's
+//! per-process readers `Plugins/processes/src/sys.rs`).
 
 use std::fmt;
 use std::mem;
@@ -23,12 +24,10 @@ impl fmt::Display for SysError {
 
 impl std::error::Error for SysError {}
 
-/// Every visible process with its parent, as `(pid, ppid)`: what
-/// `ps -axo pid=,ppid=` prints, read through libproc without a fork.
-/// `PROC_PIDT_SHORTBSDINFO` is the flavor the kernel answers across users, so
-/// root-owned ancestors such as `login` keep the tree connected. A process
-/// that exits between the listing and its read is skipped.
-pub fn process_parents() -> Result<Vec<(i32, i32)>, SysError> {
+/// Every visible pid, in the kernel's order: what `ps -axo pid=` prints, read
+/// through libproc without a fork. Listing needs no right over the processes
+/// listed; a sandboxed plugin needs the `process_info` capability.
+pub fn process_ids() -> Result<Vec<i32>, SysError> {
     // SAFETY: a null buffer asks for the current pid count.
     let count = unsafe { libc::proc_listallpids(ptr::null_mut(), 0) };
     if count <= 0 {
@@ -43,8 +42,18 @@ pub fn process_parents() -> Result<Vec<(i32, i32)>, SysError> {
         return Err(SysError(format!("proc_listallpids returned {filled}")));
     }
     pids.truncate((filled as usize).min(pids.len()));
+    pids.retain(|pid| *pid > 0);
+    Ok(pids)
+}
+
+/// Every visible process with its parent, as `(pid, ppid)`: what
+/// `ps -axo pid=,ppid=` prints, read through libproc without a fork.
+/// `PROC_PIDT_SHORTBSDINFO` is the flavor the kernel answers across users, so
+/// root-owned ancestors such as `login` keep the tree connected. A process
+/// that exits between the listing and its read is skipped.
+pub fn process_parents() -> Result<Vec<(i32, i32)>, SysError> {
     let size = mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
-    Ok(pids
+    Ok(process_ids()?
         .into_iter()
         .filter_map(|pid| {
             // SAFETY: proc_bsdshortinfo is a plain C struct; zeroed is a valid buffer.
@@ -67,6 +76,15 @@ pub fn process_parents() -> Result<Vec<(i32, i32)>, SysError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_ids_list_this_process_and_launchd_once_each() {
+        let pids = process_ids().expect("pid list");
+        let own = std::process::id() as i32;
+        assert_eq!(pids.iter().filter(|pid| **pid == own).count(), 1);
+        assert_eq!(pids.iter().filter(|pid| **pid == 1).count(), 1);
+        assert!(pids.iter().all(|pid| *pid > 0), "no kernel placeholder");
+    }
 
     #[test]
     fn process_parents_match_this_process_and_launchd() {

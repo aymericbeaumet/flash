@@ -135,9 +135,6 @@ enum FlashStatusBarSDKValue: Equatable {
   case workspaces
   case date
   case calendar
-  /// `flash.top_cpu`, `flash.top_mem`, `flash.focused_app_details`: sampled
-  /// by `ProcessStatusSampler` only while a surface shows them.
-  case process(ProcessStatusValue)
   case host
   case hostShort
   case user
@@ -744,8 +741,13 @@ enum FlashStatusBarTemplateEngine {
     raw.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
   }
 
+  /// Text another app controls, as a literal: `#` doubled, since the status
+  /// language reads `##` as one `#`, so it can never open a style marker.
+  static func escapedLiteral(_ text: String) -> String {
+    text.replacingOccurrences(of: "#", with: "##")
+  }
+
   static func sdkValue(for token: String) -> FlashStatusBarSDKValue? {
-    if let value = ProcessStatusValue(rawValue: token) { return .process(value) }
     switch token {
     case "flash.mode": return .modeLabel
     case "flash.secure_input": return .secureInput
@@ -780,11 +782,10 @@ enum FlashStatusBarTemplateEngine {
       "flash.workspace": context.workspace,
       "flash.workspaces": context.workspaces,
       // An app names itself: text, never a style, a link or a click range.
-      "flash.focused_app_name": ProcessStatusFormat.escaped(
+      "flash.focused_app_name": escapedLiteral(
         context.focusedAppName.trimmed.isEmpty
           ? context.focusedAppBundleID.trimmed : context.focusedAppName.trimmed),
-      "flash.focused_app_bundle_id": ProcessStatusFormat.escaped(
-        context.focusedAppBundleID.trimmed),
+      "flash.focused_app_bundle_id": escapedLiteral(context.focusedAppBundleID.trimmed),
       "flash.date": FlashStatusBarRenderer.dateText(
         now: context.now, calendar: context.calendar, locale: context.locale),
       "flash.calendar": FlashStatusBarRenderer.calendarText(

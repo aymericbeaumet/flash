@@ -20,7 +20,7 @@ final class LogAreaTests: XCTestCase {
     "macro", "mappings", "marks", "menu", "menubar", "menus", "missioncontrol", "mode",
     "monitors", "move", "movement", "multi", "navigation", "normal", "notifications", "notify",
     "overlay", "placement", "plugin", "plugins", "pointer", "poll", "popup", "positions",
-    "processes", "query", "repeat", "resident", "screen", "screens", "scroll", "search", "source",
+    "query", "repeat", "resident", "screen", "screens", "scroll", "search", "source",
     "startup", "statusbar", "step", "surfaces", "switcher", "system", "tap", "telemetry", "text",
     "tiling",
     "trace", "updates", "url", "visual", "warp", "watchdog", "widgets", "window", "words",

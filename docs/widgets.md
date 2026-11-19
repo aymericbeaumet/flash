@@ -57,8 +57,9 @@ As in the bar, write `%%` for a literal percent sign: the template is expanded
 by `strftime`, so `%H:%M` in it is the time. A conditional branch is expanded
 a second time, as in tmux, so a percent sign inside `#{?…}` is written `%%%%`.
 
-A multi-line value — a process table such as `flash.top_cpu`, a source that
-prints several lines, `#{flash.calendar}` — spreads over as many widget lines.
+A multi-line value — a process table such as
+`flash.plugin.processes.top_cpu`, a source that prints several lines,
+`#{flash.calendar}` — spreads over as many widget lines.
 
 ## Styling
 
@@ -160,8 +161,8 @@ Everything the bar can show is available. These values suit widgets:
 | `#{flash.plugin.terminals.session}`, `window`, `pane` | The attached local tmux client's session, window and pane; empty without one. |
 | `#{flash.calendar}` | The 75-column [calendar](calendar.md): three months, the day's progress, time zone, DST and moon. |
 | `#{flash.calendar.next}`, `next_title`, `next_in`, `next_minutes`, `next_start`, `next_end`, `next_ongoing`, `next_link` | The [next meeting](calendar.md#next-meeting): `Standup in 12m`, and its parts. Reading one asks macOS for Calendars access once. |
-| `#{flash.top_cpu}`, `#{flash.top_mem}` | The busiest processes by CPU or resident memory, one row each. |
-| `#{flash.focused_app_details}` | The focused app's CPU, memory, sockets, threads, uptime and disk I/O. |
+| `#{flash.plugin.processes.top_cpu}`, `top_mem` | The busiest processes by CPU or resident memory, one row each. |
+| `#{flash.plugin.processes.focused_app_details}` | The focused app's CPU, memory, sockets, threads, uptime and disk I/O. |
 | `#{flash.source.<name>}` | The output of a [named source](status-format.md#jobs-sources-and-flash-styles). |
 | `#{flash.history.<name>}` | The last N numeric outputs of a source with `history = N`, oldest first. |
 | `#(command)` | A tmux shell job, re-run every widget `interval`. |
@@ -170,9 +171,9 @@ Everything the bar can show is available. These values suit widgets:
 
 The plugin values are described in
 [status plugins](status-plugins.md#raw-numeric-segments); an empty value means
-unknown, not zero, so a meter over it draws nothing. `[statusbar]
-top_count = 5` sets the rows of each process table (1–20); Flash samples
-processes only while a surface shows one of the
+unknown, not zero, so a meter over it draws nothing. `[plugins.processes]
+top_count = 5` sets the rows of each process table (1–20); the `processes`
+plugin samples processes only while a surface or a monitor reads one of the
 [process values](status-format.md#process-values).
 
 A named source runs a command on its own cadence. `history = N` (2–512) keeps
@@ -263,7 +264,7 @@ and how to measure it are in [performance](performance.md#widgets-budget).
 | `${downspeed}`, `${downspeedgraph}` | `#{flash.plugin.sysinfo.network_down_bps}`, `#[spark]#{flash.plugin.sysinfo.network_down_history}#[nospark]` |
 | `${addr}` | `#{flash.plugin.sysinfo.network_address}` |
 | `${battery_percent}`, `${battery_bar}` | `#{flash.plugin.sysinfo.power_percent}`, `#[meter=20]#{flash.plugin.sysinfo.power_percent}#[nometer]` |
-| `${top name 1}` … | `#{flash.top_cpu}` (`#{flash.top_mem}` for `${top_mem}`), `[statusbar] top_count` rows |
+| `${top name 1}` … | `#{flash.plugin.processes.top_cpu}` (`#{flash.plugin.processes.top_mem}` for `${top_mem}`), `[plugins.processes] top_count` rows |
 | `${exec cmd}` | `#(cmd)` |
 | `${execi 60 cmd}` | `[statusbar.sources.x]` with `command = [...]` and `interval = 60`, shown as `#{flash.source.x}` |
 | `${execgraph …}` | A source with `history = N`, drawn with `#[spark]#{flash.history.x}#[nospark]` |

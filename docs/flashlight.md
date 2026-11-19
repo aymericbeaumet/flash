@@ -28,11 +28,12 @@ from memory: a query asks no app anything. Map it like any flashlight scope:
 
 `@system` lists the `system` plugin's actions (`screen lock`, `system
 sleep`, `system restart`, …); `@processes` lists every visible process with
-its pid and CPU and memory shares. Both are live: Flash reads them only while
-a query names them, and the first `@system` starts the plugin. Picking a
-restart, shut down, log out or empty-Trash row, or a process, asks first in
-the centred alert: `y` runs it (a process gets SIGTERM), any other key
-cancels. A row that fails says why in the centred alert.
+its pid and CPU and memory shares, from the `processes` plugin. Both are
+live: Flash asks for them only while a query names them, and the first such
+query starts the plugin. Picking a restart, shut down, log out or
+empty-Trash row, or a process, asks first in the centred alert (`Kill Safari
+(pid 4242)?`): `y` runs it (a process gets SIGTERM), any other key cancels.
+A row that fails says why in the centred alert.
 
 `@notes`, `@reminders` and `@contacts` list your notes,
 open reminders and contact cards while Notes, Reminders or Contacts runs;
@@ -132,12 +133,12 @@ reads Firefox's history alone, where `@history` reads every browser's.
 | `clipboard` | Flash | a clipboard history entry, pinned entry or named register; selecting it pastes it |
 | `notes`, `reminders`, `contacts` | Flash | a note, an open reminder or a contact card; selecting it opens it in its app |
 | `files` | Flash | a file found by name through Spotlight; selecting it opens it |
-| `processes` | Flash | a running process; selecting it offers to quit it |
 | `menus` | Flash | a menu item of the frontmost app; selecting it presses it |
 | `tabs` | browsers plugin | an open browser tab, with its URL; selecting it switches to it |
 | `history`, `bookmarks` | browsers plugin | a visited page or a bookmark, with its URL; selecting it opens it |
 | `terminals` | terminals plugin | a tmux window; selecting it switches to it |
 | `system` | system plugin | a system action (lock, sleep, restart…); selecting it runs it, after asking when nothing undoes it |
+| `processes` | processes plugin | a running process; selecting it terminates it, after asking |
 | `emojis` | emojis plugin | an emoji or symbol, by its Unicode name, shortcode, CLDR keyword (`idk`, `hooray`) or emoticon (`:)`, `<3`); selecting it types it |
 | `bangs` | searchproviders plugin | a `!token` search shortcut; selecting it completes the bang |
 | `snippets`, `shortcuts` | snippets, shortcuts plugins | a text snippet to type, or a Shortcuts app shortcut to run |

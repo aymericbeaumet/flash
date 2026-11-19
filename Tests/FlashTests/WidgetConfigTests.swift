@@ -231,8 +231,9 @@ final class WidgetConfigTests: XCTestCase {
     XCTAssertEqual(widget.anchor, .topRight)
     XCTAssertTrue(widget.template.template.contains("%% · MEM"))
     XCTAssertEqual(
-      config.observedStatusSegments(), ["sysinfo": ["cpu_percent", "memory_history"]])
-    XCTAssertTrue(widget.template.template.contains("#{flash.top_cpu}"))
+      config.observedStatusSegments(),
+      ["sysinfo": ["cpu_percent", "memory_history"], "processes": ["top_cpu"]])
+    XCTAssertTrue(widget.template.template.contains("#{flash.plugin.processes.top_cpu}"))
     XCTAssertEqual(ConfigLoader.parse(try String(contentsOf: url, encoding: .utf8)).widgets, [:])
   }
 }

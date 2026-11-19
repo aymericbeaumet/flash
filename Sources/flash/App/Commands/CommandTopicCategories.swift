@@ -30,7 +30,7 @@ extension URLEventHandler {
     ),
     (
       .system,
-      ["key", "launchpad", "notificationcenter", "controlcenter", "process"]
+      ["key", "launchpad", "notificationcenter", "controlcenter"]
     ),
     (
       .other,

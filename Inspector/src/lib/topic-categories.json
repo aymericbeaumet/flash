@@ -38,7 +38,6 @@
   "pane": "tabs",
   "plugins": "modes",
   "popup": "modes",
-  "process": "system",
   "register": "other",
   "reminders": "other",
   "resident": "other",

@@ -304,18 +304,23 @@ stored as separate register files.
   windows, nothing in them) and which status item of the menu bar is the
   clock or Control Center, all through Accessibility. Flash keeps only which
   view or panel is open, in memory.
-- **Process status and focused-app details:** while a bar, its text popup,
-  or a visible widget uses a [process value](status-format.md#process-values),
-  Flash reads process IDs, names, CPU time and resident memory through
-  libproc. Focused-app details also read its descendants, thread/socket
-  counts, start time and cumulative disk I/O, and show up to five helpers
-  from that same sample. The app name, version/build, bundle ID and bundle
-  and executable paths come from macOS application metadata and the app's
-  Info.plist, read on a background queue. These values stay in memory;
-  this collector reads no command arguments, environment variables or file
-  contents beyond that application metadata, and sends nothing over the
-  network. Application paths can contain your account name, so review a
-  popup screenshot before sharing it.
+- **Process status and focused-app details:** while the bar, one of its
+  text popups, a visible widget or a monitor reads a
+  [process value](status-format.md#process-values), and while a flashlight
+  query names `@processes`, the bundled `processes` plugin reads process
+  IDs, executable paths (a process is named after its executable), CPU time
+  and resident memory through libproc, in its own sandboxed process.
+  Focused-app details also read the app's descendants, their thread counts
+  and open-descriptor lists (to count sockets; no descriptor is examined),
+  its start time and cumulative disk I/O, and show up to five helpers from
+  that same sample. The app's name is the one Flash reports for running
+  apps, its version and build come from the bundle's `Info.plist`, and its
+  bundle and executable paths from the kernel. These values stay in memory
+  (the plugin's, and Flash's for what it shows); the plugin reads no command
+  arguments, environment variables or file contents beyond that
+  `Info.plist`, stores nothing and has no network access. Application paths
+  can contain your account name, so review a popup screenshot before
+  sharing it.
 - **Window titles:** for `window switch` and the flashlight's `@windows`, Flash reads every regular app's
   windows through Accessibility (title, whether minimized) and its name and
   icon, and remembers the order you focused windows in. It reads them at
@@ -535,11 +540,17 @@ one fixed script to System Events or Finder. Flash restarts, shuts down, logs
 out or empties the Trash only for a request you just answered `y` to in its
 confirmation alert, one action per answer; the same request from the plugin
 at any other moment is refused, so a faulty plugin cannot run one unprompted.
-The plugin reads and stores nothing. No plugin signals a process: one
-declaring the `process_signal` capability asks Flash, which sends SIGTERM to
-one process only for a request you just answered `y` to, one signal per
-answer, and never to itself, to launchd or to a group of processes. The AppleScript RPC accepts only named operations with fixed host templates and escaped
-string values; it accepts no script source, shell command or file operation.
+The plugin reads and stores nothing. `processes` is the one bundled plugin
+declaring `process_info`: its profile lets it list processes and read their
+CPU time, memory, disk I/O, thread counts, open-descriptor lists and
+executable paths, which is what its tables, the focused app's summary and
+`@processes` show. No plugin signals a process, this one included: `process
+kill` and a picked `@processes` row ask Flash behind the `process_signal`
+capability, and Flash sends SIGTERM to one process only for a request you
+just answered `y` to, one signal per answer, and never to itself, to
+launchd or to a group of processes. The AppleScript RPC accepts only named
+operations with fixed host templates and escaped string values; it accepts
+no script source, shell command or file operation.
 Each operation checks its target against the declared app IDs. Chat submission
 can send Return only to a supported browser that is still frontmost. Credentials for
 AI-provider quotas remain within its explicitly unsandboxed plugin; granting

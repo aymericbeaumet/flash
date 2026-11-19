@@ -43,8 +43,7 @@ final class SourceRegistry {
     pluginSourcesProvider: (() -> [FlashSource])? = nil,
     appleCatalogs: AppleCatalogs? = nil,
     clipboard: ClipboardFlashlight? = nil,
-    windows: WindowListSource? = nil,
-    perform: @escaping (URLCommand) -> Void = { _ in }
+    windows: WindowListSource? = nil
   ) {
     let initialRunningApplications =
       runningApplications ?? runningApplicationsProvider?()
@@ -69,10 +68,6 @@ final class SourceRegistry {
         },
         SourceDescriptor(identifier: "core.menus", activationPolicy: .always) {
           MenuBarSource()
-        },
-        // Its rows run a verb, which asks first.
-        SourceDescriptor(identifier: "core.processes", activationPolicy: .always) {
-          ProcessListSource(perform: perform)
         },
         SourceDescriptor(identifier: FileSearchSource.sourceID, activationPolicy: .always) {
           FileSearchSource()

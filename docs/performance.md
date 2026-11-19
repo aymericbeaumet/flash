@@ -400,7 +400,6 @@ work whose source has no change notification, and all of it rides the one
 | Plugin cadences and deadlines (`poll`) | A plugin registered one | The plugin's period or deadline | The plugin's: high, normal or low ([table](status-plugins.md#scheduling)) |
 | Clipboard watcher | Flash's core history is active | 0.5 s (no pasteboard notification exists) | normal |
 | Secure input | Always: while the flag is on the tap gets no keys, so nothing else can see it | 2 s; an off tick reads the flag alone | low |
-| Process values | A visible surface reads `flash.top_cpu`, `flash.top_mem` or `flash.focused_app_details` | Tables 2 s; the focused app 10 s and 300 ms after a focus change | high (the focused app's 10 s normal) |
 | Menu-bar reveal probe | The pointer is in the top band | 80 ms (no reveal notification exists) | system |
 | Plugin liveness sweep | A plugin runs | 30 s; pings only a plugin silent for 60 s | low |
 | Prepared-model maintenance | The frontmost app has a model | Before its 1.5–30 s freshness ceiling; skipped after 60 s without input | normal |

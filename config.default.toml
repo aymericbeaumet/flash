@@ -301,6 +301,16 @@ startup_timeout = 5
 # alone); the charts and secondary metrics are in the hover details. For a
 # live dashboard, show btop in a terminal popup ([popup.btop] below).
 
+# The processes plugin publishes #{flash.plugin.processes.top_cpu} and
+# …top_mem, aligned tables of the busiest processes by CPU and by resident
+# memory (conky's ${top}), and #{flash.plugin.processes.focused_app_details},
+# the focused app's resource summary. It samples only while the bar, one of
+# its text popups, a widget or a monitor reads one of them: the tables every
+# 2 seconds, the focused app every 10. It also lists @processes and runs
+# `process kill --pid=<pid>`, which asks first.
+# [plugins.processes]
+# top_count = 5 # rows of each table, 1-20
+
 # RSS headlines from the last 24 hours. No requests run until a URL is set.
 # The template owns the name and the hovers. The name and the headline can
 # open different popups; `$FLASH_STATUS_LINK` is the headline's item link:
@@ -418,10 +428,6 @@ command_timeout = 6.0
 # #[align=notch] are that lane: a housing at the middle of the bar. It hides
 # entirely on notched screens, where the hardware supplies the gap.
 notch_margin = 4
-# Rows of #{flash.top_cpu} and #{flash.top_mem}, 1-20: aligned tables of the
-# busiest processes by CPU and by resident memory (conky's ${top}), sampled
-# every 2 seconds only while the bar, a popup or a widget shows one of them.
-top_count = 5
 # URL schemes a #[link=…] may open beside http, https and mailto, which are
 # always allowed: exact lowercase names, each once, such as "slack" or
 # "x-apple.systempreferences". A link is text a plugin, a source or a popup's
@@ -436,9 +442,9 @@ link_schemes = []
 # the template) use tmux semantics. Missing tmux session/window/pane context is
 # empty.
 # Flash supplies flash.mode, flash.date,
-# flash.focused_app_name, flash.focused_app_bundle_id, flash.top_cpu,
-# flash.top_mem, flash.focused_app_details, flash.calendar (a three-month
-# calendar), flash.calendar.next ("Standup in 12m", see [calendar]) and its
+# flash.focused_app_name, flash.focused_app_bundle_id, flash.calendar (a
+# three-month calendar), flash.calendar.next ("Standup in 12m", see
+# [calendar]) and its
 # next_title/next_in/next_minutes/next_start/next_end/next_ongoing/next_link
 # parts,
 # flash.plugin.<id>.<segment>, flash.plugin.loaded_count/ready_count/error_count,
@@ -609,7 +615,7 @@ cwd = "~"
 # CPU #[meter=10]#{flash.plugin.sysinfo.cpu_percent}#[nometer] #{flash.plugin.sysinfo.cpu_percent}%% · \
 # MEM #[spark=0/100]#{flash.plugin.sysinfo.memory_history}#[nospark]
 # #[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
-# #{flash.top_cpu}
+# #{flash.plugin.processes.top_cpu}
 # """
 # screen = "primary"        # "primary", "all", or a display number (1 = leftmost)
 # anchor = "top_right"      # top_left, top_centre, top_right, centre_left, centre,

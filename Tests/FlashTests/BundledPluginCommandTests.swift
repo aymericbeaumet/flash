@@ -68,6 +68,76 @@ final class BundledPluginCommandTests: XCTestCase {
       retired.contains { $0.contains("unknown Flash value flash.caffeinate") }, "\(retired)")
   }
 
+  /// The process tables, the focused app's summary, `@processes` and
+  /// `process kill` are the `processes` plugin's: its segments, its live
+  /// source of the shared `processes` type, and a word that is no topic of
+  /// Flash's. `flash.top_cpu` and `[statusbar] top_count` name nothing.
+  func testTheProcessesPluginOwnsTheProcessWordItsValuesAndItsType() throws {
+    XCTAssertEqual(try bundledCommands()["process"], ["kill"])
+    XCTAssertFalse(URLEventHandler.isTopic("process"), "process is the plugin's, not a topic")
+    XCTAssertEqual(try owner(of: "process"), ["processes"])
+    let root = try XCTUnwrap(
+      PluginRepository.officialPluginRoots().first { $0.lastPathComponent == "processes" })
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(
+      manifest.pluginCommands.map { "\($0.command) \($0.subcommand): \($0.prompt ?? "")" },
+      ["process kill: Kill this process?"])
+    XCTAssertEqual(manifest.sourceCommands, [], "it performs no core command")
+    XCTAssertEqual(manifest.liveSources, .perQuery)
+    XCTAssertEqual(manifest.sources.map(\.type), ["processes"])
+    XCTAssertEqual(ResourceTypes.byName["processes"]?.owner, .shared)
+    XCTAssertEqual(manifest.status, ["focused_app_details", "top_cpu", "top_mem"])
+    XCTAssertTrue(manifest.isStatusBound)
+    XCTAssertEqual(
+      manifest.activation(statusObserved: false), .onDemand, "no process until a value is shown")
+    XCTAssertEqual(manifest.activation(statusObserved: true), .resident)
+    XCTAssertEqual(manifest.capabilities, [.appControl, .processInfo, .processSignal])
+    XCTAssertEqual(manifest.sandboxSpec, PluginSandboxSpec(), "the default sandbox, no allowance")
+    XCTAssertEqual(manifest.mappings.count, 0, "no default key was bound to it")
+
+    // A mapping, the CLI and the command line keep the words.
+    let kill = URLCommand.pluginCommand(
+      command: "process", subcommand: "kill", args: ["--pid=4242"])
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "process", "kill", "--pid=4242"]), .flashCommand(kill))
+    XCTAssertEqual(kill.argv, ["flash", "process", "kill", "--pid=4242"])
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "process"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "process", "renice"]))
+    let inventory = NormalModeDispatcher.CommandLineInventory.core(
+      pluginCommands: try bundledCommands())
+    XCTAssertEqual(
+      NormalModeDispatcher.resolveCommandLine(":proc kill --pid=42", inventory: inventory),
+      .plugin(command: "process", subcommand: "kill", args: ["--pid=42"]), "proc is process")
+    XCTAssertEqual(
+      NormalModeDispatcher.resolveCommandLine(":process", inventory: inventory),
+      .incomplete("process"), "the word alone terminates nothing")
+
+    // The values are plugin segments, sized by a plugin setting.
+    func diagnostics(_ toml: String) -> [String] {
+      ConfigLoader.parse(toml).loadingDiagnostics.map(\.message)
+    }
+    let bar = ConfigLoader.parse(
+      """
+      [statusbar]
+      enabled = true
+      template = "#{flash.plugin.processes.top_cpu}"
+
+      [popup.app]
+      text = "#{flash.plugin.processes.focused_app_details}"
+      """)
+    XCTAssertEqual(bar.loadingDiagnostics.map(\.message), [])
+    XCTAssertEqual(
+      bar.observedStatusSegments()["processes"], ["top_cpu", "focused_app_details"])
+    for retired in ["flash.top_cpu", "flash.top_mem", "flash.focused_app_details"] {
+      let reported = diagnostics("[statusbar]\ntemplate = \"#{\(retired)}\"")
+      XCTAssertTrue(
+        reported.contains { $0.contains("unknown Flash value \(retired)") }, "\(reported)")
+    }
+    let moved = diagnostics("[statusbar]\ntop_count = 5")
+    XCTAssertTrue(moved.contains { $0.contains("top_count") }, "\(moved)")
+    XCTAssertEqual(manifest.settings["top_count"]?.type, .integer)
+  }
+
   /// Lock, sleep, restart, shut down, log out, the Trash, dark mode and the
   /// screen saver are the `system` plugin's: six words that are no topic of
   /// Flash's, nine commands a mapping, the CLI and the command line reach

@@ -47,8 +47,8 @@ is updated several times a year. It covers exactly what Flash leaves out.
 
 - `#{flash.plugin.sysinfo.power_details}` in a text popup: charge, health, cycles,
   design and full-charge capacity, battery temperature and adapter power.
-- `#{flash.focused_app_details}` to see which app is heating the Mac
-  ([process values](../status-format.md#process-values)).
+- `#{flash.plugin.processes.focused_app_details}` to see which app is heating
+  the Mac ([process values](../status-format.md#process-values)).
 - btop in a terminal popup, which also shows CPU temperature.
 
 ## Moving from TG Pro

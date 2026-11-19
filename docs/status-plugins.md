@@ -125,9 +125,11 @@ Keep the ownership boundaries intact:
 - Register sampling cadences with the host (`ctx.interval`) instead of arming a
   timer, at the priority the [scheduling](#scheduling) table gives: one clock drives every
   domain, so their wake-ups coalesce.
-- Core owns the process values (`flash.top_cpu`, `flash.top_mem`,
-  `flash.focused_app_details`) and the system commands (`screen lock`,
-  `system sleep`, …); no plugin samples the process table or signals pids.
+- The `processes` plugin owns the process values
+  (`flash.plugin.processes.top_cpu`, `top_mem`, `focused_app_details`): it
+  alone declares `process_info` and samples the process table. No plugin
+  signals a pid: `process kill` asks the host, which sends SIGTERM only for
+  a request the user confirmed.
 - The `caffeinate` plugin owns the keep-awake power assertions
   (`caffeinate on`, `#{flash.plugin.caffeinate.state}`): they belong to its
   process, so they end with it. No other plugin holds the Mac awake.
@@ -163,6 +165,10 @@ while a surface shows it.
 | `aiproviders` · quotas | 60 s while a quota segment is shown; Codex and Grok fetch at most every 2 min, 5 min after a failure | low | A file read and remote pulls |
 | `browsers` · settles | 300 ms–1 s windows, AX bursts up to 10 s | normal | Catalogs nobody watches refresh |
 | `browsers` · Firefox tab selection beats | 120–250 ms inside one selection | high | The user waits on the switch |
+| `processes` · top tables | 2 s while `top_cpu` or `top_mem` is observed | high | A table someone has open |
+| `processes` · focused app | 10 s while `focused_app_details` is observed | normal | CPU has no change event; a tenth of a second is invisible at ten seconds |
+| `processes` · focus settle | 300 ms after a focus change, while `focused_app_details` is observed | high | The placeholder on screen waits on it |
+| `processes` · first-read bracket | One 150 ms wait when a read meets a pid it has not measured | high | A table on screen, or a typed `@processes` query, waits on it |
 | `caffeinate` · bound | A bounded hold's `--minutes`, a day at a time, armed only while it lasts | low | powerd ends the assertions at the bound itself; the tick releases them and clears `state` |
 
 ## Raw numeric segments
@@ -211,15 +217,31 @@ that clock from `kern.boottime`, so it counts sleep, as `uptime(1)` does.
 
 ## Top processes
 
-The process tables and the focused app's figures are core values, not plugin
-segments: `#{flash.top_cpu}`, `#{flash.top_mem}` and
-`#{flash.focused_app_details}`, with `[statusbar] top_count` rows per table.
-Flash samples them through libproc on a background queue, on the same host
-clock (`core:process_top` every 2 s, `core:process_focused` every 10 s and
-`core:process_focus_settle` 300 ms after a focus change), only while a
-surface reads them; see [process values](status-format.md#process-values).
-The `processes.processes` flashlight source lists every process and asks
-before it terminates one.
+The process tables and the focused app's figures are the `processes`
+plugin's segments: `#{flash.plugin.processes.top_cpu}`,
+`#{flash.plugin.processes.top_mem}` and
+`#{flash.plugin.processes.focused_app_details}`, with `[plugins.processes]
+top_count` rows per table; [process values](status-format.md#process-values)
+describes what each shows. The plugin reads the process table itself,
+through libproc (`Plugins/processes/src/sys.rs`): its manifest declares the
+`process_info` capability, which opens those reads for other processes in
+its sandbox profile. It listens to `core:status.observed` and registers each
+cadence only while one of its values is observed, on the host's clock (the
+[scheduling](#scheduling) table); a value that stops being observed is
+cleared. `focused_app_details` follows `core:focus.changed`, and asks
+`host.normal_mode_target` (the `app_control` capability) for the focused app
+when the process started after it took focus.
+
+CPU is a delta of each pid's cumulative CPU time between two reads, so a
+figure is the average over the reader's own period. A pid met for the first
+time is read twice, 150 ms apart, and that window is a host deadline
+(`ctx.wait`), never a sleep.
+
+The plugin's live source `processes.processes` (`@processes`, `per_query`)
+lists every process from one read per two seconds, and each row carries the
+question the host asks before it resolves it. `process kill --pid=<pid>` and
+a confirmed row ask `host.process_signal` for SIGTERM; a row is refused when
+its pid now names a process started at another time.
 
 ## Refresh and failure invariants
 

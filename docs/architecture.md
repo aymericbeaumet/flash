@@ -124,7 +124,7 @@ joins it.
 | Another account or a system daemon | The IPC socket and the loopback listeners | `IPCServer` refuses every peer whose `getpeereid` uid is not the resident's, in a `0700` directory it refuses when it is a link or another account's; `DebugServer` answers its data endpoints only with `HelpAccess`'s token, from a `0600` file it refuses to trust when it is not private; `OTLPReceiver` refuses senders without `[telemetry.receiver] token` once one is set, and `Doctor.telemetryReceiverCheck` warns when it runs without one while a monitor runs commands from a received metric (`Config.monitorsRunOnReceivedMetrics`) |
 | A web page | The help server, via fetch, DNS rebinding or framing | The `Host` check (own host and port only), the cross-site change refusal, the access token, `Cross-Origin-Resource-Policy` and frame headers |
 | A plugin | NDJSON stdio requests, its manifest | Capabilities and the seatbelt profile; `host.open` and row `open` effects never take a `file:` URL, so a plugin cannot have LaunchServices run what it wrote outside its sandbox |
-| Text another app controls (titles, app names, AX values, clipboard, feeds, tmux output) | Status values, rows, popups, alerts | Values are escaped (`ProcessStatusFormat.escaped`) before they reach a format, so they never become a style, a range or a link; every `#[link]` a plugin, source or program did write leaves through the overlay's one `StatusLinkOpener`, which `StatusLinkPolicy` limits to `http`, `https`, `mailto` and `[statusbar] link_schemes` (a refusal logs the scheme alone and reaches `resident doctor`); terminal popups read only `http`/`https` hyperlinks, through the same opener, and ignore clipboard writes (OSC 52); concealed and transient pasteboard types never enter clipboard history |
+| Text another app controls (titles, app names, AX values, clipboard, feeds, tmux output) | Status values, rows, popups, alerts | Values are escaped (`FlashStatusBarTemplateEngine.escapedLiteral` in the host, `Markup::text` in a plugin) before they reach a format, so they never become a style, a range or a link; every `#[link]` a plugin, source or program did write leaves through the overlay's one `StatusLinkOpener`, which `StatusLinkPolicy` limits to `http`, `https`, `mailto` and `[statusbar] link_schemes` (a refusal logs the scheme alone and reaches `resident doctor`); terminal popups read only `http`/`https` hyperlinks, through the same opener, and ignore clipboard writes (OSC 52); concealed and transient pasteboard types never enter clipboard history |
 | A network attacker | Update checks, feeds, plugin downloads | HTTPS, the GitHub digest and code-signature checks of `UpdateController`, full pinned commits for third-party plugins, bounded fetches |
 
 Loopback is not a boundary: every account on the Mac shares it, so a
@@ -394,9 +394,6 @@ release build.
 | Prepared model · `core:prepared_model_refresh:<pid>`, `…_readiness:<pid>` | 80 ms debounce; readiness ladder | normal | Warms a model ahead of an activation nobody asked for yet |
 | Prepared model · `core:prepared_model_maintenance` | Before the 1.5–30 s freshness ceiling | normal | Slack stays inside the 250 ms lead |
 | Clipboard watcher · `core:clipboard` | 0.5 s for the life of the resident | normal | No pasteboard notification; a late copy reaches the core clipboard history late |
-| Process tables · `core:process_top` | 2 s while a surface reads `flash.top_cpu` or `flash.top_mem` | high | A table someone has open |
-| Focused-app figures · `core:process_focused` | 10 s while a surface reads `flash.focused_app_details` | normal | CPU has no change event; a tenth of a second is invisible at ten seconds |
-| Focused-app settle · `core:process_focus_settle` | 300 ms after a focus change, while read | high | The placeholder on screen waits on it |
 | Secure input · `core:secure-input` | 2 s for the life of the resident | low | The tap receives no keys while the flag is on, so this poll is what sees a stuck hold |
 | Secure input release · `core:secure-input-fix` | 0.2–0.7 s steps of one release | normal | Spacing an activate, blur or restore already in progress |
 | AX observer retry · `core:ax_observer_retry:<pid>` | 60 ms–3 s ladder | normal | Events go unobserved until it lands |
@@ -416,9 +413,10 @@ release build.
 | Tiling drag settle · `core:tiling_settle` | 200 ms after a tiled window's last move or resize, re-armed while the left button is down, armed only by a hand move of a window Flash tiles | high | Once the drag ends the window swaps with the tile it was dropped on, joins another display's workspace, keeps the edge it was resized to, or snaps back to its tile |
 | Plugin cadences and deadlines · `plugin:<id>:<name>` | Plugin-chosen | Plugin-chosen: high, normal or low | See the [status plugins](status-plugins.md#scheduling) table |
 
-Registrations are also scoped to when they can observe anything at all: the
-process samplers only while the bar, one of its text popups, a visible
-widget or a monitor reads a [process value](status-format.md#process-values),
+Registrations are also scoped to when they can observe anything at all: a
+plugin's samplers only while a surface or a monitor reads one of its
+segments (the `processes` plugin's
+[process values](status-format.md#process-values), `sysinfo`'s figures),
 a received metric's quiet deadline only while a surface or a monitor reads
 that metric,
 the telemetry export flush only while something new is queued, and the

@@ -47,8 +47,8 @@ silicon and still supports OS X 10.11.
 
 ## Flash features you might like
 
-- `#{flash.focused_app_details}` for the per-app view: CPU, memory, sockets,
-  threads and disk I/O summed over an app and its helpers
+- `#{flash.plugin.processes.focused_app_details}` for the per-app view: CPU,
+  memory, sockets, threads and disk I/O summed over an app and its helpers
   ([process values](../status-format.md#process-values)).
 - `[statusbar.sources.<name>]` with `history = N` to chart any command
   ([status format](../status-format.md#jobs-sources-and-flash-styles)).
@@ -61,7 +61,7 @@ silicon and still supports OS X 10.11.
 | --- | --- |
 | CPU, memory, disk, network menu items | `#{p-3:flash.plugin.sysinfo.cpu_label}`, `memory.label`, `disks.label`, `#{p-4:flash.plugin.sysinfo.network_label}` |
 | Battery menu item | `#{flash.plugin.sysinfo.power_label}`; health and cycles in `:sysinfo power` |
-| Apps monitor | `#{flash.top_cpu}`, `#{flash.top_mem}`, or btop in a popup |
+| Apps monitor | `#{flash.plugin.processes.top_cpu}`, `#{flash.plugin.processes.top_mem}`, or btop in a popup |
 | Sensors plugin | Not available; keep iStatistica, or a named source running a sensor CLI |
 | Alert on CPU, memory, disk | `[monitors.<name>]` |
 | "Run terminal command" action | Not available; a monitor only alerts |
@@ -79,7 +79,7 @@ message = "Heavy disk writes"
 anchor = "top_right"
 template = """
 CPU #[meter=20]#{flash.plugin.sysinfo.cpu_percent}#[nometer] #[spark]#{flash.plugin.sysinfo.cpu_history}#[nospark]
-#{flash.top_cpu}
+#{flash.plugin.processes.top_cpu}
 """
 ```
 

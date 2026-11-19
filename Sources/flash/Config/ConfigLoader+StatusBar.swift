@@ -69,14 +69,6 @@ extension ConfigLoader {
       assign: { value, config in
         config.statusBar.notchMargin = value
       })
-    applyInt(
-      table["top_count"], path: ["statusbar", "top_count"],
-      message: "statusbar.top_count must be an integer between 1 and 20 (rows)",
-      locations: locations, into: &config,
-      validate: { ProcessStatusFormat.topCountRange.contains($0) },
-      assign: { value, config in
-        config.statusBar.topCount = value
-      })
     // An allowlist: a misspelt entry must not slip in as a different scheme,
     // so the whole array is rejected when one entry is not an exact name.
     applyStringArray(

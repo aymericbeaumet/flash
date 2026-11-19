@@ -20,9 +20,10 @@ instead. `flash config check` reports any problem with its line.
 A conky-style panel in the top-right corner: CPU, memory and disk meters with
 0–100 sparklines of the last 20 samples, battery, disk and network rates, the
 default-route address, uptime and load, and the five busiest processes by CPU
-and by memory (`[statusbar] top_count` sets how many). It shows only bundled
-plugin data and Flash's process tables, and runs no command. Every
-row is written out in the template, so each can be restyled on its own.
+and by memory (`[plugins.processes] top_count` sets how many). It shows
+only bundled plugin data, the process tables included, and runs no command.
+Every row is written out in the template, so each can be restyled on its
+own.
 
 ## `clock-agenda.toml`
 

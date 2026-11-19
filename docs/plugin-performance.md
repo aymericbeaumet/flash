@@ -144,8 +144,12 @@ all live is on demand: no process at launch and no catalog.
 - **The child stays up afterwards**, as after a first command: the next
   query costs a round trip, not a spawn.
 
-The bundled `system` plugin is the example: nine fixed rows behind
-`@system` and nine commands, no process until the first of either.
+The bundled `system` plugin is the `per_scope` example: nine fixed rows
+behind `@system` and nine commands, no process until the first of either.
+`processes` is the `per_query` one: `@processes` asks again as the query
+changes, the plugin answers from one read of the process table per two
+seconds, so the CPU and memory shares on screen follow the typing, and the
+host ranks the rows either way.
 
 ## Publish-then-exit plugins
 

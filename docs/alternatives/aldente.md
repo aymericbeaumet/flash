@@ -70,8 +70,8 @@ replaces AlDente. It is about what Flash shows and does around it.
 - A mapping can run a shortcut, so an AlDente Pro action you saved in
   Shortcuts (Top Up before a trip) or macOS 26.4's own Set Battery Charge
   Limit action is a key away; `@shortcuts` in the flashlight finds the rest.
-- `#{flash.top_cpu}` in a widget or a text popup for the apps drawing the
-  most, and `@processes` to stop one after a confirmation.
+- `#{flash.plugin.processes.top_cpu}` in a widget or a text popup for the apps
+  drawing the most, and `@processes` to stop one after a confirmation.
 - A monitor on `core:clock.minute` with `at` and `days` runs a shortcut at
   set times ([runs and events](../monitors.md#runs-and-events)).
 
@@ -86,7 +86,7 @@ reach AlDente's actions.
 | Menu-bar percentage and live status icon | `#{flash.plugin.sysinfo.power_label}` and `power_state` in `[statusbar] template` |
 | Hardware battery percentage | Not available: Flash shows the charge macOS reports |
 | Power flow | The adapter's watts in `:sysinfo power`; no flow diagram |
-| Apps using significant energy | `#{flash.top_cpu}`, `@processes` |
+| Apps using significant energy | `#{flash.plugin.processes.top_cpu}`, `@processes` |
 | Shortcuts actions | `["shortcuts", "run", "<your shortcut>"]` on a key, or `@shortcuts` |
 | Schedules | Keep AlDente's, or a monitor on `core:clock.minute` running a shortcut |
 

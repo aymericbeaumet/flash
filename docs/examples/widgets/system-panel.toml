@@ -1,14 +1,14 @@
 # A conky-style system panel: CPU, memory and disk meters with sparklines,
 # disk and network rates, uptime, load and the busiest processes. Every figure
-# comes from the bundled sysinfo plugin or Flash's own process tables; the
-# panel runs no command.
+# comes from the bundled sysinfo and processes plugins; the panel runs no
+# command.
 # See README.md in this directory to add it to flash.toml.
 #
 # Each gauge row is a label, a 16-cell meter, the figure and a sparkline on a
 # fixed 0-100 scale; each rate row is the rate in kB/s and a sparkline scaled
 # to its own peak. Write %% for a percent sign, and %%%% inside a #{?...}
 # branch, which is expanded once more. Each process table shows
-# `[statusbar] top_count` rows (1-20, default 5).
+# `[plugins.processes] top_count` rows (1-20, default 5).
 
 [widgets.system]
 anchor = "top_right"
@@ -42,7 +42,7 @@ template = """
 #[fg=#88C0D0]IP #[default] #{flash.plugin.sysinfo.network_address}
 #[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]
 #[fg=#88C0D0]TOP CPU#[default]
-#{flash.top_cpu}
+#{flash.plugin.processes.top_cpu}
 #[fg=#88C0D0]TOP MEM#[default]
-#{flash.top_mem}
+#{flash.plugin.processes.top_mem}
 """

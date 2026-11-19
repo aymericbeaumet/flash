@@ -55,8 +55,8 @@ without a shell, and a short source covers the rest.
 
 - `#{flash.plugin.sysinfo.cpu_history}` drawn as a sparkline, where
   i3status prints the current percentage only.
-- `#{flash.top_cpu}` and `#{flash.top_mem}`, tables of the busiest
-  processes, in a popup or a widget.
+- `#{flash.plugin.processes.top_cpu}` and `#{flash.plugin.processes.top_mem}`,
+  tables of the busiest processes, in a popup or a widget.
 - `time in tokyo` in the flashlight answers inline, for the occasional
   look at another zone.
 - `flash status refresh --name=<source>` updates one value on demand.

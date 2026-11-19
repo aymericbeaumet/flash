@@ -73,6 +73,21 @@ monitors read that no plugin publishes any more, with its replacement.
   take (`volume up --steps=2`, `caffeinate on 5`, `--minutes=0`) is refused
   when the command runs, with its usage, where `flash config check` used to
   report it.
+- **`processes` asks before it terminates a process.** Its values keep
+  their names (`#{flash.plugin.processes.top_cpu}`, `top_mem`,
+  `focused_app_details`) and the tables' row count is `[plugins.processes]
+  top_count`. Picking a row in `@processes` now asks first (`Kill Safari
+  (pid 4242)?`) where it terminated the process at once, and a row whose pid
+  has since been reused is refused. The `!kill` bang and `processes refresh`
+  are gone: `process kill --pid=<pid>` terminates one process from a
+  mapping, the command line or the CLI, after asking (`Kill this
+  process?`). It names no process in its question, refuses pids 0 and 1, a
+  pid that is gone and Flash's own, and anything but `--pid=<pid>` fails
+  with its usage when the command runs. A text popup that reads one of the
+  values keeps them sampled while the bar is enabled, open or not, so it
+  opens on current figures. With `processes` in `[plugins] disabled` the
+  values are empty, `@processes` lists nothing and `process kill` does
+  nothing.
 - **The system commands are the `system` plugin's.** `screen lock`,
   `system sleep`, `system restart`, `system shutdown`, `system logout`,
   `display sleep`, `trash empty`, `appearance toggle` and `screensaver start`
@@ -151,11 +166,9 @@ monitors read that no plugin publishes any more, with its replacement.
   `terminals` (`#{flash.plugin.terminals.session}`, `[plugins.terminals]
   ssh_hosts`); history is part of `browsers`; reference is `emojis`; search
   bangs are `searchproviders` (source `searchproviders.bangs`). apple,
-  files, marks and processes are built in: drop them from
-  `[plugins] disabled`. caffeinate, media and system are bundled plugins
-  under the same ids, so an entry for one of them still turns its commands
-  off. The busiest-process tables are
-  `#{flash.top_cpu}` and `#{flash.top_mem}`, sized by `[statusbar] top_count`.
+  files and marks are built in: drop them from `[plugins] disabled`.
+  caffeinate, media, processes and system are bundled plugins under the same
+  ids, so an entry for one of them still turns its commands and values off.
 - **Removed plugins:** github, kitty, spotify, windows and vscode, and the
   HTTP status code catalog.
 - **Leftover plugin data.** Flash no longer reads the folders of the plugins
@@ -414,6 +427,15 @@ monitors read that no plugin publishes any more, with its replacement.
   after eight seconds (a full Trash, an Automation prompt left open) answers
   `macOS has not answered yet` while the action goes on. The mappings page
   describes a key bound to one of them as running that command.
+- The busiest-process tables, the focused app's summary, `@processes` and
+  `process kill --pid=<pid>` are the bundled plugin `processes`, sandboxed.
+  It reads the process table in its own process, through libproc, which the
+  new `process_info` capability opens in its profile, and signals nothing:
+  it asks Flash, which sends SIGTERM only for a request you just answered
+  `y` to and never to itself. No process runs until a surface reads one of
+  its values, a query names `@processes` or the command runs. A kill that
+  fails says why (`process kill failed: Operation not permitted`) in the
+  alert and on the CLI.
 - A flashlight row a plugin fails to act on says why in the centred alert,
   in the plugin's words, where it failed silently.
 - `feed` and `searchproviders` no longer open network connections: Flash
