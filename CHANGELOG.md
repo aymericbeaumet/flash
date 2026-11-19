@@ -9,6 +9,10 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Fixes
 
+- A status plugin that ran a command keeps its process when the bar stops
+  showing its segments, or when the mapping that kept it warm goes: only a
+  child a command had started used to stay, so one a surface or a mapping
+  had started was stopped with whatever the command left it holding.
 - A plugin that is slow to answer `f` (tmux under load) no longer holds up
   hint walks for other apps: an activation asks it without blocking the
   Accessibility queue, for up to the same 500 ms.

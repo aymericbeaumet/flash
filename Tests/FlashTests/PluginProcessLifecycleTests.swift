@@ -1782,6 +1782,54 @@ final class PluginProcessLifecycleTests: XCTestCase {
     process.stopAndWait(reason: "test")
   }
 
+  /// A command may leave the child holding something only that process can
+  /// hold (a power assertion): a child a surface started, once it has run a
+  /// command, stays when the surface stops showing it.
+  func testStatusBoundPluginThatRanACommandWhileObservedOutlivesItsObserver() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusheld",
+      manifest: PluginFixtureKit.manifest(id: "statusheld"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture, statusObserved: false)
+    process.start()
+    process.setStatusObserved(true)
+    waitUntilTrue("spawned once observed") { process.runtimeStateSnapshot() == .running }
+    let settled = expectation(description: "perform settles")
+    process.perform(kind: "command", params: [:]) { _ in settled.fulfill() }
+    wait(for: [settled], timeout: 8)
+
+    process.setStatusObserved(false)
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "it ran a command; keep it")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    process.stopAndWait(reason: "test")
+  }
+
+  /// The same for a child a mapping kept warm: once it has run a command, it
+  /// stays when no mapping runs it any more.
+  func testWarmStatusBoundPluginThatRanACommandOutlivesItsMapping() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statuswarmheld",
+      manifest: PluginFixtureKit.manifest(id: "statuswarmheld"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture, statusObserved: false)
+    process.start()
+    process.setWarm(true)
+    process.prewarm()
+    waitUntilTrue("warmed while unobserved") { process.runtimeStateSnapshot() == .running }
+    let settled = expectation(description: "perform settles")
+    process.perform(kind: "command", params: [:]) { _ in settled.fulfill() }
+    wait(for: [settled], timeout: 8)
+
+    process.setWarm(false)
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "it ran a command; keep it")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    process.stopAndWait(reason: "test")
+  }
+
   /// A status plugin whose command a mapping runs is warmed while nothing
   /// shows it and keeps its child when the surfaces stop showing it; once no
   /// mapping runs it, it follows its surfaces again.

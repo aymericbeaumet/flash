@@ -92,13 +92,15 @@ enum PluginWarmPolicy {
   }
 
   /// Whether a status-bound plugin's child stops once no status surface
-  /// shows it: only when no perform started it and no mapping keeps it warm,
-  /// and only while a child exists or is on its way.
+  /// shows it: only when no perform reached it and no mapping keeps it warm,
+  /// and only while a child exists or is on its way. A child that has run a
+  /// command stays, whatever started it: the command may have left it
+  /// holding something that ends with the process.
   static func stopsWhenUnobserved(
-    _ manifest: PluginManifest, state: PluginLifecycle.State, performActivated: Bool,
+    _ manifest: PluginManifest, state: PluginLifecycle.State, performed: Bool,
     warm: Bool
   ) -> Bool {
-    guard manifest.isStatusBound, !performActivated, !warm else { return false }
+    guard manifest.isStatusBound, !performed, !warm else { return false }
     switch state {
     case .installing, .launching, .running, .backoff: return true
     case .initial, .idle, .published, .stopped, .failed: return false

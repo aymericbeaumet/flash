@@ -145,8 +145,12 @@ A *status-bound* plugin — `status` with no `sources`, `query` or `hints`, its
 the enabled status bar, one of its popups or a desktop widget
 shows one of its segments; otherwise it is on-demand. A config reload that
 starts showing it spawns it; one that stops showing it stops the process and
-returns it to on-demand, unless a command started it or a mapping keeps it
-warm, since on-demand plugins stay running once a command needs them.
+returns it to on-demand, unless it has run a `perform` or a mapping keeps it
+warm: on-demand plugins stay running once a command needs them, and a child
+that has run a command stays whatever started it, a surface or a mapping,
+because the command may have left it holding what ends with the process (a
+power assertion). Such a child stops only on `plugins reload`, a change to
+its files or settings, being disabled, a crash or Flash quitting.
 `:plugins show` reports the effective activation.
 
 A *publish-then-exit* plugin (manifest `"lifecycle": "publish_then_exit"`)

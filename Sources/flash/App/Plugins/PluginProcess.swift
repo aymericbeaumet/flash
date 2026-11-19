@@ -135,9 +135,11 @@ final class PluginProcess {
   /// shows this plugin's segments; decides a status-bound plugin's
   /// activation. Guarded by `lock`.
   private var statusObserved: Bool
-  /// Whether a perform spawned the current run, which then outlives its status
-  /// observers like any on-demand plugin. Queue-confined.
-  private var performActivated = false
+  /// Whether a perform reached the current run, spawned by it or not. Such a
+  /// run outlives its status observers and its mappings like any on-demand
+  /// plugin: a command may have left the child holding what only that
+  /// process can hold (a power assertion, an open session). Queue-confined.
+  private var performed = false
   /// Whether a configured mapping can run one of this plugin's commands
   /// (`PluginWarmPolicy`): an on-demand child is then spawned once startup
   /// has settled and outlives its status observers. Guarded by `lock`.
@@ -306,7 +308,7 @@ final class PluginProcess {
   /// The status surfaces started or stopped showing this plugin's segments. A
   /// status-bound plugin that becomes observed spawns if it has not yet. One
   /// that stops being observed returns to on-demand: its process stops unless
-  /// a perform started it or a mapping keeps it warm, since on-demand plugins
+  /// it has run a perform or a mapping keeps it warm, since on-demand plugins
   /// remain running once a command needs them.
   func setStatusObserved(_ observed: Bool) {
     lock.lock()
@@ -346,14 +348,14 @@ final class PluginProcess {
   }
 
   /// Runs on `queue`: a status-bound child that no surface shows, no perform
-  /// started and no mapping keeps warm stops and returns to on-demand.
+  /// reached and no mapping keeps warm stops and returns to on-demand.
   private func deactivateIfUnneeded() {
     lock.lock()
     let observed = statusObserved
     lock.unlock()
     guard !observed,
       PluginWarmPolicy.stopsWhenUnobserved(
-        manifest, state: lifecycle.state, performActivated: performActivated, warm: isWarm)
+        manifest, state: lifecycle.state, performed: performed, warm: isWarm)
     else { return }
     applyLifecycle(.deactivate)
   }
@@ -424,7 +426,7 @@ final class PluginProcess {
       // Performs that arrived before the start — a replacement published
       // while its predecessor was still stopping — asked for the child.
       if activation == .onDemand, !self.deferredPerforms.isEmpty {
-        self.performActivated = true
+        self.performed = true
         self.applyLifecycle(.activate)
       }
       self.installFileWatchers()
@@ -453,7 +455,7 @@ final class PluginProcess {
 
   private func applyLifecycle(_ event: PluginLifecycle.Event) {
     switch event {
-    case .reload, .stop: performActivated = false
+    case .reload, .stop: performed = false
     default: break
     }
     let effects = lifecycle.transition(
@@ -1189,6 +1191,8 @@ final class PluginProcess {
       let timeoutMs = timeoutMs ?? PluginProtocol.performDeadlineMs
       let route = PluginLifecycle.performRoute(
         state: self.lifecycle.state, onDemand: self.activation == .onDemand)
+      // Whatever started the child, it serves a perform from here on.
+      if route != .unhandled { self.performed = true }
       switch route {
       case .unhandled:
         mainCompletion(.unhandled)
@@ -1207,7 +1211,6 @@ final class PluginProcess {
         self.enqueueDeferredPerform(
           kind: kind, params: params, timeoutMs: timeoutMs, trace: trace,
           completion: mainCompletion)
-        self.performActivated = true
         self.applyLifecycle(.activate)
       }
     }

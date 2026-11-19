@@ -93,15 +93,15 @@ final class PluginWarmPolicyTests: XCTestCase {
     for state in Self.states {
       XCTAssertEqual(
         Policy.stopsWhenUnobserved(
-          statusBound, state: state, performActivated: false, warm: false),
+          statusBound, state: state, performed: false, warm: false),
         live.contains(state), "\(state)")
       XCTAssertFalse(
         Policy.stopsWhenUnobserved(
-          statusBound, state: state, performActivated: true, warm: false),
+          statusBound, state: state, performed: true, warm: false),
         "\(state): a perform started it")
       XCTAssertFalse(
         Policy.stopsWhenUnobserved(
-          statusBound, state: state, performActivated: false, warm: true),
+          statusBound, state: state, performed: false, warm: true),
         "\(state): a mapping keeps it warm")
     }
 
@@ -109,7 +109,7 @@ final class PluginWarmPolicyTests: XCTestCase {
       id: "resident", name: "Resident", version: "1", description: "", exec: ["./run"],
       hints: PluginHints(), status: ["state"])
     XCTAssertFalse(
-      Policy.stopsWhenUnobserved(resident, state: .running, performActivated: false, warm: false),
+      Policy.stopsWhenUnobserved(resident, state: .running, performed: false, warm: false),
       "not status-bound: its other surfaces keep it")
   }
 }
