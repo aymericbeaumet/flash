@@ -48,7 +48,8 @@ arguments the plugin's manifest declares for it
 as it holds its own commands to theirs: `flash config check` reports a
 mapping whose arguments the command does not take, the command line and the
 CLI answer `unknown command or invalid arguments` (exit 2), and a command
-that asks first asks only once its arguments passed. A command that declares
+that asks first asks only once its arguments passed. Words a bundled plugin's
+command refuses do not start Flash to be refused. A command that declares
 none takes none; the [bundled plugin commands](#bundled-plugin-commands)
 table lists what each takes. On the command line the words after an argument continue
 its value (`:tmux session Daft Punk`, `:audio output --device=Studio

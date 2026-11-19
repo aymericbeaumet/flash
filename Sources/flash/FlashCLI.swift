@@ -147,7 +147,8 @@ enum FlashCLI {
 
   /// Whether these words may start a resident that is not running. Not
   /// to quit it, and not for words Flash's own topics reject: no plugin can
-  /// make them valid, so the CLI says why without starting anything.
+  /// make them valid, so the CLI says why without starting anything. Nor
+  /// for a bundled plugin's command given arguments its manifest refuses.
   static func startsResident(
     _ local: NormalModeDispatcher.CommandLineResolution, words: [String],
     inventory: NormalModeDispatcher.CommandLineInventory
@@ -155,6 +156,12 @@ enum FlashCLI {
     if case .commands(let commands) = local, commands == [.quit] { return false }
     if let first = words.first, URLEventHandler.isTopic(first),
       local.rejection(of: words, inventory: inventory) != nil
+    {
+      return false
+    }
+    if words.count >= 2,
+      let declared = PluginRepository.declaredCommand(words[0], subcommand: words[1])?.arguments,
+      declared.canonical(NormalModeDispatcher.commandLineArgumentWords(words.dropFirst(2))) == nil
     {
       return false
     }

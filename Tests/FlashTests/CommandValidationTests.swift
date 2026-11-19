@@ -68,5 +68,26 @@ final class CommandValidationTests: XCTestCase {
     ] {
       XCTAssertEqual(FlashCLI.run(args: args, transport: notRunning), 2, "\(args)")
     }
+    // Arguments a bundled plugin's command does not declare start no
+    // resident to be refused; ones it takes may.
+    let inventory = NormalModeDispatcher.CommandLineInventory.core()
+    func starts(_ words: [String]) -> Bool {
+      FlashCLI.startsResident(
+        NormalModeDispatcher.resolveCommandWords(words, inventory: inventory), words: words,
+        inventory: inventory)
+    }
+    for words in [
+      ["process", "kill", "--pid=1"], ["process", "kill"], ["screen", "lock", "--now"],
+      ["caffeinate", "on", "--minutes=x"], ["tmux", "session"],
+    ] {
+      XCTAssertFalse(starts(words), "\(words)")
+      XCTAssertEqual(FlashCLI.run(args: words, transport: notRunning), 2, "\(words)")
+    }
+    for words in [
+      ["process", "kill", "--pid=4242"], ["screen", "lock"], ["tmux", "session", "Daft", "Punk"],
+      ["audio", "output", "--device=Studio", "Speakers"],
+    ] {
+      XCTAssertTrue(starts(words), "\(words)")
+    }
   }
 }
