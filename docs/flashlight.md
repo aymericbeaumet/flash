@@ -202,10 +202,11 @@ identify it, so `ctrl-o` / `ctrl-i` can walk locations reached through
 ordinary desktop switching.
 
 A row that names one thing to do or to show acts on `<cr>` as well: a
-`@system` action, a `@menus` item, a note, a reminder, a contact card. Any
-other row is written onto the line first, under its type (`@processes
-Safari `), and the next `<cr>` runs it; so is every row once what you typed
-is its whole title. `<cmd-cr>` runs the selected row whichever it is.
+`@system` action, a `@menus` item, a process, a note, a reminder, a contact
+card. Any other row is written onto the line first, under its type
+(`@<type> <title> `), and the next `<cr>` runs it; so is every row once
+what you typed is its whole title. `<cmd-cr>` runs the selected row
+whichever it is.
 
 Plugin catalogs are push-based: each candidate plugin publishes its full
 catalog to the host whenever it changes, and Flash serves the flashlight from

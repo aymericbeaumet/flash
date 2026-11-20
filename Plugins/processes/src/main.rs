@@ -161,6 +161,8 @@ fn prompt(process: &Process) -> String {
 
 /// One row: the process name over its pid and resource shares; the pid is
 /// also a search alias. Selecting it asks, then terminates that process.
+/// Return acts on the row itself: several processes share a name, and a row
+/// written onto the line as its name would stand for the first of them.
 fn row(process: &Process, physical_memory: u64) -> Candidate {
     let memory_percent = process.resident_bytes as f64 / physical_memory.max(1) as f64 * 100.0;
     let title = if process.name.trim().is_empty() {
@@ -177,6 +179,7 @@ fn row(process: &Process, physical_memory: u64) -> Candidate {
         .aliases([process.pid.to_string()])
         .payload(format!("{}:{}", process.pid, process.start_abstime))
         .confirm(prompt(process))
+        .finishes_command(true)
 }
 
 /// A row's payload: the pid and the start time of its process.
@@ -398,7 +401,11 @@ mod tests {
         assert_eq!(row.payload_str(), Some("4242:77"));
         assert_eq!(row.confirm.as_deref(), Some("Kill Safari (pid 4242)?"));
         assert_eq!(row_identity(&row), Some((4242, 77)));
-        assert_eq!(row.meta("finishes_command"), None);
+        assert_eq!(
+            row.meta("finishes_command"),
+            Some("1"),
+            "Return asks about this row, not the first process of its name"
+        );
 
         // A name is one bounded line in the question, whatever it holds.
         let odd = Process {

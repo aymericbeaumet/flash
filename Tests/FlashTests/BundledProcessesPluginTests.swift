@@ -209,7 +209,7 @@ final class BundledProcessesPluginTests: XCTestCase {
     XCTAssertTrue(
       rows.allSatisfy {
         $0.source == "processes.processes" && $0.sourceID == "plugin:processes"
-          && $0.kind == .plugin("process") && !$0.finishesCommand && $0.confirm != nil
+          && $0.kind == .plugin("process") && $0.finishesCommand && $0.confirm != nil
       })
     XCTAssertEqual(registry.resourceTypesBySource()["processes.processes"], "processes")
 

@@ -17,8 +17,10 @@ command it most likely meant, and the upgrade notes below say what to write.
   it. Return used to write the row onto the line under its source's name
   (`@menus.items Edit › Select All`), which is no type: the line then
   matched nothing and the next Return closed the flashlight. A row written
-  onto the line is now scoped by its type (`@processes Safari `), and these
-  four kinds of row, which name one item, act on the first Return.
+  onto the line is now scoped by its type (`@<type> <title> `), and these
+  four kinds of row, which name one item, act on the first Return. So does
+  a `@processes` row: Return asks about the process of that row, where its
+  name on the line stood for the first process so named.
 - The command line lists a command's arguments once its two words are
   typed: each `--name=` it still takes, each `--flag`, and the values an
   argument enumerates, for Flash's own commands and for a plugin's, whose
