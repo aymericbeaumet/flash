@@ -345,7 +345,9 @@ final class BundledProcessesPluginTests: XCTestCase {
       enabled = true
       template = "#{flash.plugin.processes.focused_app_details}"
       """)
-    waitUntilTrue("the plugin runs while its value is shown") { self.status?.pid != nil }
+    // An event reaches a plugin once it runs: a spawned child that has not
+    // answered `initialize` yet is sent none.
+    waitUntilTrue("the plugin runs while its value is shown") { self.status?.state == "running" }
     manager.emit(
       PluginEvent(
         .focusChanged,
