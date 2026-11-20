@@ -447,9 +447,10 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   overrides a specific one. Carve permitted children out of the deny, write a
   bounding deny after its allow, canonicalize symlinked paths, and retain
   secret-read denies. `(deny default)` leaves `process-info*` open:
-  `PluginSandbox.processInfoRules` denies other processes by name and opens
-  the libproc reads only under the `process_info` capability, which macOS
-  extends to one process's `sysctl` nodes, arguments and environment included.
+  `PluginSandbox.processInfoRules` denies other processes by target and by
+  each operation's name (the wildcard misses `csops`) and opens the libproc
+  reads only under the `process_info` capability, which macOS extends to one
+  process's `sysctl` nodes, arguments and environment included.
   `sysctl-read` is `PluginSandbox.sysctlRules`' allow-list, never a blanket
   allow or a `kern.` or `net.` prefix; a new node needs a measured reader
   ([profile invariants](docs/plugin-protocol.md#seatbelt-profile-invariants)).

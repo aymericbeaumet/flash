@@ -70,11 +70,16 @@ enum PluginSandbox {
   /// Each deny names exactly what it denies, by target or by operation, and
   /// no allow has to reopen one: a plugin always reads its own process;
   /// other processes and the pid list need the `process_info` capability,
-  /// which opens `processInfoOperations` and nothing else.
+  /// which opens `processInfoOperations` and nothing else. The wildcard does
+  /// not reach every operation either (measured: under it alone `csops`
+  /// still read another process's code signature), so without the
+  /// capability each one is denied by name as well.
   static func processInfoRules(for manifest: PluginManifest) -> [String] {
     guard manifest.capabilities.contains(.processInfo) else {
+      let named = (processInfoOperations + deniedProcessInfoOperations).joined(separator: " ")
       return [
         "(deny process-info* (target others))",
+        "(deny \(named) (target others))",
         "(deny process-info-listpids)",
         "(allow process-info* (target self))",
       ]

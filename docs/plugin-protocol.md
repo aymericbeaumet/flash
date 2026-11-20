@@ -1812,8 +1812,9 @@ directory among its siblings), and write a deny that bounds an allow after it.
 `(deny default)` does not cover every operation family. A profile with no
 `process-info*` rule reads every process through libproc, so
 `PluginSandbox.processInfoRules` writes that denial out: other processes by
-target, the pid list by name, and under `process_info` only the operations no
-reader uses. It does cover `sysctl-read`, by name and by MIB, so
+target and by each operation's name (the wildcard leaves `csops`, the code
+signature, open), the pid list by name, and under `process_info` only the
+operations no reader uses. It does cover `sysctl-read`, by name and by MIB, so
 `PluginSandbox.sysctlRules` is an allow-list: the names Apple's `container.sb`
 gives every containerized process, the `hw.` subtree, and what `sysinfo`
 reads (swap, file-system types, interfaces, routes). Seatbelt names a node
@@ -1823,7 +1824,8 @@ environment (`kern.procargs2`) are on no list and denied by prefix after the
 allow. macOS also serves the nodes of one pid to whoever may `proc_pidinfo`
 it, whatever `sysctl-read` says: the two denials close them together, and
 `process_info` opens them with libproc. A plugin can still tell that a pid is
-in use and read its process group and code signature.
+in use and read its group, session and priority (`getpgid`, `getsid`,
+`getpriority`).
 
 Seatbelt matches canonical vnode paths. Resolve symlinked executables before
 putting them in a profile, and canonicalize temporary fixture roots

@@ -534,13 +534,13 @@ sandbox. A sandboxed plugin asks macOS about its own process alone: the
 profile denies it the process list and other processes' names, launch
 arguments, environment, CPU time, memory, disk I/O, thread counts,
 open-descriptor lists and executable paths, which only a plugin declaring the
-`process_info` capability reads. The denial covers both interfaces macOS
-serves them through: process information (libproc) and kernel settings
-(`sysctl`), of which a plugin reads a fixed list describing the hardware, the
-system version, the host name, uptime, memory, load, file-system types,
-network interfaces and routes. A plugin can still tell that a process ID is
-in use, and read that process's group and code signature (its signing
-identifier and entitlements).
+`process_info` capability reads, and their code signatures, which no
+sandboxed plugin reads. The denial covers both interfaces macOS serves them
+through: process information (libproc) and kernel settings (`sysctl`), of
+which a plugin reads a fixed list describing the hardware, the system
+version, the host name, uptime, memory, load, file-system types, network
+interfaces and routes. A plugin can still tell that a process ID is in use,
+and read that process's group, session and scheduling priority.
 
 Three bundled plugins opt out: `screenshot` and `terminals` execute helpers
 (the system screenshot utility, tmux and ssh), while `aiproviders` reads the

@@ -81,13 +81,20 @@ final class PluginSandboxTests: XCTestCase {
 
   /// Seatbelt's `(deny default)` leaves the `process-info*` family open, so
   /// the profile denies it by name: a plugin reads its own process alone,
-  /// and cannot list pids. No rule relies on its position among the others.
+  /// and cannot list pids. The wildcard leaves the code-signature reads
+  /// open, so every operation is named too. No rule relies on its position
+  /// among the others.
   func testOtherProcessesAreDeniedByNameWithoutTheCapability() throws {
     let profile = try XCTUnwrap(
       PluginSandbox.resolvedSandboxProfile(
         manifest: specManifest(), settings: [:], root: root, dataDir: dataDir
       ).profile)
     XCTAssertTrue(profile.contains("(deny process-info* (target others))"))
+    XCTAssertTrue(
+      profile.contains(
+        "(deny process-info-pidinfo process-info-pidfdinfo process-info-rusage"
+          + " process-info-pidfileportinfo process-info-setcontrol process-info-dirtycontrol"
+          + " process-info-codesignature process-info-ledger (target others))"))
     XCTAssertTrue(profile.contains("(deny process-info-listpids)"))
     XCTAssertTrue(profile.contains("(allow process-info* (target self))"))
     XCTAssertFalse(profile.contains("(allow process-info-listpids)"))

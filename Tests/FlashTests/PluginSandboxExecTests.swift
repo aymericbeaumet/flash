@@ -464,6 +464,17 @@ final class PluginSandboxExecTests: XCTestCase {
     XCTAssertEqual(reads.granted["kern.proc.uid"], "errno:\(EPERM)")
   }
 
+  /// `csops(2)` serves a process's code signature: its signing identifier,
+  /// which names the app, its entitlements and its hash. No bundled reader
+  /// uses it, so no profile opens it for another process, with or without
+  /// `process_info`.
+  func testNoSandboxedPluginReadsAnotherProcessCodeSignature() throws {
+    let reads = try readsOfAHeldProcess()
+    XCTAssertEqual(reads.unsandboxed["csops"], "read", "the probe reads it")
+    XCTAssertEqual(reads.plain["csops"], "errno:\(EPERM)", "under a plugin's profile")
+    XCTAssertEqual(reads.granted["csops"], "errno:\(EPERM)", "under process_info")
+  }
+
   /// The allow-list serves what the bundled plugins and the system libraries
   /// read: each node answers under a plugin's profile exactly as it does
   /// without one. Trimming the list fails here before a plugin's values go

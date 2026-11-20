@@ -7,8 +7,14 @@ import Darwin
 // anything it read.
 //
 //   hold                         wait for stdin to close (the process to read)
-//   process <pid> <marker>...    the sysctl and libproc reads of one process
+//   process <pid> <marker>...    the sysctl, libproc and csops reads of one process
 //   sysctl <name|n.n.n>...       one read per node, by name or by numeric MIB
+
+/// `csops(2)`, which `<sys/codesign.h>` declares outside the SDK's modules.
+@_silgen_name("csops")
+private func csops(
+  _ pid: pid_t, _ operation: UInt32, _ buffer: UnsafeMutableRawPointer?, _ size: Int
+) -> Int32
 
 private func emit(_ what: String, _ outcome: String) {
   print("\(what) \(outcome)")
@@ -68,6 +74,11 @@ private func probeProcess(pid: Int32, markers: [String]) {
   errno = 0
   let length = proc_pidpath(pid, &path, UInt32(path.count))
   emit("proc_pidpath", length > 0 ? "read" : "errno:\(errno)")
+  // CS_OPS_STATUS: the code-signing flags, which an unsigned process has too.
+  var flags: UInt32 = 0
+  errno = 0
+  let status = csops(pid, 0, &flags, MemoryLayout<UInt32>.size)
+  emit("csops", status == 0 ? "read" : "errno:\(errno)")
 }
 
 private func probeSysctl(_ nodes: [String]) {

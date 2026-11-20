@@ -506,13 +506,13 @@ monitors read that no plugin publishes any more, with its replacement.
   denied nothing of macOS's process-information interface (Seatbelt's
   default denial does not reach it) and allowed every kernel setting
   (`sysctl`), so any plugin could list every process with its CPU time,
-  memory, open descriptors and path, and read the launch arguments and
-  environment of your processes. The profile now denies the first by name
-  and allows a fixed list of settings that describe the system, and the new
-  `process_info` capability opens the reads a process table needs (the pid
-  list, `proc_pidinfo`, the descriptor list and `proc_pid_rusage`) to the
-  plugin that declares it; macOS attaches a process's arguments and
-  environment to that permission
+  memory, open descriptors, path and code signature, and read the launch
+  arguments and environment of your processes. The profile now denies the
+  first by name and allows a fixed list of settings that describe the
+  system, and the new `process_info` capability opens the reads a process
+  table needs (the pid list, `proc_pidinfo`, the descriptor list and
+  `proc_pid_rusage`) to the plugin that declares it; macOS attaches a
+  process's arguments and environment to that permission
   ([privacy](docs/privacy.md#plugin-isolation)).
 - Lock, sleep, restart, shut down, log out, empty the Trash, dark mode and
   the screen saver are a bundled plugin, `system`. It is sandboxed and holds
