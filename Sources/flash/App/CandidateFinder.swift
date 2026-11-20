@@ -99,7 +99,13 @@ enum CandidateFinder {
     text.count == 1
   }
 
-  static func commandInsertionText(_ candidate: Candidate) -> String {
+  /// The line an insert-first row writes. A row is scoped by the resource
+  /// type its source feeds, the word `@` filters by; `types` maps lowered
+  /// source names to it (`SourceRegistry.resourceTypesBySource`). A source's
+  /// own name is no scope, so a row of no known type writes its title alone.
+  static func commandInsertionText(_ candidate: Candidate, types: [String: String] = [:])
+    -> String
+  {
     if candidate.kind == bangKind, let token = candidate.sourcePayload, !token.isEmpty {
       return "!\(token) "
     }
@@ -107,12 +113,12 @@ enum CandidateFinder {
       return "@\(source) "
     }
     let name = candidate.title.trimmed
-    let source =
+    let type =
       candidate.kind == .app
       ? "apps"
-      : candidate.source.trimmed
-    if !source.isEmpty, !name.isEmpty {
-      return "@\(source) \(name) "
+      : types[candidate.source.trimmed.lowercased()] ?? ""
+    if !type.isEmpty, !name.isEmpty {
+      return "@\(type) \(name) "
     }
     if !name.isEmpty {
       return "\(name) "

@@ -201,6 +201,12 @@ feed Flash's movement history with the current location when a source can
 identify it, so `ctrl-o` / `ctrl-i` can walk locations reached through
 ordinary desktop switching.
 
+A row that names one thing to do or to show acts on `<cr>` as well: a
+`@system` action, a `@menus` item, a note, a reminder, a contact card. Any
+other row is written onto the line first, under its type (`@processes
+Safari `), and the next `<cr>` runs it; so is every row once what you typed
+is its whole title. `<cmd-cr>` runs the selected row whichever it is.
+
 Plugin catalogs are push-based: each candidate plugin publishes its full
 catalog to the host whenever it changes, and Flash serves the flashlight from
 its own in-memory store, so reading it performs no I/O and no plugin round

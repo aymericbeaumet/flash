@@ -34,7 +34,8 @@ const PRESS: &str = "AXPress";
 /// The host's answer for a handle a later snapshot or a quit app retired.
 const STALE_HANDLE: &str = "stale ax handle";
 
-/// The app whose menu bar a snapshot read, and the rows of its items.
+/// The app whose menu bar a snapshot read, and the rows of its items. A row
+/// is the whole path to its item, so selecting it presses the item at once.
 fn rows(pid: i64, bar: &MenuBar) -> Vec<Candidate> {
     bar.items()
         .into_iter()
@@ -42,6 +43,7 @@ fn rows(pid: i64, bar: &MenuBar) -> Vec<Candidate> {
             Candidate::new(SOURCE, item.title)
                 .pid(pid)
                 .payload(item.handle.to_string())
+                .finishes_command(true)
         })
         .collect()
 }
@@ -241,11 +243,18 @@ mod tests {
             [
                 Candidate::new(SOURCE, "File › New Tab")
                     .pid(512)
-                    .payload("21"),
+                    .payload("21")
+                    .finishes_command(true),
                 Candidate::new(SOURCE, "File › Export › PDF…")
                     .pid(512)
-                    .payload("31"),
+                    .payload("31")
+                    .finishes_command(true),
             ]
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.meta("finishes_command") == Some("1")),
+            "Return on a row presses its item"
         );
     }
 

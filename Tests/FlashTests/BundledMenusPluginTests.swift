@@ -138,7 +138,7 @@ final class BundledMenusPluginTests: XCTestCase {
     XCTAssertTrue(
       rows.allSatisfy {
         $0.source == "menus.items" && $0.sourceID == "plugin:menus" && $0.pid == fixture.owner
-          && $0.effect == nil && $0.confirm == nil && !$0.finishesCommand
+          && $0.effect == nil && $0.confirm == nil && $0.finishesCommand
       })
     XCTAssertEqual(registry.resourceTypesBySource()["menus.items"], "menus")
     XCTAssertEqual(

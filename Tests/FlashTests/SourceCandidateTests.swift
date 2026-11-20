@@ -1678,15 +1678,36 @@ final class SourceCandidateTests: XCTestCase {
           subtitle: "app",
           bundleIdentifier: "com.apple.MobileSMS")),
       "@apps Messages ")
+    let tab = candidate(
+      kind: .plugin("browser_tab"),
+      source: "Firefox.Tabs",
+      name: "Gmail",
+      subtitle: "browser tab",
+      bundleIdentifier: "org.mozilla.firefox")
     XCTAssertEqual(
-      CandidateFinder.commandInsertionText(
-        candidate(
-          kind: .plugin("browser_tab"),
-          source: "firefox",
-          name: "Gmail",
-          subtitle: "browser tab",
-          bundleIdentifier: "org.mozilla.firefox")),
-      "@firefox Gmail ")
+      CandidateFinder.commandInsertionText(tab, types: ["firefox.tabs": "tabs"]), "@tabs Gmail ")
+    XCTAssertEqual(
+      CandidateFinder.commandInsertionText(tab), "Gmail ",
+      "a source of no known type inserts no scope: its name is not one")
+  }
+
+  /// The line an insert-first row writes filters to that row again: the word
+  /// after `@` is the type the row's source feeds, never the source's name.
+  func testAnInsertedRowIsFoundByTheLineItWrote() {
+    let types = ["menus.items": "menus", "notes.notes": "notes"]
+    let item = candidate(
+      kind: .plugin("menu_item"),
+      source: "menus.items",
+      name: "Edit › Select All",
+      subtitle: "menu item",
+      bundleIdentifier: "")
+    let line = CandidateFinder.commandInsertionText(item, types: types)
+    XCTAssertEqual(line, "@menus Edit › Select All ")
+    let parsed = NormalModeDispatcher.candidateFinderQuery(line)
+    XCTAssertEqual(parsed.scope, .type("menus"))
+    XCTAssertEqual(parsed.scope?.matches(item, types: types), true)
+    XCTAssertTrue(
+      CandidateFinder.selectionFinishes(item, query: line), "the second Return performs the row")
   }
 
   func testCandidateSelectionFinishesForFinalDestinationsMarkedRowsAndExactPrimaryTitle() {

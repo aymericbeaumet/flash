@@ -135,7 +135,10 @@ mod tests {
             serde_json::to_value(&rows[1]).unwrap(),
             json!({
                 "source": "notes.notes", "title": "Second",
-                "metadata": { "kind": "note", "subtitle": "Note", "payload": "note-2" },
+                "metadata": {
+                    "kind": "note", "subtitle": "Note", "payload": "note-2",
+                    "finishes_command": "1",
+                },
             })
         );
         assert!(SPEC.candidates(Vec::new()).is_empty());

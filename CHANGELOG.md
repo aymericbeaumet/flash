@@ -13,6 +13,12 @@ command it most likely meant, and the upgrade notes below say what to write.
   keyboard sends. Such a key carries a flag bit no modifier sets, and NORMAL
   took it for a modifier: a posted digit started no count, a posted Escape
   cancelled nothing and a posted `y` answered a confirmation with no.
+- Return on a `@menus`, `@notes`, `@reminders` or `@contacts` row acts on
+  it. Return used to write the row onto the line under its source's name
+  (`@menus.items Edit › Select All`), which is no type: the line then
+  matched nothing and the next Return closed the flashlight. A row written
+  onto the line is now scoped by its type (`@processes Safari `), and these
+  four kinds of row, which name one item, act on the first Return.
 - The command line lists a command's arguments once its two words are
   typed: each `--name=` it still takes, each `--flag`, and the values an
   argument enumerates, for Flash's own commands and for a plugin's, whose

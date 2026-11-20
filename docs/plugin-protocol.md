@@ -786,6 +786,10 @@ reply; `confirm` is the question the host asks before it acts on the row
 (see [confirmation](#confirmation)), and the row comes back in its resolve
 as it was sent, `confirm` included;
 routing `source_id` is always host-stamped and never crosses the wire.
+`metadata.finishes_command: "1"` makes Return act on the row at once (the
+SDK's `Candidate::finishes_command`): for a row that names one thing to do
+or to show. Without it Return writes the row onto the line under its
+source's type (`@<type> <title> `) and the next Return acts.
 Catalogs are bounded to 10,000 rows / 4 MiB encoded; titles 4 KiB, URLs
 16 KiB, metadata 64 entries (256-byte keys, 64-KiB values), effect text
 64 KiB. `evaluate` answers use the deliberately narrower `{"answers":

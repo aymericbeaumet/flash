@@ -1648,7 +1648,9 @@ extension AppDelegate {
       openSourceItem(candidate, insertionTargetPID: insertionTargetPID, variant: variant)
       return
     }
-    replaceCommandLineCandidateQuery(with: CandidateFinder.commandInsertionText(candidate))
+    replaceCommandLineCandidateQuery(
+      with: CandidateFinder.commandInsertionText(
+        candidate, types: registry?.resourceTypesBySource() ?? [:]))
   }
 
   /// Replay a held selection only when both asynchronous first-row boundaries

@@ -146,7 +146,10 @@ mod tests {
             serde_json::to_value(&rows[0]).unwrap(),
             json!({
                 "source": "contacts.cards", "title": "Ada Lovelace",
-                "metadata": { "kind": "contact", "subtitle": "Contact", "payload": "1:ABPerson" },
+                "metadata": {
+                    "kind": "contact", "subtitle": "Contact", "payload": "1:ABPerson",
+                    "finishes_command": "1",
+                },
             })
         );
     }

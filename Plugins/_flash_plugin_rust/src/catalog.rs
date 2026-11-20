@@ -207,7 +207,8 @@ pub struct ItemCatalogSpec {
 impl ItemCatalogSpec {
     /// The flashlight rows of a listing, in the plugin's order: an entry
     /// without an id or a title is dropped, and an id listed twice keeps
-    /// its first row. A row carries its item's id as its payload.
+    /// its first row. A row carries its item's id as its payload, and names
+    /// one item, so selecting it shows that item at once.
     pub fn candidates(&self, items: Vec<AppItem>) -> Vec<Candidate> {
         let mut ids = HashSet::new();
         (self.rows)(items)
@@ -219,6 +220,7 @@ impl ItemCatalogSpec {
                     .kind(self.kind)
                     .subtitle(row.subtitle)
                     .payload(row.id)
+                    .finishes_command(true)
             })
             .collect()
     }
@@ -1080,7 +1082,10 @@ mod tests {
             serde_json::to_value(&rows[0]).unwrap(),
             json!({
                 "source": "notes.notes", "title": "First",
-                "metadata": { "kind": "note", "subtitle": "Note", "payload": "note-1" },
+                "metadata": {
+                    "kind": "note", "subtitle": "Note", "payload": "note-1",
+                    "finishes_command": "1",
+                },
             })
         );
         assert!(spec().candidates(Vec::new()).is_empty());

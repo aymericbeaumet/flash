@@ -167,6 +167,7 @@ mod tests {
                 "source": "reminders.tasks", "title": "Buy milk",
                 "metadata": {
                     "kind": "reminder", "subtitle": "Reminder — Inbox", "payload": "rem-1",
+                    "finishes_command": "1",
                 },
             })
         );
