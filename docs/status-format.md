@@ -214,12 +214,12 @@ such as [btop](https://github.com/aristocratos/btop) in a
 
 Sampling is scoped to what reads a value. The plugin reads the process table
 itself, through libproc, in its own sandboxed process, and only while the
-enabled bar's template, one of its text popups (open or not), a visible
-widget or an enabled monitor reads one of these values: the tables every
-2 seconds, the focused app every 10 seconds and 300 ms after a focus change.
-A value nothing reads is cleared, so showing it again never reads another
-moment's figures, and with none of them read the plugin samples nothing; it
-runs no process at all until one is read, `@processes` is queried or
+enabled bar's template, a text popup that is open, a visible widget or an
+enabled monitor shows one of these values: the tables every 2 seconds, the
+focused app every 10 seconds and 300 ms after a focus change. A value that
+stops being shown keeps its last figures until it is shown again and the
+plugin has read fresh ones, and with none of them shown the plugin samples
+nothing; it runs no process at all until one is read, `@processes` is queried or
 `process kill` runs. With `processes` in `[plugins] disabled` the three
 values are empty and `flash resident doctor` says so.
 

@@ -61,6 +61,19 @@ final class StatusPopupSurface {
   private var showProbe: LatencyProbe?
   /// `resignKey` can re-enter while dismissal orders the panel out.
   private var resigningFocus = false
+  /// Until when, on `clock`, a focused or standalone text popup follows its
+  /// document; nil once it keeps the one it has.
+  private var followsUntil: TimeInterval?
+  /// Uptime seconds; a test's own clock.
+  var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+  /// Whether a focused or standalone text popup still follows its document
+  /// (`awaitValues`): a changed document then reloads the pager, as in a
+  /// hover preview. Otherwise the popup keeps its document until an
+  /// explicit restart.
+  private var followsDocument: Bool {
+    guard let followsUntil, presentation.isFocused, !isContentSnapshot else { return false }
+    return clock() < followsUntil
+  }
   var onFocusRequested: (() -> Void)?
   var willFocus: (() -> Void)?
   var willDismissFocus: (() -> Void)?
@@ -308,6 +321,11 @@ final class StatusPopupSurface {
     if let frame = visibleFrameContaining(updated.anchor) {
       visibleFrame = frame
     }
+    if terminals.isPager(name), followsDocument {
+      region = updated
+      layout(region: updated)
+      return
+    }
     if terminals.isPager(name), presentation.isFocused || isContentSnapshot {
       let segments = updated.document ?? FlashStatusBarRenderer.segments(from: updated.content)
       terminals.stagePopup(name: name, data: StatusPopupController.documentVT(segments))
@@ -326,13 +344,32 @@ final class StatusPopupSurface {
     layout(region: updated)
   }
 
-  /// A standalone text popup keeps the document it opened with; the latest
-  /// collected one waits for an explicit restart, as in a focused pager.
+  /// This showing opened on plugin values nobody was showing, so their
+  /// plugins start sampling now and the document it has lacks them: for
+  /// `StatusPopupController.documentSettle` it follows its document even
+  /// focused or standalone, then keeps the one it has.
+  func awaitValues() {
+    guard isVisible else { return }
+    followsUntil = clock() + StatusPopupController.documentSettle
+  }
+
+  /// A standalone text popup keeps the document it opened with, unless it
+  /// still awaits the values its opening started reading (`awaitValues`);
+  /// the latest collected one then waits for an explicit restart, as in a
+  /// focused pager.
   func stageStandalone(_ documents: [String: [FlashStatusTextSegment]]) {
     guard presentation.isStandalone, let name = presentation.name,
       terminals.isPager(name), let document = documents[name]
     else { return }
-    terminals.stagePopup(name: name, data: StatusPopupController.documentVT(document))
+    guard followsDocument, var following = region else {
+      terminals.stagePopup(name: name, data: StatusPopupController.documentVT(document))
+      return
+    }
+    following.document = document
+    following.content = document.filter { !$0.ignore }.map(\.text).joined()
+    guard following != region else { return }
+    region = following
+    layout(region: following)
   }
 
   /// A showing opens centred on its label. While the label only changes
@@ -456,6 +493,8 @@ final class StatusPopupSurface {
   private func transition(_ event: StatusPopupPresentation.Event) {
     let next = presentation.applying(event)
     guard next != presentation else { return }
+    // What one showing awaited is not owed to the next.
+    if next.name != presentation.name { followsUntil = nil }
     presentation = next
     panel.acceptsKeyboardFocus = next.isFocused
     terminalView.drawsCursor = next.isFocused || next.isStandalone
@@ -533,7 +572,7 @@ final class StatusPopupSurface {
           rows: rows, interactive: presentation.isFocused || presentation.isStandalone) ? 1 : 0
       let session: TerminalSession
       if let existing = terminals.session(named: region.name),
-        presentation.isFocused || isContentSnapshot
+        presentation.isFocused || isContentSnapshot, !followsDocument
       {
         session = existing
       } else {

@@ -199,6 +199,18 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   ([refresh and cost](docs/widgets.md#refresh-and-cost)). Monitors run at
   `low` priority and alert only on transitions (`MonitorTracker`), through
   `StatusAlert`.
+- A plugin value is observed (`core:status.observed`, and `servesUser`)
+  only while a surface shows it: the controller's one required set
+  (`requiredPluginSegments`, reported through `pluginSegmentsSink` to
+  `PluginManager.setShownStatusSegments`), in which a closed text popup and
+  an occluded widget count for nothing, though a closed popup's sources and
+  jobs still run. Never derive it from the configuration. Whether a
+  status-bound plugin runs stays `Config.statusSegmentsRead`, so a popup
+  opening spawns nothing. No child hears a set before the controller's
+  first report. A value its plugin clears on being told nobody shows it any
+  more is kept (`heldStatusSegments`) until the plugin publishes it again,
+  `statusRevalidateSeconds` at most once it is shown again
+  ([status observation](docs/plugin-protocol.md#status-observation)).
 - A system window in front of the focused app is what `f` walks
   (`AppMonitor.coveringInteractionWindow`); an authentication prompt
   (SecurityAgent, LocalAuthentication) refuses hints and is never walked or
@@ -222,7 +234,11 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
 - Every popup uses a real PTY session owned by `StatusTerminalRegistry`, one
   per name. Text popups use the shared terminal pager; do not add a separate
   native document renderer. Keep focused pager input and its snapshot stable
-  until explicit refresh. Lifecycles are exactly `persistent` and `fresh`,
+  until explicit refresh, with one exception: a focused or standalone text
+  popup that opens on plugin values nobody was showing, and that have no
+  current value (none yet, or a kept one), follows its document for
+  `StatusPopupController.documentSettle` (1 s), then keeps it
+  (`awaitValues`, told by `popupAwaitsValuesSink` alone). Lifecycles are exactly `persistent` and `fresh`,
   with one restart backoff; presentation ends a showing once, through `hide`.
   A hover preview never closes or takes keyboard focus from the focused
   terminal, and only a live one keeps its popup's clock deadline

@@ -910,10 +910,11 @@ struct PluginManifest: Decodable, Equatable {
 
   /// A plugin whose only resident surface is `status` — its `listen`
   /// subscriptions, if any, feed those segments. Nothing reads the segments
-  /// unless the enabled bar, one of its popups or a desktop widget shows one,
-  /// so such a plugin is resident only while observed and otherwise waits for
-  /// its first `perform` or `search` like an on-demand plugin, or is warmed
-  /// like one when a configured mapping runs one of its commands.
+  /// unless the enabled bar, one of its text popups, a desktop widget or a
+  /// monitor reads one, so such a plugin is resident only while read and
+  /// otherwise waits for its first `perform` or `search` like an on-demand
+  /// plugin, or is warmed like one when a configured mapping runs one of
+  /// its commands.
   var isStatusBound: Bool {
     !status.isEmpty && pushedSources.isEmpty && query == nil && hints == nil
   }

@@ -74,7 +74,7 @@ final class BundledPluginCommandTests: XCTestCase {
     }
     let config = bar("flash.plugin.caffeinate.state")
     XCTAssertEqual(config.loadingDiagnostics.map(\.message), [])
-    XCTAssertEqual(config.observedStatusSegments()["caffeinate"], ["state"])
+    XCTAssertEqual(config.statusSegmentsRead()["caffeinate"], ["state"])
     let retired = bar("flash.caffeinate").loadingDiagnostics.map(\.message)
     XCTAssertTrue(
       retired.contains { $0.contains("unknown Flash value flash.caffeinate") }, "\(retired)")
@@ -136,7 +136,7 @@ final class BundledPluginCommandTests: XCTestCase {
       .incomplete("calendar"), "the word alone joins nothing")
 
     // Every segment validates wherever a status format reads it: the bar, a
-    // text popup, a widget and a monitor, which all count as showing it.
+    // text popup, a widget and a monitor, which all keep its plugin running.
     let names = segments.map { "flash.plugin.calendar.\($0)" }
     let all = names.map { "#{\($0)}" }.joined(separator: " ")
     let config = ConfigLoader.parse(
@@ -171,8 +171,8 @@ final class BundledPluginCommandTests: XCTestCase {
         "declined": .bool(true), "lookahead_hours": .int(8),
       ])
     XCTAssertEqual(
-      config.observedStatusSegments()["calendar"], Set(segments),
-      "a widget and a monitor show them with the bar off")
+      config.statusSegmentsRead()["calendar"], Set(segments),
+      "a widget and a monitor read them with the bar off")
     let monitorOnly = ConfigLoader.parse(
       """
       [monitors.meeting]
@@ -181,7 +181,7 @@ final class BundledPluginCommandTests: XCTestCase {
       warning = 2
       """)
     XCTAssertEqual(monitorOnly.loadingDiagnostics.map(\.message), [])
-    XCTAssertEqual(monitorOnly.observedStatusSegments()["calendar"], ["next_minutes"])
+    XCTAssertEqual(monitorOnly.statusSegmentsRead()["calendar"], ["next_minutes"])
 
     func diagnostics(_ toml: String) -> [String] {
       ConfigLoader.parse(toml).loadingDiagnostics.map(\.message)
@@ -360,7 +360,7 @@ final class BundledPluginCommandTests: XCTestCase {
       """)
     XCTAssertEqual(bar.loadingDiagnostics.map(\.message), [])
     XCTAssertEqual(
-      bar.observedStatusSegments()["processes"], ["top_cpu", "focused_app_details"])
+      bar.statusSegmentsRead()["processes"], ["top_cpu", "focused_app_details"])
     for retired in ["flash.top_cpu", "flash.top_mem", "flash.focused_app_details"] {
       let reported = diagnostics("[statusbar]\ntemplate = \"#{\(retired)}\"")
       XCTAssertTrue(

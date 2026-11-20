@@ -248,6 +248,10 @@ struct PluginStatusBarInfo {
   var state: String
   var hasError: Bool
   var statusSegments: [String: PluginStatusSegment]
+  /// The names in `statusSegments` whose value the host kept after its
+  /// plugin cleared it while nobody showed it: the last one published, not
+  /// one being read now (`PluginProcess.heldStatusSegments`).
+  var heldStatusSegments: Set<String> = []
   /// The child's latest process spawn; nil before its first.
   var lastSpawn: PluginSpawnTiming? = nil
 }

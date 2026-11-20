@@ -1,7 +1,8 @@
 //! Samples the process values while a status surface shows them, and only
 //! then: each cadence is registered with the host's clock when its first
 //! value becomes observed (`core:status.observed`) and cancelled when its
-//! last one stops. A value nobody shows is cleared rather than left stale.
+//! last one stops. A value nobody shows any more is cleared; the host keeps
+//! its last figures for the surface that shows it next.
 //!
 //! Nothing here runs on the event worker for longer than a lock: a sample
 //! may wait a window on the host's clock, whose tick the event worker
@@ -83,8 +84,8 @@ pub(crate) struct Change {
     pub(crate) sample_top_now: bool,
     /// `focused_app_details` became observed.
     pub(crate) sample_focused_now: bool,
-    /// Values no longer observed. They clear rather than go stale, so a
-    /// surface that shows one again never reads another moment's figures.
+    /// Values no longer observed. They clear here; the host keeps each
+    /// one's last figures until it is shown again and published afresh.
     pub(crate) cleared: BTreeSet<Value>,
 }
 

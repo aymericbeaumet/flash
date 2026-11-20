@@ -304,9 +304,9 @@ startup_timeout = 5
 # The processes plugin publishes #{flash.plugin.processes.top_cpu} and
 # …top_mem, aligned tables of the busiest processes by CPU and by resident
 # memory (conky's ${top}), and #{flash.plugin.processes.focused_app_details},
-# the focused app's resource summary. It samples only while the bar, one of
-# its text popups, a widget or a monitor reads one of them: the tables every
-# 2 seconds, the focused app every 10. It also lists @processes and runs
+# the focused app's resource summary. It samples only while the bar, an open
+# text popup, a visible widget or a monitor shows one of them: the tables
+# every 2 seconds, the focused app every 10. It also lists @processes and runs
 # `process kill --pid=<pid>`, which asks first.
 # [plugins.processes]
 # top_count = 5 # rows of each table, 1-20

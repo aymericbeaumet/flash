@@ -122,6 +122,21 @@ final class PluginProcess {
   private var pollArmings: [String: UInt64] = [:]
   private var pollArmingSerial: UInt64 = 0
   private var staleStatusSegments: Set<String> = []
+  /// Segments that were shown and are not any more
+  /// (`core:status.observed` lost their name), until they are shown again:
+  /// the ones this plugin was asked to stop sampling. Guarded by `lock`.
+  private var releasedStatusSegments: Set<String> = []
+  /// Released segments this plugin then cleared, whose last value the host
+  /// keeps: the plugin was asked to stop sampling, not to blank the surface
+  /// that shows the value next. A kept value goes when the plugin publishes
+  /// the segment again, a value or an empty one once it is shown, and
+  /// `statusRevalidateSeconds` after it is shown again otherwise
+  /// (`statusRevalidateDeadline`). A segment never shown is none of this:
+  /// its empty value clears at once. Guarded by `lock`.
+  private var heldStatusSegments: Set<String> = []
+  /// Whether the manifest's `listen` admits `core:status.observed`: only a
+  /// plugin that hears what is shown was ever asked to stop.
+  private let listensToStatusObserved: Bool
   /// The grace a planned reload gives stale status segments, on the shared
   /// clock. `.low`: nobody watches the instant a stale label blanks. Armed
   /// afresh on every keep-status teardown, so the newest replacement gets
@@ -131,6 +146,14 @@ final class PluginProcess {
   private let scheduler: PollScheduler
   private lazy var statusGraceDeadline = PollDeadline(
     "core:plugin_status_grace:\(manifest.id):\(instanceTag)", priority: .low, on: queue,
+    scheduler: scheduler)
+  /// How long a kept value outlives being shown again, on the shared clock.
+  /// Armed only when a surface starts showing a kept segment, so it runs
+  /// only while someone can see the value it bounds. `.normal`: the value
+  /// on screen is the last one published, and a tenth of a second more of
+  /// it is invisible. Queue-confined.
+  private lazy var statusRevalidateDeadline = PollDeadline(
+    "core:plugin_status_revalidate:\(manifest.id):\(instanceTag)", priority: .normal, on: queue,
     scheduler: scheduler)
   private var startDate: Date?
   /// Mirrors of queue-confined runtime fields, guarded by `lock`, so status
@@ -142,9 +165,11 @@ final class PluginProcess {
   /// The latest spawn's duration, read as `flash.plugin.spawn_ms`. Guarded
   /// by `lock`; set where the spawn returns.
   private var publishedSpawn: PluginSpawnTiming?
-  /// Whether a status surface (the enabled bar, its popups, a desktop widget)
-  /// shows this plugin's segments; decides a status-bound plugin's
-  /// activation. Guarded by `lock`.
+  /// Whether the configuration's status surfaces read this plugin's
+  /// segments (the enabled bar, its text popups open or not, a desktop
+  /// widget not covered for long, a monitor); decides a status-bound
+  /// plugin's activation, so a popup opening spawns nothing. Guarded by
+  /// `lock`.
   private var statusObserved: Bool
   /// Whether a perform reached the current run, spawned by it or not. Such a
   /// run outlives its status observers and its mappings like any on-demand
@@ -155,9 +180,13 @@ final class PluginProcess {
   /// (`PluginWarmPolicy`): an on-demand child is then spawned once startup
   /// has settled and outlives its status observers. Guarded by `lock`.
   private var warm = false
-  /// The manifest `status` names a live status surface shows, sorted — the
-  /// `core:status.observed` payload. Guarded by `lock`.
-  private var observedStatusSegments: [String]
+  /// The manifest `status` names a status surface shows now, sorted — the
+  /// `core:status.observed` payload, and one way the user is using the
+  /// plugin (`servesUser`). A closed text popup and a covered widget show
+  /// nothing. Nil until the host knows: the status controller has not
+  /// reported yet, at launch, and the child is told nothing until it does.
+  /// Guarded by `lock`.
+  private var observedStatusSegments: [String]?
   /// The set the current child last received; queue-confined and cleared on
   /// each initialize, so a restarted child starts from the truth and no child
   /// ever receives an unchanged set twice.
@@ -188,6 +217,13 @@ final class PluginProcess {
   /// `restartWindowAttempts` restarts happen within `restartWindowSeconds`,
   /// the plugin is parked in `.failed` and stops auto-restarting. The user
   /// can recover with `:plugins reload`.
+  /// How long a value the host kept for a plugin that stopped sampling it
+  /// (`heldStatusSegments`) stays once a surface shows it again and the
+  /// plugin publishes nothing for it. Shorter than
+  /// `StatusPopupController.documentSettle`, so a pinned popup never keeps
+  /// a document holding such a value.
+  static let statusRevalidateSeconds: TimeInterval = 0.5
+
   // Testability seams: production values, overridden (and restored) by the
   // lifecycle tests so restart parking and idle-ping teardown run in
   // milliseconds instead of minutes, and a wire check on `evaluate` is not
@@ -299,7 +335,7 @@ final class PluginProcess {
     watchFiles: Bool = true,
     settings: [String: PluginConfigValue] = [:],
     statusObserved: Bool = true,
-    observedStatusSegments: Set<String> = [],
+    observedStatusSegments: Set<String>? = [],
     environment: FlashProcessEnvironment = .shared,
     sandboxExecPath: String = PluginSandbox.sandboxExecPath,
     installLogDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -311,7 +347,11 @@ final class PluginProcess {
     self.environment = environment
     self.manifest = manifest
     self.origin = origin
-    self.listenPatterns = manifest.listen.map(PluginPattern.init)
+    let listenPatterns = manifest.listen.map(PluginPattern.init)
+    self.listenPatterns = listenPatterns
+    self.listensToStatusObserved = listenPatterns.contains {
+      $0.matches(HostEvent.statusObserved.rawValue)
+    }
     self.declaredStatusSegments = Set(manifest.statusSegments)
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.sandboxExecPath = sandboxExecPath
@@ -325,8 +365,9 @@ final class PluginProcess {
     self.watchFiles = watchFiles
     self.settings = settings
     self.statusObserved = statusObserved
-    self.observedStatusSegments = Self.statusObservedSegments(
-      observedStatusSegments, declared: manifest.status)
+    self.observedStatusSegments = observedStatusSegments.map {
+      Self.statusObservedSegments($0, declared: manifest.status)
+    }
   }
 
   /// The login environment the child inherits; a spawn waits for it.
@@ -342,11 +383,11 @@ final class PluginProcess {
     return manifest.activation(statusObserved: statusObserved)
   }
 
-  /// The status surfaces started or stopped showing this plugin's segments. A
-  /// status-bound plugin that becomes observed spawns if it has not yet. One
-  /// that stops being observed returns to on-demand: its process stops unless
-  /// it has run a perform or a mapping keeps it warm, since on-demand plugins
-  /// remain running once a command needs them.
+  /// The configuration's status surfaces started or stopped reading this
+  /// plugin's segments. A status-bound plugin that becomes read spawns if it
+  /// has not yet. One that stops being read returns to on-demand: its
+  /// process stops unless it has run a perform or a mapping keeps it warm,
+  /// since on-demand plugins remain running once a command needs them.
   func setStatusObserved(_ observed: Bool) {
     lock.lock()
     let changed = statusObserved != observed
@@ -419,30 +460,50 @@ final class PluginProcess {
 
   /// The surfaces started or stopped showing some of this plugin's segments.
   /// A running child hears the new set at once; a starting one hears it right
-  /// after initialize.
+  /// after initialize. A segment shown again whose value the host kept
+  /// (`heldStatusSegments`) starts its bounded wait for a fresh one.
   func setObservedStatusSegments(_ observed: Set<String>) {
     let segments = Self.statusObservedSegments(observed, declared: manifest.status)
     lock.lock()
     let changed = observedStatusSegments != segments
+    let shownAgain = heldStatusSegments.intersection(segments).subtracting(
+      observedStatusSegments ?? [])
+    releasedStatusSegments.formUnion(observedStatusSegments ?? [])
+    releasedStatusSegments.subtract(segments)
     observedStatusSegments = segments
     lock.unlock()
     guard changed else { return }
     queue.async { [weak self] in
-      guard let self, self.runtimeStateSnapshot() == .running else { return }
+      guard let self else { return }
+      if !shownAgain.isEmpty { self.armStatusRevalidation() }
+      guard self.runtimeStateSnapshot() == .running else { return }
       self.deliverObservedStatusSegments()
     }
   }
 
-  /// `core:status.observed` to a listening child, unless it already has
-  /// this exact set. Runs on `queue`.
-  private func deliverObservedStatusSegments() {
-    guard listenPatterns.contains(where: { $0.matches(HostEvent.statusObserved.rawValue) }) else {
-      return
+  /// Runs on `queue`: bound how long the kept values just shown again stay
+  /// without their plugin publishing them. One deadline serves them all, so
+  /// a second segment shown inside the window restarts it for the first.
+  private func armStatusRevalidation() {
+    statusRevalidateDeadline.arm(after: Self.statusRevalidateSeconds) { [weak self] in
+      guard let self else { return }
+      self.lock.lock()
+      let expired = self.heldStatusSegments.intersection(self.observedStatusSegments ?? [])
+      for name in expired { self.statusSegments.removeValue(forKey: name) }
+      self.heldStatusSegments.subtract(expired)
+      self.lock.unlock()
+      if !expired.isEmpty { self.notifyStatus() }
     }
+  }
+
+  /// `core:status.observed` to a listening child, unless it already has
+  /// this exact set or the host does not know it yet. Runs on `queue`.
+  private func deliverObservedStatusSegments() {
+    guard listensToStatusObserved else { return }
     lock.lock()
-    let segments = observedStatusSegments
+    let known = observedStatusSegments
     lock.unlock()
-    guard segments != deliveredStatusSegments else { return }
+    guard let segments = known, segments != deliveredStatusSegments else { return }
     deliveredStatusSegments = segments
     deliverEventOnQueue(
       PluginEvent(.statusObserved, payload: ["segments": segments], bundleID: nil))
@@ -634,8 +695,13 @@ final class PluginProcess {
       statusSegments.removeAll()
       staleStatusSegments.removeAll()
     }
+    // What this child was asked to stop sampling is not owed to the next:
+    // a kept value is a stale one now, under the reload grace, or gone.
+    heldStatusSegments.removeAll()
+    releasedStatusSegments.removeAll()
     let needsStatusExpiry = !staleStatusSegments.isEmpty
     lock.unlock()
+    statusRevalidateDeadline.cancel()
     if !preserveStatus {
       statusGraceDeadline.cancel()
     } else if needsStatusExpiry {
@@ -648,6 +714,7 @@ final class PluginProcess {
         guard let self else { return }
         self.lock.lock()
         for name in self.staleStatusSegments { self.statusSegments.removeValue(forKey: name) }
+        self.heldStatusSegments.subtract(self.staleStatusSegments)
         self.staleStatusSegments.removeAll()
         self.lock.unlock()
         self.notifyStatus()
@@ -853,7 +920,8 @@ final class PluginProcess {
       deliverEventOnQueue(.appsChanged(snapshot))
     }
     // Every child, including a restarted one, starts from the current set —
-    // sent even when it is empty.
+    // sent even when it is empty, and held back only until the host knows
+    // it (`observedStatusSegments`).
     deliveredStatusSegments = nil
     deliverObservedStatusSegments()
     PluginLivenessSweep.shared.join(self)
@@ -1434,7 +1502,7 @@ final class PluginProcess {
 
   /// Whether the user is using the plugin now: one of its performs or of
   /// its searches is in flight, or a status surface shows one of its
-  /// segments. Safe from any queue.
+  /// segments now (a closed text popup shows none). Safe from any queue.
   private func servesUser() -> Bool {
     confirmedPerformsLock.lock()
     let serving = performsInFlight > 0 || searchesInFlight > 0
@@ -1442,7 +1510,7 @@ final class PluginProcess {
     if serving { return true }
     lock.lock()
     defer { lock.unlock() }
-    return !observedStatusSegments.isEmpty
+    return observedStatusSegments?.isEmpty == false
   }
 
   private func enqueueDeferredPerform(
@@ -1548,6 +1616,7 @@ final class PluginProcess {
   func statusBarInfo() -> PluginStatusBarInfo {
     lock.lock()
     let segments = statusSegments
+    let held = heldStatusSegments
     let state = self.state
     let hasError = !(lastError ?? "").isEmpty
     let spawn = publishedSpawn
@@ -1557,6 +1626,7 @@ final class PluginProcess {
       state: Self.stateLabel(state: state, activation: manifest.activation),
       hasError: hasError,
       statusSegments: segments,
+      heldStatusSegments: held,
       lastSpawn: spawn)
   }
 
@@ -2333,6 +2403,14 @@ final class PluginProcess {
     var changed = false
     lock.lock()
     for (key, segment) in decoded {
+      // An empty value for a segment this plugin was told nobody shows any
+      // more is it stopping, not an answer: the last value stays for the
+      // surface that shows it next (`heldStatusSegments`).
+      if segment == nil, listensToStatusObserved, releasedStatusSegments.contains(key) {
+        if statusSegments[key] != nil { heldStatusSegments.insert(key) }
+        continue
+      }
+      heldStatusSegments.remove(key)
       if staleStatusSegments.remove(key) != nil { changed = true }
       if let segment {
         if statusSegments[key] != segment {

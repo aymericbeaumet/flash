@@ -18,6 +18,24 @@ command it most likely meant, and the upgrade notes below say what to write.
   what the command does, `flash cli completion` and the man page list the
   bundled plugins' commands with their options again, and
   [commands](docs/commands.md#bundled-plugin-commands) has a table of them.
+- A plugin's status value is observed only while it is shown. A plugin is
+  told which of its values are shown (`core:status.observed`) from what is
+  on screen now: the enabled bar, a visible widget, an enabled monitor, and
+  a text popup only while it is hovered, pinned or standalone. A value that
+  only a closed popup reads is not sampled: the `processes` plugin reads no
+  process for a popup nobody opened, and a calendar value in a popup raises
+  macOS's Calendars prompt when the popup first opens, not at launch. This
+  narrows plugin values alone; a closed popup's sources and jobs still run.
+  The plugin's process runs while the configuration reads its values, so
+  opening the popup spawns nothing: the value lands a moment after it
+  opens, and a pinned or standalone popup follows its document for that
+  moment (one second), then keeps it until Command-R. A covered widget
+  stops its plugins' sampling at once rather than after 30 seconds.
+  A value that stops being shown keeps its last figures: an uncovered
+  widget or a reopened popup shows them until the fresh ones land, half a
+  second at most when the plugin has nothing new. At launch a plugin hears
+  the set once, when Flash knows it, not an empty one first
+  ([status plugins](docs/status-plugins.md#scheduling)).
 - A status plugin that ran a command keeps its process when the bar stops
   showing its segments, or when the mapping that kept it warm goes: only a
   child a command had started used to stay, so one a surface or a mapping
@@ -89,8 +107,9 @@ monitors read that no plugin publishes any more, with its replacement.
   mapping, the command line or the CLI, after asking (`Kill this
   process?`). It names no process in its question and refuses a pid that is
   gone and Flash's own. A text popup that reads one of the
-  values keeps them sampled while the bar is enabled, open or not, so it
-  opens on current figures. With `processes` in `[plugins] disabled` the
+  values has it sampled only while the popup is open: the focused app's
+  identity and `Collecting metrics…` land as it opens, and the figures
+  follow a first read later. With `processes` in `[plugins] disabled` the
   values are empty, `@processes` lists nothing and `process kill` does
   nothing.
 - **`@notes`, `@reminders` and `@contacts` are three plugins.** The `apple`
@@ -478,7 +497,8 @@ monitors read that no plugin publishes any more, with its replacement.
   lists the events of a window of at most 14 days, with the links found in
   each event's notes and never the notes. macOS's prompt comes up only
   while you are using that plugin (one of its commands is running, or a
-  status surface shows one of its values), and `core:calendar.changed`
+  status surface shows one of its values now, which a closed text popup
+  does not), and `core:calendar.changed`
   tells such a plugin, and nobody else, that the calendar changed
   ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
 - A plugin holding the new `notes`, `reminders` or `contacts` capability

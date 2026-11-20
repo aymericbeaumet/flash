@@ -421,9 +421,9 @@ shown by the bar and read by a monitor runs once.
 - A monitor is re-evaluated whenever a value it read changed: a plugin
   publish, a source's output, a job's line. A battery crossing 20 alerts as
   soon as the `sysinfo` plugin publishes it.
-- The plugin segments an enabled monitor reads count as observed, so their
-  plugins run and publish them (`core:status.observed`) as they would for a
-  visible bar. The built-ins keep the `sysinfo` plugin's battery figures
+- The plugin segments an enabled monitor reads count as observed always,
+  nobody having to look, so their plugins run and publish them
+  (`core:status.observed`) as they would for a visible bar. The built-ins keep the `sysinfo` plugin's battery figures
   (event-driven), disk figures (a three-second I/O sample) and memory figures
   (a one-second sample) sampled.
 - Its `#()` jobs re-run every `interval`; a named source keeps its own

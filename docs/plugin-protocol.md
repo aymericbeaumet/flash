@@ -153,9 +153,10 @@ process creation. See
 
 A *status-bound* plugin — `status` with no pushed `sources`, `query` or `hints`, its
 `listen` subscriptions presumed to feed those segments — is resident only while
-the enabled status bar, one of its popups or a desktop widget
-shows one of its segments; otherwise it is on-demand. A config reload that
-starts showing it spawns it; one that stops showing it stops the process and
+the configuration reads one of its segments: on the enabled status bar, in one
+of its text popups (open or not, so opening one spawns nothing), in a desktop
+widget or in a monitor; otherwise it is on-demand. A config reload that
+starts reading it spawns it; one that stops reading it stops the process and
 returns it to on-demand, unless it has run a `perform` or a mapping keeps it
 warm: on-demand plugins stay running once a command needs them, and a child
 that has run a command stays whatever started it, a surface or a mapping,
@@ -612,19 +613,26 @@ sample only while one of its cpu segments, such as `cpu_label` or
   sends them sorted; order carries no meaning. `[]` is authoritative —
   nothing is observed. Names the manifest does not declare never appear,
   and no other plugin's segments do. Other payload keys are ignored.
-- **Observed.** A segment is observed while a live surface would resolve
-  `#{flash.plugin.<id>.<segment>}`: the enabled bar's template, its named
-  popups, and desktop widgets. These are the
-  references that keep a status-bound plugin resident, refined from plugin
-  ids to segment names. A disabled bar or a removed widget observes nothing.
+- **Observed.** A segment is observed while a status surface shows it now:
+  the enabled bar's template, a text popup while it is open (hovered, pinned
+  or standalone), a desktop widget while one of its windows is visible, and
+  an enabled monitor. It is what the surface's last evaluation read, so a
+  segment behind a conditional counts while its branch is taken. This is
+  narrower than what keeps a status-bound plugin resident, which is every
+  reference in the configuration: a plugin whose value only a closed popup
+  reads runs and observes nothing. A disabled bar, a covered or removed
+  widget and a closed popup observe nothing.
 - **Delivery.** Filtered by `listen` like every other event, and not
   capability-gated: segment names are manifest data, not user content. The
   host sends the current set once right after the initialize reply (after
   the `core:apps.changed` snapshot), even when it is empty, so every
-  restarted child starts from the truth. It sends it again whenever that
+  restarted child starts from the truth. A child that initializes before
+  the status surfaces first evaluate, as at launch, hears nothing until the
+  host knows the set, then that set, once. It sends it again whenever that
   plugin's set changes — a configuration reload, the bar being enabled or
-  disabled, a widget appearing or disappearing — and never repeats an
-  unchanged set. Observation does not change activation or residency.
+  disabled, a popup opening or closing, a widget being covered or shown —
+  and never repeats an unchanged set. Observation does not change
+  activation or residency.
 - **Coalescing.** The set is a full replacement, coalesced like every
   replacement event (see [Event coalescing](#event-coalescing)), so
   intermediate sets may be skipped but the final set arrives.
@@ -636,8 +644,15 @@ sample only while one of its cpu segments, such as `cpu_label` or
 
 A plugin keeps the segments it publishes correct regardless: observation
 schedules work, it does not filter what the host renders. A plugin that
-stops sampling for an unobserved segment should clear it (`""`), so a
-surface that shows it again never reads stale figures.
+stops sampling a segment it is told nobody shows any more should clear it
+(`""`). The host reads that as the plugin stopping, not as an answer: it
+keeps the last value for the surface that shows the segment next, until the
+plugin publishes the segment again, and for at most 0.5 s after it is shown
+again when the plugin publishes nothing. So a widget uncovered, or a popup
+opened, shows the last figures until the fresh ones land, never a blank. An
+empty value clears at once in every other case: published while the segment
+is shown, for a segment no surface ever showed, or by a plugin that does
+not listen to `core:status.observed`.
 
 ### Plugin → host notifications
 
@@ -851,7 +866,7 @@ carries `operation` and exactly the fields it takes. Every success carries
 it too and, when it is undetermined, asks macOS first and answers once the
 user did. The host shows that prompt only while the user is using the
 plugin: one of its performs or searches is in flight, or a status surface
-shows one of its segments. Anywhere else an undetermined access answers `{"ok": false,
+shows one of its segments now ([observed](#status-observation)). Anywhere else an undetermined access answers `{"ok": false,
 "error": "requires the user to be using the plugin"}` and nothing is shown,
 so a plugin never raises a prompt from a background refresh. Requests made
 while the prompt is open share its answer, and the host sends

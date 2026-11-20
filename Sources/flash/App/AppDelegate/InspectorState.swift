@@ -327,8 +327,9 @@ extension AppDelegate {
     }
     overlay.statusPopupController.didChange = { [weak self] in
       guard let self else { return }
-      self.statusBarController?.setLivePopupNames(
-        Set([self.overlay.statusPopupController.previewName].compactMap { $0 }))
+      let popups = self.overlay.statusPopupController
+      self.statusBarController?.setPopups(
+        shown: popups.visibleNames, live: Set([popups.previewName].compactMap { $0 }))
       self.debugStateDidChange(.sections(["terminals"]))
     }
     widgetController?.didChange = { [weak self] in

@@ -17,7 +17,7 @@
     "host_to_plugin": {
       "initialize": "request {protocol_version} -> {ok, protocol_version}; reply immediately, once ever; ok:false or a version mismatch is terminal (flush, exit 0)",
       "ping": "request {} -> {ok:true}",
-      "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`; `core:status.observed` carries {segments: [name]}, the complete set of unique nonempty manifest `status` names of this plugin that a status surface shows (empty = none), sent once after initialize and again on every change",
+      "event": "notification {name, payload}; never replied; `core:poll:<name>` ticks a cadence registered through `poll` and bypasses `listen`; `core:status.observed` carries {segments: [name]}, the complete set of unique nonempty manifest `status` names of this plugin that a status surface shows (empty = none), sent once after initialize, or once the host first knows the set, and again on every change",
       "evaluate": "request {query} -> {ok, answers}; CPU-only over pre-warmed state",
       "hints": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, targets, context_pid?}; always live",
       "text_grid": "request {bundle_id, pid, front_window_frame, display_scale? (physical pixels per AppKit point)} -> {ok, columns, rows, lines, cell?}; always live; sent to the focused app's hint providers in hint order, first non-empty grid wins; each line is one text_grid_line shape; cell is the text_grid_cell shape, and without it the host divides the window evenly by columns and rows; empty lines = no grid",

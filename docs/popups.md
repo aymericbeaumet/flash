@@ -84,6 +84,13 @@ is invalid keeps running on its last good one until it is fixed or removed.
 A text popup takes only `text`. Its body keeps its newlines and supports the
 whole status format: colours, bold, italics, underline, dim, reverse, links. It
 reads the values the bar already collects, so opening it starts no collector.
+A plugin value is the exception: one that only the popup reads is sampled
+only while the popup is open, hovered, pinned or standalone, so its plugin
+is told when the popup opens and the value lands a moment later (the
+`processes` plugin's focused-app figures: a placeholder at once, the figures
+0.15 s later, each on the bar's next evaluation). Until then the popup shows
+what the value last was, if it was shown before. A value the bar or a
+widget also shows is already there.
 `#[popup=inline:<percent-encoded-body>]` lets a dynamic row carry its own body
 instead of naming a popup. A text popup is as wide as its widest line, from
 `min_width` up to `max_width` and the screen; longer lines wrap and taller
@@ -434,6 +441,18 @@ page shifted. The session holds the frames that redraw causes
 (`TerminalSession.sendRedraw`) until its output has been quiet for three frame
 intervals, half a second at most, and publishes the finished page once; typed
 keys and scrolls keep their leading-edge frames.
+
+A focused or standalone pager keeps the document it has until Command-R. One
+exception covers a popup that opens on plugin values nobody was showing and
+that have no current value: none yet, or the last one Flash kept when their
+plugin stopped sampling. Their plugins start sampling at that moment, so the
+document it opens with lacks them. The status controller says so
+(`popupAwaitsValuesSink`), and for one second
+(`StatusPopupController.documentSettle`) that showing follows its document as
+a hover preview does, then keeps it. A kept value is gone within half a
+second of the opening, so the document a popup keeps never holds one. A
+popup whose values were already shown or are published by a plugin that
+never stopped, or that reads no plugin value, never follows.
 
 ### Stopping
 

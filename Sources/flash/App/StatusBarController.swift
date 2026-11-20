@@ -30,6 +30,10 @@ final class FlashStatusBarController {
   private var popupTemplates: [String: FlashStatusBarTemplate]
   /// Only hover previews update live; focused pagers keep their captured document.
   private var livePopupNames: Set<String> = []
+  /// The text popups on screen in any presentation: a hover preview, a
+  /// pinned popup, a standalone one. What only a closed popup reads is
+  /// evaluated, so it opens on a document, but is not shown.
+  private var shownPopupNames: Set<String> = []
   private var sources: [String: FlashStatusBarSourceDefinition]
   private var terminalPopupNames: Set<String>
   private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
@@ -61,9 +65,10 @@ final class FlashStatusBarController {
     /// as tmux keeps a client's job output until the new command answers.
     var jobValues: [String: String] = [:]
     var sources: Set<String> = []
-    /// The plugin segments it read, keyed `<plugin>.<segment>` like
-    /// `pluginCycles`: only a carousel some active surface reads rotates on a
-    /// wake-up.
+    /// The plugin segments it shows, keyed `<plugin>.<segment>` like
+    /// `pluginCycles`: the ones it read, without those only a closed popup
+    /// of the bar read. Only these are observed (`pluginSegmentsSink`), and
+    /// only a carousel some active surface shows rotates on a wake-up.
     var pluginSegments: Set<String> = []
     /// The received-metric values it read (`#{flash.otel…}`): only their
     /// metrics wake it.
@@ -94,10 +99,15 @@ final class FlashStatusBarController {
         if let value = native.jobs[job.rawCommand] { values[job.rawCommand] = value }
       }
       (sources, clock) = FlashStatusBarTemplateEngine.requirements(of: dependencies)
-      pluginSegments = Set(
-        dependencies.values.lazy.filter { $0.hasPrefix(Self.pluginValuePrefix) }
-          .map { String($0.dropFirst(Self.pluginValuePrefix.count)) })
+      pluginSegments = Self.pluginSegments(of: dependencies)
       telemetryKeys = dependencies.values.filter(TelemetryQuery.isTelemetryKey)
+    }
+
+    /// The plugin values `dependencies` read, as `<plugin>.<segment>`.
+    static func pluginSegments(of dependencies: StatusFormatDependencies) -> Set<String> {
+      Set(
+        dependencies.values.lazy.filter { $0.hasPrefix(pluginValuePrefix) }
+          .map { String($0.dropFirst(pluginValuePrefix.count)) })
     }
   }
 
@@ -173,8 +183,22 @@ final class FlashStatusBarController {
   var nextWakeup: TimeInterval? { schedule?.nextWakeup }
   private var nextJobToken: UInt64 = 0
   private var requiredSources: Set<String> = []
-  /// Plugin segments (`<plugin>.<segment>`) an active surface reads.
+  /// Plugin segments (`<plugin>.<segment>`) an active surface shows.
   private var requiredPluginSegments: Set<String> = []
+  /// What `pluginSegmentsSink` was last told: `requiredPluginSegments` of the
+  /// running controller, nothing once it stops. Nil until the first report,
+  /// which waits for the controller to run or to be stopped: until then
+  /// what is shown is not known, and reporting nothing would tell every
+  /// plugin an empty set the first evaluation corrects.
+  private var reportedPluginSegments: Set<String>?
+  /// The plugin segments shown now, `<plugin>.<segment>`, each time the set
+  /// changes: what `core:status.observed` tells each plugin.
+  private let pluginSegmentsSink: ((Set<String>) -> Void)?
+  /// The text popups that just opened on plugin values nobody was showing
+  /// and that have no value yet: their plugins start sampling now, so the
+  /// document each opened with lacks them
+  /// (`StatusPopupController.awaitValues`). Called on main.
+  private let popupAwaitsValuesSink: ((Set<String>) -> Void)?
   private var requiredJobs: [String: StatusFormatJobRequest] = [:]
   /// The jobs and sources a foreground surface requires; the rest are a
   /// monitor's alone and re-run at `.low`.
@@ -280,9 +304,13 @@ final class FlashStatusBarController {
     monitorFireSink: ((MonitorFire) -> Void)? = nil,
     monitorNotifySink: ((String, StatusAlert) -> Void)? = nil,
     monitorTriggerSink: ((String, MonitorLevel) -> Void)? = nil,
+    pluginSegmentsSink: ((Set<String>) -> Void)? = nil,
+    popupAwaitsValuesSink: ((Set<String>) -> Void)? = nil,
     telemetry: TelemetryStore? = nil
   ) {
     self.telemetry = telemetry
+    self.pluginSegmentsSink = pluginSegmentsSink
+    self.popupAwaitsValuesSink = popupAwaitsValuesSink
     self.widgetSink = widgetSink
     self.monitorSink = monitorSink
     self.monitorAlertSink = monitorAlertSink
@@ -385,7 +413,28 @@ final class FlashStatusBarController {
     requiredTelemetryKeys = []
     telemetryValues = [:]
     telemetryReadKeys = nil
+    reportPluginSegments([])
     stopJobs(jobs)
+  }
+
+  /// Whether one of `segments` (`<plugin>.<segment>`) has no current value:
+  /// its plugin never published it, or cleared it while nobody showed it,
+  /// whether or not the host kept the last one
+  /// (`PluginStatusBarInfo.heldStatusSegments`).
+  private func lacksPluginValue(_ segments: Set<String>) -> Bool {
+    guard !segments.isEmpty else { return false }
+    let current = Set(
+      pluginStatusesProvider().flatMap { info in
+        info.statusSegments.keys.lazy.filter { !info.heldStatusSegments.contains($0) }
+          .map { "\(info.id).\($0)" }
+      })
+    return !segments.isSubset(of: current)
+  }
+
+  private func reportPluginSegments(_ segments: Set<String>) {
+    guard segments != reportedPluginSegments else { return }
+    reportedPluginSegments = segments
+    pluginSegmentsSink?(segments)
   }
 
   /// `[statusbar] enabled`: whether the bar is a surface. The controller keeps
@@ -399,14 +448,30 @@ final class FlashStatusBarController {
     }
   }
 
-  /// A hidden popup needs no clock wakes. Showing one evaluates at the current
-  /// wall time immediately, even when none of the bar's other inputs changed.
-  func setLivePopupNames(_ names: Set<String>) {
+  /// The text popups on screen: `shown` in any presentation, `live` the
+  /// hover preview alone. A hidden popup needs no clock wakes, and the
+  /// plugin values only it reads are not shown; a focused pager keeps its
+  /// captured document, so only a live one ticks. Showing one evaluates at
+  /// the current wall time immediately, even when none of the bar's other
+  /// inputs changed.
+  func setPopups(shown: Set<String>, live: Set<String>) {
     queue.async { [weak self] in
-      guard let self, self.livePopupNames != names else { return }
-      self.livePopupNames = names
+      guard let self, self.livePopupNames != live || self.shownPopupNames != shown else {
+        return
+      }
+      let opened = shown.subtracting(self.shownPopupNames)
+      let shownBefore = self.reportedPluginSegments ?? []
+      self.livePopupNames = live
+      self.shownPopupNames = shown
       self.bar?.memo = nil
       self.publishCurrentModel()
+      let newlyShown = (self.reportedPluginSegments ?? []).subtracting(shownBefore)
+      guard !opened.isEmpty, self.lacksPluginValue(newlyShown),
+        let sink = self.popupAwaitsValuesSink
+      else { return }
+      // Called on main alone: the hop is what confines it.
+      nonisolated(unsafe) let popupAwaitsValuesSink = sink
+      DispatchQueue.main.async { popupAwaitsValuesSink(opened) }
     }
   }
 
@@ -741,10 +806,15 @@ final class FlashStatusBarController {
     let result = FlashStatusBarTemplateEngine.evaluate(
       template: template, popupTemplates: popupTemplates, context: context,
       terminalPopupNames: terminalPopupNames, nativeContext: native,
-      popupCache: popupCache, visiblePopupNames: livePopupNames)
+      popupCache: popupCache, visiblePopupNames: livePopupNames,
+      shownPopupNames: shownPopupNames)
     bar?.record(result.dependencies, jobs: result.jobs, native: native)
-    // Dependencies retain hidden popup data subscriptions; only visible clocks wake.
+    // Dependencies retain hidden popup data subscriptions: a closed popup's
+    // sources and jobs keep running, so it opens on a document. Only a live
+    // one's clock wakes, and only a shown one's plugin values are shown:
+    // their plugins sample for someone looking.
     bar?.clock = result.clock
+    bar?.pluginSegments = SurfaceState.pluginSegments(of: result.shown)
     surfaceEvaluations["bar", default: 0] += 1
     requirementsChanged = true
     if result.model != lastPublishedModel {
@@ -935,6 +1005,10 @@ final class FlashStatusBarController {
     self.foregroundSources = foregroundSources
     self.foregroundJobs = foregroundJobs
     requiredPluginSegments = pluginSegments
+    // Plugins sample for a running controller's surfaces. A stopped one
+    // shows nothing, which `stopOnQueue` reported; one neither started nor
+    // stopped yet reports nothing at all.
+    if schedule != nil { reportPluginSegments(pluginSegments) }
     // The store follows the metrics a running controller's surfaces read,
     // so only those wake it.
     if schedule == nil { telemetryKeys = [] }
