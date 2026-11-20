@@ -531,14 +531,16 @@ the interpreter its manifest names), and reaches the network only when it
 declares it. A plugin allowed to open URLs never opens a local file through
 Flash (`file:`), so it cannot have a script or an app it wrote run outside its
 sandbox. A sandboxed plugin asks macOS about its own process alone: the
-profile denies it the process list and other processes' CPU time, memory,
-disk I/O, thread counts, open-descriptor lists and executable paths, which
-only a plugin declaring the `process_info` capability reads. That denial
-covers the process-information interface (libproc). The profile also lets a
-plugin read kernel settings (`sysctl`), and macOS serves the names and IDs of
-running processes, and the launch arguments and environment of your own,
-through that interface to any program that asks; the sandbox cannot filter
-those entries, so a sandboxed plugin can read them too.
+profile denies it the process list and other processes' names, launch
+arguments, environment, CPU time, memory, disk I/O, thread counts,
+open-descriptor lists and executable paths, which only a plugin declaring the
+`process_info` capability reads. The denial covers both interfaces macOS
+serves them through: process information (libproc) and kernel settings
+(`sysctl`), of which a plugin reads a fixed list describing the hardware, the
+system version, the host name, uptime, memory, load, file-system types,
+network interfaces and routes. A plugin can still tell that a process ID is
+in use, and read that process's group and code signature (its signing
+identifier and entitlements).
 
 Three bundled plugins opt out: `screenshot` and `terminals` execute helpers
 (the system screenshot utility, tmux and ssh), while `aiproviders` reads the
@@ -571,11 +573,13 @@ or the app quitting retires. `processes` is the one bundled plugin
 declaring `process_info`: its profile lets it list processes and read their
 CPU time, memory, disk I/O, thread counts, open-descriptor lists and
 executable paths, which is what its tables, the focused app's summary and
-`@processes` show. No plugin signals a process, this one included: `process
-kill` and a picked `@processes` row ask Flash behind the `process_signal`
-capability, and Flash sends SIGTERM to one process only for a request you
-just answered `y` to, one signal per answer, and never to itself, to
-launchd or to a group of processes. The AppleScript RPC accepts only named
+`@processes` show. macOS attaches your processes' launch arguments and
+environment to the same permission; the plugin reads neither. No plugin
+signals a process, this one included: `process kill` and a picked
+`@processes` row ask Flash behind the `process_signal` capability, and Flash
+sends SIGTERM to one process only for a request you just answered `y` to,
+one signal per answer, and never to itself, to launchd or to a group of
+processes. The AppleScript RPC accepts only named
 operations with fixed host templates and escaped string values; it accepts
 no script source, shell command or file operation.
 Each operation checks its target against the declared app IDs. Chat submission

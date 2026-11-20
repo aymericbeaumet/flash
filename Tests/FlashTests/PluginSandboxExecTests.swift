@@ -337,6 +337,163 @@ final class PluginSandboxExecTests: XCTestCase {
     XCTAssertEqual(
       denied?.map(\.title), [], "without the capability the profile denies the process table")
   }
+
+  /// The built `flash-sandbox-probe`, beside the test bundle.
+  private func sandboxProbe() throws -> URL {
+    guard FileManager.default.isExecutableFile(atPath: PluginSandbox.sandboxExecPath) else {
+      throw XCTSkip("sandbox-exec unavailable")
+    }
+    let probe = Self.canonicalURL(
+      Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+        .appendingPathComponent("flash-sandbox-probe"))
+    try XCTSkipUnless(
+      FileManager.default.isExecutableFile(atPath: probe.path),
+      "flash-sandbox-probe is not built beside the test bundle")
+    return probe
+  }
+
+  /// One probe run, as `<what>: <outcome>`: under the profile a plugin with
+  /// `capabilities` resolves to, or under none when `capabilities` is nil.
+  private func runProbe(
+    _ probe: URL, _ arguments: [String], capabilities: Set<PluginCapability>?
+  ) throws -> [String: String] {
+    let process = Process()
+    if let capabilities {
+      let dataDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("flash-sandbox-probe/\(UUID().uuidString)")
+      try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: dataDir) }
+      let manifest = PluginManifest(
+        id: "probe", name: "Probe", version: "1", description: "",
+        exec: ["./flash-sandbox-probe"], capabilities: capabilities)
+      let profile = try XCTUnwrap(
+        PluginSandbox.resolvedSandboxProfile(
+          manifest: manifest, settings: [:], root: probe.deletingLastPathComponent(),
+          dataDir: Self.canonicalURL(dataDir), executablePath: probe.path
+        ).profile)
+      process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
+      process.arguments = ["-p", profile, probe.path] + arguments
+    } else {
+      process.executableURL = probe
+      process.arguments = arguments
+    }
+    process.environment = PluginProcess.sanitizedPluginEnvironment(
+      base: ProcessInfo.processInfo.environment, overrides: [:])
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+    try process.run()
+    let output = stdout.fileHandleForReading.readDataToEndOfFile()
+    let diagnostics = stderr.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    XCTAssertEqual(
+      process.terminationStatus, 0,
+      "the probe ran — \(String(data: diagnostics, encoding: .utf8) ?? "")")
+    var outcomes: [String: String] = [:]
+    for line in (String(data: output, encoding: .utf8) ?? "").split(separator: "\n") {
+      let words = line.split(separator: " ", maxSplits: 1)
+      if words.count == 2 { outcomes[String(words[0])] = String(words[1]) }
+    }
+    return outcomes
+  }
+
+  /// The probe's reads of a child this test spawns, which holds one marker
+  /// in its arguments and one in its environment: without a sandbox, under a
+  /// plugin's profile, and under the profile of one declaring `process_info`.
+  private func readsOfAHeldProcess() throws -> (
+    unsandboxed: [String: String], plain: [String: String], granted: [String: String]
+  ) {
+    let probe = try sandboxProbe()
+    let argument = "flash-probe-argument-\(UUID().uuidString)"
+    let secret = "flash-probe-environment-\(UUID().uuidString)"
+    let held = Process()
+    held.executableURL = probe
+    held.arguments = ["hold", argument]
+    held.environment = ["FLASH_SANDBOX_PROBE_SECRET": secret]
+    let hold = Pipe()
+    held.standardInput = hold
+    held.standardOutput = FileHandle.nullDevice
+    try held.run()
+    defer {
+      hold.fileHandleForWriting.closeFile()
+      held.waitUntilExit()
+    }
+    let arguments = ["process", "\(held.processIdentifier)", argument, secret]
+    return (
+      try runProbe(probe, arguments, capabilities: nil),
+      try runProbe(probe, arguments, capabilities: []),
+      try runProbe(probe, arguments, capabilities: [.processInfo])
+    )
+  }
+
+  /// The kernel serves the process list, and a same-user process's
+  /// arguments and environment, through `sysctl` as well as through libproc.
+  /// With no sandbox the probe finds both markers; under a plugin's profile
+  /// every one of those nodes is refused, by MIB and by name, like libproc.
+  func testASandboxedPluginReadsNoOtherProcessThroughSysctl() throws {
+    let reads = try readsOfAHeldProcess()
+    XCTAssertEqual(reads.unsandboxed["kern.procargs2"], "markers:2/2", "the probe finds both")
+    XCTAssertEqual(reads.unsandboxed["kern.procargs"], "markers:2/2")
+    XCTAssertEqual(reads.unsandboxed["name:kern.procargs2"], "markers:2/2")
+    XCTAssertEqual(reads.unsandboxed["proc_pidpath"], "read")
+    for node in [
+      "kern.procargs2", "kern.procargs", "kern.proc.pid", "kern.proc.all", "kern.proc.uid",
+      "name:kern.procargs2", "name:kern.proc.pid", "proc_pidpath",
+    ] {
+      XCTAssertEqual(reads.plain[node], "errno:\(EPERM)", "\(node) under a plugin's profile")
+    }
+  }
+
+  /// What `process_info` means for `sysctl`. macOS serves the nodes addressed
+  /// by one pid (`kern.proc.pid`, `kern.procargs`, `kern.procargs2`) to
+  /// whoever may `proc_pidinfo` that process, whatever the profile says of
+  /// `sysctl-read`: no rule separates them (measured on macOS 26), so the
+  /// capability reads a same-user process's arguments and environment too.
+  /// The nodes that list processes follow `sysctl-read` and stay refused. A
+  /// failure of the first half means macOS separated them: say so in the
+  /// capability's description and in the privacy page.
+  func testProcessInfoAlsoReadsTheSysctlNodesOfOneProcess() throws {
+    let reads = try readsOfAHeldProcess()
+    XCTAssertEqual(reads.granted["proc_pidpath"], "read", "process_info opens libproc")
+    XCTAssertEqual(reads.granted["kern.procargs2"], "markers:2/2")
+    XCTAssertEqual(reads.granted["kern.procargs"], "markers:2/2")
+    XCTAssertEqual(reads.granted["name:kern.procargs2"], "markers:2/2")
+    XCTAssertEqual(reads.granted["kern.proc.pid"], "read")
+    XCTAssertEqual(reads.granted["kern.proc.all"], "errno:\(EPERM)", "the list follows sysctl")
+    XCTAssertEqual(reads.granted["kern.proc.uid"], "errno:\(EPERM)")
+  }
+
+  /// The allow-list serves what the bundled plugins and the system libraries
+  /// read: each node answers under a plugin's profile exactly as it does
+  /// without one. Trimming the list fails here before a plugin's values go
+  /// empty. Numeric names are MIBs: the file-system table (`3.0.…`), then
+  /// `getifaddrs`, the interface counters and the two routing tables
+  /// (`4.17.…`).
+  func testTheSysctlAllowListServesWhatBundledPluginsRead() throws {
+    let probe = try sandboxProbe()
+    let nodes = [
+      "hw.memsize", "hw.ncpu", "hw.pagesize_compat", "kern.hostname", "kern.iossupportversion",
+      "kern.memorystatus_level", "kern.osproductversion", "kern.osvariant_status",
+      "security.mac.lockdown_mode_state", "vm.loadavg", "vm.swapusage",
+      "3.0.1", "3.0.2.0", "3.0.2.1", "3.0.2.2", "3.0.2.30",
+      "4.17.0.0.3.0", "4.17.0.0.6.0", "4.17.0.2.7.0", "4.17.0.30.7.0",
+    ]
+    let withheld = ["kern.bootargs", "kern.procname", "net.inet.tcp.pcblist_n"]
+    let unsandboxed = try runProbe(probe, ["sysctl"] + nodes, capabilities: nil)
+    XCTAssertEqual(unsandboxed["hw.memsize"], "read")
+    XCTAssertEqual(unsandboxed["4.17.0.0.6.0"], "read")
+    for capabilities: Set<PluginCapability> in [[], [.processInfo]] {
+      let sandboxed = try runProbe(
+        probe, ["sysctl"] + nodes + withheld, capabilities: capabilities)
+      for node in nodes {
+        XCTAssertEqual(sandboxed[node], unsandboxed[node], "\(node) under a plugin's profile")
+      }
+      for node in withheld {
+        XCTAssertEqual(sandboxed[node], "errno:\(EPERM)", "\(node) stays closed")
+      }
+    }
+  }
 }
 
 /// Minimal host side of the NDJSON protocol for the boot test: collects the

@@ -1000,9 +1000,12 @@ declares it. The profile lets a plugin ask the kernel about its own process
 alone and denies it the pid list; with `process_info` it may list pids and
 read other processes through libproc in its own process: `proc_pidinfo`
 (task and BSD info, and `proc_pidpath`), a process's descriptor list and
-`proc_pid_rusage` (CPU time, resident memory, disk I/O). The other
-`process-info` operations (file ports, control, code signature, ledger) stay
-denied for other processes. Omitted capabilities are
+`proc_pid_rusage` (CPU time, resident memory, disk I/O). macOS serves
+whoever may `proc_pidinfo` a process its `sysctl` nodes too, so the
+capability also reads the user's processes' arguments and environment
+(`kern.procargs2`). The other `process-info` operations (file ports,
+control, code signature, ledger) stay denied for other processes. Omitted
+capabilities are
 default-denied. The registry is
 frozen: additions are allowed, renames never.
 
@@ -1122,13 +1125,14 @@ Section semantics:
 - **`sandbox`** — every plugin process, third-party ones included, runs
   under a deny-default seatbelt profile: everything is denied except
   loading the binary, broad reads minus secrets (`~/.ssh`, `~/.aws`,
-  `~/.config/gh`, keychains, other plugins' data), and writes inside the
-  plugin's data dir. The process runs only its own executable (and an
+  `~/.config/gh`, keychains, other plugins' data), a fixed list of `sysctl`
+  nodes describing the system, and writes inside the plugin's data dir. The
+  process runs only its own executable (and an
   interpreter that `exec` resolves outside the plugin root). An object adds
   allowances; without `sandbox` the plugin gets none. The one allowance is
   `mach`: named mach services the plugin needs. The `network` capability
   composes `network-outbound`, which also covers local unix sockets, and
-  `process_info` composes the libproc reads of other processes (see
+  `process_info` composes the reads of other processes (see
   [Host RPCs](#host-rpcs)); an unsandboxed plugin declaring either fails to
   load, since it has no profile to widen. `"sandbox": false` runs the plugin unsandboxed for external or
   credentialed helpers, as `screenshot`, `terminals` and `aiproviders` require.
@@ -1796,23 +1800,30 @@ all plugins.
 
 ### Seatbelt profile invariants
 
-Seatbelt denies are not reopened by a later allow rule. When a denied parent
-contains an allowed child, carve the child out inside the deny filter with
-`require-all` and `require-not`; `PluginSandbox.secretsReadDeny` is the
-canonical pattern for allowing a plugin's own data directory while denying its
-siblings.
+Rule order must never carry an exception. Among one operation's filtered
+rules the last match decides, and a rule on a wildcard operation (`file*`)
+never overrides one on the operation itself: after `(deny file-read* …)`, a
+later `(allow file* …)` reopens nothing and a later `(allow file-read* …)`
+does (measured on macOS 26). When a denied parent contains an allowed child,
+carve the child out inside the deny filter with `require-all` and
+`require-not` (`PluginSandbox.secretsReadDeny`, for a plugin's own data
+directory among its siblings), and write a deny that bounds an allow after it.
 
 `(deny default)` does not cover every operation family. A profile with no
-`process-info*` rule reads every process through libproc (measured on macOS
-26), so `PluginSandbox.processInfoRules` writes that denial out: other
-processes by target, the pid list by name, and under `process_info` only the
-operations no reader uses, so no allow has to reopen a deny. The profile's
-`sysctl-read` allowance is broad, which leaves the kernel's own process list
-(`kern.proc`) and a same-user process's arguments (`kern.procargs2`)
-readable by every sandboxed plugin: Seatbelt's sysctl name filters do not
-match those nodes, so no rule closes them. `process_info` therefore gates
-what libproc adds, the resource, task and descriptor reads and the
-executable path, not the existence of other processes.
+`process-info*` rule reads every process through libproc, so
+`PluginSandbox.processInfoRules` writes that denial out: other processes by
+target, the pid list by name, and under `process_info` only the operations no
+reader uses. It does cover `sysctl-read`, by name and by MIB, so
+`PluginSandbox.sysctlRules` is an allow-list: the names Apple's `container.sb`
+gives every containerized process, the `hw.` subtree, and what `sysinfo`
+reads (swap, file-system types, interfaces, routes). Seatbelt names a node
+with its numeric tail (`kern.procargs2.<pid>`), which only a prefix matches.
+The process list (`kern.proc.all`) and other processes' arguments and
+environment (`kern.procargs2`) are on no list and denied by prefix after the
+allow. macOS also serves the nodes of one pid to whoever may `proc_pidinfo`
+it, whatever `sysctl-read` says: the two denials close them together, and
+`process_info` opens them with libproc. A plugin can still tell that a pid is
+in use and read its process group and code signature.
 
 Seatbelt matches canonical vnode paths. Resolve symlinked executables before
 putting them in a profile, and canonicalize temporary fixture roots

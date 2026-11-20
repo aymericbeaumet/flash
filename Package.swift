@@ -51,6 +51,7 @@ let package = Package(
     .executable(name: "flash-native-fixture", targets: ["flash-native-fixture"]),
     .executable(name: "flash-native-oracle", targets: ["flash-native-oracle"]),
     .executable(name: "flash-electron-oracle", targets: ["flash-electron-oracle"]),
+    .executable(name: "flash-sandbox-probe", targets: ["flash-sandbox-probe"]),
     .library(name: "FlashCore", targets: ["FlashCore"]),
     .library(name: "FlashProviders", targets: ["FlashProviders"]),
     .library(name: "FlashIntegrationTestSupport", targets: ["FlashIntegrationTestSupport"]),
@@ -109,6 +110,13 @@ let package = Package(
       name: "flash-electron-oracle",
       dependencies: ["FlashCore", "FlashProviders", "FlashIntegrationTestSupport"],
       path: "Sources/flash-electron-oracle",
+      swiftSettings: strictSwiftSettings
+    ),
+    // What a process reads from the kernel under a plugin's Seatbelt profile.
+    // `PluginSandboxExecTests` runs it; nothing ships it.
+    .executableTarget(
+      name: "flash-sandbox-probe",
+      path: "Sources/flash-sandbox-probe",
       swiftSettings: strictSwiftSettings
     ),
     // Generated OTLP message types (opentelemetry-proto); never edited by hand.

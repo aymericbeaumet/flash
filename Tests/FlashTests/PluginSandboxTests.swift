@@ -124,6 +124,58 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertFalse(profile.contains("(allow process-fork)"))
   }
 
+  /// `sysctl-read` is an allow-list in every plugin profile, whatever the
+  /// capabilities: no blanket allow, one filtered allow, and the process
+  /// subtrees denied after it, because the last matching filtered rule of an
+  /// operation decides.
+  func testSysctlReadsAreAnAllowListFollowedByTheProcessDeny() throws {
+    for capabilities: Set<PluginCapability> in [[], [.processInfo], [.network]] {
+      let profile = try XCTUnwrap(
+        PluginSandbox.resolvedSandboxProfile(
+          manifest: specManifest(capabilities), settings: [:], root: root, dataDir: dataDir
+        ).profile)
+      let lines = profile.components(separatedBy: "\n")
+      XCTAssertFalse(lines.contains("(allow sysctl-read)"), "no blanket allow")
+      XCTAssertFalse(profile.contains("sysctl*"))
+      XCTAssertFalse(profile.contains("sysctl-write"))
+      let allows = lines.indices.filter { lines[$0].hasPrefix("(allow sysctl-read ") }
+      XCTAssertEqual(allows.count, 1, "one allow, filtered")
+      let allow = try XCTUnwrap(allows.first)
+      XCTAssertTrue(lines[allow].contains("(sysctl-name \"kern.boottime\" "))
+      XCTAssertTrue(lines[allow].contains("\"hw.\""))
+      let deny = try XCTUnwrap(
+        lines.firstIndex(of: "(deny sysctl-read (sysctl-name-prefix \"kern.proc\"))"))
+      XCTAssertGreaterThan(deny, allow, "the deny follows the allow it bounds")
+      XCTAssertTrue(
+        lines.contains("(deny sysctl-read (with no-report) (sysctl-name \"kern.bootargs\"))"))
+    }
+  }
+
+  /// The list names no process node, and none of its prefixes reaches one: a
+  /// prefix that `kern.proc` itself starts with (`kern.`) would open the
+  /// process list and every process's arguments and environment.
+  func testTheSysctlAllowListNamesNoProcessNode() {
+    let denied = PluginSandbox.deniedSysctlPrefix
+    XCTAssertEqual(denied, "kern.proc")
+    let names = PluginSandbox.sysctlNames
+    let prefixes = PluginSandbox.sysctlNamePrefixes
+    XCTAssertEqual(Set(names).count, names.count, "each name once")
+    XCTAssertEqual(Set(prefixes).count, prefixes.count, "each prefix once")
+    for name in names {
+      XCTAssertFalse(name.hasPrefix(denied), name)
+      XCTAssertNotEqual(name, "kern.bootargs")
+      // An exact name: a node addressed with a numeric tail needs its own.
+      XCTAssertFalse(name.hasSuffix("."), name)
+    }
+    for prefix in prefixes {
+      XCTAssertFalse(prefix.hasPrefix(denied), prefix)
+      XCTAssertFalse(denied.hasPrefix(prefix), "\(prefix) covers the process subtrees")
+      XCTAssertFalse("kern.bootargs".hasPrefix(prefix), prefix)
+      // `net.` holds every socket's owner (`net.inet.tcp.pcblist_n`).
+      XCTAssertFalse("net.inet.".hasPrefix(prefix), prefix)
+    }
+  }
+
   func testConfigKillSwitchDisablesSandboxLoudly() {
     let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: specManifest(), settings: ["sandbox": .bool(false)],

@@ -49,8 +49,9 @@ enum PluginSandbox {
   }
 
   /// The `process-info*` operations the `process_info` capability opens for
-  /// other processes: `proc_pidinfo` (which also serves `proc_pidpath`), the
-  /// descriptor list (`PROC_PIDLISTFDS` is checked as `pidfdinfo`) and
+  /// other processes: `proc_pidinfo` (which also serves `proc_pidpath` and,
+  /// by macOS's own rule, the `sysctl` nodes of one process: `sysctlRules`),
+  /// the descriptor list (`PROC_PIDLISTFDS` is checked as `pidfdinfo`) and
   /// `proc_pid_rusage`. Listing pids names no target and is opened beside
   /// them.
   static let processInfoOperations = [
@@ -86,13 +87,73 @@ enum PluginSandbox {
     ]
   }
 
+  /// The `sysctl` nodes a sandboxed plugin reads, by exact name: the kernel's
+  /// description of the system, and nothing about a process. First the names
+  /// Apple's own `container.sb` opens to every containerized process, which
+  /// is what the system libraries may expect on any macOS release or
+  /// architecture; then what the bundled plugins and the system libraries
+  /// were measured reading beyond them (macOS 26, arm64): the lockdown-mode
+  /// state libsystem asks at every start, and `sysinfo`'s swap usage,
+  /// file-system types, `getifaddrs`, interface counters and IPv4 and IPv6
+  /// routing tables (a routing node's name is its MIB).
+  static let sysctlNames = [
+    "kern.boottime", "kern.clockrate", "kern.hostid", "kern.hostname", "kern.hv_vmm_present",
+    "kern.iossupportversion", "kern.maxfilesperproc", "kern.maxproc", "kern.maxvnodes",
+    "kern.memorystatus_level", "kern.monotoniclock_offset_usecs", "kern.ngroups",
+    "kern.osproductversion", "kern.osrelease", "kern.ostype", "kern.osvariant_status",
+    "kern.osversion", "kern.safeboot", "kern.saved_ids", "kern.secure_kernel",
+    "kern.system_version_compat", "kern.usrstack64", "kern.version", "kern.waketime",
+    "machdep.ptrauth_enabled", "machdep.virtual_address_size", "security.mac.sandbox.sentinel",
+    "sysctl.name2oid", "sysctl.proc_native", "vm.loadavg",
+    "security.mac.lockdown_mode_state", "vm.swapusage", "vfs.generic.maxtypenum",
+    "net.routetable.0.0.3.0", "net.routetable.0.0.6.0", "net.routetable.0.2.7.0",
+    "net.routetable.0.30.7.0",
+  ]
+  /// The subtrees read whole: the hardware description (`container.sb` names
+  /// nearly all of `hw.`), its two other prefixes, the CPU's description
+  /// (Node and Python read `machdep.cpu.brand_string`) and `sysinfo`'s
+  /// file-system type table, one node per type.
+  static let sysctlNamePrefixes = [
+    "hw.", "kern.monotonicclock", "sysctl.oidfmt.", "machdep.cpu.", "vfs.generic.conf.",
+  ]
+  /// The process subtrees: `kern.proc.*` is the process list and
+  /// `kern.procargs*` every same-user process's arguments and environment.
+  static let deniedSysctlPrefix = "kern.proc"
+
+  /// What a plugin may read through `sysctl`. `(deny default)` reaches
+  /// sysctl, by name and by MIB (measured on macOS 26), so the allow-list is
+  /// the rule: a node it does not name is refused. Seatbelt names a node
+  /// with its numeric tail (`kern.procargs2.<pid>`), so only a prefix
+  /// matches those; and among the filtered rules of one operation the last
+  /// match decides, so the process deny is written after the allow, where a
+  /// list widened to `kern.` could not reopen it.
+  ///
+  /// One exception is macOS's, not the profile's: the nodes addressed by one
+  /// pid (`kern.proc.pid`, `kern.procargs`, `kern.procargs2`) are also
+  /// served to whoever may `proc_pidinfo` that process, whatever
+  /// `sysctl-read` says. Closing them takes this list and
+  /// `processInfoRules`' denial together, and a plugin declaring
+  /// `process_info` reads them: no rule separates them from libproc.
+  ///
+  /// `kern.bootargs` is refused without a log line: libsystem asks at every
+  /// start and runs without it, as in Apple's containers.
+  static let sysctlRules: [String] = {
+    let quoted = { (names: [String]) in names.map { "\"\($0)\"" }.joined(separator: " ") }
+    return [
+      "(allow sysctl-read (sysctl-name \(quoted(sysctlNames)))"
+        + " (sysctl-name-prefix \(quoted(sysctlNamePrefixes))))",
+      "(deny sysctl-read (sysctl-name-prefix \(quoted([deniedSysctlPrefix]))))",
+      "(deny sysctl-read (with no-report) (sysctl-name \"kern.bootargs\"))",
+    ]
+  }()
+
   /// Deny-default profile generated from the manifest's `sandbox` spec plus
   /// capability composition: everything is denied except loading the binary
   /// (plugin root + system libraries, plus an interpreter outside the root),
-  /// the plugin's own data dir, declared mach allowances,
-  /// network-outbound when the `network` capability is declared — never to
-  /// the resident's own socket — and libproc reads of other processes when
-  /// `process_info` is (`processInfoRules`).
+  /// the plugin's own data dir, the system description `sysctlRules` lists,
+  /// declared mach allowances, network-outbound when the `network`
+  /// capability is declared — never to the resident's own socket — and reads
+  /// of other processes when `process_info` is (`processInfoRules`).
   static func denyDefaultSandboxProfile(
     for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL,
     executablePath: String = "",
@@ -123,7 +184,6 @@ enum PluginSandbox {
       "(allow file* (subpath \(q(dataDir.path))))",
       "(allow file-write-data (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))",
       "(allow file-read-metadata)",
-      "(allow sysctl-read)",
       // Baseline mach services every process ends up touching (unified
       // logging, notifications). Name-scoped on purpose — no wildcard.
       "(allow mach-lookup (global-name \"com.apple.logd\")"
@@ -131,6 +191,7 @@ enum PluginSandbox {
         + " (global-name \"com.apple.system.notification_center\")"
         + " (global-name \"com.apple.system.logger\"))",
     ]
+    lines.append(contentsOf: sysctlRules)
     lines.append(contentsOf: processInfoRules(for: manifest))
     if manifest.capabilities.contains(.network) {
       lines.append("(allow network-outbound)")

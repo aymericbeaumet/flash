@@ -442,11 +442,16 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   belong to `RegisterStore`; app marks belong to `MarkStore`. Keep their
   command, help and privacy surfaces in sync, and migrate stored data when
   changing its path.
-- Seatbelt denies cannot be reopened by later allows. Carve permitted children
-  out of the deny, canonicalize symlinked paths, and retain secret-read denies.
-  `(deny default)` leaves `process-info*` open: `PluginSandbox.processInfoRules`
-  denies other processes by name and opens the libproc reads only under the
-  `process_info` capability
+- Seatbelt rule order never carries an exception: one operation's last
+  matching filtered rule wins, and a wildcard operation (`file*`) never
+  overrides a specific one. Carve permitted children out of the deny, write a
+  bounding deny after its allow, canonicalize symlinked paths, and retain
+  secret-read denies. `(deny default)` leaves `process-info*` open:
+  `PluginSandbox.processInfoRules` denies other processes by name and opens
+  the libproc reads only under the `process_info` capability, which macOS
+  extends to one process's `sysctl` nodes, arguments and environment included.
+  `sysctl-read` is `PluginSandbox.sysctlRules`' allow-list, never a blanket
+  allow or a `kern.` or `net.` prefix; a new node needs a measured reader
   ([profile invariants](docs/plugin-protocol.md#seatbelt-profile-invariants)).
   Local socket connections require network capability. Do not widen the sandbox
   to host credentialed network CLIs that require the subprocess shape.
