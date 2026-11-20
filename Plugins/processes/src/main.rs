@@ -2,8 +2,11 @@
 //! app's resource summary, every process as an `@processes` row, and
 //! `process kill`.
 //!
-//! The process table is read here, through libproc, under the manifest's
-//! `process_info` capability. Nothing here signals a process: `process kill`
+//! Nothing here reads a process: the host reads the table for this plugin
+//! (`host.process_table`, the `process_table` capability), and the sandbox
+//! denies it every process but its own. What is sampled and when, which
+//! processes top a table, how a tree is summed and how each reads as text
+//! are decided here. Nothing here signals a process either: `process kill`
 //! and a picked row ask the host (`host.process_signal`), which sends
 //! SIGTERM only inside the perform the user confirmed. The command and each
 //! row declare `confirm`, so the host asks first and this plugin never does.
@@ -25,7 +28,7 @@ use flash_plugin::{
 };
 
 use sampler::Sampler;
-use sys::{Kernel, Libproc};
+use sys::{Machine, ThisMac};
 use table::{Process, ProcessTable};
 
 /// The plugin's one source, live and `per_query`: asked while a query names
@@ -39,6 +42,9 @@ const TOP_COUNT_SETTING: &str = "top_count";
 /// question stays inside the host's bound on one (`quotas.confirm_bytes`).
 const PROMPT_NAME_BYTES: usize = 160;
 const KILL_USAGE: &str = "usage: process kill --pid=<pid>";
+/// The kernel's reason for a pid that names no process (`ESRCH`), as the
+/// host reports it from `kill(2)`.
+const NO_SUCH_PROCESS: &str = "No such process";
 
 struct Processes {
     table: Arc<ProcessTable>,
@@ -49,9 +55,9 @@ struct Processes {
 }
 
 impl Processes {
-    fn new(kernel: Arc<dyn Kernel>) -> Self {
+    fn new(machine: Arc<dyn Machine>) -> Self {
         Self {
-            table: Arc::new(ProcessTable::new(kernel)),
+            table: Arc::new(ProcessTable::new(machine)),
             sampler: Mutex::new(None),
             rows: Mutex::new(None),
         }
@@ -83,21 +89,22 @@ impl Processes {
             rows.map(|rows| (Instant::now(), rows));
     }
 
-    /// SIGTERM `pid` through the host, once it still is the process the
-    /// user was asked about. `expected_start`: the start time of the row's
-    /// process, which a reused pid does not share.
+    /// SIGTERM `pid` through the host. `expected_start`: the start time of
+    /// the row's process, which a reused pid does not share, so a row is
+    /// signalled only while the table still lists that very process. A pid
+    /// the user named is the kernel's to judge: gone, another user's, or
+    /// signalled.
     async fn kill(&self, ctx: &Context, pid: i32, expected_start: Option<u64>) -> PerformResponse {
         if pid <= 1 {
             return PerformResponse::fail(format!("refusing pid {pid}"));
         }
-        // Gone, or not this user's to inspect.
-        if self.table.name(pid).is_none() {
-            return PerformResponse::fail(format!("no process with pid {pid}"));
-        }
-        // The pid now names a process started at another time: not the one
-        // the row listed and the user was asked about.
-        if expected_start.is_some_and(|expected| self.table.start(pid) != Some(expected)) {
-            return PerformResponse::fail(format!("no process with pid {pid}"));
+        let gone = || PerformResponse::fail(format!("no process with pid {pid}"));
+        // The process the row listed is gone, or its pid now names one
+        // started at another time: not the one the user was asked about.
+        if let Some(expected) = expected_start
+            && self.table.start(ctx, pid).await != Some(expected)
+        {
+            return gone();
         }
         // The next query reads the table afresh: this row is about to go.
         self.set_rows(None);
@@ -106,6 +113,7 @@ impl Processes {
             .await
         {
             Ok(()) => PerformResponse::ok(),
+            Err(reason) if expected_start.is_none() && reason == NO_SUCH_PROCESS => gone(),
             Err(reason) => PerformResponse::fail(format!("process kill failed: {reason}")),
         }
     }
@@ -211,7 +219,7 @@ impl FlashPlugin for Processes {
         if let Some(rows) = self.cached_rows() {
             return SearchResponse::rows(rows);
         }
-        let physical_memory = self.table.kernel().physical_memory();
+        let physical_memory = self.table.machine().physical_memory();
         let rows: Vec<Candidate> = self
             .table
             .processes(&ctx)
@@ -243,13 +251,13 @@ impl FlashPlugin for Processes {
 }
 
 fn main() {
-    run(Processes::new(Arc::new(Libproc)));
+    run(Processes::new(Arc::new(ThisMac)));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::testing::FakeKernel;
+    use crate::table::testing::FakeMachine;
     use crate::testing::Host;
     use flash_plugin::testing::WireHarness;
     use serde_json::{Value, json};
@@ -261,22 +269,22 @@ mod tests {
     }
 
     /// launchd, Safari and a shell.
-    fn kernel() -> Arc<FakeKernel> {
-        let kernel = Arc::new(FakeKernel::new(RAM));
-        kernel.spawn(1, 0, "/sbin/launchd", 1);
-        kernel.spawn(
+    fn machine() -> Arc<FakeMachine> {
+        let machine = Arc::new(FakeMachine::new(RAM));
+        machine.spawn(1, 0, "/sbin/launchd", 1);
+        machine.spawn(
             4242,
             1,
             "/Applications/Safari.app/Contents/MacOS/Safari",
             77,
         );
-        kernel.spawn(4300, 1, "/bin/zsh", 90);
-        kernel.update(4242, |process| process.usage.resident_bytes = RAM / 4);
-        kernel
+        machine.spawn(4300, 1, "/bin/zsh", 90);
+        machine.update(4242, |process| process.usage.resident_bytes = RAM / 4);
+        machine
     }
 
-    fn plugin(kernel: &Arc<FakeKernel>) -> Arc<Processes> {
-        Arc::new(Processes::new(kernel.clone()))
+    fn plugin(machine: &Arc<FakeMachine>) -> Arc<Processes> {
+        Arc::new(Processes::new(machine.clone()))
     }
 
     fn request(words: &str, args: &[&str]) -> CommandRequest {
@@ -346,7 +354,7 @@ mod tests {
         );
         assert_eq!(
             manifest["capabilities"],
-            json!(["app_control", "process_info", "process_signal"])
+            json!(["app_control", "process_signal", "process_table"])
         );
         assert!(manifest.get("sandbox").is_none(), "the default sandbox");
         let setting = &manifest["settings"][TOP_COUNT_SETTING];
@@ -358,7 +366,8 @@ mod tests {
 
     #[test]
     fn top_count_is_the_setting_the_host_resolved() {
-        let count = |config: Value| top_count(&Host::new(config).harness.context());
+        let machine = Arc::new(FakeMachine::new(RAM));
+        let count = |config: Value| top_count(&Host::new(config, &machine).harness.context());
         assert_eq!(count(json!({ "top_count": 12 })), 12);
         assert_eq!(count(json!({ "top_count": 1 })), 1);
         assert_eq!(count(json!({})), 5);
@@ -416,9 +425,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_search_lists_every_process_and_one_read_serves_two_seconds() {
-        let kernel = kernel();
-        let plugin = plugin(&kernel);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let plugin = plugin(&machine);
+        let mut host = Host::new(json!({}), &machine);
         let rows = search(&plugin, &mut host, SOURCE).await;
         assert_eq!(
             rows.iter()
@@ -437,21 +446,31 @@ mod tests {
         );
 
         // The next keystroke reads nothing new.
-        kernel.spawn(4400, 1, "/usr/bin/top", 95);
+        machine.spawn(4400, 1, "/usr/bin/top", 95);
         assert_eq!(search(&plugin, &mut host, SOURCE).await.len(), 3);
         // Another source is none of this plugin's.
         assert_eq!(search(&plugin, &mut host, "processes.other").await.len(), 0);
         // Once the read has aged out, the table is read afresh.
         plugin.set_rows(None);
         assert_eq!(search(&plugin, &mut host, SOURCE).await.len(), 4);
-        assert_eq!(host.calls, [], "listing asks the host nothing");
+        assert_eq!(host.calls, [], "listing asks the host for the table alone");
+        assert_eq!(
+            host.reads,
+            [
+                json!({ "operation": "list" }),
+                json!({ "operation": "list", "pids": [1, 4242, 4300] }),
+                json!({ "operation": "list" }),
+                json!({ "operation": "list", "pids": [4400] }),
+            ],
+            "one read per two seconds of typing, and a second for the pids it had not met"
+        );
     }
 
     #[tokio::test]
     async fn the_command_asks_the_host_to_terminate_the_pid_it_names() {
-        let kernel = kernel();
-        let plugin = plugin(&kernel);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let plugin = plugin(&machine);
+        let mut host = Host::new(json!({}), &machine);
         assert_eq!(
             command(&plugin, &mut host, &["--pid=4242"]).await,
             json!({ "ok": true })
@@ -466,12 +485,13 @@ mod tests {
 
         // The host's reason reaches the user as the command's failure, the
         // refusal of a perform the user did not confirm included.
-        host.signal = json!({ "ok": false, "error": "Operation not permitted" });
+        host.signal = Some(json!({ "ok": false, "error": "Operation not permitted" }));
         assert_eq!(
             command(&plugin, &mut host, &["--pid=4300"]).await,
             json!({ "ok": false, "error": "process kill failed: Operation not permitted" })
         );
-        host.signal = json!({ "ok": false, "error": flash_plugin::CONFIRMATION_REQUIRED_ERROR });
+        host.signal =
+            Some(json!({ "ok": false, "error": flash_plugin::CONFIRMATION_REQUIRED_ERROR }));
         assert_eq!(
             command(&plugin, &mut host, &["--pid=4300"]).await,
             json!({
@@ -480,15 +500,40 @@ mod tests {
             })
         );
         assert_eq!(host.calls.len(), 3);
+        assert_eq!(
+            host.reads,
+            Vec::<Value>::new(),
+            "a named pid is not looked up"
+        );
     }
 
-    /// The host holds `--pid` to its declaration, so none of these but the
-    /// last arrives from it; none reaches the host back either way.
+    /// A pid that names no process is the kernel's to say: the host's
+    /// `No such process` reads as the plugin's own words.
+    #[tokio::test]
+    async fn a_pid_that_names_no_process_says_so() {
+        let machine = machine();
+        let plugin = plugin(&machine);
+        let mut host = Host::new(json!({}), &machine);
+        assert_eq!(
+            command(&plugin, &mut host, &["--pid=9999"]).await,
+            json!({ "ok": false, "error": "no process with pid 9999" })
+        );
+        assert_eq!(
+            host.calls,
+            [(
+                "host.process_signal".to_string(),
+                json!({ "pid": 9999, "signal": "term" })
+            )]
+        );
+    }
+
+    /// The host holds `--pid` to its declaration, so none of these arrives
+    /// from it; none reaches the host back either way.
     #[tokio::test]
     async fn a_missing_or_refused_pid_asks_the_host_nothing() {
-        let kernel = kernel();
-        let plugin = plugin(&kernel);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let plugin = plugin(&machine);
+        let mut host = Host::new(json!({}), &machine);
         for (args, error) in [
             (vec![], KILL_USAGE),
             (vec!["4242"], KILL_USAGE),
@@ -498,7 +543,6 @@ mod tests {
             (vec!["--pid=-4242"], "refusing pid -4242"),
             (vec!["--pid=1"], "refusing pid 1"),
             (vec!["--pid=0"], "refusing pid 0"),
-            (vec!["--pid=9999"], "no process with pid 9999"),
         ] {
             assert_eq!(
                 command(&plugin, &mut host, &args).await,
@@ -512,14 +556,15 @@ mod tests {
             unknown.error_message(),
             Some("unknown command: process list")
         );
-        assert_eq!(host.calls, [], "no host call");
+        assert_eq!(host.calls, [], "no signal asked");
+        assert_eq!(host.reads, Vec::<Value>::new(), "and no process looked up");
     }
 
     #[tokio::test]
     async fn a_picked_row_terminates_the_process_it_listed_and_no_other() {
-        let kernel = kernel();
-        let plugin = plugin(&kernel);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let plugin = plugin(&machine);
+        let mut host = Host::new(json!({}), &machine);
         let rows = search(&plugin, &mut host, SOURCE).await;
         let safari = rows[1].clone();
         assert_eq!(
@@ -534,17 +579,17 @@ mod tests {
             )]
         );
         // The row is about to go: the next query reads the table afresh.
-        kernel.exit(4242);
+        machine.exit(4242);
         assert_eq!(search(&plugin, &mut host, SOURCE).await.len(), 2);
 
         // The pid now names another process, started later: the question
         // the user answered was about the first one.
-        kernel.spawn(4242, 1, "/usr/bin/ssh-agent", 5_000);
+        machine.spawn(4242, 1, "/usr/bin/ssh-agent", 5_000);
         assert_eq!(
             resolve(&plugin, &mut host, safari.clone()).await,
             json!({ "ok": false, "error": "no process with pid 4242" })
         );
-        kernel.exit(4242);
+        machine.exit(4242);
         assert_eq!(
             resolve(&plugin, &mut host, safari).await,
             json!({ "ok": false, "error": "no process with pid 4242" })
@@ -575,10 +620,19 @@ mod tests {
     /// catalog, and a confirmed row comes back to be terminated.
     #[tokio::test]
     async fn events_searches_and_resolves_reach_their_handlers() {
-        /// The next frame that is not a `poll`, whose deadlines land at once.
-        async fn next(wire: &mut WireHarness) -> Value {
+        /// The next frame that is neither a read of the process table,
+        /// which the scripted Mac answers, nor a `poll`, whose deadlines
+        /// land at once.
+        async fn next(wire: &mut WireHarness, machine: &FakeMachine) -> Value {
             loop {
                 let frame = wire.recv().await;
+                if frame["method"] == "host.process_table" {
+                    wire.send(json!({
+                        "id": frame["id"], "result": machine.reply(&frame["params"])
+                    }))
+                    .await;
+                    continue;
+                }
                 if frame["method"] != "poll" {
                     return frame;
                 }
@@ -594,9 +648,9 @@ mod tests {
             }
         }
 
-        let kernel = kernel();
+        let machine = machine();
         let mut wire =
-            WireHarness::with_config(Processes::new(kernel.clone()), json!({ "top_count": 1 }));
+            WireHarness::with_config(Processes::new(machine.clone()), json!({ "top_count": 1 }));
         wire.send(json!({ "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }))
             .await;
         assert_eq!(wire.recv_response(1).await["ok"], true);
@@ -605,7 +659,7 @@ mod tests {
             "name": "core:status.observed", "payload": { "segments": ["top_mem"] }
         }}))
         .await;
-        let status = next(&mut wire).await;
+        let status = next(&mut wire, &machine).await;
         assert_eq!(status["method"], "status", "{status}");
         assert_eq!(
             status["params"]["segments"],
@@ -617,7 +671,7 @@ mod tests {
             "params": { "source": SOURCE, "query": "" }
         }))
         .await;
-        let reply = next(&mut wire).await;
+        let reply = next(&mut wire, &machine).await;
         assert_eq!(reply["id"], 2, "{reply}");
         let listed = reply["result"]["rows"].as_array().unwrap().clone();
         assert_eq!(listed.len(), 3);
@@ -628,7 +682,7 @@ mod tests {
             "kind": "resolve", "row": listed[1], "confirmed": true
         }}))
         .await;
-        let call = next(&mut wire).await;
+        let call = next(&mut wire, &machine).await;
         assert_eq!(call["method"], "host.process_signal");
         assert_eq!(call["params"], json!({ "pid": 4242, "signal": "term" }));
         wire.send(json!({ "id": call["id"], "result": { "ok": true } }))

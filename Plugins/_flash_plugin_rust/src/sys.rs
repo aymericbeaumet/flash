@@ -1,12 +1,14 @@
-//! Native macOS process queries shared by plugins.
+//! The process tree, for a plugin that runs outside the sandbox.
 //!
 //! A fork and exec can stall for seconds while macOS's exec policy daemon is
-//! busy, so a plugin that needs the process table reads it through libproc
-//! here instead of spawning `ps`. As with `process.rs` and `runtime.rs`, the
-//! unsafe FFI more than one plugin needs stays inside the SDK; readers only
-//! one plugin uses live in that plugin (the `sysinfo` monitors' kernel and
-//! IOKit samplers are `Plugins/sysinfo/src/sys/`, the `processes` plugin's
-//! per-process readers `Plugins/processes/src/sys.rs`).
+//! busy, so a plugin that maps a terminal to its tmux client reads every
+//! process's parent through libproc here instead of spawning `ps`. No
+//! sandbox profile opens another process, the pid list included: under one
+//! this answers an error, and a sandboxed plugin asks the host
+//! (`Context::processes`, `host.process_table`). As with `process.rs` and
+//! `runtime.rs`, the unsafe FFI stays inside the SDK; readers only one
+//! plugin uses live in that plugin (the `sysinfo` monitors' kernel and
+//! IOKit samplers are `Plugins/sysinfo/src/sys/`).
 
 use std::fmt;
 use std::mem;
@@ -25,9 +27,8 @@ impl fmt::Display for SysError {
 impl std::error::Error for SysError {}
 
 /// Every visible pid, in the kernel's order: what `ps -axo pid=` prints, read
-/// through libproc without a fork. Listing needs no right over the processes
-/// listed; a sandboxed plugin needs the `process_info` capability.
-pub fn process_ids() -> Result<Vec<i32>, SysError> {
+/// through libproc without a fork.
+fn process_ids() -> Result<Vec<i32>, SysError> {
     // SAFETY: a null buffer asks for the current pid count.
     let count = unsafe { libc::proc_listallpids(ptr::null_mut(), 0) };
     if count <= 0 {
@@ -50,7 +51,9 @@ pub fn process_ids() -> Result<Vec<i32>, SysError> {
 /// `ps -axo pid=,ppid=` prints, read through libproc without a fork.
 /// `PROC_PIDT_SHORTBSDINFO` is the flavor the kernel answers across users, so
 /// root-owned ancestors such as `login` keep the tree connected. A process
-/// that exits between the listing and its read is skipped.
+/// that exits between the listing and its read is skipped. Only an
+/// unsandboxed plugin can call it: a plugin's profile denies the pid list
+/// and every other process.
 pub fn process_parents() -> Result<Vec<(i32, i32)>, SysError> {
     let size = mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
     Ok(process_ids()?

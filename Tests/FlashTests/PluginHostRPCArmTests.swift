@@ -70,7 +70,7 @@ final class PluginHostRPCArmTests: XCTestCase {
     let methods = try XCTUnwrap(
       (try protocolSpec()["methods"] as? [String: Any])?["plugin_to_host_rpcs"]
         as? [String: Any])
-    XCTAssertEqual(methods.count, 19, "the RPC arm table changed — extend these suites")
+    XCTAssertEqual(methods.count, 20, "the RPC arm table changed — extend these suites")
     let rpc = PluginHostRPC()
     var gated = 0
     for (method, rawCapability) in methods {
@@ -84,7 +84,7 @@ final class PluginHostRPCArmTests: XCTestCase {
         reply["error"] as? String, "missing \(capability) capability",
         "\(method) must reply the spec-pinned EXACT denial string")
     }
-    XCTAssertEqual(gated, 18, "18 gated + host.ping ungated")
+    XCTAssertEqual(gated, 19, "19 gated + host.ping ungated")
     // The ungated arm answers without any capability at all.
     XCTAssertEqual(hostReply(rpc, "host.ping", [:])["ok"] as? Bool, true)
   }
@@ -529,6 +529,149 @@ final class PluginHostRPCArmTests: XCTestCase {
         HostSystemActions.queue(for: $0.execution) === DispatchQueue.main
       },
       [.lockScreen])
+  }
+
+  // MARK: - host.process_table (processTable seam)
+
+  private func tableReply(
+    _ rpc: PluginHostRPC, _ params: [String: Any],
+    capabilities: Set<PluginCapability> = [.processTable]
+  ) -> NSDictionary {
+    hostReply(rpc, "host.process_table", params, capabilities: capabilities) as NSDictionary
+  }
+
+  /// The table is the host's to read, on its own queue, for a plugin
+  /// holding the capability: a list, some of it, or one process's tree.
+  func testTheProcessTableIsReadOffMainForAPluginHoldingTheCapability() {
+    let rpc = PluginHostRPC()
+    let kernel = ProcessKernelStub.corpus()
+    rpc.processTable = HostProcessTable(kernel: kernel)
+
+    let list = tableReply(rpc, ["operation": "list"])
+    XCTAssertEqual(list["ok"] as? Bool, true)
+    XCTAssertEqual(list["at"] as? Int, 90_000_000_000)
+    let processes = list["processes"] as? [[String: Any]] ?? []
+    XCTAssertEqual(processes.map { $0["pid"] as? Int }, [4242, 4243, 4300])
+    XCTAssertEqual(
+      Set(processes.flatMap(\.keys)), ["pid", "start", "cpu_ns", "resident_bytes"],
+      "these keys are all a listed process has")
+    XCTAssertNil(list["truncated"])
+
+    let some = tableReply(rpc, ["operation": "list", "pids": [4300, 9999]])
+    XCTAssertEqual(
+      (some["processes"] as? [[String: Any]])?.map { $0["name"] as? String }, ["zsh"],
+      "asked for by pid, a process has its name too")
+    XCTAssertEqual(
+      (tableReply(rpc, ["operation": "list", "pids": [Int]()])["processes"] as? [Any])?.count, 0)
+
+    let tree = tableReply(rpc, ["operation": "tree", "pid": 4242])
+    let members = tree["processes"] as? [[String: Any]] ?? []
+    XCTAssertEqual(members.map { $0["pid"] as? Int }, [4242, 4243])
+    XCTAssertEqual(
+      Set(members.flatMap(\.keys)),
+      [
+        "pid", "start", "cpu_ns", "resident_bytes", "name", "threads", "sockets",
+        "disk_read_bytes", "disk_write_bytes",
+      ])
+    XCTAssertEqual(tree["path"] as? String, "/Applications/Safari.app/Contents/MacOS/Safari")
+    XCTAssertEqual(tree["started_at"] as? Int, 1_799_996_400)
+    XCTAssertEqual(
+      tableReply(rpc, ["operation": "tree", "pid": 9999]),
+      ["ok": true, "at": 90_000_000_000, "processes": [Any]()] as NSDictionary)
+    XCTAssertFalse(kernel.askedOnMain, "no read runs on the main thread")
+  }
+
+  /// Without the capability nothing is read, whatever else the plugin
+  /// holds; a host with no table wired answers why.
+  func testTheProcessTableIsRefusedWithoutItsCapabilityOrItsWiring() {
+    let rpc = PluginHostRPC()
+    XCTAssertNil(rpc.processTable, "nothing is wired outside the resident's launch")
+    XCTAssertEqual(
+      tableReply(rpc, ["operation": "list"]),
+      ["ok": false, "error": "process table unavailable"] as NSDictionary)
+
+    let kernel = ProcessKernelStub.corpus()
+    rpc.processTable = HostProcessTable(kernel: kernel)
+    let others = Set(PluginCapability.allCases).subtracting([.processTable])
+    for params: [String: Any] in [["operation": "list"], ["operation": "tree", "pid": 4242]] {
+      XCTAssertEqual(
+        tableReply(rpc, params, capabilities: others),
+        ["ok": false, "error": "missing process_table capability"] as NSDictionary)
+    }
+    XCTAssertEqual(kernel.questions, [], "the kernel was asked nothing")
+  }
+
+  func testProcessTableRefusesWhatItDoesNotDefine() {
+    let rpc = PluginHostRPC()
+    let kernel = ProcessKernelStub.corpus()
+    rpc.processTable = HostProcessTable(kernel: kernel)
+    let operation = "host.process_table requires a supported operation"
+    let pids = "host.process_table list takes at most 4096 distinct pids above 0"
+    let pid = "host.process_table tree requires a pid above 0"
+    let params = "invalid host.process_table params"
+    let malformed: [([String: Any], String)] = [
+      ([:], operation),
+      (["pid": 4242], operation),
+      (["operation": "arguments", "pid": 4242], operation),
+      (["operation": "environment"], operation),
+      (["operation": 1], operation),
+      (["operation": "list", "pids": 4242], pids),
+      (["operation": "list", "pids": ["4242"]], pids),
+      (["operation": "list", "pids": [0]], pids),
+      (["operation": "list", "pids": [-4242]], pids),
+      (["operation": "list", "pids": [4242.5]], pids),
+      (["operation": "list", "pids": [4242, 4242]], pids),
+      (["operation": "list", "pids": [Int(Int32.max) + 1]], pids),
+      (["operation": "list", "pids": Array(1...HostProcessTable.maxPids + 1)], pids),
+      (["operation": "tree"], pid),
+      (["operation": "tree", "pid": 0], pid),
+      (["operation": "tree", "pid": -4242], pid),
+      (["operation": "tree", "pid": "4242"], pid),
+      (["operation": "tree", "pid": true], pid),
+      (["operation": "tree", "pid": 4242, "pids": [4242]], params),
+      (["operation": "list", "pid": 4242], params),
+      (["operation": "list", "environment": true], params),
+      (["operation": "tree", "pid": 4242, "arguments": true], params),
+    ]
+    for (request, error) in malformed {
+      XCTAssertEqual(
+        tableReply(rpc, request), ["ok": false, "error": error] as NSDictionary, "\(request)")
+    }
+    XCTAssertEqual(kernel.questions, [], "nothing was read for a refused request")
+    XCTAssertEqual(
+      (tableReply(rpc, ["operation": "list", "pids": Array(1...HostProcessTable.maxPids)])["ok"])
+        as? Bool, true, "the most pids one list names")
+  }
+
+  /// The bounds and the shape are the contract's.
+  func testProcessTableContractMatchesSpec() throws {
+    let spec = try XCTUnwrap(try protocolSpec()["process_table"] as? [String: Any])
+    XCTAssertEqual(
+      spec["operations"] as? [String], PluginHostRequest.ProcessTable.operations.map(\.name))
+    XCTAssertEqual(spec["min_pid"] as? Int, 1)
+    XCTAssertEqual(spec["max_pids"] as? Int, HostProcessTable.maxPids)
+    XCTAssertEqual(spec["max_processes"] as? Int, HostProcessTable.maxProcesses)
+    XCTAssertEqual(spec["reply_bytes"] as? Int, HostProcessTable.maxReplyBytes)
+    XCTAssertEqual(spec["name_bytes"] as? Int, HostProcessTable.maxNameBytes)
+    XCTAssertEqual(spec["path_bytes"] as? Int, HostProcessTable.maxPathBytes)
+
+    let shape = try XCTUnwrap(try protocolSpec()["process"] as? [String: Any])
+    let detailed = HostProcessTable.Process(
+      pid: 1,
+      usage: ProcessUsage(
+        cpuNs: 0, residentBytes: 0, diskReadBytes: 0, diskWriteBytes: 0, startAbstime: 0),
+      name: "n", detail: .init(threads: 0, sockets: 0))
+    var listed = detailed
+    listed.detail = nil
+    var nameless = listed
+    nameless.name = nil
+    let required = Set(try XCTUnwrap(shape["required"] as? [String]))
+    let optional = Set(try XCTUnwrap(shape["optional"] as? [String]))
+    let detail = Set(try XCTUnwrap(shape["process_detail"] as? [String]))
+    XCTAssertEqual(Set(HostProcessTable.wire(nameless).keys), required)
+    XCTAssertEqual(Set(HostProcessTable.wire(listed).keys), required.union(optional))
+    XCTAssertEqual(
+      Set(HostProcessTable.wire(detailed).keys), required.union(optional).union(detail))
   }
 
   // MARK: - host.process_signal (processSignals seam)

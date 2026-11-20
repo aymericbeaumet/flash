@@ -416,6 +416,28 @@ PY
     "candidate_query" \
     Plugins
 
+  # The process table is the host's to read (HostProcessTable, behind
+  # `host.process_table`), and no sandbox profile opens another process to a
+  # plugin. A plugin crate therefore calls no libproc reader. The one
+  # exception is the SDK's `process_parents`, for a plugin that runs
+  # unsandboxed (terminals maps a terminal to its tmux client).
+  check_absent_except \
+    "plugins read no process themselves: the table is the host's (host.process_table)" \
+    'proc_pidinfo|proc_pid_rusage|proc_listallpids|proc_listpids|proc_listchildpids|proc_pidpath|proc_pidfdinfo' \
+    '^Plugins/_flash_plugin_rust/src/sys\.rs:' \
+    Plugins/_flash_plugin_rust/src Plugins/*/src
+
+  # Neither the host nor a plugin crate reads a process's arguments or
+  # environment from the kernel: the host's process table is figures and
+  # executable names. Only the sandbox test probe asks, to prove a profile
+  # refuses. (The unsandboxed terminals plugin asks `/bin/ps` for the
+  # focused terminal's command line; docs/privacy.md says so.)
+  check_absent \
+    "the host and the plugin crates read no process's arguments or environment from the kernel" \
+    'KERN_PROCARGS|sysctlbyname\([^)]*procargs|proc_pidargs' \
+    Sources/flash Sources/FlashCore Sources/FlashProviders Sources/FlashTerminal \
+    Sources/CFlashTerminal Plugins/_flash_plugin_rust/src Plugins/*/src
+
   # Query evaluators stay synchronous CPU-only hooks — an async evaluate in
   # a plugin or SDK would put I/O on the 50 ms per-keystroke path.
   check_absent \

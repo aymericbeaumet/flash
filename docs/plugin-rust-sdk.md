@@ -189,15 +189,23 @@ Handed to every handler; cheap to clone. Key surface:
   waits while sampling; it preserves timeout warnings while moving that call's
   default one-second slow warning. `.into_perform()` turns a capture into a
   `PerformResponse`.
-- Process table: `flash_plugin::sys::process_ids()` lists every visible pid
-  and `process_parents()` every `(pid, ppid)` through libproc, so no plugin
-  forks `ps` for a process tree. A sandboxed plugin needs the `process_info`
-  capability for either: without it its profile denies the pid list and
-  every read of another process. The SDK carries only the native bindings
-  more than one plugin needs; a reader one plugin uses lives in that plugin
-  (the `sysinfo` monitors' Mach, sysctl and IOKit samplers are
-  `Plugins/sysinfo/src/sys/`, the `processes` plugin's per-process libproc
-  readers `Plugins/processes/src/sys.rs`).
+- Process table: `ctx.processes(None)` reads the figures of every process
+  the user may measure (`ProcessEntry`: pid, start, CPU time, resident
+  memory), `ctx.processes(Some(&pids))` those of at most
+  `MAX_PROCESS_PIDS` pids with their names, and `ctx.process_tree(pid)` one
+  process and its descendants with their thread and socket counts, disk
+  I/O and the root's path and start (`host.process_table`, the
+  `process_table` capability). Each reply carries `at`, the host's
+  monotonic clock: a CPU share is the CPU time gained between two reads
+  over the difference of their `at`. The host never reads a process's
+  arguments or environment. No sandbox profile opens another process, so a
+  sandboxed plugin has no other way to one.
+- Process tree, unsandboxed plugins only: `flash_plugin::sys::process_parents()`
+  lists every `(pid, ppid)` through libproc, so `terminals` forks no `ps`
+  to map a terminal to its tmux client. Under a sandbox profile it answers
+  an error. The SDK carries only the native bindings more than one plugin
+  needs; a reader one plugin uses lives in that plugin (the `sysinfo`
+  monitors' Mach, sysctl and IOKit samplers are `Plugins/sysinfo/src/sys/`).
 - AppleScript: `ctx.applescript(&AppleScriptOperation::…, timeout)` returns
   `Result<String, String>` through `host.applescript`. Named operations cover
   browser tab listing/selection/moves, listing/running shortcuts, sending

@@ -83,40 +83,6 @@ final class PluginSandboxExecTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(checked, 8, "only \(checked) sandboxed manifests checked")
   }
 
-  /// The process-info rules, as written with and without the `process_info`
-  /// capability: both forms compile and run under the real `sandbox-exec`.
-  func testTheProcessInfoRulesCompileWithAndWithoutTheCapability() throws {
-    guard FileManager.default.isExecutableFile(atPath: PluginSandbox.sandboxExecPath) else {
-      throw XCTSkip("sandbox-exec unavailable")
-    }
-    let dataDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("flash-sandbox-test/process-info")
-    try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
-    for capabilities: Set<PluginCapability> in [[], [.processInfo]] {
-      let manifest = PluginManifest(
-        id: "probe", name: "Probe", version: "1", description: "",
-        exec: ["./flash-plugin-probe"], capabilities: capabilities)
-      let profile = try XCTUnwrap(
-        PluginSandbox.resolvedSandboxProfile(
-          manifest: manifest, settings: [:], root: URL(fileURLWithPath: "/tmp/plugin-root"),
-          dataDir: dataDir
-        ).profile)
-      let process = Process()
-      process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
-      process.arguments = ["-p", profile + Self.trueAllowance, "/usr/bin/true"]
-      let stderr = Pipe()
-      process.standardError = stderr
-      try process.run()
-      process.waitUntilExit()
-      let diagnostics =
-        String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-      XCTAssertEqual(
-        process.terminationStatus, 0,
-        "\(capabilities.map(\.rawValue)): sandbox-exec exit \(process.terminationStatus) — "
-          + diagnostics)
-    }
-  }
-
   /// Boots every built sandboxed plugin under its resolved profile. Host RPCs
   /// are answered like a host that grants nothing. Skips when no binary is
   /// built (`mise run build:plugins`).
@@ -295,18 +261,16 @@ final class PluginSandboxExecTests: XCTestCase {
     }
   }
 
-  /// What `process_info` buys, measured under the real sandbox with one
-  /// binary and two profiles. Under its own manifest's, the plugin that
-  /// declares the capability lists other processes, this test runner among
-  /// them. Under the same manifest without the capability, the same binary
-  /// reads no process table at all: the profile's denial is what stands
-  /// between a sandboxed plugin and every other process.
-  func testProcessInfoIsWhatLetsASandboxedPluginReadOtherProcesses() throws {
+  /// The plugin that shows the process table reads none of it. Under its
+  /// own profile, with a host that answers no RPC, its live source lists
+  /// nothing, this test runner included: its rows are the host's answer
+  /// (`host.process_table`) and it has no reader of its own to fall back on.
+  func testThePluginThatShowsProcessesReadsNoneItself() throws {
     let declaring = try sandboxedManifests().filter {
-      $0.manifest.capabilities.contains(.processInfo)
+      $0.manifest.capabilities.contains(.processTable)
     }
-    let (root, manifest) = try XCTUnwrap(declaring.first, "a bundled plugin reads processes")
-    XCTAssertEqual(declaring.count, 1, "one bundled plugin holds process_info")
+    let (root, manifest) = try XCTUnwrap(declaring.first, "a bundled plugin shows processes")
+    XCTAssertEqual(declaring.count, 1, "one bundled plugin holds process_table")
     let executable = try XCTUnwrap(manifest.exec?.first)
     let executablePath = root.appendingPathComponent(executable).standardizedFileURL.path
     guard FileManager.default.isExecutableFile(atPath: executablePath) else {
@@ -316,26 +280,11 @@ final class PluginSandboxExecTests: XCTestCase {
       throw XCTSkip("\(manifest.id) is not built: run `mise run build:plugins`")
     }
     let source = try XCTUnwrap(manifest.sources.first { $0.live != nil }?.name)
-    let runner = "\(getpid()):"
-
-    var granted: [Candidate]?
+    var rows: [Candidate]?
     try launch(manifest: manifest, root: root, executablePath: executablePath, execTail: []) {
-      granted = searchRows($0, manifest: manifest, source: source, id: 100)
+      rows = searchRows($0, manifest: manifest, source: source, id: 100)
     }
-    let listed = try XCTUnwrap(granted, "the search answers under the profile")
-    XCTAssertGreaterThan(listed.count, 10, "other processes are listed")
-    XCTAssertTrue(
-      listed.contains { $0.sourcePayload?.hasPrefix(runner) == true && !$0.title.isEmpty },
-      "the test runner, another process, is read by name")
-
-    var withheld = manifest
-    withheld.capabilities.remove(.processInfo)
-    var denied: [Candidate]?
-    try launch(manifest: withheld, root: root, executablePath: executablePath, execTail: []) {
-      denied = searchRows($0, manifest: withheld, source: source, id: 100)
-    }
-    XCTAssertEqual(
-      denied?.map(\.title), [], "without the capability the profile denies the process table")
+    XCTAssertEqual(rows?.map(\.title), [], "no host, no process")
   }
 
   /// The built `flash-sandbox-probe`, beside the test bundle.
@@ -357,22 +306,35 @@ final class PluginSandboxExecTests: XCTestCase {
   private func runProbe(
     _ probe: URL, _ arguments: [String], capabilities: Set<PluginCapability>?
   ) throws -> [String: String] {
+    try runProbe(
+      probe, arguments,
+      manifest: capabilities.map {
+        PluginManifest(
+          id: "probe", name: "Probe", version: "1", description: "",
+          exec: ["./flash-sandbox-probe"], capabilities: $0)
+      })
+  }
+
+  /// One probe run under the profile `manifest` resolves to, with the
+  /// probe's directory standing for the plugin's root, or under none.
+  /// `widening` is a rule appended to that profile: what a profile would
+  /// let through if it ever carried it.
+  private func runProbe(
+    _ probe: URL, _ arguments: [String], manifest: PluginManifest?, widening: String = ""
+  ) throws -> [String: String] {
     let process = Process()
-    if let capabilities {
+    if let manifest {
       let dataDir = FileManager.default.temporaryDirectory
         .appendingPathComponent("flash-sandbox-probe/\(UUID().uuidString)")
       try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
       defer { try? FileManager.default.removeItem(at: dataDir) }
-      let manifest = PluginManifest(
-        id: "probe", name: "Probe", version: "1", description: "",
-        exec: ["./flash-sandbox-probe"], capabilities: capabilities)
       let profile = try XCTUnwrap(
         PluginSandbox.resolvedSandboxProfile(
           manifest: manifest, settings: [:], root: probe.deletingLastPathComponent(),
           dataDir: Self.canonicalURL(dataDir), executablePath: probe.path
         ).profile)
       process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
-      process.arguments = ["-p", profile, probe.path] + arguments
+      process.arguments = ["-p", profile + widening, probe.path] + arguments
     } else {
       process.executableURL = probe
       process.arguments = arguments
@@ -398,12 +360,11 @@ final class PluginSandboxExecTests: XCTestCase {
     return outcomes
   }
 
-  /// The probe's reads of a child this test spawns, which holds one marker
-  /// in its arguments and one in its environment: without a sandbox, under a
-  /// plugin's profile, and under the profile of one declaring `process_info`.
-  private func readsOfAHeldProcess() throws -> (
-    unsandboxed: [String: String], plain: [String: String], granted: [String: String]
-  ) {
+  /// Run `body` with the probe's arguments for a child this test spawns,
+  /// which holds one marker in its arguments and one in its environment.
+  private func withAHeldProcess<Result>(
+    _ body: (_ probe: URL, _ arguments: [String]) throws -> Result
+  ) throws -> Result {
     let probe = try sandboxProbe()
     let argument = "flash-probe-argument-\(UUID().uuidString)"
     let secret = "flash-probe-environment-\(UUID().uuidString)"
@@ -419,12 +380,45 @@ final class PluginSandboxExecTests: XCTestCase {
       hold.fileHandleForWriting.closeFile()
       held.waitUntilExit()
     }
-    let arguments = ["process", "\(held.processIdentifier)", argument, secret]
-    return (
-      try runProbe(probe, arguments, capabilities: nil),
-      try runProbe(probe, arguments, capabilities: []),
-      try runProbe(probe, arguments, capabilities: [.processInfo])
-    )
+    return try body(probe, ["process", "\(held.processIdentifier)", argument, secret])
+  }
+
+  /// The probe's reads of that child: without a sandbox, and under a
+  /// plugin's profile.
+  private func readsOfAHeldProcess() throws -> (
+    unsandboxed: [String: String], plain: [String: String]
+  ) {
+    try withAHeldProcess { probe, arguments in
+      (
+        try runProbe(probe, arguments, capabilities: nil),
+        try runProbe(probe, arguments, capabilities: [])
+      )
+    }
+  }
+
+  /// The reads every node and call of the probe makes of another process.
+  private static let processReads = [
+    "kern.procargs2", "kern.procargs", "kern.proc.pid", "kern.proc.all", "kern.proc.uid",
+    "name:kern.procargs2", "name:kern.proc.pid", "proc_pidpath", "csops",
+  ]
+
+  /// Under the real profile of every sandboxed bundled plugin, the one
+  /// that shows the process table included, a process reads nothing of a
+  /// child this test spawned: not its arguments, not its environment, not
+  /// its path, through sysctl or through libproc. No manifest opens them.
+  func testNoBundledPluginReadsAnotherProcessUnderItsOwnProfile() throws {
+    let manifests = try sandboxedManifests()
+    XCTAssertTrue(manifests.contains { $0.manifest.id == "processes" }, "the process plugin")
+    try withAHeldProcess { probe, arguments in
+      let unsandboxed = try runProbe(probe, arguments, manifest: nil)
+      XCTAssertEqual(unsandboxed["kern.procargs2"], "markers:2/2", "the probe finds both")
+      for (_, manifest) in manifests {
+        let reads = try runProbe(probe, arguments, manifest: manifest)
+        for read in Self.processReads {
+          XCTAssertEqual(reads[read], "errno:\(EPERM)", "\(manifest.id): \(read)")
+        }
+      }
+    }
   }
 
   /// The kernel serves the process list, and a same-user process's
@@ -445,34 +439,39 @@ final class PluginSandboxExecTests: XCTestCase {
     }
   }
 
-  /// What `process_info` means for `sysctl`. macOS serves the nodes addressed
-  /// by one pid (`kern.proc.pid`, `kern.procargs`, `kern.procargs2`) to
-  /// whoever may `proc_pidinfo` that process, whatever the profile says of
-  /// `sysctl-read`: no rule separates them (measured on macOS 26), so the
-  /// capability reads a same-user process's arguments and environment too.
-  /// The nodes that list processes follow `sysctl-read` and stay refused. A
-  /// failure of the first half means macOS separated them: say so in the
-  /// capability's description and in the privacy page.
-  func testProcessInfoAlsoReadsTheSysctlNodesOfOneProcess() throws {
-    let reads = try readsOfAHeldProcess()
-    XCTAssertEqual(reads.granted["proc_pidpath"], "read", "process_info opens libproc")
-    XCTAssertEqual(reads.granted["kern.procargs2"], "markers:2/2")
-    XCTAssertEqual(reads.granted["kern.procargs"], "markers:2/2")
-    XCTAssertEqual(reads.granted["name:kern.procargs2"], "markers:2/2")
-    XCTAssertEqual(reads.granted["kern.proc.pid"], "read")
-    XCTAssertEqual(reads.granted["kern.proc.all"], "errno:\(EPERM)", "the list follows sysctl")
-    XCTAssertEqual(reads.granted["kern.proc.uid"], "errno:\(EPERM)")
+  /// Why no profile opens `proc_pidinfo` for another process, and why the
+  /// process table is the host's to read. macOS serves the `sysctl` nodes
+  /// addressed by one pid (`kern.proc.pid`, `kern.procargs`,
+  /// `kern.procargs2`) to whoever may `proc_pidinfo` that process, whatever
+  /// the profile says of `sysctl-read`: no rule separates them (measured on
+  /// macOS 26). A profile carrying that one allow reads a same-user
+  /// process's arguments and environment. A failure of the first half means
+  /// macOS separated them; the profiles stay as they are either way.
+  func testOpeningPidinfoWouldAlsoServeArgumentsAndEnvironment() throws {
+    let widened = try withAHeldProcess { probe, arguments in
+      try runProbe(
+        probe, arguments,
+        manifest: PluginManifest(
+          id: "probe", name: "Probe", version: "1", description: "",
+          exec: ["./flash-sandbox-probe"]),
+        widening: "\n(allow process-info-pidinfo (target others))")
+    }
+    XCTAssertEqual(widened["proc_pidpath"], "read", "the allow opens libproc")
+    XCTAssertEqual(widened["kern.procargs2"], "markers:2/2")
+    XCTAssertEqual(widened["kern.procargs"], "markers:2/2")
+    XCTAssertEqual(widened["name:kern.procargs2"], "markers:2/2")
+    XCTAssertEqual(widened["kern.proc.pid"], "read")
+    XCTAssertEqual(widened["kern.proc.all"], "errno:\(EPERM)", "the list follows sysctl")
+    XCTAssertEqual(widened["kern.proc.uid"], "errno:\(EPERM)")
   }
 
   /// `csops(2)` serves a process's code signature: its signing identifier,
-  /// which names the app, its entitlements and its hash. No bundled reader
-  /// uses it, so no profile opens it for another process, with or without
-  /// `process_info`.
+  /// which names the app, its entitlements and its hash. No profile opens
+  /// it for another process.
   func testNoSandboxedPluginReadsAnotherProcessCodeSignature() throws {
     let reads = try readsOfAHeldProcess()
     XCTAssertEqual(reads.unsandboxed["csops"], "read", "the probe reads it")
     XCTAssertEqual(reads.plain["csops"], "errno:\(EPERM)", "under a plugin's profile")
-    XCTAssertEqual(reads.granted["csops"], "errno:\(EPERM)", "under process_info")
   }
 
   /// The allow-list serves what the bundled plugins and the system libraries
@@ -494,7 +493,7 @@ final class PluginSandboxExecTests: XCTestCase {
     let unsandboxed = try runProbe(probe, ["sysctl"] + nodes, capabilities: nil)
     XCTAssertEqual(unsandboxed["hw.memsize"], "read")
     XCTAssertEqual(unsandboxed["4.17.0.0.6.0"], "read")
-    for capabilities: Set<PluginCapability> in [[], [.processInfo]] {
+    for capabilities: Set<PluginCapability> in [[], Set(PluginCapability.allCases)] {
       let sandboxed = try runProbe(
         probe, ["sysctl"] + nodes + withheld, capabilities: capabilities)
       for node in nodes {

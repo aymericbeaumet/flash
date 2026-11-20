@@ -1,33 +1,97 @@
 //! The host, played for the tests: it lands the deadlines the plugin
-//! registers, answers its host calls and keeps what it emitted.
+//! registers, answers its host calls, the process table among them, and
+//! keeps what it emitted.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use flash_plugin::testing::Harness;
 use serde_json::{Value, json};
 
+use crate::table::testing::FakeMachine;
+
 pub(crate) struct Host {
     pub(crate) harness: Harness,
+    /// The scripted Mac whose processes answer `host.process_table`.
+    machine: Arc<FakeMachine>,
     /// Deadlines already landed: each fires once.
     landed: BTreeSet<String>,
+    /// Deadlines seen and not landed yet (`answer_until_waiting`).
+    pending: Vec<String>,
     /// The reply to `host.normal_mode_target`.
     pub(crate) target: Value,
-    /// The reply to `host.process_signal`.
-    pub(crate) signal: Value,
-    /// Every host call the plugin made, as `(method, params)`.
+    /// The reply to `host.process_signal`. Nil: the kernel's, which takes
+    /// the signal of a process the scripted Mac runs and knows no other.
+    pub(crate) signal: Option<Value>,
+    /// When set, every `host.process_table` request fails with it.
+    pub(crate) failure: Option<String>,
+    /// The params of every `host.process_table` request, in order.
+    pub(crate) reads: Vec<Value>,
+    /// Every other host call the plugin made, as `(method, params)`.
     pub(crate) calls: Vec<(String, Value)>,
 }
 
 impl Host {
-    pub(crate) fn new(config: Value) -> Self {
+    pub(crate) fn new(config: Value, machine: &Arc<FakeMachine>) -> Self {
         Self {
             harness: Harness::with_config("processes", config),
+            machine: machine.clone(),
             landed: BTreeSet::new(),
+            pending: Vec::new(),
             target: json!({ "ok": true, "present": false }),
-            signal: json!({ "ok": true }),
+            signal: None,
+            failure: None,
+            reads: Vec::new(),
             calls: Vec::new(),
         }
+    }
+
+    /// Answer one host call; false when `frame` is none.
+    fn answer(&mut self, frame: &Value) -> bool {
+        let (Some(id), Some(method)) = (frame["id"].as_u64(), frame["method"].as_str()) else {
+            return false;
+        };
+        let reply = match method {
+            "host.process_table" => {
+                self.reads.push(frame["params"].clone());
+                match &self.failure {
+                    Some(reason) => json!({ "ok": false, "error": reason }),
+                    None => self.machine.reply(&frame["params"]),
+                }
+            }
+            _ => {
+                self.calls
+                    .push((method.to_string(), frame["params"].clone()));
+                match method {
+                    "host.normal_mode_target" => self.target.clone(),
+                    "host.process_signal" => self.signal.clone().unwrap_or_else(|| {
+                        match self.machine.runs(frame["params"]["pid"].as_i64()) {
+                            true => json!({ "ok": true }),
+                            false => json!({ "ok": false, "error": "No such process" }),
+                        }
+                    }),
+                    _ => json!({ "ok": false, "error": "not scripted" }),
+                }
+            }
+        };
+        assert!(self.harness.reply_host(id, reply));
+        true
+    }
+
+    /// The one-shot deadlines `frame` registers that were not seen before.
+    fn deadlines(&mut self, frame: &Value) -> Vec<String> {
+        let mut names = Vec::new();
+        if frame["method"] == "poll"
+            && let Some(registrations) = frame["params"]["registrations"].as_object()
+        {
+            for (name, registration) in registrations {
+                if registration.get("after").is_some() && self.landed.insert(name.clone()) {
+                    names.push(name.clone());
+                }
+            }
+        }
+        names
     }
 
     /// Run the plugin until it has nothing left to do: every one-shot
@@ -35,6 +99,9 @@ impl Host {
     /// answered. The frames it emitted meanwhile, in order, host calls
     /// aside.
     pub(crate) async fn settle(&mut self) -> Vec<Value> {
+        for name in std::mem::take(&mut self.pending) {
+            self.harness.deliver_poll_tick(&name);
+        }
         let mut emitted = Vec::new();
         let mut quiet = 0;
         while quiet < 20 {
@@ -51,30 +118,38 @@ impl Host {
             }
             quiet = 0;
             for frame in frames {
-                if let (Some(id), Some(method)) = (frame["id"].as_u64(), frame["method"].as_str()) {
-                    self.calls
-                        .push((method.to_string(), frame["params"].clone()));
-                    let reply = match method {
-                        "host.normal_mode_target" => self.target.clone(),
-                        "host.process_signal" => self.signal.clone(),
-                        _ => json!({ "ok": false, "error": "not scripted" }),
-                    };
-                    assert!(self.harness.reply_host(id, reply));
+                if self.answer(&frame) {
                     continue;
                 }
-                if frame["method"] == "poll"
-                    && let Some(registrations) = frame["params"]["registrations"].as_object()
-                {
-                    for (name, registration) in registrations {
-                        if registration.get("after").is_some() && self.landed.insert(name.clone()) {
-                            self.harness.deliver_poll_tick(name);
-                        }
-                    }
+                for name in self.deadlines(&frame) {
+                    self.harness.deliver_poll_tick(&name);
                 }
                 emitted.push(frame);
             }
         }
         emitted
+    }
+
+    /// Run the plugin until it waits on a deadline, answering its host
+    /// calls and landing nothing: the next `settle` lands it. For what
+    /// happens to the machine inside a window.
+    pub(crate) async fn answer_until_waiting(&mut self) {
+        for _ in 0..1_000 {
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            for frame in self.harness.drain() {
+                if self.answer(&frame) {
+                    continue;
+                }
+                let names = self.deadlines(&frame);
+                self.pending.extend(names);
+            }
+            if !self.pending.is_empty() {
+                return;
+            }
+        }
+        panic!("the plugin registered no deadline");
     }
 
     /// The host's tick of the cadence `name`, run to its end.

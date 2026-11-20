@@ -127,9 +127,10 @@ Keep the ownership boundaries intact:
   domain, so their wake-ups coalesce.
 - The `processes` plugin owns the process values
   (`flash.plugin.processes.top_cpu`, `top_mem`, `focused_app_details`): it
-  alone declares `process_info` and samples the process table. No plugin
-  signals a pid: `process kill` asks the host, which sends SIGTERM only for
-  a request the user confirmed.
+  decides what is sampled and when. No plugin reads another process: the
+  host reads the table for it (`host.process_table`). No plugin signals a
+  pid either: `process kill` asks the host, which sends SIGTERM only for a
+  request the user confirmed.
 - The `calendar` plugin owns the next-meeting values
   (`flash.plugin.calendar.next` and its parts), `calendar join` and
   `calendar next`. It reads no calendar: the host does, for the
@@ -249,10 +250,17 @@ plugin's segments: `#{flash.plugin.processes.top_cpu}`,
 `#{flash.plugin.processes.top_mem}` and
 `#{flash.plugin.processes.focused_app_details}`, with `[plugins.processes]
 top_count` rows per table; [process values](status-format.md#process-values)
-describes what each shows. The plugin reads the process table itself,
-through libproc (`Plugins/processes/src/sys.rs`): its manifest declares the
-`process_info` capability, which opens those reads for other processes in
-its sandbox profile. It listens to `core:status.observed` and registers each
+describes what each shows. The plugin reads no process: its sandbox denies
+it every one but its own, and it asks the host, which reads the table
+through libproc on its own queue
+([`host.process_table`](plugin-host-rpcs.md#process-table), the
+`process_table` capability). A reply is each process's pid, start, CPU time
+and resident memory, its executable's name when asked for by pid, and for
+the focused app's tree the thread and socket counts, disk I/O and the
+root's path; never a process's arguments or environment. What is sampled,
+when, which processes top a table and how a tree reads as text stay the
+plugin's (`Plugins/processes/src/table.rs`, `sampler.rs`, `format.rs`). It
+listens to `core:status.observed` and registers each
 cadence only while one of its values is observed, on the host's clock (the
 [scheduling](#scheduling) table); a value that stops being observed is
 cleared, and Flash keeps its last figures for the next showing. A text popup
@@ -268,16 +276,27 @@ plugin's status change by 0.1 to 0.2 s. `focused_app_details` follows `core:focu
 `host.normal_mode_target` (the `app_control` capability) for the focused app
 when the process started after it took focus.
 
-CPU is a delta of each pid's cumulative CPU time between two reads, so a
-figure is the average over the reader's own period. A pid met for the first
-time is read twice, 150 ms apart, and that window is a host deadline
-(`ctx.wait`), never a sleep.
+CPU is a delta of each pid's cumulative CPU time between two reads, over
+the host's clock at each (`at`), so a figure is the average over the
+reader's own period. A pid met for the first time is read twice, 150 ms
+apart, and that window is a host deadline (`ctx.wait`), never a sleep; the
+second read names it.
+
+One sweep of the table is one request and one reply. With 690 processes,
+485 of them the user's (Apple M4 Pro, macOS 26.6.2, a debug build of the
+host and the `plugin-dev` profile of the plugin), the host reads them in
+0.5 ms and encodes a 39 KB reply in 0.7 ms, and the plugin decodes and
+ranks it in 0.2 ms: 1.4 ms every two seconds while a table is shown. The
+second read of a few new pids is 0.02 ms and under 1 KB. The largest app tree on that Mac,
+85 processes, is 0.9 ms to read and 0.3 ms to encode, 14 KB, every ten
+seconds while its details are shown.
 
 The plugin's live source `processes.processes` (`@processes`, `per_query`)
 lists every process from one read per two seconds, and each row carries the
 question the host asks before it resolves it. `process kill --pid=<pid>` and
-a confirmed row ask `host.process_signal` for SIGTERM; a row is refused when
-its pid now names a process started at another time.
+a confirmed row ask `host.process_signal` for SIGTERM. A row is refused
+when the table no longer lists its process: it is gone, or its pid now
+names one started at another time.
 
 ## Next meeting
 

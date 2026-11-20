@@ -5,10 +5,12 @@ import XCTest
 @testable import flash
 
 /// The built `processes` plugin, spawned under its sandbox profile by a real
-/// `PluginManager`. It reads the process table itself, through libproc,
-/// which its profile opens for other processes with the `process_info`
-/// capability: every figure asserted here was read inside the sandbox. It
-/// signals nothing: `process kill` and a picked row reach
+/// `PluginManager`. It reads no process: its profile denies it every one but
+/// its own, and every figure asserted here reached it through
+/// `host.process_table`. The table is this suite's: the test runner and the
+/// children it spawned, read live (`OwnProcessKernel`), and a scripted
+/// dozen beside them, so no test reads a process that is not its own. The
+/// plugin signals nothing either: `process kill` and a picked row reach
 /// `host.process_signal`, whose mechanism is this suite's
 /// (`ChildProcessSignals`), so the only process a test here ever signals is
 /// a child it spawned.
@@ -16,6 +18,32 @@ final class BundledProcessesPluginTests: XCTestCase {
   private var manager: PluginManager!
   private var dataDir: URL!
   private var children: [Process] = []
+  /// The scripted part of the table.
+  private let scripted = BundledProcessesPluginTests.scriptedTable()
+  private lazy var kernel = OwnProcessKernel(scripted: scripted)
+
+  private static let finder = "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"
+
+  /// Twelve idle processes and Finder with one helper, none of them real:
+  /// pids no process of this user holds are not needed, since no read of
+  /// them reaches the machine.
+  private static func scriptedTable() -> ProcessKernelStub {
+    let table = ProcessKernelStub(clock: 1)
+    for index in 0..<12 {
+      table.spawn(
+        pid_t(3_000_000 + index), path: "/usr/libexec/scripted-\(index)",
+        start: UInt64(1_000 + index), residentBytes: UInt64(index + 1) << 20)
+    }
+    table.spawn(3_100_000, path: finder, start: 5_000, residentBytes: 64 << 20) {
+      $0.threads = 7
+      $0.sockets = 2
+      $0.startTime = Int(Date().timeIntervalSince1970) - 3_600
+    }
+    table.spawn(
+      3_100_001, parent: 3_100_000, path: "/usr/libexec/scripted-helper", start: 5_001,
+      residentBytes: 8 << 20)
+    return table
+  }
 
   private static func config(_ toml: String = "") throws -> Config {
     let roots = PluginRepository.officialPluginRoots()
@@ -35,9 +63,9 @@ final class BundledProcessesPluginTests: XCTestCase {
   }
 
   /// Start the plugin set under `toml`, with `signals` as the host's signal
-  /// mechanism: wired before any plugin starts. `shown` is what a surface
-  /// has on screen: every value the configuration reads, unless a test says
-  /// otherwise.
+  /// mechanism and this suite's table as its process table: both wired
+  /// before any plugin starts. `shown` is what a surface has on screen:
+  /// every value the configuration reads, unless a test says otherwise.
   private func start(
     _ toml: String = "", signals: (any ProcessSignalling)? = nil, shown: Set<String>? = nil
   ) throws {
@@ -46,6 +74,7 @@ final class BundledProcessesPluginTests: XCTestCase {
       .appendingPathComponent("flash-processes-plugin-\(UUID().uuidString)")
     manager = PluginManager(baseDataDir: dataDir)
     manager.hostRPC.processSignals = signals
+    manager.hostRPC.processTable = HostProcessTable(kernel: kernel)
     if let shown {
       manager.setShownStatusSegments(shown)
     } else {
@@ -75,6 +104,7 @@ final class BundledProcessesPluginTests: XCTestCase {
     child.arguments = ["600"]
     try child.run()
     children.append(child)
+    kernel.allow(child)
     return child
   }
 
@@ -134,7 +164,10 @@ final class BundledProcessesPluginTests: XCTestCase {
   /// Status segments nobody shows, a live source and one command: no
   /// process until one of them is used.
   func testThePluginCostsNothingUntilItIsUsed() throws {
-    try start()
+    // The kernel's answer for a pid that names no process.
+    let gone = ProcessSignalStub()
+    gone.failure = "No such process"
+    try start(signals: gone)
     XCTAssertEqual(status?.activation, "on_demand")
     XCTAssertNil(status?.pid, "nothing runs at launch")
     XCTAssertEqual(
@@ -149,12 +182,15 @@ final class BundledProcessesPluginTests: XCTestCase {
       run(["--pid=2147483646"], confirmed: true),
       PluginCommandResult(ok: false, error: "no process with pid 2147483646"))
     XCTAssertNotNil(status?.pid, "the first command spawned it")
+    XCTAssertEqual(gone.sent.map(\.pid), [2_147_483_646], "the kernel was asked, off main")
+    XCTAssertEqual(gone.sent.map(\.onMainThread), [false])
   }
 
-  /// The sandbox proof for the table: under the plugin's own profile, a
-  /// scoped query lists other processes with their names and shares. The
-  /// test runner and a child it spawned are two of them.
-  func testProcessRowsAreReadInsideTheSandboxAndPulledLive() throws {
+  /// The rows are the host's table: under the plugin's own profile, which
+  /// reads no process, a scoped query lists every process the host reports
+  /// with its name and shares. The test runner and a child it spawned are
+  /// two of them.
+  func testProcessRowsAreTheHostsTablePulledLive() throws {
     try start()
     let child = try spawnChild()
     let manager = try XCTUnwrap(self.manager)
@@ -166,7 +202,10 @@ final class BundledProcessesPluginTests: XCTestCase {
     let rows = try rows(registry, query: "sle")
     XCTAssertNotNil(status?.pid, "the first scoped query spawned it")
     XCTAssertEqual(manager.catalogStore.publishedPluginIDs(), [], "live rows are never stored")
-    XCTAssertGreaterThan(rows.count, 10, "every visible process, whatever was typed")
+    XCTAssertFalse(scripted.askedOnMain, "the host reads off the main thread")
+    XCTAssertEqual(
+      Set(rows.compactMap { $0.sourcePayload?.split(separator: ":").first.map(String.init) }),
+      Set(kernel.pids().map(String.init)), "every process of the table, whatever was typed")
     XCTAssertTrue(
       rows.allSatisfy {
         $0.source == "processes.processes" && $0.sourceID == "plugin:processes"
@@ -187,15 +226,17 @@ final class BundledProcessesPluginTests: XCTestCase {
     let runner = try XCTUnwrap(row(rows, pid: getpid()), "the test runner is listed")
     XCTAssertFalse(runner.title.isEmpty)
     XCTAssertEqual(runner.confirm, "Kill \(runner.title) (pid \(getpid()))?")
-    let plugin = try XCTUnwrap(status?.pid)
-    XCTAssertNotNil(row(rows, pid: pid_t(plugin)), "and so is the plugin itself")
+    let idle = try XCTUnwrap(row(rows, pid: 3_000_003), "a scripted process is listed")
+    XCTAssertEqual(idle.title, "scripted-3")
+    XCTAssertEqual(idle.sourcePayload, "3000003:1003", "its pid and its start")
+    XCTAssertTrue(idle.subtitle.hasPrefix("pid 3000003 · 0.0% CPU · "), idle.subtitle)
   }
 
-  /// The sandbox proof for the status values: shown by a bar and, once it
-  /// opens, a text popup, the tables and the focused app's tree are sampled
-  /// inside the sandbox, on the host's clock, at the configured row count.
-  /// The popup's value is sampled only while the popup is open.
-  func testObservedValuesAreSampledInsideTheSandbox() throws {
+  /// The status values: shown by a bar and, once it opens, a text popup,
+  /// the tables and the focused app's tree are sampled through the host, on
+  /// the host's clock, at the configured row count. The popup's value is
+  /// sampled only while the popup is open.
+  func testObservedValuesAreSampledThroughTheHost() throws {
     let child = try spawnChild()
     let tables: Set<String> = ["processes.top_mem", "processes.top_cpu"]
     try start(
@@ -293,6 +334,46 @@ final class BundledProcessesPluginTests: XCTestCase {
       (status?.statusSegments["focused_app_details"] ?? "").contains("com.example.tests"))
   }
 
+  /// The app's version and its bundle path come from its `Info.plist`,
+  /// which the plugin reads itself: a file, not a process, and its profile
+  /// reads files. The focused app here is the scripted Finder, whose bundle
+  /// is the real one on disk; its figures are the host's.
+  func testTheFocusedAppsBundleIsReadInsideTheSandboxAndItsTreeByTheHost() throws {
+    try start(
+      """
+      [statusbar]
+      enabled = true
+      template = "#{flash.plugin.processes.focused_app_details}"
+      """)
+    waitUntilTrue("the plugin runs while its value is shown") { self.status?.pid != nil }
+    manager.emit(
+      PluginEvent(
+        .focusChanged,
+        payload: ["bundle_id": "com.apple.finder", "localized_name": "Finder", "pid": 3_100_000],
+        bundleID: "com.apple.finder"))
+    var details: String { status?.statusSegments["focused_app_details"] ?? "" }
+    waitUntilTrue("the focused app's figures were published") { details.contains("Resources") }
+    XCTAssertTrue(details.hasPrefix("#[bold]Finder#[nobold]\nVersion       "), details)
+    XCTAssertNotNil(
+      details.range(
+        of: #"\nVersion       \d[^\n]*\nBundle        com\.apple\.finder\nPID           3100000\n"#,
+        options: .regularExpression), details)
+    XCTAssertTrue(details.contains("Memory        72 MiB ("), details)
+    XCTAssertTrue(
+      details.contains(
+        "Processes     2 · 8 threads\nSockets       2\nRunning       1h 0m · main process"),
+      details)
+    XCTAssertTrue(details.contains("#[bold]Busiest helpers · 1 of 1#[nobold]"), details)
+    XCTAssertNotNil(
+      details.range(of: #"scripted-helper +3100001 +0\.0% +8\.0 MiB"#, options: .regularExpression),
+      details)
+    XCTAssertTrue(
+      details.hasSuffix(
+        "Bundle path   /System/Library/CoreServices/Finder.app\nExecutable    \(Self.finder)"),
+      details)
+    XCTAssertFalse(scripted.askedOnMain)
+  }
+
   /// A popup is all that reads the plugin: it runs, since the configuration
   /// refers to its value, and reads nothing until the popup opens. Opening
   /// it shows the focused app's identity at once and its figures one first
@@ -363,7 +444,7 @@ final class BundledProcessesPluginTests: XCTestCase {
     waitForExit(child, "the confirmed kill ended the child")
     XCTAssertEqual(signals.refused, [], "only the child was ever signalled")
 
-    // It is gone: the same command now says so, and asks the host nothing.
+    // It is gone: the kernel says so, in the plugin's words.
     XCTAssertEqual(
       run([pid], confirmed: true),
       PluginCommandResult(ok: false, error: "no process with pid \(child.processIdentifier)"))
@@ -431,6 +512,7 @@ final class BundledProcessesPluginTests: XCTestCase {
     // The seam, before anything can call through it: these two children
     // and nothing else.
     resident.hostRPC.processSignals = ChildProcessSignals(children: [child, other])
+    resident.hostRPC.processTable = HostProcessTable(kernel: kernel)
     let config = try Self.config()
     delegate.config = config
     delegate.registry = registry(resident)

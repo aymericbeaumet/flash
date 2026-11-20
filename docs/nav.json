@@ -332,6 +332,7 @@
       "items": [
         { "title": "IPC protocol", "page": "ipc-protocol.md", "aliases": ["ipc", "socket", "events"] },
         { "title": "Plugin protocol", "page": "plugin-protocol.md" },
+        { "title": "Plugin host RPCs", "page": "plugin-host-rpcs.md", "aliases": ["host-rpcs", "rpcs"] },
         { "title": "Plugin cookbook", "page": "plugin-cookbook.md" },
         { "title": "Rust plugin SDK", "page": "plugin-rust-sdk.md" },
         { "title": "Plugin performance", "page": "plugin-performance.md" },

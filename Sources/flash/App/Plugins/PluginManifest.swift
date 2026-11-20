@@ -51,18 +51,18 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// the resident and add nothing to the plugin's sandbox; the four that
   /// cannot be undone run only inside a perform the user confirmed.
   case systemActions = "system_actions"
-  /// Read other processes through libproc in the plugin's own process: the
-  /// pid list, `proc_pidinfo` and `proc_pidpath`, the descriptor list and
-  /// `proc_pid_rusage`. It composes those `process-info` operations into the
-  /// deny-default profile, which otherwise denies them for every process but
-  /// the plugin's own, and grants no host RPC. Only a sandboxed plugin
-  /// declares it.
-  case processInfo = "process_info"
   /// Send a signal to a process through the host (`host.process_signal`).
   /// `kill(2)` stays in the resident and the plugin's sandbox gains
   /// nothing; every signal runs only inside a perform the user confirmed,
   /// never to Flash itself, launchd or a process group.
   case processSignal = "process_signal"
+  /// Read the process table through the host (`host.process_table`): each
+  /// process the user may measure as its pid, start, CPU time, resident
+  /// memory and executable name, and one process's tree with its thread
+  /// and socket counts, disk I/O and the root's path. libproc stays in the
+  /// resident, the plugin's sandbox gains nothing, and no process's
+  /// arguments or environment are read.
+  case processTable = "process_table"
   /// Read the access macOS grants Flash to the user's calendars, ask for it,
   /// and list the events of a bounded window through the host
   /// (`host.calendar_events`), and hear `core:calendar.changed`. EventKit
@@ -1452,12 +1452,6 @@ struct PluginManifest: Decodable, Equatable {
       throw PluginError.failure(
         "manifest.json network capability only composes the sandbox profile; an unsandboxed "
           + "plugin cannot declare it")
-    }
-    // `process_info` composes libproc reads into the same profile.
-    if capabilities.contains(.processInfo), sandboxSpec == nil {
-      throw PluginError.failure(
-        "manifest.json process_info capability only composes the sandbox profile; an "
-          + "unsandboxed plugin cannot declare it")
     }
     let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
     // Reject `.`/`..`/anything containing `..`: the id becomes the plugin's

@@ -62,6 +62,9 @@
       "$ref": "host.process_signal.schema.json"
     },
     {
+      "$ref": "host.process_table.schema.json"
+    },
+    {
       "$ref": "host.calendar_events.schema.json"
     },
     {

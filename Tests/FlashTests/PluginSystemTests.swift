@@ -1209,8 +1209,10 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(try load(#""sandbox": false, "capabilities": ["open"]"#).capabilities, [.open])
   }
 
-  /// `process_info` only widens the deny-default profile, like `network`.
-  func testProcessInfoCapabilityRequiresTheSandbox() throws {
+  /// `process_info`, which opened libproc in a plugin's own process, is no
+  /// capability: a manifest that declares it does not load. The process
+  /// table is asked of the host, sandboxed or not.
+  func testProcessInfoIsNoCapability() throws {
     func load(_ fields: String) throws -> PluginManifest {
       let root = try temporaryPluginRoot(
         manifest: """
@@ -1227,15 +1229,12 @@ final class PluginSystemTests: XCTestCase {
       defer { try? FileManager.default.removeItem(at: root) }
       return try PluginManifest.load(from: root)
     }
-    XCTAssertEqual(try load(#""capabilities": ["process_info"]"#).capabilities, [.processInfo])
-    XCTAssertThrowsError(try load(#""sandbox": false, "capabilities": ["process_info"]"#)) {
-      error in
-      XCTAssertTrue(
-        String(describing: error).contains(
-          "process_info capability only composes the sandbox profile; an unsandboxed plugin "
-            + "cannot declare it"),
-        String(describing: error))
-    }
+    XCTAssertThrowsError(try load(#""capabilities": ["process_info"]"#))
+    XCTAssertEqual(
+      try load(#""capabilities": ["process_table"]"#).capabilities, [.processTable])
+    XCTAssertEqual(
+      try load(#""sandbox": false, "capabilities": ["process_table"]"#).capabilities,
+      [.processTable])
   }
 
   func testManifestRejectsUnknownNestedFieldsUniformly() throws {

@@ -57,6 +57,12 @@ final class PluginHostRPC {
   /// (`LiveProcessSignals`), and nil inside the test runner unless a test
   /// injects one: an unwired host refuses every signal.
   var processSignals: (any ProcessSignalling)?
+  /// libproc behind `host.process_table`: plugins never read another
+  /// process themselves, and no sandbox profile lets one. Nil until the
+  /// resident wires its own at launch (over `LibprocKernel`), and nil inside
+  /// the test runner unless a test injects one over a scripted kernel: an
+  /// unwired host answers every call with a failure.
+  var processTable: HostProcessTable?
   /// EventKit behind `host.calendar_events`: plugins never read the calendar
   /// themselves, and the Calendars grant stays Flash's. Nil until the
   /// resident wires its own at launch (over `LiveCalendarEvents`), and nil
@@ -173,6 +179,8 @@ final class PluginHostRPC {
       hostSystemAction(action, pluginID: pluginID, scope: scope, reply: reply)
     case .processSignal(let pid, let signal):
       hostProcessSignal(signal, pid: pid, pluginID: pluginID, scope: scope, reply: reply)
+    case .processTable(let operation):
+      hostProcessTable(operation, pluginID: pluginID, scope: scope, reply: reply)
     case .calendar(let operation):
       hostCalendarEvents(operation, pluginID: pluginID, scope: scope, reply: reply)
     case .appItems(let kind, let operation):
@@ -391,6 +399,33 @@ final class PluginHostRPC {
         "[plugin] process signal failed: \(failure)",
         fields: ["plugin": pluginID, "signal": signal.rawValue, "pid": "\(pid)"])
       reply(["ok": false, "error": failure])
+    }
+  }
+
+  /// `host.process_table`: every process the user may measure, some of
+  /// them, or one process's tree, read on the table's own queue. A reply is
+  /// figures, counts and executable names; nothing reads a process's
+  /// arguments or its environment.
+  private func hostProcessTable(
+    _ operation: PluginHostRequest.ProcessTable, pluginID: String,
+    scope: PluginHostRequestScope, reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let processTable else {
+      reply(["ok": false, "error": "process table unavailable"])
+      return
+    }
+    scope.enqueue(on: processTable.queue) {
+      let snapshot: HostProcessTable.Snapshot
+      switch operation {
+      case .list(let pids): snapshot = processTable.list(pids: pids)
+      case .tree(let pid): snapshot = processTable.tree(root: pid)
+      }
+      if snapshot.truncated {
+        FlashLog.debug(
+          "[plugin] process table truncated",
+          fields: ["plugin": pluginID, "processes": "\(snapshot.processes.count)"])
+      }
+      reply(HostProcessTable.wire(snapshot))
     }
   }
 

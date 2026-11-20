@@ -84,7 +84,7 @@ final class PluginSandboxTests: XCTestCase {
   /// and cannot list pids. The wildcard leaves the code-signature reads
   /// open, so every operation is named too. No rule relies on its position
   /// among the others.
-  func testOtherProcessesAreDeniedByNameWithoutTheCapability() throws {
+  func testOtherProcessesAreDeniedByNameInEveryProfile() throws {
     let profile = try XCTUnwrap(
       PluginSandbox.resolvedSandboxProfile(
         manifest: specManifest(), settings: [:], root: root, dataDir: dataDir
@@ -101,34 +101,29 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertFalse(profile.contains("(allow process-info-pidinfo"))
   }
 
-  /// `process_info` opens exactly the libproc reads a process table needs,
-  /// for other processes: the pid list, `proc_pidinfo` (which serves the
-  /// path too), the descriptor list and `proc_pid_rusage`. The operations
-  /// it does not name stay denied for other processes, and the deny names
-  /// only those, so no allow has to reopen it.
-  func testProcessInfoCapabilityOpensTheLibprocReadsOfOtherProcesses() throws {
-    let profile = try XCTUnwrap(
+  /// No capability opens another process: the profile of a plugin holding
+  /// every one of them, the one that reads the process table through the
+  /// host included, carries the same denial and no allow beside its own
+  /// process.
+  func testNoCapabilityOpensAnotherProcess() throws {
+    let plain = try XCTUnwrap(
       PluginSandbox.resolvedSandboxProfile(
-        manifest: specManifest([.processInfo]), settings: [:], root: root, dataDir: dataDir
+        manifest: specManifest([]), settings: [:], root: root, dataDir: dataDir
       ).profile)
-    XCTAssertTrue(profile.contains("(allow process-info* (target self))"))
-    XCTAssertTrue(profile.contains("(allow process-info-listpids)"))
-    XCTAssertTrue(
-      profile.contains(
-        "(allow process-info-pidinfo process-info-pidfdinfo process-info-rusage"
-          + " (target others))"))
-    XCTAssertTrue(
-      profile.contains(
-        "(deny process-info-pidfileportinfo process-info-setcontrol process-info-dirtycontrol"
-          + " process-info-codesignature process-info-ledger (target others))"))
-    XCTAssertFalse(profile.contains("(deny process-info* (target others))"))
-    XCTAssertFalse(profile.contains("(deny process-info-listpids)"))
-    XCTAssertEqual(
-      Set(PluginSandbox.processInfoOperations).intersection(
-        PluginSandbox.deniedProcessInfoOperations), [], "an operation is opened or denied")
-    // The capability widens nothing else.
-    XCTAssertFalse(profile.contains("network-outbound"))
-    XCTAssertFalse(profile.contains("(allow process-fork)"))
+    for capabilities in [Set(PluginCapability.allCases), [.processTable], [.processSignal]] {
+      let profile = try XCTUnwrap(
+        PluginSandbox.resolvedSandboxProfile(
+          manifest: specManifest(capabilities), settings: [:], root: root, dataDir: dataDir
+        ).profile)
+      let rules = { (text: String) in
+        text.split(separator: "\n").filter { $0.contains("process-info") }
+      }
+      XCTAssertEqual(rules(profile), rules(plain), "\(capabilities.map(\.rawValue).sorted())")
+      XCTAssertEqual(rules(profile).count, 4)
+      XCTAssertEqual(
+        rules(profile).filter { $0.hasPrefix("(allow") }, ["(allow process-info* (target self))"])
+    }
+    XCTAssertNil(PluginCapability(rawValue: "process_info"), "the capability is gone")
   }
 
   /// `sysctl-read` is an allow-list in every plugin profile, whatever the
@@ -136,7 +131,7 @@ final class PluginSandboxTests: XCTestCase {
   /// subtrees denied after it, because the last matching filtered rule of an
   /// operation decides.
   func testSysctlReadsAreAnAllowListFollowedByTheProcessDeny() throws {
-    for capabilities: Set<PluginCapability> in [[], [.processInfo], [.network]] {
+    for capabilities: Set<PluginCapability> in [[], [.processTable], [.network]] {
       let profile = try XCTUnwrap(
         PluginSandbox.resolvedSandboxProfile(
           manifest: specManifest(capabilities), settings: [:], root: root, dataDir: dataDir

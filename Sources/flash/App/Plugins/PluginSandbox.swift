@@ -48,49 +48,36 @@ enum PluginSandbox {
       .joined(separator: "\n")
   }
 
-  /// The `process-info*` operations the `process_info` capability opens for
-  /// other processes: `proc_pidinfo` (which also serves `proc_pidpath` and,
-  /// by macOS's own rule, the `sysctl` nodes of one process: `sysctlRules`),
-  /// the descriptor list (`PROC_PIDLISTFDS` is checked as `pidfdinfo`) and
-  /// `proc_pid_rusage`. Listing pids names no target and is opened beside
-  /// them.
+  /// The `process-info*` operations that name another process:
+  /// `proc_pidinfo` (which also serves `proc_pidpath` and, by macOS's own
+  /// rule, the `sysctl` nodes of one process: `sysctlRules`), the descriptor
+  /// list (`PROC_PIDLISTFDS` is checked as `pidfdinfo`), `proc_pid_rusage`,
+  /// file ports, the two control operations, the code signature and the
+  /// ledger.
   static let processInfoOperations = [
     "process-info-pidinfo", "process-info-pidfdinfo", "process-info-rusage",
-  ]
-  /// The ones no bundled reader uses, denied for other processes even with
-  /// the capability.
-  static let deniedProcessInfoOperations = [
     "process-info-pidfileportinfo", "process-info-setcontrol", "process-info-dirtycontrol",
     "process-info-codesignature", "process-info-ledger",
   ]
 
-  /// What a plugin may ask the kernel about processes. `(deny default)` does
-  /// not reach the `process-info*` family (measured on macOS 26: a profile
-  /// with no rule for it reads every process), so the denial is written out.
-  /// Each deny names exactly what it denies, by target or by operation, and
-  /// no allow has to reopen one: a plugin always reads its own process;
-  /// other processes and the pid list need the `process_info` capability,
-  /// which opens `processInfoOperations` and nothing else. The wildcard does
+  /// What a plugin process may ask the kernel about processes: its own, and
+  /// nothing of any other. `(deny default)` does not reach the
+  /// `process-info*` family (measured on macOS 26: a profile with no rule
+  /// for it reads every process), so the denial is written out. Each deny
+  /// names exactly what it denies, by target or by operation, and no allow
+  /// reopens one: no capability and no manifest key does. The wildcard does
   /// not reach every operation either (measured: under it alone `csops`
-  /// still read another process's code signature), so without the
-  /// capability each one is denied by name as well.
-  static func processInfoRules(for manifest: PluginManifest) -> [String] {
-    guard manifest.capabilities.contains(.processInfo) else {
-      let named = (processInfoOperations + deniedProcessInfoOperations).joined(separator: " ")
-      return [
-        "(deny process-info* (target others))",
-        "(deny \(named) (target others))",
-        "(deny process-info-listpids)",
-        "(allow process-info* (target self))",
-      ]
-    }
-    return [
-      "(deny \(deniedProcessInfoOperations.joined(separator: " ")) (target others))",
-      "(allow process-info* (target self))",
-      "(allow process-info-listpids)",
-      "(allow \(processInfoOperations.joined(separator: " ")) (target others))",
-    ]
-  }
+  /// still read another process's code signature), so each one is denied by
+  /// name as well. A plugin that shows processes asks the host
+  /// (`host.process_table`). A third-party install step is no plugin
+  /// process and runs under `installSandboxProfile`, which leaves these
+  /// reads open to the toolchain it runs.
+  static let processInfoRules = [
+    "(deny process-info* (target others))",
+    "(deny \(processInfoOperations.joined(separator: " ")) (target others))",
+    "(deny process-info-listpids)",
+    "(allow process-info* (target self))",
+  ]
 
   /// The `sysctl` nodes a sandboxed plugin reads, by exact name: the kernel's
   /// description of the system, and nothing about a process. First the names
@@ -133,12 +120,12 @@ enum PluginSandbox {
   /// match decides, so the process deny is written after the allow, where a
   /// list widened to `kern.` could not reopen it.
   ///
-  /// One exception is macOS's, not the profile's: the nodes addressed by one
-  /// pid (`kern.proc.pid`, `kern.procargs`, `kern.procargs2`) are also
-  /// served to whoever may `proc_pidinfo` that process, whatever
-  /// `sysctl-read` says. Closing them takes this list and
-  /// `processInfoRules`' denial together, and a plugin declaring
-  /// `process_info` reads them: no rule separates them from libproc.
+  /// The nodes addressed by one pid (`kern.proc.pid`, `kern.procargs`,
+  /// `kern.procargs2`) are macOS's exception: it also serves them to whoever
+  /// may `proc_pidinfo` that process, whatever `sysctl-read` says, and no
+  /// rule separates them from libproc. Closing them takes this list and
+  /// `processInfoRules`' denial together, which is why a plugin's profile
+  /// never opens `process-info-pidinfo` for another process.
   ///
   /// `kern.bootargs` is refused without a log line: libsystem asks at every
   /// start and runs without it, as in Apple's containers.
@@ -156,9 +143,9 @@ enum PluginSandbox {
   /// capability composition: everything is denied except loading the binary
   /// (plugin root + system libraries, plus an interpreter outside the root),
   /// the plugin's own data dir, the system description `sysctlRules` lists,
-  /// declared mach allowances, network-outbound when the `network`
-  /// capability is declared — never to the resident's own socket — and reads
-  /// of other processes when `process_info` is (`processInfoRules`).
+  /// declared mach allowances, and network-outbound when the `network`
+  /// capability is declared, never to the resident's own socket. Nothing
+  /// opens another process (`processInfoRules`).
   static func denyDefaultSandboxProfile(
     for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL,
     executablePath: String = "",
@@ -197,7 +184,7 @@ enum PluginSandbox {
         + " (global-name \"com.apple.system.logger\"))",
     ]
     lines.append(contentsOf: sysctlRules)
-    lines.append(contentsOf: processInfoRules(for: manifest))
+    lines.append(contentsOf: processInfoRules)
     if manifest.capabilities.contains(.network) {
       lines.append("(allow network-outbound)")
       lines.append(residentSocketDeny(residentSocketDirectories))

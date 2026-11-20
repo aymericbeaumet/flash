@@ -30,7 +30,8 @@ touched per `host.audio_devices` request of a plugin holding the
 `audio_devices` capability, and the lock chord, power management and the
 System Events and Finder scripts per `host.system_action` request of one
 holding `system_actions`, `kill(2)` per confirmed `host.process_signal`
-request of one holding `process_signal`, EventKit per
+request of one holding `process_signal`, the process table per
+`host.process_table` request of one holding `process_table`, EventKit per
 `host.calendar_events` request of one holding `calendar_events`, its database
 observed only while such a plugin listens to `core:calendar.changed`, and
 Notes' scripts, the reminders and the contact cards per `host.notes`,
@@ -128,6 +129,7 @@ joins it.
 | Another account or a system daemon | The IPC socket and the loopback listeners | `IPCServer` refuses every peer whose `getpeereid` uid is not the resident's, in a `0700` directory it refuses when it is a link or another account's; `DebugServer` answers its data endpoints only with `HelpAccess`'s token, from a `0600` file it refuses to trust when it is not private; `OTLPReceiver` refuses senders without `[telemetry.receiver] token` once one is set, and `Doctor.telemetryReceiverCheck` warns when it runs without one while a monitor runs commands from a received metric (`Config.monitorsRunOnReceivedMetrics`) |
 | A web page | The help server, via fetch, DNS rebinding or framing | The `Host` check (own host and port only), the cross-site change refusal, the access token, `Cross-Origin-Resource-Policy` and frame headers |
 | A plugin | NDJSON stdio requests, its manifest | Capabilities and the seatbelt profile; `host.open` and row `open` effects never take a `file:` URL, so a plugin cannot have LaunchServices run what it wrote outside its sandbox |
+| A sandboxed plugin | Other processes: their arguments and environment hold tokens | `PluginSandbox.processInfoRules` and `sysctlRules` deny every other process in every profile, with no capability to open one; the process table is `HostProcessTable`'s, which reads no arguments and no environment and answers figures and executable names |
 | Text another app controls (titles, app names, AX values, clipboard, feeds, tmux output) | Status values, rows, popups, alerts | Values are escaped (`FlashStatusBarTemplateEngine.escapedLiteral` in the host, `Markup::text` in a plugin) before they reach a format, so they never become a style, a range or a link; every `#[link]` a plugin, source or program did write leaves through the overlay's one `StatusLinkOpener`, which `StatusLinkPolicy` limits to `http`, `https`, `mailto` and `[statusbar] link_schemes` (a refusal logs the scheme alone and reaches `resident doctor`); terminal popups read only `http`/`https` hyperlinks, through the same opener, and ignore clipboard writes (OSC 52); concealed and transient pasteboard types never enter clipboard history |
 | A network attacker | Update checks, feeds, plugin downloads | HTTPS, the GitHub digest and code-signature checks of `UpdateController`, full pinned commits for third-party plugins, bounded fetches |
 

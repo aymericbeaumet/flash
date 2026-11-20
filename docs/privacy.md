@@ -327,23 +327,27 @@ stored as separate register files.
   windows, nothing in them) and which status item of the menu bar is the
   clock or Control Center, all through Accessibility. Flash keeps only which
   view or panel is open, in memory.
-- **Process status and focused-app details:** while the bar, an open text
-  popup, a visible widget or a monitor shows a
-  [process value](status-format.md#process-values), and while a flashlight
-  query names `@processes`, the bundled `processes` plugin reads process
-  IDs, executable paths (a process is named after its executable), CPU time
-  and resident memory through libproc, in its own sandboxed process.
-  Focused-app details also read the app's descendants, their thread counts
-  and open-descriptor lists (to count sockets; no descriptor is examined),
-  its start time and cumulative disk I/O, and show up to five helpers from
-  that same sample. The app's name is the one Flash reports for running
-  apps, its version and build come from the bundle's `Info.plist`, and its
-  bundle and executable paths from the kernel. These values stay in memory
-  (the plugin's, and Flash's for what it shows); the plugin reads no command
-  arguments, environment variables or file contents beyond that
-  `Info.plist`, stores nothing and has no network access. Application paths
-  can contain your account name, so review a popup screenshot before
-  sharing it.
+- **Process status and focused-app details:** Flash reads the process
+  table, through libproc, for the bundled `processes` plugin, which is
+  sandboxed and reads no process itself. It reads only while the bar, an
+  open text popup, a visible widget or a monitor shows a
+  [process value](status-format.md#process-values), while a flashlight
+  query names `@processes`, and when a picked `@processes` row checks that
+  its process is still the one it listed. What
+  Flash hands the plugin of each of your processes is its process ID, when
+  it started, its CPU time, its resident memory and the name of its
+  executable. For the focused app it adds the app's descendants, their
+  thread counts and open-socket counts (from the descriptor list; no
+  descriptor is examined), their cumulative disk I/O, and the app's
+  executable path and start time; the plugin shows up to five helpers from
+  that same sample. Flash never reads a process's launch arguments or its
+  environment variables, so neither reaches the plugin. The app's name is
+  the one Flash reports for running apps, and its version and build come
+  from the bundle's `Info.plist`, which the plugin reads. These values stay
+  in memory (the plugin's, and Flash's for what it shows); the plugin reads
+  no file contents beyond that `Info.plist`, stores nothing and has no
+  network access. Application paths can contain your account name, so
+  review a popup screenshot before sharing it.
 - **Window titles:** for `window switch` and the flashlight's `@windows`, Flash reads every regular app's
   windows through Accessibility (title, whether minimized) and its name and
   icon, and remembers the order you focused windows in. It reads them at
@@ -533,9 +537,10 @@ Flash (`file:`), so it cannot have a script or an app it wrote run outside its
 sandbox. A sandboxed plugin asks macOS about its own process alone: the
 profile denies it the process list and other processes' names, launch
 arguments, environment, CPU time, memory, disk I/O, thread counts,
-open-descriptor lists and executable paths, which only a plugin declaring the
-`process_info` capability reads, and their code signatures, which no
-sandboxed plugin reads. The denial covers both interfaces macOS serves them
+open-descriptor lists, executable paths and code signatures. No capability
+and no manifest key opens any of them: a plugin that shows processes asks
+Flash, which answers figures and executable names and never arguments or
+environment. The denial covers both interfaces macOS serves them
 through: process information (libproc) and kernel settings (`sysctl`), of
 which a plugin reads a fixed list describing the hardware, the system
 version, the host name, uptime, memory, load, file-system types, network
@@ -569,12 +574,15 @@ The plugin reads and stores nothing. `menus` is sandboxed with no allowance eith
 and reads no app itself: behind the `accessibility` capability its manifest
 declares it asks Flash for the menu bar of the app that owns it, and presses
 an item only by the handle Flash gave that snapshot, which a later snapshot
-or the app quitting retires. `processes` is the one bundled plugin
-declaring `process_info`: its profile lets it list processes and read their
-CPU time, memory, disk I/O, thread counts, open-descriptor lists and
-executable paths, which is what its tables, the focused app's summary and
-`@processes` show. macOS attaches your processes' launch arguments and
-environment to the same permission; the plugin reads neither. No plugin
+or the app quitting retires. `processes` is sandboxed with no allowance
+too, and reads no process: behind the `process_table` capability its
+manifest declares, it asks Flash for the table, and Flash answers each
+process's ID, start, CPU time, resident memory and executable name, and for
+the focused app its tree's thread and socket counts, disk I/O and
+executable path, which is what its tables, the focused app's summary and
+`@processes` show. macOS serves a process's launch arguments and
+environment to any process allowed to read that much of it, which is why no
+plugin is: Flash reads the table itself and reads neither. No plugin
 signals a process, this one included: `process kill` and a picked
 `@processes` row ask Flash behind the `process_signal` capability, and Flash
 sends SIGTERM to one process only for a request you just answered `y` to,
@@ -620,7 +628,12 @@ off on its own in `[plugins] disabled`.
 
 Third-party plugins load only when listed in `[plugins] third_party`, and GitHub
 references must pin a full commit SHA. They get the same sandbox: one runs
-unsandboxed only when its manifest declares `"sandbox": false`.
+unsandboxed only when its manifest declares `"sandbox": false`. The install
+step such a plugin may declare runs before it, under a looser profile: it
+writes only into the plugin's own directories, but it reaches the network,
+runs other programs and reads what they can of your processes, launch
+arguments and environment included, since it fetches and builds the plugin.
+No bundled plugin has one.
 `[plugins.<id>] sandbox = false` in your configuration turns any plugin's
 sandbox off.
 

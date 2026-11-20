@@ -27,12 +27,13 @@ plugins.
    user confirmed. The mechanisms stay in the host, so the plugin runs in the
    default sandbox with no allowance; a failure is the command's words and
    the host's reason, which the host shows.
-3. **Observed status + live source + sandbox capability —
+3. **Observed status + live source + host-read data —
    `Plugins/processes`.** The busiest processes and the focused app's
    resources as status segments, every process as `@processes` rows and
-   `process kill`. It reads the process table in its own process through
-   libproc, which its sandbox profile opens with the `process_info`
-   capability, and samples only while `core:status.observed` lists one of
+   `process kill`. It reads no process: the host reads the table for it
+   (`ctx.processes`, `ctx.process_tree`, the `process_table` capability),
+   and the plugin keeps the policy, which is what to sample, when, and how
+   it reads as text. It samples only while `core:status.observed` lists one of
    its segments: one `ctx.interval` per group of segments, cancelled and
    re-armed through its `PollHandle`, and a `ctx.wait` for the 150 ms a
    first CPU reading brackets. The source is `"live": "per_query"`, answered

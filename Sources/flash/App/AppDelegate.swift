@@ -637,6 +637,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     })
     // `kill(2)` for `host.process_signal`, wired here alone like the above.
     pluginManager.hostRPC.processSignals = LiveProcessSignals()
+    // libproc for `host.process_table`, wired here alone too: no plugin
+    // reads another process.
+    pluginManager.hostRPC.processTable = HostProcessTable(kernel: LibprocKernel())
     // EventKit for `host.calendar_events`, wired here alone too. A burst of
     // database changes, or the user answering macOS's prompt, is one
     // `core:calendar.changed`.

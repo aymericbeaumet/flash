@@ -655,6 +655,18 @@ async fn emitted(plugin_frames: &[Line]) -> Vec<(&'static str, Value)> {
             .await,
         ),
         (
+            "host.process_table.list",
+            request(|ctx| async move { ctx.processes(None).await }).await,
+        ),
+        (
+            "host.process_table.list.pids",
+            request(|ctx| async move { ctx.processes(Some(&[4300, 9999])).await }).await,
+        ),
+        (
+            "host.process_table.tree",
+            request(|ctx| async move { ctx.process_tree(4242).await }).await,
+        ),
+        (
             "host.calendar_events.access",
             request(|ctx| async move { ctx.calendar_access().await }).await,
         ),

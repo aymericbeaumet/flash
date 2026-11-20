@@ -52,7 +52,7 @@
   ],
   "capabilities": [
     "app_control",
-    "process_info",
-    "process_signal"
+    "process_signal",
+    "process_table"
   ]
 }

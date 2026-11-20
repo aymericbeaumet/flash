@@ -68,6 +68,10 @@ The lines describe one plugin and one moment:
   confirmed perform is in flight, so a destructive one is refused.
 - No process is signalled: with no confirmed perform in flight, the host
   refuses a signal to pid 4242.
+- The process table, read when the host's monotonic clock says
+  90000000000: Safari (pid 4242, started 1799996400) with its content
+  process (4243), then a shell (4300). launchd is root's and is not listed;
+  no process has pid 9999.
 - macOS grants Calendars access. From 2027-01-15 08:00 UTC (1800000000) the
   calendar holds `Standup` at 08:12 in `Work`, with a URL, the location
   `Room 4` and a Zoom link in its notes, and `Lunch` at 10:00 in `Home`.

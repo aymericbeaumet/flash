@@ -1,21 +1,22 @@
-//! The plugin's one process model: every visible process, and the whole
-//! process tree of one app.
+//! The plugin's one process model: every process the user may measure, and
+//! the whole process tree of one app. Both are read by the host
+//! (`host.process_table`): this plugin reads no process itself.
 //!
 //! CPU is a delta. Each pid's cumulative CPU time is cached with the moment
-//! it was read, and the next read divides the difference by the time
-//! elapsed: the average over the reader's own period, not a lifetime mean. A
-//! pid with no usable prior read is read twice, [`SAMPLE_WINDOW`] apart, so
-//! its first figure is real rather than zero. That window is a deadline on
-//! the host's clock, never a sleep. The share is of one core, as `top` and
-//! Activity Monitor report it.
+//! the host read it, and the next read divides the difference by the time
+//! between the two: the average over the reader's own period, not a lifetime
+//! mean. A pid with no usable prior read is read twice, [`SAMPLE_WINDOW`]
+//! apart, so its first figure is real rather than zero. That window is a
+//! deadline on the host's clock, never a sleep. The share is of one core, as
+//! `top` and Activity Monitor report it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use flash_plugin::{Context, PollPriority};
+use flash_plugin::{Context, PollPriority, ProcessEntry, TreeProcess};
 
-use crate::sys::{Kernel, Usage, basename};
+use crate::sys::Machine;
 
 /// The bracket for a pid read for the first time.
 pub(crate) const SAMPLE_WINDOW: Duration = Duration::from_millis(150);
@@ -53,25 +54,73 @@ pub(crate) struct Tree {
 }
 
 /// One read of a pid, kept so the next read computes CPU as a delta.
-/// `start_abstime` guards against pid reuse; the path is cached because
-/// `proc_pidpath` is the most expensive per-pid call of a sweep.
+/// `start_abstime` guards against pid reuse; the name is the one the host
+/// read at the end of the pid's first bracket.
 struct Sample {
     cpu_ns: u64,
-    sampled_at: Instant,
+    /// The host's monotonic clock at that read, in nanoseconds.
+    sampled_at: u64,
     start_abstime: u64,
-    path: String,
     name: String,
+}
+
+/// One process as one read of the host found it. A list carries no disk
+/// figures, and names only the processes it was asked for by pid.
+#[derive(Clone)]
+struct Reading {
+    pid: i32,
+    start_abstime: u64,
+    cpu_ns: u64,
+    resident_bytes: u64,
+    disk_read_bytes: u64,
+    disk_write_bytes: u64,
+    name: Option<String>,
+}
+
+impl From<&ProcessEntry> for Reading {
+    fn from(process: &ProcessEntry) -> Self {
+        Self {
+            pid: process.pid,
+            start_abstime: process.start,
+            cpu_ns: process.cpu_ns,
+            resident_bytes: process.resident_bytes,
+            disk_read_bytes: 0,
+            disk_write_bytes: 0,
+            name: process.name.clone(),
+        }
+    }
+}
+
+impl From<&TreeProcess> for Reading {
+    fn from(process: &TreeProcess) -> Self {
+        Self {
+            disk_read_bytes: process.disk_read_bytes,
+            disk_write_bytes: process.disk_write_bytes,
+            ..Self::from(&process.process)
+        }
+    }
 }
 
 struct Sampled {
-    usage: Usage,
+    reading: Reading,
     cpu_percent: f64,
-    path: String,
     name: String,
 }
 
+impl Sampled {
+    fn process(&self) -> Process {
+        Process {
+            pid: self.reading.pid,
+            name: self.name.clone(),
+            cpu_percent: self.cpu_percent,
+            resident_bytes: self.reading.resident_bytes,
+            start_abstime: self.reading.start_abstime,
+        }
+    }
+}
+
 pub(crate) struct ProcessTable {
-    kernel: Arc<dyn Kernel>,
+    machine: Arc<dyn Machine>,
     samples: Mutex<HashMap<i32, Sample>>,
 }
 
@@ -85,15 +134,15 @@ fn share(before_ns: u64, after_ns: u64, elapsed: Duration) -> f64 {
 }
 
 impl ProcessTable {
-    pub(crate) fn new(kernel: Arc<dyn Kernel>) -> Self {
+    pub(crate) fn new(machine: Arc<dyn Machine>) -> Self {
         Self {
-            kernel,
+            machine,
             samples: Mutex::new(HashMap::new()),
         }
     }
 
-    pub(crate) fn kernel(&self) -> &Arc<dyn Kernel> {
-        &self.kernel
+    pub(crate) fn machine(&self) -> &Arc<dyn Machine> {
+        &self.machine
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<i32, Sample>> {
@@ -102,21 +151,28 @@ impl ProcessTable {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Every visible process, in the kernel's order. Empty only when the
-    /// read failed: the reading process itself is always listed.
+    /// Every process the user may measure, in the kernel's order. Empty
+    /// when the host could not read: this process itself is always listed.
     pub(crate) async fn processes(&self, ctx: &Context) -> Vec<Process> {
-        let pids = self.kernel.pids();
-        let sampled = self.sample(ctx, &pids, true).await;
-        pids.iter()
-            .filter_map(|pid| {
-                sampled.get(pid).map(|process| Process {
-                    pid: *pid,
-                    name: process.name.clone(),
-                    cpu_percent: process.cpu_percent,
-                    resident_bytes: process.usage.resident_bytes,
-                    start_abstime: process.usage.start_abstime,
-                })
-            })
+        let Ok(first) = ctx.processes(None).await else {
+            return Vec::new();
+        };
+        let order: Vec<i32> = first.processes.iter().map(|process| process.pid).collect();
+        let readings = first.processes.iter().map(Reading::from).collect();
+        let (mut sampled, unread) = self.settle(first.at, readings, true);
+        if !unread.is_empty() {
+            // `High`: a table on screen, or a query someone typed, waits on
+            // it.
+            ctx.wait(SAMPLE_WINDOW, PollPriority::High).await;
+            let pids: Vec<i32> = unread.iter().map(|reading| reading.pid).collect();
+            if let Ok(second) = ctx.processes(Some(&pids)).await {
+                let again = second.processes.iter().map(Reading::from).collect();
+                self.bracket(first.at, unread, second.at, again, &mut sampled);
+            }
+        }
+        order
+            .iter()
+            .filter_map(|pid| sampled.get(pid).map(Sampled::process))
             .collect()
     }
 
@@ -124,9 +180,33 @@ impl ProcessTable {
     /// lives mostly in helpers, so a root-only figure would under-report
     /// the app. Nil when `root` is gone.
     pub(crate) async fn tree(&self, ctx: &Context, root: i32) -> Option<Tree> {
-        let pids = self.descendants(root);
-        let sampled = self.sample(ctx, &pids, false).await;
+        let first = ctx.process_tree(root).await.ok()?;
+        let order: Vec<i32> = first
+            .processes
+            .iter()
+            .map(|process| process.process.pid)
+            .collect();
+        let readings = first.processes.iter().map(Reading::from).collect();
+        let (mut sampled, unread) = self.settle(first.at, readings, false);
+        // The counts, the root's path and its start are the last read's, as
+        // the figures of a pid read for the first time are.
+        let mut last = first;
+        if !unread.is_empty() {
+            // `High`: the placeholder on screen is waiting for it.
+            ctx.wait(SAMPLE_WINDOW, PollPriority::High).await;
+            if let Ok(second) = ctx.process_tree(root).await {
+                let again = second.processes.iter().map(Reading::from).collect();
+                self.bracket(last.at, unread, second.at, again, &mut sampled);
+                last = second;
+            }
+        }
         let main = sampled.get(&root)?;
+        let detail: HashMap<i32, &TreeProcess> = last
+            .processes
+            .iter()
+            .map(|process| (process.process.pid, process))
+            .collect();
+        let count = |value: u64| usize::try_from(value).unwrap_or(usize::MAX);
         let mut tree = Tree {
             pid: root,
             name: main.name.clone(),
@@ -135,14 +215,16 @@ impl ProcessTable {
             process_count: 0,
             thread_count: 0,
             socket_count: 0,
-            uptime_seconds: self.kernel.uptime_seconds(root),
+            uptime_seconds: last
+                .started_at
+                .map_or(0, |started| self.machine.now().saturating_sub(started)),
             disk_read_bytes: 0,
             disk_write_bytes: 0,
-            start_abstime: main.usage.start_abstime,
-            executable_path: main.path.clone(),
+            start_abstime: main.reading.start_abstime,
+            executable_path: last.path.clone().unwrap_or_default(),
             descendants: Vec::new(),
         };
-        for pid in &pids {
+        for pid in &order {
             let Some(process) = sampled.get(pid) else {
                 continue;
             };
@@ -150,157 +232,156 @@ impl ProcessTable {
             tree.cpu_percent += process.cpu_percent;
             tree.resident_bytes = tree
                 .resident_bytes
-                .saturating_add(process.usage.resident_bytes);
+                .saturating_add(process.reading.resident_bytes);
             tree.disk_read_bytes = tree
                 .disk_read_bytes
-                .saturating_add(process.usage.disk_read_bytes);
+                .saturating_add(process.reading.disk_read_bytes);
             tree.disk_write_bytes = tree
                 .disk_write_bytes
-                .saturating_add(process.usage.disk_write_bytes);
-            tree.thread_count += self.kernel.thread_count(*pid);
-            tree.socket_count += self.kernel.socket_count(*pid);
+                .saturating_add(process.reading.disk_write_bytes);
+            if let Some(detail) = detail.get(pid) {
+                tree.thread_count = tree.thread_count.saturating_add(count(detail.threads));
+                tree.socket_count = tree.socket_count.saturating_add(count(detail.sockets));
+            }
             if *pid != root {
-                tree.descendants.push(Process {
-                    pid: *pid,
-                    name: process.name.clone(),
-                    cpu_percent: process.cpu_percent,
-                    resident_bytes: process.usage.resident_bytes,
-                    start_abstime: process.usage.start_abstime,
-                });
+                tree.descendants.push(process.process());
             }
         }
         Some(tree)
     }
 
-    /// A pid's executable name as it is now, or nil when it is gone or not
-    /// this user's to inspect.
-    pub(crate) fn name(&self, pid: i32) -> Option<String> {
-        basename(&self.kernel.path(pid)?)
-    }
-
     /// When the process at `pid` started: with the pid, its identity. Nil
-    /// when it is gone, or another user's.
-    pub(crate) fn start(&self, pid: i32) -> Option<u64> {
-        self.kernel.usage(pid).map(|usage| usage.start_abstime)
+    /// when it is gone, or not this user's to measure.
+    pub(crate) async fn start(&self, ctx: &Context, pid: i32) -> Option<u64> {
+        let listed = ctx.processes(Some(&[pid])).await.ok()?;
+        listed
+            .processes
+            .iter()
+            .find(|process| process.pid == pid && process.name.is_some())
+            .map(|process| process.start)
     }
 
-    /// `root`, then its children, then theirs: breadth first, each once.
-    fn descendants(&self, root: i32) -> Vec<i32> {
-        let mut ordered = vec![root];
-        let mut seen: HashSet<i32> = HashSet::from([root]);
-        let mut index = 0;
-        while index < ordered.len() {
-            let parent = ordered[index];
-            index += 1;
-            for child in self.kernel.children(parent) {
-                if child > 0 && seen.insert(child) {
-                    ordered.push(child);
-                }
-            }
-        }
-        ordered
-    }
-
-    /// Read every pid once; a pid without a usable prior read is read again
-    /// after the window. Prior reads come from the cache whichever caller
-    /// made them; a full sweep prunes the pids that are gone.
-    async fn sample(
+    /// Compute each reading the host took at `at` against the pid's prior
+    /// read. A pid without a usable one is returned to be read again after
+    /// the window. Prior reads come from the cache whichever caller made
+    /// them; a full sweep prunes the pids that are gone.
+    fn settle(
         &self,
-        ctx: &Context,
-        pids: &[i32],
+        at: u64,
+        readings: Vec<Reading>,
         prune_others: bool,
-    ) -> HashMap<i32, Sampled> {
+    ) -> (HashMap<i32, Sampled>, Vec<Reading>) {
         let mut out: HashMap<i32, Sampled> = HashMap::new();
-        let mut needs_bracket: Vec<(i32, Usage)> = Vec::new();
-        let now = Instant::now();
-        {
-            let mut samples = self.lock();
-            for pid in pids {
-                let Some(usage) = self.kernel.usage(*pid) else {
-                    continue;
-                };
-                match samples.get_mut(pid) {
-                    Some(prior)
-                        if prior.start_abstime == usage.start_abstime && now > prior.sampled_at =>
-                    {
-                        let cpu_percent = share(prior.cpu_ns, usage.cpu_ns, now - prior.sampled_at);
-                        prior.cpu_ns = usage.cpu_ns;
-                        prior.sampled_at = now;
-                        out.insert(
-                            *pid,
-                            Sampled {
-                                usage,
-                                cpu_percent,
-                                path: prior.path.clone(),
-                                name: prior.name.clone(),
-                            },
-                        );
-                    }
-                    _ => needs_bracket.push((*pid, usage)),
-                }
-            }
-            if prune_others {
-                let live: HashSet<i32> = pids.iter().copied().collect();
-                samples.retain(|pid, _| live.contains(pid));
-            }
-        }
-        if needs_bracket.is_empty() {
-            return out;
-        }
-
-        // `High`: a table on screen, or a query someone typed, waits on it.
-        ctx.wait(SAMPLE_WINDOW, PollPriority::High).await;
-        let after = Instant::now();
-        let window = after - now;
+        let mut unread: Vec<Reading> = Vec::new();
         let mut samples = self.lock();
-        for (pid, first) in needs_bracket {
-            let Some(usage) = self.kernel.usage(pid) else {
+        if prune_others {
+            let live: HashSet<i32> = readings.iter().map(|reading| reading.pid).collect();
+            samples.retain(|pid, _| live.contains(pid));
+        }
+        for reading in readings {
+            match samples.get_mut(&reading.pid) {
+                Some(prior)
+                    if prior.start_abstime == reading.start_abstime && at > prior.sampled_at =>
+                {
+                    let cpu_percent = share(
+                        prior.cpu_ns,
+                        reading.cpu_ns,
+                        Duration::from_nanos(at - prior.sampled_at),
+                    );
+                    prior.cpu_ns = reading.cpu_ns;
+                    prior.sampled_at = at;
+                    out.insert(
+                        reading.pid,
+                        Sampled {
+                            cpu_percent,
+                            name: prior.name.clone(),
+                            reading,
+                        },
+                    );
+                }
+                _ => unread.push(reading),
+            }
+        }
+        (out, unread)
+    }
+
+    /// The second read of the pids `settle` returned: `again`, taken at
+    /// `second_at`. A pid that is gone, was reused meanwhile or has no name
+    /// stays out.
+    fn bracket(
+        &self,
+        first_at: u64,
+        firsts: Vec<Reading>,
+        second_at: u64,
+        again: Vec<Reading>,
+        out: &mut HashMap<i32, Sampled>,
+    ) {
+        let mut again: HashMap<i32, Reading> = again
+            .into_iter()
+            .map(|reading| (reading.pid, reading))
+            .collect();
+        let window = Duration::from_nanos(second_at.saturating_sub(first_at));
+        let mut samples = self.lock();
+        for first in firsts {
+            let Some(reading) = again.remove(&first.pid) else {
                 continue;
             };
-            if usage.start_abstime != first.start_abstime {
+            if reading.start_abstime != first.start_abstime {
                 continue;
             }
-            let Some(path) = self.kernel.path(pid) else {
+            let Some(name) = reading.name.clone() else {
                 continue;
             };
-            let Some(name) = basename(&path) else {
-                continue;
-            };
-            let cpu_percent = share(first.cpu_ns, usage.cpu_ns, window);
+            let cpu_percent = share(first.cpu_ns, reading.cpu_ns, window);
             samples.insert(
-                pid,
+                reading.pid,
                 Sample {
-                    cpu_ns: usage.cpu_ns,
-                    sampled_at: after,
-                    start_abstime: usage.start_abstime,
-                    path: path.clone(),
+                    cpu_ns: reading.cpu_ns,
+                    sampled_at: second_at,
+                    start_abstime: reading.start_abstime,
                     name: name.clone(),
                 },
             );
             out.insert(
-                pid,
+                reading.pid,
                 Sampled {
-                    usage,
+                    reading,
                     cpu_percent,
-                    path,
                     name,
                 },
             );
         }
-        out
     }
 }
 
 #[cfg(test)]
 pub(crate) mod testing {
-    //! A scripted kernel: the processes a test declares, and nothing of the
-    //! machine the test runs on.
+    //! A scripted Mac: the processes a test declares, as the host reports
+    //! them, and nothing of the machine the test runs on.
 
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use serde_json::{Value, json};
 
     use crate::bundle::BundleInfo;
-    use crate::sys::{Kernel, Usage};
+    use crate::sys::Machine;
+
+    /// The wall clock of every scripted Mac, in Unix seconds.
+    pub(crate) const NOW: u64 = 1_800_000_000;
+    /// How far the host's monotonic clock moves between two reads.
+    const READ_INTERVAL_NS: u64 = 10_000_000;
+
+    /// What the host reads of one process.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Usage {
+        pub(crate) cpu_ns: u64,
+        pub(crate) resident_bytes: u64,
+        pub(crate) disk_read_bytes: u64,
+        pub(crate) disk_write_bytes: u64,
+        pub(crate) start_abstime: u64,
+    }
 
     #[derive(Clone, Debug, Default)]
     pub(crate) struct FakeProcess {
@@ -313,15 +394,17 @@ pub(crate) mod testing {
     }
 
     #[derive(Default)]
-    pub(crate) struct FakeKernel {
+    pub(crate) struct FakeMachine {
         pub(crate) processes: Mutex<BTreeMap<i32, FakeProcess>>,
         pub(crate) bundles: Mutex<BTreeMap<String, BundleInfo>>,
         pub(crate) physical_memory: u64,
         /// How many times a bundle was read.
         pub(crate) bundle_reads: Mutex<usize>,
+        /// The host's monotonic clock, in nanoseconds.
+        clock: AtomicU64,
     }
 
-    impl FakeKernel {
+    impl FakeMachine {
         pub(crate) fn new(physical_memory: u64) -> Self {
             Self {
                 physical_memory,
@@ -359,65 +442,98 @@ pub(crate) mod testing {
         pub(crate) fn exit(&self, pid: i32) {
             self.processes.lock().unwrap().remove(&pid);
         }
+
+        /// Whether `pid` names a declared process.
+        pub(crate) fn runs(&self, pid: Option<i64>) -> bool {
+            pid.and_then(|pid| i32::try_from(pid).ok())
+                .is_some_and(|pid| self.processes.lock().unwrap().contains_key(&pid))
+        }
+
+        /// One process as the host reports it. `named`: asked for by pid,
+        /// or part of a tree.
+        fn process(pid: i32, process: &FakeProcess, named: bool) -> Value {
+            let name = process.path.trim_end_matches('/').rsplit('/').next();
+            let mut row = json!({
+                "pid": pid, "start": process.usage.start_abstime,
+                "cpu_ns": process.usage.cpu_ns, "resident_bytes": process.usage.resident_bytes,
+            });
+            if let Some(name) = name.filter(|name| named && !name.is_empty()) {
+                row["name"] = json!(name);
+            }
+            row
+        }
+
+        /// The host's reply to one `host.process_table` request: every
+        /// declared process is the user's to measure, in pid order.
+        pub(crate) fn reply(&self, params: &Value) -> Value {
+            let at = self.clock.fetch_add(READ_INTERVAL_NS, Ordering::SeqCst) + READ_INTERVAL_NS;
+            let processes = self.processes.lock().unwrap();
+            match params["operation"].as_str() {
+                Some("list") => {
+                    let named = params.get("pids").is_some();
+                    let pids: Vec<i32> = match params.get("pids") {
+                        None => processes.keys().copied().collect(),
+                        Some(pids) => pids
+                            .as_array()
+                            .expect("pids is a list")
+                            .iter()
+                            .map(|pid| pid.as_i64().expect("a pid") as i32)
+                            .collect(),
+                    };
+                    let rows: Vec<Value> = pids
+                        .iter()
+                        .filter_map(|pid| Some(Self::process(*pid, processes.get(pid)?, named)))
+                        .collect();
+                    json!({ "ok": true, "at": at, "processes": rows })
+                }
+                Some("tree") => {
+                    let root = params["pid"].as_i64().expect("a pid") as i32;
+                    let Some(main) = processes.get(&root) else {
+                        return json!({ "ok": true, "at": at, "processes": [] });
+                    };
+                    let mut ordered = vec![root];
+                    let mut seen = BTreeSet::from([root]);
+                    let mut index = 0;
+                    while index < ordered.len() {
+                        let parent = ordered[index];
+                        index += 1;
+                        for (pid, process) in processes.iter() {
+                            if process.parent == parent && seen.insert(*pid) {
+                                ordered.push(*pid);
+                            }
+                        }
+                    }
+                    let rows: Vec<Value> = ordered
+                        .iter()
+                        .map(|pid| {
+                            let process = &processes[pid];
+                            let mut row = Self::process(*pid, process, true);
+                            row["threads"] = json!(process.threads);
+                            row["sockets"] = json!(process.sockets);
+                            row["disk_read_bytes"] = json!(process.usage.disk_read_bytes);
+                            row["disk_write_bytes"] = json!(process.usage.disk_write_bytes);
+                            row
+                        })
+                        .collect();
+                    json!({
+                        "ok": true, "at": at, "processes": rows, "path": main.path,
+                        "started_at": NOW - main.uptime_seconds,
+                    })
+                }
+                _ => {
+                    json!({ "ok": false, "error": "host.process_table requires a supported operation" })
+                }
+            }
+        }
     }
 
-    impl Kernel for FakeKernel {
-        fn pids(&self) -> Vec<i32> {
-            self.processes.lock().unwrap().keys().copied().collect()
-        }
-
-        fn children(&self, parent: i32) -> Vec<i32> {
-            self.processes
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|(_, process)| process.parent == parent)
-                .map(|(pid, _)| *pid)
-                .collect()
-        }
-
-        fn usage(&self, pid: i32) -> Option<Usage> {
-            self.processes
-                .lock()
-                .unwrap()
-                .get(&pid)
-                .map(|process| process.usage)
-        }
-
-        fn path(&self, pid: i32) -> Option<String> {
-            self.processes
-                .lock()
-                .unwrap()
-                .get(&pid)
-                .map(|process| process.path.clone())
-        }
-
-        fn thread_count(&self, pid: i32) -> usize {
-            self.processes
-                .lock()
-                .unwrap()
-                .get(&pid)
-                .map_or(0, |process| process.threads)
-        }
-
-        fn socket_count(&self, pid: i32) -> usize {
-            self.processes
-                .lock()
-                .unwrap()
-                .get(&pid)
-                .map_or(0, |process| process.sockets)
-        }
-
-        fn uptime_seconds(&self, pid: i32) -> u64 {
-            self.processes
-                .lock()
-                .unwrap()
-                .get(&pid)
-                .map_or(0, |process| process.uptime_seconds)
-        }
-
+    impl Machine for FakeMachine {
         fn physical_memory(&self) -> u64 {
             self.physical_memory.max(1)
+        }
+
+        fn now(&self) -> u64 {
+            NOW
         }
 
         fn bundle_info(&self, bundle_path: &str) -> BundleInfo {
@@ -434,14 +550,13 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
-    use super::testing::FakeKernel;
+    use super::testing::FakeMachine;
     use super::*;
-    use crate::sys::Libproc;
     use crate::testing::{Host, deadlines};
     use serde_json::json;
 
-    /// Run `read` to its end, with the host landing the bracket it asks
-    /// for; also the deadlines it registered meanwhile.
+    /// Run `read` to its end, with the host answering its reads and landing
+    /// the bracket it asks for; also the deadlines it registered meanwhile.
     async fn read<T: Send + 'static>(
         host: &mut Host,
         read: impl std::future::Future<Output = T> + Send + 'static,
@@ -451,8 +566,8 @@ mod tests {
         (task.await.unwrap(), deadlines(&frames))
     }
 
-    fn table(kernel: &Arc<FakeKernel>) -> Arc<ProcessTable> {
-        Arc::new(ProcessTable::new(kernel.clone()))
+    fn table(machine: &Arc<FakeMachine>) -> Arc<ProcessTable> {
+        Arc::new(ProcessTable::new(machine.clone()))
     }
 
     #[test]
@@ -465,12 +580,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_first_read_brackets_a_window_and_the_next_one_is_a_delta() {
-        let kernel = Arc::new(FakeKernel::new(1 << 30));
-        kernel.spawn(10, 1, "/usr/bin/first", 100);
-        kernel.spawn(20, 1, "/Applications/Second.app/Contents/MacOS/Second", 200);
-        kernel.update(20, |process| process.usage.resident_bytes = 4096);
-        let table = table(&kernel);
-        let mut host = Host::new(json!({}));
+        let machine = Arc::new(FakeMachine::new(1 << 30));
+        machine.spawn(10, 1, "/usr/bin/first", 100);
+        machine.spawn(20, 1, "/Applications/Second.app/Contents/MacOS/Second", 200);
+        machine.update(20, |process| process.usage.resident_bytes = 4096);
+        let table = table(&machine);
+        let mut host = Host::new(json!({}), &machine);
 
         let ctx = host.harness.context();
         let reader = table.clone();
@@ -481,6 +596,14 @@ mod tests {
             "the bracket is one host deadline"
         );
         assert_eq!(
+            host.reads,
+            [
+                json!({ "operation": "list" }),
+                json!({ "operation": "list", "pids": [10, 20] })
+            ],
+            "the whole table, then only the pids read for the first time"
+        );
+        assert_eq!(
             rows.iter()
                 .map(|row| (row.pid, row.name.as_str(), row.resident_bytes))
                 .collect::<Vec<_>>(),
@@ -489,73 +612,138 @@ mod tests {
         assert_eq!(rows[1].start_abstime, 200);
         assert_eq!(rows[0].cpu_percent, 0.0, "idle across the window");
 
-        // Known pids are deltas since their last read: no window, no wait.
-        kernel.update(10, |process| process.usage.cpu_ns = 1_000_000);
+        // Known pids are deltas since their last read: no window, no wait,
+        // one read. A millisecond of CPU over the 10 ms between the host's
+        // two reads is a tenth of a core.
+        machine.update(10, |process| process.usage.cpu_ns = 1_000_000);
         let ctx = host.harness.context();
-        let rows = table.processes(&ctx).await;
-        assert!(rows[0].cpu_percent > 0.0, "{rows:?}");
+        let reader = table.clone();
+        let (rows, waited) = read(&mut host, async move { reader.processes(&ctx).await }).await;
+        assert_eq!(rows[0].cpu_percent, 10.0, "{rows:?}");
         assert_eq!(rows[1].cpu_percent, 0.0);
-        assert_eq!(host.settle().await, Vec::<serde_json::Value>::new());
+        assert_eq!(waited, Vec::<serde_json::Value>::new());
+        assert_eq!(host.reads.len(), 3);
     }
 
     #[tokio::test]
     async fn a_reused_pid_is_a_new_process_and_a_gone_one_leaves_the_table() {
-        let kernel = Arc::new(FakeKernel::new(1 << 30));
-        kernel.spawn(10, 1, "/usr/bin/old", 100);
-        kernel.spawn(11, 1, "/usr/bin/other", 100);
-        let table = table(&kernel);
-        let mut host = Host::new(json!({}));
+        let machine = Arc::new(FakeMachine::new(1 << 30));
+        machine.spawn(10, 1, "/usr/bin/old", 100);
+        machine.spawn(11, 1, "/usr/bin/other", 100);
+        let table = table(&machine);
+        let mut host = Host::new(json!({}), &machine);
         let ctx = host.harness.context();
         let reader = table.clone();
         read(&mut host, async move { reader.processes(&ctx).await }).await;
 
         // The same pid, started later: its name is read afresh and its
         // first figure brackets a window again.
-        kernel.spawn(10, 1, "/usr/bin/new", 900);
-        kernel.exit(11);
+        machine.spawn(10, 1, "/usr/bin/new", 900);
+        machine.exit(11);
         let ctx = host.harness.context();
         let reader = table.clone();
         let (rows, waited) = read(&mut host, async move { reader.processes(&ctx).await }).await;
         assert_eq!(waited.len(), 1, "a new process brackets a window again");
         assert_eq!(
+            host.reads.last(),
+            Some(&json!({ "operation": "list", "pids": [10] }))
+        );
+        assert_eq!(
             rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
             ["new"]
         );
         assert_eq!(table.lock().len(), 1, "the sweep pruned the pid that left");
-        assert_eq!(table.name(10).as_deref(), Some("new"));
-        assert_eq!(table.start(10), Some(900));
-        assert_eq!(table.name(11), None);
-        assert_eq!(table.start(11), None);
+
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let (start, _) = read(&mut host, async move { reader.start(&ctx, 10).await }).await;
+        assert_eq!(start, Some(900));
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let (start, _) = read(&mut host, async move { reader.start(&ctx, 11).await }).await;
+        assert_eq!(start, None);
+    }
+
+    /// A pid that leaves, is reused or loses its name inside the window is
+    /// not listed: its second read is the one that names it.
+    #[tokio::test]
+    async fn a_pid_that_changes_inside_the_window_stays_out() {
+        let machine = Arc::new(FakeMachine::new(1 << 30));
+        machine.spawn(10, 1, "/usr/bin/stays", 100);
+        machine.spawn(11, 1, "/usr/bin/leaves", 110);
+        machine.spawn(12, 1, "/usr/bin/reused", 120);
+        let table = table(&machine);
+        let mut host = Host::new(json!({}), &machine);
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let task = tokio::spawn(async move { reader.processes(&ctx).await });
+        host.answer_until_waiting().await;
+        machine.exit(11);
+        machine.spawn(12, 1, "/usr/bin/another", 500);
+        host.settle().await;
+        let rows = task.await.unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            ["stays"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_lists_nothing() {
+        let machine = Arc::new(FakeMachine::new(1 << 30));
+        machine.spawn(10, 1, "/usr/bin/first", 100);
+        let table = table(&machine);
+        let mut host = Host::new(json!({}), &machine);
+        host.failure = Some("process table unavailable".into());
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let (rows, waited) = read(&mut host, async move { reader.processes(&ctx).await }).await;
+        assert_eq!(rows, Vec::new());
+        assert_eq!(waited, Vec::<serde_json::Value>::new());
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let (tree, _) = read(&mut host, async move { reader.tree(&ctx, 10).await }).await;
+        assert_eq!(tree, None);
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let (start, _) = read(&mut host, async move { reader.start(&ctx, 10).await }).await;
+        assert_eq!(start, None);
     }
 
     #[tokio::test]
     async fn a_tree_sums_an_app_and_every_reachable_descendant() {
-        let kernel = Arc::new(FakeKernel::new(1 << 30));
-        kernel.spawn(1, 0, "/sbin/launchd", 1);
-        kernel.spawn(40, 1, "/Applications/Web.app/Contents/MacOS/Web", 400);
-        kernel.spawn(41, 40, "/Applications/Web.app/Contents/MacOS/Helper", 410);
-        kernel.spawn(42, 41, "/Applications/Web.app/Contents/MacOS/Renderer", 420);
-        kernel.spawn(50, 1, "/usr/bin/unrelated", 500);
-        kernel.update(40, |process| {
+        let machine = Arc::new(FakeMachine::new(1 << 30));
+        machine.spawn(1, 0, "/sbin/launchd", 1);
+        machine.spawn(40, 1, "/Applications/Web.app/Contents/MacOS/Web", 400);
+        machine.spawn(41, 40, "/Applications/Web.app/Contents/MacOS/Helper", 410);
+        machine.spawn(42, 41, "/Applications/Web.app/Contents/MacOS/Renderer", 420);
+        machine.spawn(50, 1, "/usr/bin/unrelated", 500);
+        machine.update(40, |process| {
             process.usage.resident_bytes = 100;
             process.usage.disk_read_bytes = 7;
             process.threads = 5;
             process.sockets = 2;
             process.uptime_seconds = 3_600;
         });
-        kernel.update(41, |process| {
+        machine.update(41, |process| {
             process.usage.resident_bytes = 20;
             process.usage.disk_write_bytes = 9;
             process.threads = 3;
             process.sockets = 1;
             process.uptime_seconds = 60;
         });
-        kernel.update(42, |process| process.usage.resident_bytes = 3);
-        let table = table(&kernel);
-        let mut host = Host::new(json!({}));
+        machine.update(42, |process| process.usage.resident_bytes = 3);
+        let table = table(&machine);
+        let mut host = Host::new(json!({}), &machine);
         let ctx = host.harness.context();
         let reader = table.clone();
-        let (tree, _) = read(&mut host, async move { reader.tree(&ctx, 40).await }).await;
+        let (tree, waited) = read(&mut host, async move { reader.tree(&ctx, 40).await }).await;
+        assert_eq!(
+            waited.len(),
+            1,
+            "pids read for the first time bracket a window"
+        );
+        assert_eq!(
+            host.reads,
+            [
+                json!({ "operation": "tree", "pid": 40 }),
+                json!({ "operation": "tree", "pid": 40 })
+            ]
+        );
         let tree = tree.expect("the app runs");
         assert_eq!(tree.name, "Web");
         assert_eq!(
@@ -579,36 +767,16 @@ mod tests {
         );
         assert_eq!(table.lock().len(), 3, "a tree read prunes nothing");
 
-        let ctx = host.harness.context();
-        assert_eq!(table.tree(&ctx, 999).await, None, "no such app");
-    }
+        // The next read is one request: every pid has a prior read.
+        machine.update(41, |process| process.usage.cpu_ns = 5_000_000);
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let (tree, waited) = read(&mut host, async move { reader.tree(&ctx, 40).await }).await;
+        assert_eq!(waited, Vec::<serde_json::Value>::new());
+        assert_eq!(host.reads.len(), 3);
+        assert_eq!(tree.expect("the app runs").cpu_percent, 50.0);
 
-    /// The real table, on this process: it lists itself with a real CPU
-    /// share, and sums its own tree.
-    #[tokio::test]
-    async fn the_live_table_lists_this_process_and_sums_its_tree() {
-        let table = Arc::new(ProcessTable::new(Arc::new(Libproc)));
-        let mut host = Host::new(json!({}));
-        let own = std::process::id() as i32;
-        let ctx = host.harness.context();
-        let reader = table.clone();
-        let (rows, _) = read(&mut host, async move { reader.processes(&ctx).await }).await;
-        let mine = rows.iter().find(|row| row.pid == own).expect("own row");
-        assert!(!mine.name.is_empty());
-        assert!(mine.resident_bytes > 0);
-        assert!(mine.cpu_percent >= 0.0);
-        assert!(rows.len() > 10, "other processes are listed too");
-        assert_eq!(table.name(own), Some(mine.name.clone()));
-        assert_eq!(table.start(own), Some(mine.start_abstime));
-
-        let ctx = host.harness.context();
-        let reader = table.clone();
-        let (tree, _) = read(&mut host, async move { reader.tree(&ctx, own).await }).await;
-        let tree = tree.expect("own tree");
-        assert_eq!(tree.pid, own);
-        assert_eq!(tree.name, mine.name);
-        assert!(tree.process_count >= 1);
-        assert!(tree.thread_count >= 1);
-        assert!(tree.resident_bytes > 0);
+        let (ctx, reader) = (host.harness.context(), table.clone());
+        let (tree, _) = read(&mut host, async move { reader.tree(&ctx, 999).await }).await;
+        assert_eq!(tree, None, "no such app");
     }
 }

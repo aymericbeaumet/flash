@@ -212,8 +212,8 @@ interactive process browsing, filtering and graphs, put a maintained TUI
 such as [btop](https://github.com/aristocratos/btop) in a
 [terminal popup](popups.md); this summary stays focused on the current app.
 
-Sampling is scoped to what reads a value. The plugin reads the process table
-itself, through libproc, in its own sandboxed process, and only while the
+Sampling is scoped to what reads a value. Flash reads the process table for
+the plugin, which is sandboxed and reads no process itself, and only while the
 enabled bar's template, a text popup that is open, a visible widget or an
 enabled monitor shows one of these values: the tables every 2 seconds, the
 focused app every 10 seconds and 300 ms after a focus change. A value that

@@ -50,6 +50,9 @@
       "$ref": "host.process_signal.reply.schema.json"
     },
     {
+      "$ref": "host.process_table.reply.schema.json"
+    },
+    {
       "$ref": "host.calendar_events.reply.schema.json"
     },
     {

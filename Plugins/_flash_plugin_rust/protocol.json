@@ -39,6 +39,7 @@
       "host.audio_devices": "audio_devices",
       "host.system_action": "system_actions",
       "host.process_signal": "process_signal",
+      "host.process_table": "process_table",
       "host.calendar_events": "calendar_events",
       "host.notes": "notes",
       "host.reminders": "reminders",
@@ -181,6 +182,37 @@
       "term"
     ],
     "min_pid": 2
+  },
+  "process_table": {
+    "$comment": "host.process_table: the process table is read by the host, through libproc, on its own queue; no sandboxed plugin reads another process, and the plugin's sandbox gains no allowance. Requests carry operation and exactly the fields it takes; any other key refuses the call. Every success carries `at`, the host's monotonic clock in nanoseconds when it read: two replies' `at` are what a CPU share divides by. list {pids?} -> {ok, at, processes, truncated?} reads every process the user may measure, in the kernel's order, each one `process` shape without its name: a name costs the kernel a path lookup per process, which a sweep of the whole table does not pay. With pids, at most max_pids distinct integers of at least min_pid, it reads only those, in the order asked, each with its name, a pid that is gone or not the user's to measure left out. tree {pid} -> {ok, at, processes, path?, started_at?, truncated?} reads the process pid and every descendant reachable from it now, breadth first, pid first, each one `process` shape with its name and its `process_detail` keys; path is pid's executable and started_at its start in Unix seconds, each present when the kernel answers; processes is empty when pid is gone or not the user's to measure. A reply holds at most max_processes processes and at most reply_bytes of them, counted from their compact encoding; later ones are left out and `truncated` is true, and is absent otherwise. A process's arguments and environment are never read and never cross the wire.",
+    "operations": [
+      "list",
+      "tree"
+    ],
+    "min_pid": 1,
+    "max_pids": 4096,
+    "max_processes": 4096,
+    "reply_bytes": 1048576,
+    "name_bytes": 255,
+    "path_bytes": 4096
+  },
+  "process": {
+    "$comment": "One process of a host.process_table reply. pid is its process id; start is when it started, in Mach absolute time: with the pid, the identity of one process, which a reused pid does not share; cpu_ns is its cumulative user and system CPU time in nanoseconds; resident_bytes is its resident memory. name is the last component of its executable's path, present in a list of pids and in a tree when the kernel answers one of at most process_table.name_bytes. A tree's processes also carry process_detail: threads is its thread count, sockets its open socket descriptors (unix-domain ones included; no descriptor is examined), disk_read_bytes and disk_write_bytes its cumulative disk I/O. Nothing else of a process crosses the wire: no arguments, no environment, no user, no parent.",
+    "required": [
+      "pid",
+      "start",
+      "cpu_ns",
+      "resident_bytes"
+    ],
+    "optional": [
+      "name"
+    ],
+    "process_detail": [
+      "threads",
+      "sockets",
+      "disk_read_bytes",
+      "disk_write_bytes"
+    ]
   },
   "calendar_events": {
     "$comment": "host.calendar_events: EventKit and the Calendars grant stay in the host, and macOS names Flash in its prompt. Requests carry operation and exactly the fields it takes; any other key refuses the call. Every success carries `access`, what macOS answers without asking: granted, denied (refused, restricted or write-only) or undetermined (Flash never asked). access {} -> {ok, access} reads it. request_access {} -> {ok, access} reads it too, and when it is undetermined asks macOS first and answers once the user did (granted or denied). The host asks only while the user is using the plugin, that is while one of its performs or searches is in flight or a status surface shows one of its segments; an undetermined access asked about anywhere else answers errors.user_request_required and shows no prompt. Requests made while the prompt is open share its answer, and once the user answered the host sends core:calendar.changed, so a caller that stopped waiting still hears of it. list {start, end, calendars?} -> {ok, access, events?, truncated?} reads the occurrences overlapping start..<end, both Unix seconds from 0 to max_time, start < end, the window at most max_window_seconds long; calendars is at most max_calendars calendar titles as Calendar shows them, each non-empty and at most quotas.title_bytes, and absent or empty reads every event calendar. It never asks: without the grant it answers the access alone, with no events key. events are in start order (then end, then id), each one calendar_event shape. The reply holds at most max_events events and at most reply_bytes of them, counted from their compact encoding; later events are left out and `truncated` is true, and is absent otherwise. An EventKit failure answers {ok:false, error}.",
@@ -536,8 +568,8 @@
     "network_fetch",
     "notes",
     "open",
-    "process_info",
     "process_signal",
+    "process_table",
     "reminders",
     "system_actions",
     "wifi_info"

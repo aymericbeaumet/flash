@@ -14,8 +14,9 @@ contracts before changing a subsystem:
   [TERMINAL](docs/terminal-mode.md), [HYPER](docs/hyper-mode.md),
   [HOLD](docs/hold-mode.md), [layers](docs/layers.md)), and
   [input latency](docs/input-internals.md).
-- [Plugin protocol](docs/plugin-protocol.md), [Rust SDK](docs/plugin-rust-sdk.md),
-  [cookbook](docs/plugin-cookbook.md), [performance](docs/plugin-performance.md).
+- [Plugin protocol](docs/plugin-protocol.md), [host RPCs](docs/plugin-host-rpcs.md),
+  [Rust SDK](docs/plugin-rust-sdk.md), [cookbook](docs/plugin-cookbook.md),
+  [performance](docs/plugin-performance.md).
 - [Status format](docs/status-format.md), [status plugins](docs/status-plugins.md),
   [popups](docs/popups.md), [desktop widgets](docs/widgets.md), [help](docs/help.md),
   [telemetry](docs/telemetry.md).
@@ -338,13 +339,22 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
 - A `listen` beside live sources keeps no process
   (`PluginManifest.isLiveBound`): the events feed rows nobody reads until a
   query asks, and the child hears them from its first search or perform on.
-- The process table belongs to the `processes` plugin
-  (`Plugins/processes/src/sys.rs`, libproc under `process_info`), never the
-  resident: the top tables, the focused app's summary, `@processes` and
-  `process kill` are its segments, its live source and its command. It
-  samples only while `core:status.observed` lists a segment, and its first
-  CPU reading waits on the host clock (`ctx.wait`), never a sleep
-  ([top processes](docs/status-plugins.md#top-processes)).
+- The process table is the host's to read (`HostProcessTable.swift`, libproc
+  behind `ProcessKernel`), behind `host.process_table` and the
+  `process_table` capability, on its own queue, never on main. A reply is
+  each process's pid, start, CPU time and resident memory, its executable's
+  name when asked for by pid, and for a tree the thread and socket counts,
+  disk I/O and the root's path, bounded by `protocol.json` `process_table`.
+  The seam cannot read a process's arguments or environment and none may be
+  added; no plugin crate calls libproc but the SDK's `process_parents`, for
+  unsandboxed `terminals` (both guardrail-enforced). The resident alone
+  wires `LibprocKernel`; a test injects a `ProcessKernel` and reads through
+  the live one only itself and children it spawned (`OwnProcessKernel`).
+  What is sampled and when, the top tables, the focused app's summary,
+  `@processes`, the pid-reuse check and `process kill` belong to the plugin
+  (`processes`): it samples only while `core:status.observed` lists a
+  segment, and its first CPU reading waits on the host clock (`ctx.wait`),
+  never a sleep ([top processes](docs/status-plugins.md#top-processes)).
 - The menu bar reaches a plugin only through the broker's `root:
   "menu_bar"` snapshot (`AXBroker`): the host names the owning app, never
   itself, walks on the menu-bar queue, apart from window walks and from
@@ -353,7 +363,7 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   (`menus`, `Plugins/menus/src/bar.rs`), which keeps no state. The menu-item
   bindings and `mouse menubar` stay core, on `AXMenuBar`. A test injects the
   broker's trees and its press (`MenuBarFixture`) and never reads or presses
-  a real app's menu ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
+  a real app's menu ([host RPCs](docs/plugin-host-rpcs.md#accessibility)).
 - Read the window list only through `WindowSnapshot.windowList`
   (guardrail-enforced), and never make main wait on a queue that calls it
   ([the deadlock](docs/input-internals.md#input-capture-and-latency)).
@@ -464,9 +474,10 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   bounding deny after its allow, canonicalize symlinked paths, and retain
   secret-read denies. `(deny default)` leaves `process-info*` open:
   `PluginSandbox.processInfoRules` denies other processes by target and by
-  each operation's name (the wildcard misses `csops`) and opens the libproc
-  reads only under the `process_info` capability, which macOS extends to one
-  process's `sysctl` nodes, arguments and environment included.
+  each operation's name (the wildcard misses `csops`), the same for every
+  plugin process. Never open one, by capability or by manifest key: macOS
+  extends `proc_pidinfo` on a process to its `sysctl` nodes, arguments and
+  environment included.
   `sysctl-read` is `PluginSandbox.sysctlRules`' allow-list, never a blanket
   allow or a `kern.` or `net.` prefix; a new node needs a measured reader
   ([profile invariants](docs/plugin-protocol.md#seatbelt-profile-invariants)).

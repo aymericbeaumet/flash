@@ -324,7 +324,7 @@ final class BundledPluginCommandTests: XCTestCase {
     XCTAssertEqual(
       manifest.activation(statusObserved: false), .onDemand, "no process until a value is shown")
     XCTAssertEqual(manifest.activation(statusObserved: true), .resident)
-    XCTAssertEqual(manifest.capabilities, [.appControl, .processInfo, .processSignal])
+    XCTAssertEqual(manifest.capabilities, [.appControl, .processSignal, .processTable])
     XCTAssertEqual(manifest.sandboxSpec, PluginSandboxSpec(), "the default sandbox, no allowance")
     XCTAssertEqual(manifest.mappings.count, 0, "no default key was bound to it")
 

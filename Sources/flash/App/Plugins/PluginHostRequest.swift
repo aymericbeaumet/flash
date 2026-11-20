@@ -23,6 +23,7 @@ enum PluginHostRequest {
   /// `pid` is above 1: launchd, the caller's own group and every group are
   /// refused when the request is decoded.
   case processSignal(pid: pid_t, signal: HostProcessSignal)
+  case processTable(ProcessTable)
   case calendar(Calendar)
   case appItems(HostAppItemKind, AppItems)
   case ax(AX)
@@ -50,6 +51,21 @@ enum PluginHostRequest {
     static let operations: [(name: String, params: Set<String>)] = [
       ("list", ["direction"]), ("select", ["direction", "uid"]), ("step_volume", ["ticks"]),
       ("toggle_mute", []), ("volume", []),
+    ]
+  }
+
+  /// One `host.process_table` operation (`protocol.json` `process_table`).
+  enum ProcessTable: Equatable {
+    /// Every process the user may measure, or, with `pids`, only those: at
+    /// most `HostProcessTable.maxPids` distinct pids above 0.
+    case list(pids: [pid_t]?)
+    /// One process and every descendant reachable from it.
+    case tree(pid: pid_t)
+
+    /// The operation names, in contract order, each with the params it
+    /// takes besides `operation`.
+    static let operations: [(name: String, params: Set<String>)] = [
+      ("list", ["pids"]), ("tree", ["pid"]),
     ]
   }
 
@@ -120,6 +136,7 @@ enum PluginHostRequest {
     case audioDevices = "host.audio_devices"
     case systemAction = "host.system_action"
     case processSignal = "host.process_signal"
+    case processTable = "host.process_table"
     case calendarEvents = "host.calendar_events"
     case notes = "host.notes"
     case reminders = "host.reminders"
@@ -144,6 +161,7 @@ enum PluginHostRequest {
       case .audioDevices: return .audioDevices
       case .systemAction: return .systemActions
       case .processSignal: return .processSignal
+      case .processTable: return .processTable
       case .calendarEvents: return .calendarEvents
       case .notes: return .notes
       case .reminders: return .reminders
@@ -165,6 +183,7 @@ enum PluginHostRequest {
       case .audioDevices: return ["operation", "direction", "uid", "ticks"]
       case .systemAction: return ["action"]
       case .processSignal: return ["pid", "signal"]
+      case .processTable: return ["operation", "pids", "pid"]
       case .calendarEvents: return ["operation", "start", "end", "calendars"]
       case .notes, .reminders, .contacts: return ["operation", "id"]
       case .activate: return ["pid"]
@@ -224,6 +243,8 @@ enum PluginHostRequest {
         throw Refusal(message: "host.process_signal requires a pid above 1 and a supported signal")
       }
       self = .processSignal(pid: pid, signal: signal)
+    case .processTable:
+      self = .processTable(try Self.processTable(params, malformed: malformed))
     case .calendarEvents:
       self = .calendar(try Self.calendar(params, malformed: malformed))
     case .notes:
@@ -344,6 +365,36 @@ enum PluginHostRequest {
     default:
       return .volume
     }
+  }
+
+  /// `host.process_table`: a known operation with exactly its own params.
+  private static func processTable(
+    _ params: [String: Any], malformed: Refusal
+  ) throws(Refusal) -> ProcessTable {
+    guard let name = params["operation"] as? String,
+      let operation = ProcessTable.operations.first(where: { $0.name == name })
+    else { throw Refusal(message: "host.process_table requires a supported operation") }
+    guard Set(params.keys).isSubset(of: operation.params.union(["operation"])) else {
+      throw malformed
+    }
+    if name == "tree" {
+      guard let pid = PluginJSON.pid(params["pid"]) else {
+        throw Refusal(message: "host.process_table tree requires a pid above 0")
+      }
+      return .tree(pid: pid)
+    }
+    guard let raw = params["pids"] else { return .list(pids: nil) }
+    let limit = HostProcessTable.maxPids
+    guard let values = raw as? [Any], values.count <= limit else {
+      throw Refusal(
+        message: "host.process_table list takes at most \(limit) distinct pids above 0")
+    }
+    let pids = values.compactMap { PluginJSON.pid($0) }
+    guard pids.count == values.count, Set(pids).count == pids.count else {
+      throw Refusal(
+        message: "host.process_table list takes at most \(limit) distinct pids above 0")
+    }
+    return .list(pids: pids)
   }
 
   /// `host.calendar_events`: a known operation with exactly its own params.

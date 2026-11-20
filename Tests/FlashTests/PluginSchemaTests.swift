@@ -377,6 +377,7 @@ final class PluginSchemaTests: XCTestCase {
     rpc.audioDevices = AudioDeviceStub()
     rpc.systemActions = SystemActionStub()
     rpc.processSignals = ProcessSignalStub()
+    rpc.processTable = HostProcessTable(kernel: ProcessKernelStub.corpus())
     rpc.calendarEvents = HostCalendarEvents(
       provider: CalendarEventStub.corpus(), scheduler: PollScheduler(), changed: {})
     for kind in HostAppItemKind.allCases {

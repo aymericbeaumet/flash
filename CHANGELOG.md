@@ -60,6 +60,11 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Development and getting started
 
+- The host RPC reference is its own page of the manual,
+  [plugin host RPCs](docs/plugin-host-rpcs.md): each method's params, reply
+  and bounds, and the capabilities. The plugin protocol page keeps the
+  envelope and the list of methods.
+
 - `mise run bench:help -- --site` measures a build of the published site,
   and `Inspector/site-budget.test.ts` holds its size. The help UI's snapshot
   types and topic categories are generated (`mise run build:schema`), and
@@ -480,7 +485,7 @@ monitors read that no plugin publishes any more, with its replacement.
   answers that app's `pid` with the bar's elements, each with the handle
   `host.ax_perform` presses it by. The menu bar has its own queue in Flash,
   so it neither waits on a browser's window walk nor holds one up
-  ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
+  ([host RPCs](docs/plugin-host-rpcs.md#accessibility)).
 - A plugin holding the new `system_actions` capability asks Flash to lock
   the screen, sleep the Mac or its displays, start the screen saver, toggle
   dark mode, restart, shut down, log out or empty the Trash through
@@ -491,6 +496,14 @@ monitors read that no plugin publishes any more, with its replacement.
   SIGTERM to one process through `host.process_signal`. Flash sends it only
   inside a request the user confirmed, once per confirmation, and never to
   itself, to launchd or to a process group.
+- A plugin holding the new `process_table` capability reads the process
+  table through Flash, which reads it through libproc: `host.process_table`
+  lists every process you may measure as its pid, start, CPU time and
+  resident memory, names the ones asked for by pid, and reads one process's
+  tree with thread and socket counts, disk I/O and the root's executable
+  path and start time, at most 4,096 processes and 1 MiB a reply. Flash
+  never reads a process's arguments or environment
+  ([host RPCs](docs/plugin-host-rpcs.md#process-table)).
 - A plugin holding the new `calendar_events` capability reads your calendar
   through Flash, which keeps EventKit and the Calendars grant:
   `host.calendar_events` reports the access macOS grants, asks for it, and
@@ -500,7 +513,7 @@ monitors read that no plugin publishes any more, with its replacement.
   status surface shows one of its values now, which a closed text popup
   does not), and `core:calendar.changed`
   tells such a plugin, and nobody else, that the calendar changed
-  ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
+  ([host RPCs](docs/plugin-host-rpcs.md#calendar-events)).
 - A plugin holding the new `notes`, `reminders` or `contacts` capability
   lists that app's items through Flash, which keeps the grant:
   `host.notes`, `host.reminders` and `host.contacts` report the access macOS
@@ -509,7 +522,7 @@ monitors read that no plugin publishes any more, with its replacement.
   nothing else of an item crosses), and show one in its app. macOS's prompt
   comes up only while you are using that plugin, which now includes a
   flashlight query scoped to one of its live sources
-  ([host RPCs](docs/plugin-protocol.md#host-rpcs)).
+  ([host RPCs](docs/plugin-host-rpcs.md#notes-reminders-and-contacts)).
 - A plugin whose sources are live keeps no process for the events it
   listens to: it starts on its first query or command and hears them from
   then on ([activation](docs/plugin-protocol.md#process-model-and-lifecycle)).
@@ -528,11 +541,10 @@ monitors read that no plugin publishes any more, with its replacement.
   (`sysctl`), so any plugin could list every process with its CPU time,
   memory, open descriptors, path and code signature, and read the launch
   arguments and environment of your processes. The profile now denies the
-  first by name and allows a fixed list of settings that describe the
-  system, and the new `process_info` capability opens the reads a process
-  table needs (the pid list, `proc_pidinfo`, the descriptor list and
-  `proc_pid_rusage`) to the plugin that declares it; macOS attaches a
-  process's arguments and environment to that permission
+  first by name, for every plugin, and allows a fixed list of settings that
+  describe the system. No capability opens another process: macOS serves a
+  process's arguments and environment to whoever may read anything else of
+  it, so a plugin that shows processes asks Flash for the table
   ([privacy](docs/privacy.md#plugin-isolation)).
 - Lock, sleep, restart, shut down, log out, empty the Trash, dark mode and
   the screen saver are a bundled plugin, `system`. It is sandboxed and holds
@@ -547,10 +559,9 @@ monitors read that no plugin publishes any more, with its replacement.
   describes a key bound to one of them as running that command.
 - The busiest-process tables, the focused app's summary, `@processes` and
   `process kill --pid=<pid>` are the bundled plugin `processes`, sandboxed.
-  It reads the process table in its own process, through libproc, which the
-  new `process_info` capability opens in its profile, and signals nothing:
-  it asks Flash, which sends SIGTERM only for a request you just answered
-  `y` to and never to itself. No process runs until a surface reads one of
+  It reads no process and signals none: it asks Flash for the table, as
+  figures and executable names, and for a kill, which Flash sends as SIGTERM
+  only for a request you just answered `y` to and never to itself. No process runs until a surface reads one of
   its values, a query names `@processes` or the command runs. A kill that
   fails says why (`process kill failed: Operation not permitted`) in the
   alert and on the CLI.

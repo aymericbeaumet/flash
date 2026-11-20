@@ -22,6 +22,7 @@ mod items;
 mod observed;
 mod poll;
 pub mod process;
+mod process_table;
 mod runtime;
 mod settle;
 mod signal;
@@ -44,6 +45,7 @@ pub use context::{
 };
 pub use observed::ObservedCadences;
 pub use poll::{Deadline, PollHandle, PollPriority};
+pub use process_table::{MAX_PROCESS_PIDS, ProcessEntry, ProcessList, ProcessTree, TreeProcess};
 pub use runtime::{Plugin, run};
 pub use settle::Settle;
 pub use signal::ProcessSignal;

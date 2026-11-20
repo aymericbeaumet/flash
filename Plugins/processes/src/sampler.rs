@@ -16,11 +16,11 @@ use flash_plugin::{Context, Deadline, Event, PollHandle, PollPriority};
 
 use crate::bundle;
 use crate::format::{self, FocusedApp, Metadata, TopKind};
-use crate::sys::Kernel;
+use crate::sys::Machine;
 use crate::table::{ProcessTable, Tree};
 
 /// The top tables' cadence: fast enough for a desktop widget, slow enough
-/// that one libproc pass is noise.
+/// that one read of the table by the host is noise.
 pub(crate) const TOP_PERIOD: Duration = Duration::from_secs(2);
 /// CPU use has no change event: the focused app's figures are re-read on
 /// this cadence while shown.
@@ -172,8 +172,8 @@ impl Sampler {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn kernel(&self) -> &Arc<dyn Kernel> {
-        self.table.kernel()
+    fn machine(&self) -> &Arc<dyn Machine> {
+        self.table.machine()
     }
 
     /// The host's complete report of the segments a surface shows.
@@ -405,7 +405,8 @@ impl Sampler {
             return;
         };
         let metadata = self.metadata(ctx, &app, &tree).await;
-        let text = format::focused_details(&app, &tree, &metadata, self.kernel().physical_memory());
+        let text =
+            format::focused_details(&app, &tree, &metadata, self.machine().physical_memory());
         let mut state = self.lock();
         // The focus moved while this app was read: its figures are not the
         // focused app's any more.
@@ -445,8 +446,8 @@ impl Sampler {
             bundle::BundleInfo::default()
         } else {
             // A file read: off the plugin's one executor thread.
-            let (kernel, path) = (self.kernel().clone(), bundle_path.clone());
-            tokio::task::spawn_blocking(move || kernel.bundle_info(&path))
+            let (machine, path) = (self.machine().clone(), bundle_path.clone());
+            tokio::task::spawn_blocking(move || machine.bundle_info(&path))
                 .await
                 .unwrap_or_default()
         };
@@ -501,7 +502,7 @@ impl Sampler {
 mod tests {
     use super::*;
     use crate::bundle::BundleInfo;
-    use crate::table::testing::FakeKernel;
+    use crate::table::testing::FakeMachine;
     use crate::testing::{Host, cadences, deadlines, segments, statuses};
     use flash_plugin::RunningApplication;
     use serde_json::json;
@@ -509,31 +510,31 @@ mod tests {
     const MIB: u64 = 1 << 20;
 
     /// launchd, Firefox with one helper, and Xcode, on a Mac with 1 GiB.
-    fn kernel() -> Arc<FakeKernel> {
-        let kernel = Arc::new(FakeKernel::new(1 << 30));
-        kernel.spawn(1, 0, "/sbin/launchd", 1);
-        kernel.spawn(
+    fn machine() -> Arc<FakeMachine> {
+        let machine = Arc::new(FakeMachine::new(1 << 30));
+        machine.spawn(1, 0, "/sbin/launchd", 1);
+        machine.spawn(
             20,
             1,
             "/Applications/Firefox.app/Contents/MacOS/firefox",
             200,
         );
-        kernel.spawn(
+        machine.spawn(
             21,
             20,
             "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container",
             210,
         );
-        kernel.spawn(30, 1, "/Applications/Xcode.app/Contents/MacOS/Xcode", 300);
-        kernel.update(20, |process| {
+        machine.spawn(30, 1, "/Applications/Xcode.app/Contents/MacOS/Xcode", 300);
+        machine.update(20, |process| {
             process.usage.resident_bytes = 8 * MIB;
             process.threads = 4;
             process.sockets = 3;
             process.uptime_seconds = 3_600;
         });
-        kernel.update(21, |process| process.usage.resident_bytes = MIB);
-        kernel.update(30, |process| process.usage.resident_bytes = 20 * MIB);
-        kernel.bundles.lock().unwrap().insert(
+        machine.update(21, |process| process.usage.resident_bytes = MIB);
+        machine.update(30, |process| process.usage.resident_bytes = 20 * MIB);
+        machine.bundles.lock().unwrap().insert(
             "/Applications/Firefox.app".into(),
             BundleInfo {
                 identifier: "org.mozilla.firefox".into(),
@@ -541,12 +542,12 @@ mod tests {
                 build: "14025.1".into(),
             },
         );
-        kernel
+        machine
     }
 
-    fn sampler(kernel: &Arc<FakeKernel>, top_count: usize) -> Arc<Sampler> {
+    fn sampler(machine: &Arc<FakeMachine>, top_count: usize) -> Arc<Sampler> {
         Arc::new(Sampler::new(
-            Arc::new(ProcessTable::new(kernel.clone())),
+            Arc::new(ProcessTable::new(machine.clone())),
             top_count,
         ))
     }
@@ -631,9 +632,9 @@ mod tests {
 
     #[tokio::test]
     async fn the_top_tables_sample_only_while_observed_and_publish_what_changed() {
-        let kernel = kernel();
-        let sampler = sampler(&kernel, 2);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let sampler = sampler(&machine, 2);
+        let mut host = Host::new(json!({}), &machine);
         let ctx = host.harness.context();
 
         // Unobserved: nothing registers, reads or publishes.
@@ -676,7 +677,7 @@ mod tests {
         let frames = host.settle().await;
         assert_eq!(statuses(&frames), [json!({ "top_cpu": "" })]);
         assert_eq!(cadences(&frames), Vec::<serde_json::Value>::new());
-        kernel.update(1, |process| process.usage.resident_bytes = 64 * MIB);
+        machine.update(1, |process| process.usage.resident_bytes = 64 * MIB);
         assert_eq!(
             statuses(&host.tick("i0").await),
             [json!({ "top_mem": "launchd            64 MiB\nXcode              20 MiB" })]
@@ -720,9 +721,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_table_read_keeps_the_last_tables_and_warns_once() {
-        let kernel = Arc::new(FakeKernel::new(1 << 30));
-        let sampler = sampler(&kernel, 5);
-        let mut host = Host::new(json!({}));
+        let machine = Arc::new(FakeMachine::new(1 << 30));
+        let sampler = sampler(&machine, 5);
+        let mut host = Host::new(json!({}), &machine);
         let ctx = host.harness.context();
         sampler.observe(&ctx, &segments(&["top_cpu"]));
         let mut frames = host.settle().await;
@@ -764,9 +765,9 @@ mod tests {
 
     #[tokio::test]
     async fn the_focused_app_is_read_only_while_its_details_are_observed() {
-        let kernel = kernel();
-        let sampler = sampler(&kernel, 5);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let sampler = sampler(&machine, 5);
+        let mut host = Host::new(json!({}), &machine);
         host.harness
             .set_running_applications(vec![RunningApplication {
                 bundle_id: "org.mozilla.firefox".into(),
@@ -804,10 +805,10 @@ mod tests {
                 json!({ "focused_app_details": FIREFOX }),
             ]
         );
-        assert_eq!(*kernel.bundle_reads.lock().unwrap(), 1);
+        assert_eq!(*machine.bundle_reads.lock().unwrap(), 1);
 
         // Its cadence re-reads the figures, not the application metadata.
-        kernel.update(20, |process| process.sockets = 4);
+        machine.update(20, |process| process.sockets = 4);
         let frames = host.tick("i1").await;
         assert_eq!(
             statuses(&frames),
@@ -816,7 +817,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            *kernel.bundle_reads.lock().unwrap(),
+            *machine.bundle_reads.lock().unwrap(),
             1,
             "one read per identity"
         );
@@ -855,7 +856,7 @@ mod tests {
         ));
 
         // The app is gone: its identity over the reason, never old figures.
-        kernel.exit(30);
+        machine.exit(30);
         assert_eq!(
             statuses(&host.tick("i1").await),
             [json!({ "focused_app_details":
@@ -886,9 +887,9 @@ mod tests {
     /// it asks the host which app is focused.
     #[tokio::test]
     async fn the_focused_app_is_asked_of_the_host_when_no_event_named_it() {
-        let kernel = kernel();
-        let sampler = sampler(&kernel, 5);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let sampler = sampler(&machine, 5);
+        let mut host = Host::new(json!({}), &machine);
         host.target = json!({
             "ok": true, "present": true, "pid": 30, "bundle_id": "com.apple.dt.Xcode",
             "window_id": 7
@@ -915,8 +916,8 @@ mod tests {
         );
 
         // With no app at all, nothing is published and nothing is read.
-        let sampler = self::sampler(&kernel, 5);
-        let mut host = Host::new(json!({}));
+        let sampler = self::sampler(&machine, 5);
+        let mut host = Host::new(json!({}), &machine);
         let ctx = host.harness.context();
         sampler.observe(&ctx, &segments(&["focused_app_details"]));
         assert_eq!(
@@ -928,9 +929,9 @@ mod tests {
     /// A bundle that names another app says nothing about this process.
     #[tokio::test]
     async fn metadata_of_another_app_is_not_shown() {
-        let kernel = kernel();
-        let sampler = sampler(&kernel, 5);
-        let mut host = Host::new(json!({}));
+        let machine = machine();
+        let sampler = sampler(&machine, 5);
+        let mut host = Host::new(json!({}), &machine);
         let ctx = host.harness.context();
         sampler.focus_changed(&ctx, &focus(20, "com.example.Imposter"));
         sampler.observe(&ctx, &segments(&["focused_app_details"]));

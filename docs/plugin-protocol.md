@@ -756,6 +756,7 @@ can name a window without asking the user to pick one) +
 `host.wifi_info` (`wifi_info`), `host.applescript` (`apple_events`),
 `host.audio_devices` (`audio_devices`), `host.system_action`
 (`system_actions`), `host.process_signal` (`process_signal`),
+`host.process_table` (`process_table`),
 `host.calendar_events` (`calendar_events`), `host.notes` (`notes`),
 `host.reminders` (`reminders`), `host.contacts` (`contacts`),
 `host.post_keys` + `host.ax_snapshot` /
@@ -773,262 +774,8 @@ is missing or malformed answers the method's own error (`host.activate
 requires pid`). The capability is checked first, so a plugin without it reads
 the denial whatever it sent.
 
-`host.applescript` accepts a named `operation`, data fields and optional
-`timeout_ms`; it returns `{ok: true, result}` or `{ok: false, error, status?}`.
-It accepts no `script` field or executable source. The fixed operations are
-`browser_tabs` (`bundle_id`), `browser_select` (`bundle_id`, optional `url`,
-`title`, paired positive `window`/`tab`), `browser_tab_index` (`bundle_id`,
-positive `index`), `browser_tab_move` (Safari `bundle_id`, boolean `forward`),
-`shortcuts_list`, `shortcut_run` (`name`), `chat_submit` (`bundle_id` of the
-browser that must still be frontmost, Firefox included), and `now_playing`
-(`bundle_id` of a media player, boolean `artist`). `now_playing` answers the
-player state, a line feed and the current track's name, followed by its
-artist after an em dash when `artist` is true (`playing\nOne More Time —
-Daft Punk`); a stopped player answers its state alone, and an app that is
-not running answers an empty result and is never launched. A browser is an app
-some manifest declares in [`browser_engines`](#manifest): the tab operations
-serve `chromium` and `webkit` browsers, each in its engine's dialect
-(`browser_tab_move` is `webkit` alone), and `chat_submit` serves any engine.
-Unknown fields, non-browser chat destinations and undeclared browsers are
-rejected.
-Each operation selects a host-owned template; every supplied string becomes
-an escaped literal. Declare `apple_events` with nonempty
-`apple_events_targets`: declared browser IDs, `com.apple.shortcuts.events`
-for shortcut operations, `com.apple.systemevents` for chat submit, or the
-players `now_playing` asks.
-Templates run in the resident off its main thread, so plugin senders retain
-their sandbox and Automation belongs to Flash. `protocol.json` bounds source
-to 64 KiB, result to 1 MiB and concurrency to four per plugin. Timeout defaults
-to 10 seconds and must be an integer from 1 to 30000 ms. Operation data and
-result contents never enter plugin diagnostics.
-
-`host.wifi_info` requires `{"request_authorization": false}` for passive reads
-or `true` only for an explicit user action allowed to show the host-owned
-Location prompt. An undetermined request replies absent immediately after
-starting the prompt; callers retry after authorization instead of holding an
-RPC open. The method returns
-`{"ok": true, "present": true, "ssid": "…"}` for an associated network or
-`{"ok": true, "present": false}` when Wi-Fi information is unavailable.
-`host.audio_devices` is CoreAudio, which stays in the resident. It takes an
-`operation` and exactly the fields that operation names:
-`{"operation": "list", "direction": "input" | "output"}` answers `{"ok":
-true, "devices": [{"uid", "name", "default"}]}`, sorted by name, `default`
-marking the direction's default device; `{"operation": "select",
-"direction", "uid"}` makes the device with that UID the default;
-`{"operation": "step_volume", "ticks": N}` moves the default output `N`
-macOS volume-key ticks (a sixteenth each, up when positive, down when
-negative, never zero, at most 16 either way), clears its mute and answers
-`{"ok": true, "percent"}`, the percent the bezel would show;
-`{"operation": "toggle_mute"}` answers `{"ok": true, "muted"}`; and
-`{"operation": "volume"}` reads `{"ok": true, "percent", "muted"}`. A
-CoreAudio failure, an unknown UID or a device without the control answers
-`{"ok": false, "error"}`. The calls of every plugin run one at a time, off
-the main thread.
-`host.system_action` takes exactly `{"action"}` and asks macOS for one
-machine or session action, which stays in the resident: `lock_screen` posts
-macOS's Lock Screen shortcut to the session, `sleep` and `display_sleep` ask
-IOKit power management, `screensaver` opens ScreenSaverEngine and
-`toggle_appearance` switches dark mode through System Events. `restart`,
-`shutdown` and `logout` go through System Events and `empty_trash` through
-Finder, and nothing undoes them: the host honours one of these four only
-inside a `perform` the user [confirmed](#confirmation), one action per
-confirmed perform. Outside one — from an event, a poll tick, a search, a
-perform the user was not asked about, or after that perform's one action —
-it asks macOS for nothing and answers `{"ok": false, "error": "requires a
-perform the user confirmed"}`. A plugin cannot grant itself that consent: the
-request has no key for it, and only the user's `y` marks a perform. The
-reply is `{"ok": true}` once macOS took the request, or `{"ok": false,
-"error"}` with why it did not. The Apple Events are the host's own fixed
-scripts, so the plugin needs neither `apple_events` nor a target list and
-its sandbox gains nothing; macOS attributes the Automation request to
-Flash. The actions run one at a time, off the main thread except the lock
-chord. `protocol.json` `system_actions` lists them.
-`host.process_signal` takes exactly `{"pid", "signal"}` and sends one signal
-to one process: `kill(2)` stays in the resident. `signal` is `"term"`
-(SIGTERM), the only one. `pid` is an integer above 1: `0` (the caller's
-process group), a negative pid (a group, or every process) and `1`
-(launchd) refuse the request as malformed, and the host refuses its own pid
-(`refusing to signal Flash itself`). The host honours every signal only
-inside a `perform` the user [confirmed](#confirmation), one signal per
-confirmed perform; outside one it asks the kernel nothing and answers
-`{"ok": false, "error": "requires a perform the user confirmed"}`. A refused
-pid spends no consent. The reply is `{"ok": true}` once the kernel took the
-signal, or `{"ok": false, "error"}` with the kernel's reason (`No such
-process`, `Operation not permitted` for another user's process). The
-plugin's sandbox gains nothing. `protocol.json` `process_signals` lists the
-signals.
-`host.calendar_events` reads the user's calendar: EventKit and the Calendars
-grant stay in the resident, and macOS names Flash in its prompt. A request
-carries `operation` and exactly the fields it takes. Every success carries
-`access`, what macOS answers without asking: `"granted"`, `"denied"`
-(refused, restricted or write-only) or `"undetermined"` (Flash never asked).
-`{"operation": "access"}` reads it. `{"operation": "request_access"}` reads
-it too and, when it is undetermined, asks macOS first and answers once the
-user did. The host shows that prompt only while the user is using the
-plugin: one of its performs or searches is in flight, or a status surface
-shows one of its segments now ([observed](#status-observation)). Anywhere else an undetermined access answers `{"ok": false,
-"error": "requires the user to be using the plugin"}` and nothing is shown,
-so a plugin never raises a prompt from a background refresh. Requests made
-while the prompt is open share its answer, and the host sends
-`core:calendar.changed` once the user answered, so a caller that stopped
-waiting still hears of it.
-`{"operation": "list", "start", "end", "calendars"?}` reads the occurrences
-overlapping `start..<end`, both whole Unix seconds, `start` before `end` and
-at most 1,209,600 seconds (14 days) apart. `calendars` is at most 64
-calendar titles as Calendar shows them; absent or empty, every event
-calendar is read. A list never asks: without the grant its reply is the
-`access` alone. With it, `events` holds the occurrences in start order:
-
-```json
-{"id": "8C1F…@1800000720", "title": "Standup", "start": 1800000720,
- "end": 1800002520, "all_day": false, "calendar": "Work", "declined": false,
- "canceled": false, "url": "https://example.com/standup",
- "location": "Room 4", "links": ["https://zoom.us/j/123?pwd=abc"]}
-```
-
-`id` is the event's identifier and the occurrence's start, `declined` says
-the user is an attendee who declined it, and `url` and `location` are present
-only when the event has them. The event's notes never cross the wire:
-`links` holds the link-shaped runs found in them, in order (a URL scheme,
-`:/` and the characters up to the next whitespace, quote or bracket), at
-most 32, and is absent when there is none. Which of them is a meeting link
-is the plugin's to decide. A title is cut at a character boundary to 4 KiB;
-a URL, a location or a link over 16 KiB is left out whole, never cut. A
-reply holds at most 1,000 events and 1 MiB of them; later ones are left out
-and `truncated` is `true`. An EventKit failure answers `{"ok": false,
-"error"}`. `protocol.json` `calendar_events` and `calendar_event` pin the
-operations, the bounds and the shape. The bundled `calendar` plugin is its
-reader: it lists from now to twice its look-ahead while one of its segments
-is observed, again on `core:calendar.changed`, and for each of its commands.
-`host.notes`, `host.reminders` and `host.contacts` read the items of an
-Apple app whose grant Flash holds (Automation of Notes, Reminders,
-Contacts), each behind the capability of its name. The three take the same
-requests and answer `access` as `host.calendar_events` does:
-`{"operation": "access"}` reads it, and `{"operation": "request_access"}`
-asks macOS first when it is undetermined, under the same rule (only while
-the user is using the plugin, one shared answer per prompt). Notes answers
-an Automation request only while it runs, so its access reads
-`"undetermined"` while it does not, and nothing is asked then.
-`{"operation": "list"}` reads every item in the app's own order: every note
-of every account, every open reminder, every contact card. It never asks
-and never launches Notes; without the grant its reply is the `access`
-alone. With it, `items` holds one object per item:
-
-```json
-{"id": "5F8A…", "title": "Buy milk", "list": "Inbox", "list_index": 0,
- "created": 1800000000}
-```
-
-`id` selects the item again and `title` is a note's name, a reminder's
-title or the name Contacts shows a card by, cut at a character boundary to
-4 KiB. A reminder adds its list's title, that list's position among
-Reminders' lists (absent once Reminders no longer names it) and its
-creation time in Unix seconds; a note and a contact carry `id` and `title`
-alone. Nothing else of an item crosses the wire: no note text, no due date,
-no phone number or address. Which rows these make, and in what order, is
-the plugin's to decide. A reply holds at most 10,000 items and 2 MiB of
-them; later ones are left out and `truncated` is `true`.
-`{"operation": "show", "id"}` brings the app forward on an item a list
-returned (`id` is 1 to 1,024 bytes without control characters); without the
-grant it answers `{"ok": false, "error"}` and asks nothing. Notes is read
-and shown by the host's own fixed AppleScript, the `id` an escaped literal.
-`protocol.json` `app_items` and `app_item` pin the operations, the bounds
-and the shape. The bundled `notes`, `reminders` and `contacts` plugins are
-their readers, one each.
-`host.open` takes `{"url"}` or `{"bundle_id"}`, never both; a URL's reply also
-names the app LaunchServices handed it to (`bundle_id`, when resolvable), so a
-plugin can confirm that app still has focus before acting on it. A `file:` URL
-is refused (`host.open does not open local files`): a sandboxed plugin could
-otherwise write a `.command`, a script or an app into its data directory and
-have LaunchServices run it outside the sandbox. `{"url", "if_handled": true}`
-opens the URL only when an application is registered for it, and otherwise
-hands LaunchServices nothing and answers `{"ok": false, "error": "no
-application opens the URL"}`: a plugin tries an app's own link (`zoommtg:`)
-before the web one.
-The AX broker exists because `AXUIElement` cannot
-cross a process boundary: `host.ax_snapshot` BFS-walks one tree (default cap
-3000 nodes) and returns flat nodes with opaque handles. `root` names the
-tree. `"windows"`, the default, is the windows of the app `pid` names.
-`"menu_bar"` is the menu bar of the app that owns it: the host names that
-app, the one whose menus are installed, so the request takes no `pid` (one
-beside it is refused) and the reply carries the app's `pid` beside `nodes`.
-Its one root is the app's `AXMenuBar`: the first node is the bar, its
-children the bar items in bar order, the Apple menu first, and a boolean
-attribute such as `AXEnabled` arrives as `"1"` or `"0"`. The host never walks
-its own menus: when no app but Flash owns the bar the reply is `{"ok": true,
-"nodes": []}`, without a `pid`. Each element costs one Accessibility round
-trip, which reads `collect` and `follow` together, so name only what you
-read: a menu bar of 2,500 elements, read for its roles, titles, enabled
-flags and children, is a reply of about 310 KB.
-A snapshot supersedes the handles the plugin held for that app, and a
-menu-bar snapshot its menu-bar handles for every app, since one app owns the
-bar at a time; a quit app's handles go with it. A call on a handle that is
-gone answers `stale ax handle` and touches nothing.
-The two trees have separate host queues, and a call on a handle runs on the
-queue of the snapshot that returned it: a menu bar never waits on a
-browser's window walk, nor a hint provider's window snapshot on a menu bar.
-The menu bar is AppKit's own in a Gecko app too, so reading or pressing it
-takes no part in Gecko's process lock.
-`protocol.json` `ax_snapshot` pins the roots, the default cap and the budget.
-The bundled `menus` plugin is the menu bar's reader: one snapshot per
-`@menus` scope, and a row's handle pressed when the row is picked.
-Snapshots have a host-side five-second budget including queue admission.
-Expiry, a revoked child, or an unresponsive AX batch fails the whole snapshot;
-it never returns partial nodes or leaves their handles actionable. The budget
-is checked between AX reads and after acquiring Gecko's process lock; it cannot
-preempt synchronous AX calls or an operation already holding that lock.
-An AX timeout is not retried once per requested attribute: the broker shares Gecko's process
-lock with hint discovery, and abandoned snapshots must release it promptly.
-`host.ax_set` takes `{handle, attribute, value}` and sets a boolean
-attribute such as `AXFocused`; a non-boolean value is rejected.
-`host.post_keys` takes `{pid, keys, interval_ms?}`: 1 to 32 chords of
-`{key_code, modifiers}`, each under at least one of `command`, `control`,
-`option` and `shift`, spelled exactly so. It cannot type text.
-`capabilities` also includes `network` (composes
-`network-outbound` into the sandbox profile, so only a sandboxed plugin
-declares it) and `network_fetch` (the host
-performs HTTPS GETs on the plugin's behalf via `host.fetch`, restricted to
-the manifest's `fetch_urls` prefixes and the URLs its `fetch_settings` hold,
-answering UTF-8 text within its `fetch_limits` — the plugin keeps a fully
-network-denied sandbox; the capability comes with `fetch_urls` or
-`fetch_settings`, and only with them). `host.fetch` answers
-`{ok, status, body}` whatever the HTTP status; the Rust SDK's `fetch`
-returns the body of a 2xx response alone. A redirect is followed only to a
-URL the allowlist admits. `open` hands URLs/bundle ids to LaunchServices
-host-side.
-`wifi_info` exposes only the current SSID after host-owned Location
-authorization. `audio_devices` lists the audio devices and changes the
-default device, the output volume and its mute. `system_actions` locks the
-screen, sleeps the Mac or its displays, starts the screen saver, toggles
-dark mode and, inside a perform the user confirmed, restarts, shuts down,
-logs out or empties the Trash. `process_signal` sends SIGTERM to one
-process, only inside a perform the user confirmed. `calendar_events` reads
-the access macOS grants Flash to the user's calendars, asks for it while the
-user is using the plugin, lists the events of a window of at most 14 days
-without their notes, and delivers `core:calendar.changed`. `notes`,
-`reminders` and `contacts` each read one app's access, ask for it while the
-user is using the plugin, list its items as an identifier and one line, and
-show one in the app. `process_info`
-grants no host RPC: like
-`network` it only composes the sandbox profile, so only a sandboxed plugin
-declares it. The profile lets a plugin ask the kernel about its own process
-alone and denies it the pid list; with `process_info` it may list pids and
-read other processes through libproc in its own process: `proc_pidinfo`
-(task and BSD info, and `proc_pidpath`), a process's descriptor list and
-`proc_pid_rusage` (CPU time, resident memory, disk I/O). macOS serves
-whoever may `proc_pidinfo` a process its `sysctl` nodes too, so the
-capability also reads the user's processes' arguments and environment
-(`kern.procargs2`). The other `process-info` operations (file ports,
-control, code signature, ledger) stay denied for other processes. Omitted
-capabilities are
-default-denied. The registry is
-frozen: additions are allowed, renames never.
-
-**SDK `call_host` convention:** `call_host` never
-throws and never returns nil — it always yields a result object. Capability
-NAKs, host death (`{"ok": false, "error": "host closed stdin"}`), and the
-5 s default timeout (`{"ok": false, "error": "host call timed out"}`, per-
-call override available) all arrive the same way.
+[Plugin host RPCs](plugin-host-rpcs.md) describes each method: its params,
+its reply, its bounds and the capability that opens it.
 
 ## Payloads and quotas
 
@@ -1146,16 +893,17 @@ Section semantics:
   interpreter that `exec` resolves outside the plugin root). An object adds
   allowances; without `sandbox` the plugin gets none. The one allowance is
   `mach`: named mach services the plugin needs. The `network` capability
-  composes `network-outbound`, which also covers local unix sockets, and
-  `process_info` composes the reads of other processes (see
-  [Host RPCs](#host-rpcs)); an unsandboxed plugin declaring either fails to
-  load, since it has no profile to widen. `"sandbox": false` runs the plugin unsandboxed for external or
+  composes `network-outbound`, which also covers local unix sockets; an
+  unsandboxed plugin declaring it fails to load, since it has no profile to
+  widen. Nothing composes reads of another process: a plugin asks the host
+  for the process table
+  ([`host.process_table`](plugin-host-rpcs.md#process-table)).
+  `"sandbox": false` runs the plugin unsandboxed for external or
   credentialed helpers, as `screenshot`, `terminals` and `aiproviders` require.
   `browsers`, `shortcuts` and `media` keep the default sandbox: their fixed
   AppleScript operations run in the host through `apple_events`. `sysinfo`
   and `caffeinate` name powerd's `com.apple.PowerManagement.control`, the one
-  mach service a bundled plugin reaches. `processes` is the one bundled
-  plugin declaring `process_info`. Any other sandbox value
+  mach service a bundled plugin reaches. Any other sandbox value
   is rejected, and a
   manifest-only plugin cannot declare `sandbox`.
   `[plugins.<id>] sandbox = false` is the user's per-plugin fail-open kill
@@ -1647,7 +1395,7 @@ the host's queue is restarted; replacement events coalesce instead (see
   [Manifest](#manifest), and [privacy](privacy.md) for the unsandboxed
   bundled plugins.
 - **Capabilities.** Host RPCs are default-deny and checked per process
-  against the manifest; see [Host RPCs](#host-rpcs).
+  against the manifest; see [capabilities](plugin-host-rpcs.md#capabilities).
 - **Environment.** A plugin gets a scrubbed environment: no ambient tokens,
   agent sockets or login-shell secrets. Credentials go in its
   `[plugins.<id>]` table, delivered as `FLASH_PLUGIN_CONFIG`.
@@ -1826,10 +1574,13 @@ directory among its siblings), and write a deny that bounds an allow after it.
 
 `(deny default)` does not cover every operation family. A profile with no
 `process-info*` rule reads every process through libproc, so
-`PluginSandbox.processInfoRules` writes that denial out: other processes by
-target and by each operation's name (the wildcard leaves `csops`, the code
-signature, open), the pid list by name, and under `process_info` only the
-operations no reader uses. It does cover `sysctl-read`, by name and by MIB, so
+`PluginSandbox.processInfoRules` writes that denial out, the same for every
+plugin process: other processes by target and by each operation's name (the
+wildcard leaves `csops`, the code signature, open) and the pid list by
+name. No capability and no manifest key opens one. (A third-party `install`
+step is not a plugin process: its profile, `installSandboxProfile`, confines
+writes and leaves these reads, the network and other executables open to
+the toolchain it runs.) It does cover `sysctl-read`, by name and by MIB, so
 `PluginSandbox.sysctlRules` is an allow-list: the names Apple's `container.sb`
 gives every containerized process, the `hw.` subtree, and what `sysinfo`
 reads (swap, file-system types, interfaces, routes). Seatbelt names a node
@@ -1838,9 +1589,12 @@ The process list (`kern.proc.all`) and other processes' arguments and
 environment (`kern.procargs2`) are on no list and denied by prefix after the
 allow. macOS also serves the nodes of one pid to whoever may `proc_pidinfo`
 it, whatever `sysctl-read` says: the two denials close them together, and
-`process_info` opens them with libproc. A plugin can still tell that a pid is
-in use and read its group, session and priority (`getpgid`, `getsid`,
-`getpriority`).
+an allow of `process-info-pidinfo` for other processes would hand over
+their arguments and environment with it
+(`testOpeningPidinfoWouldAlsoServeArgumentsAndEnvironment`). That is why the
+process table is the host's to read, and reaches a plugin as figures and
+executable names. A plugin can still tell that a pid is in use and read its
+group, session and priority (`getpgid`, `getsid`, `getpriority`).
 
 Seatbelt matches canonical vnode paths. Resolve symlinked executables before
 putting them in a profile, and canonicalize temporary fixture roots
