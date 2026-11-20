@@ -77,6 +77,13 @@ share the main run loop. Treat that loop as the input latency budget:
   reconcile
   does no work when the event's target pid already matches the observed
   frontmost app (`reconcileFrontmostApplication(forKeyTargetingPID:)`).
+- A key's modifiers are read through `NSEvent.ModifierFlags.modifierKeys`
+  (Caps Lock, Shift, Control, Option, Command, the numeric pad, Help and Fn),
+  never the whole device-independent range. A key another process posts
+  arrives with the bit `0x20000000` in that range, which no key sets; a "no
+  modifier" check that read it refused the posted key as a count digit, as
+  Escape and as the `y` of a confirmation. A guardrail keeps
+  `deviceIndependentFlagsMask` out of the sources.
 - The hyper key is prepared once per config load (`HyperKeyMatcher`: the
   atom's physical chord and the characters that can spell it). A key that
   cannot be it is settled from its key code or typed character before any

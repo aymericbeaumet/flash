@@ -95,6 +95,15 @@ check_absent_except \
   '/(HotkeySyntax|KeyboardLayout|UIKitApps|NormalModeTerminalChords)\.swift:|/NormalMode\.swift:[0-9]+:[[:space:]]*case kVK_|/AppDelegate\.swift:[0-9]+:.*== Int64\(kVK_Escape\)' \
   "${PROD_SWIFT[@]}"
 
+# An event's modifiers are read through `NSEvent.ModifierFlags.modifierKeys`.
+# The device-independent range also holds bits no key sets (a key another
+# process posts carries one), so a "no modifier" check over it refuses a
+# posted key a keyboard's own would pass.
+check_absent \
+  "key modifiers are read through .modifierKeys (FlashCore/ModifierKeys.swift)" \
+  '\.deviceIndependentFlagsMask' \
+  "${PROD_SWIFT[@]}" Sources/FlashTerminal
+
 # `CGWindowListCopyWindowInfo` off the main thread deadlocks against a
 # main-thread Core Animation commit until SkyLight's 500 ms timeout, freezing
 # main with it. `WindowSnapshot.windowList` is the one door and always runs the

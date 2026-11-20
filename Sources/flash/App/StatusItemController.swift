@@ -270,7 +270,7 @@ final class StatusItemController: NSObject {
 /// aimed at a window.
 private final class AboutWindow: NSWindow {
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let modifiers = event.modifierFlags.intersection(.modifierKeys)
     let closeChord =
       !modifiers.isDisjoint(with: [.command, .control])
       && modifiers.subtracting([.command, .control, .shift]).isEmpty

@@ -281,7 +281,7 @@ extension StatusPopupController {
   /// Command-C and Command-V keep their local copy and paste.
   static func closesEndedPopup(_ event: NSEvent) -> Bool {
     guard event.type == .keyDown else { return false }
-    guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) else {
+    guard event.modifierFlags.intersection(.modifierKeys).contains(.command) else {
       return true
     }
     let key = event.charactersIgnoringModifiers?.lowercased()

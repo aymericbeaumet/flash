@@ -55,7 +55,7 @@ enum ConfirmationInterpreter {
   static func accepts(charactersIgnoringModifiers: String?, modifierFlags: NSEvent.ModifierFlags)
     -> Bool
   {
-    let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let flags = modifierFlags.intersection(.modifierKeys)
     guard flags.subtracting(.shift).isEmpty else { return false }
     return charactersIgnoringModifiers?.lowercased() == "y"
   }
@@ -98,7 +98,7 @@ enum MouseGridInputInterpreter {
     shape: MouseGrid.Shape,
     magicModifiers: ClickModifiers
   ) -> MouseGridKeyCommand {
-    let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let flags = modifierFlags.intersection(.modifierKeys)
     let strict = flags.intersection([.command, .control, .option])
     switch keyCode {
     case 53:  // escape
@@ -457,7 +457,7 @@ enum OverlayInputInterpreter {
 
     let independentModifiers =
       modifierFlags
-      .intersection(.deviceIndependentFlagsMask)
+      .intersection(.modifierKeys)
     let strictModifiers = independentModifiers.intersection([.command, .control, .option])
     let requestedStrictModifiers = ClickModifiers(eventFlags: strictModifiers)
     if !magicModifiers.isSuperset(of: requestedStrictModifiers) {
@@ -530,7 +530,7 @@ extension OverlayPanel {
       return true
     }
 
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let modifiers = event.modifierFlags.intersection(.modifierKeys)
     guard
       modifiers.contains(.command) || modifiers.contains(.option) || modifiers.contains(.control)
     else {
@@ -649,7 +649,7 @@ extension OverlayPanel {
       // Mappings keep their precedence (a mapped chord can replace the grid),
       // then the grid owns every other key.
       if coordinator.overlayDidHandleMapping(event) { return true }
-      let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      let flags = event.modifierFlags.intersection(.modifierKeys)
       let shiftHeld = flags.contains(.shift)
       let typed = Self.gridTypedCharacters(
         shiftHeld: shiftHeld,
@@ -664,11 +664,11 @@ extension OverlayPanel {
       if let command = HintSearchInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+        modifierFlags: event.modifierFlags.intersection(.modifierKeys))
       {
         let clickAllowed = magicModifiers.union(.shift)
         let clickModifiers = ClickModifiers(
-          eventFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+          eventFlags: event.modifierFlags.intersection(.modifierKeys),
           allowed: clickAllowed)
         coordinator.overlayDidSearch(command, clickModifiers: clickModifiers)
       }
@@ -677,7 +677,7 @@ extension OverlayPanel {
       if let command = PointerModeInterpreter.command(
         keyCode: event.keyCode,
         charactersIgnoringModifiers: keys.ignoringModifiers,
-        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+        modifierFlags: event.modifierFlags.intersection(.modifierKeys),
         arrows: keyboardNavigation)
       {
         coordinator.overlayDidPointer(command)
@@ -691,7 +691,7 @@ extension OverlayPanel {
       {
         let clickAllowed = magicModifiers.union(.shift)
         let clickModifiers = ClickModifiers(
-          eventFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+          eventFlags: event.modifierFlags.intersection(.modifierKeys),
           allowed: clickAllowed)
         coordinator.overlayDidAdjust(command, clickModifiers: clickModifiers)
       }
@@ -700,7 +700,7 @@ extension OverlayPanel {
       if let command = HintBigramInterpreter.command(
         keyCode: event.keyCode,
         characters: keys.characters,
-        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+        modifierFlags: event.modifierFlags.intersection(.modifierKeys))
       {
         coordinator.overlayDidBigram(command)
       }
@@ -719,7 +719,7 @@ extension OverlayPanel {
       guard let switching = coordinator as? OverlayWindowSwitching else { return true }
       if let command = WindowSwitcherInterpreter.command(
         keyCode: event.keyCode, typed: keys.ignoringModifiers,
-        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+        modifierFlags: event.modifierFlags.intersection(.modifierKeys))
       {
         switching.overlayDidSwitchWindow(command)
       }
@@ -806,7 +806,7 @@ extension OverlayPanel {
   /// run. We do the translation here for the small set of edit
   /// shortcuts everyone expects from a single-line text input.
   private func handleCommandLineEditingShortcut(_ event: NSEvent) -> Bool {
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let modifiers = event.modifierFlags.intersection(.modifierKeys)
     guard modifiers.contains(.command) else { return false }
     // ⌘+Return / ⌘+Keypad-Enter: force-submit the selected flashlight
     // candidate (insert canonical token if it's a bang, then dispatch /

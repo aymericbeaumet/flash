@@ -286,7 +286,7 @@ final class MappingsCoordinator {
   }
 
   private static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
-    let independent = flags.intersection(.deviceIndependentFlagsMask)
+    let independent = flags.intersection(.modifierKeys)
     var out: UInt32 = 0
     if independent.contains(.command) { out |= UInt32(cmdKey) }
     if independent.contains(.shift) { out |= UInt32(shiftKey) }

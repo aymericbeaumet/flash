@@ -9,6 +9,10 @@ command it most likely meant, and the upgrade notes below say what to write.
 
 ### Fixes
 
+- A key another app posts (an automation tool, a script) reads as the key a
+  keyboard sends. Such a key carries a flag bit no modifier sets, and NORMAL
+  took it for a modifier: a posted digit started no count, a posted Escape
+  cancelled nothing and a posted `y` answered a confirmation with no.
 - The command line lists a command's arguments once its two words are
   typed: each `--name=` it still takes, each `--flag`, and the values an
   argument enumerates, for Flash's own commands and for a plugin's, whose

@@ -533,7 +533,7 @@ extension OverlayPanel: NSTextFieldDelegate {
   /// `ctrl+u` everything back to the prompt, and `ctrl+r` waits for a
   /// register name, whose text the next key inserts (`controlTextDidChange`).
   func handleCommandLineControlKey(_ event: NSEvent) -> Bool {
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let modifiers = event.modifierFlags.intersection(.modifierKeys)
       .subtracting(.capsLock)
     guard modifiers == .control,
       let key = event.charactersIgnoringModifiers?.lowercased().first, "wur".contains(key),

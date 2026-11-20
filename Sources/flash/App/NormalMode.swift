@@ -248,7 +248,7 @@ enum NormalModeInterpreter {
     mappings: CompiledMappings,
     recordingMacro: Bool = false
   ) -> NormalModeTransition {
-    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let independent = modifierFlags.intersection(.modifierKeys)
 
     let hasControl = independent.contains(.control)
     let ignoredChar = firstCharacter(charactersIgnoringModifiers)?.lowercased().first
@@ -465,7 +465,7 @@ enum NormalModeInterpreter {
     characters: String?,
     charactersIgnoringModifiers: String?
   ) -> Bool {
-    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let independent = modifierFlags.intersection(.modifierKeys)
       .subtracting(.capsLock)
     if namedKeyAtom(keyCode: keyCode) == escapeKeyAtom { return independent.isEmpty }
     guard independent == .control else { return false }
@@ -739,7 +739,7 @@ enum NormalModeInterpreter {
     _ pending: String, event: NSEvent, mappings: CompiledMappings
   ) -> Bool {
     guard pendingReadsNextKey(pending) else { return false }
-    let independent = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let independent = event.modifierFlags.intersection(.modifierKeys)
     guard !independent.intersection([.command, .control, .option]).isEmpty else { return true }
     guard let prefix = continuationMappingPrefix(pending), !prefix.isEmpty else { return false }
     let keys = mappingKeys(
@@ -803,7 +803,7 @@ enum NormalModeInterpreter {
     characters: String?,
     charactersIgnoringModifiers: String?
   ) -> [String] {
-    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let independent = modifierFlags.intersection(.modifierKeys)
     return mappingKeys(
       keyCode: keyCode,
       modifierFlags: independent,
@@ -876,7 +876,7 @@ enum NormalModeInterpreter {
     characters: String?,
     charactersIgnoringModifiers: String?
   ) -> Bool {
-    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let independent = modifierFlags.intersection(.modifierKeys)
     if independent.contains(.command) || independent.contains(.control)
       || independent.contains(.option)
     {
@@ -919,7 +919,7 @@ enum NormalModeInterpreter {
       keyCode: keyCode,
       modifierFlags: modifierFlags,
       ignoredChar: ignoredChar)
-    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let independent = modifierFlags.intersection(.modifierKeys)
     if let modified,
       independent.contains(.command) || independent.contains(.option)
         || independent.contains(.control)
@@ -971,7 +971,7 @@ enum NormalModeInterpreter {
     modifierFlags: NSEvent.ModifierFlags,
     ignoredChar: Character?
   ) -> String? {
-    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let independent = modifierFlags.intersection(.modifierKeys)
     var modifiers: [String] = []
     if independent.contains(.command) { modifiers.append("cmd") }
     if independent.contains(.control) { modifiers.append("ctrl") }

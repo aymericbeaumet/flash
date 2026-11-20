@@ -462,7 +462,7 @@ public final class TerminalView: NSView, @preconcurrency NSTextInputClient {
       encode(event)
       return
     }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let modifiers = event.modifierFlags.intersection(.modifierKeys)
     if modifiers.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "c" {
       localCommandKeys.insert(event.keyCode)
       copy(nil)

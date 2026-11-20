@@ -122,7 +122,7 @@ extension OverlayPanel {
       action = .leftClick
     }
     let modifiers = ClickModifiers(
-      eventFlags: event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? [],
+      eventFlags: event?.modifierFlags.intersection(.modifierKeys) ?? [],
       allowed: .all)
     let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
     let flashWasActive =

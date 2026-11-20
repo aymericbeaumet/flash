@@ -294,6 +294,35 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(smartZoom.repeatCount, 2)
   }
 
+  /// A key another process posts (a remapper, an automation tool) carries a
+  /// flag bit no modifier key sets; it reads as the key a keyboard sends.
+  func testAPostedKeyReadsAsTheKeyAKeyboardSends() {
+    let posted = NSEvent.ModifierFlags(rawValue: 0x2000_0000)
+    XCTAssertEqual(transition(chars: "3", flags: posted).pending, "3")
+    let undo = transition(pending: "3", chars: "u", flags: posted)
+    XCTAssertEqual(undo.command, .undo)
+    XCTAssertEqual(undo.repeatCount, 3)
+    let halfPageUp = transition(pending: "2", chars: "u", flags: posted.union(.control))
+    XCTAssertEqual(halfPageUp.command, .move(.halfPageUp))
+    XCTAssertTrue(
+      NormalModeInterpreter.isEscape(
+        keyCode: UInt16(kVK_Escape), modifierFlags: posted, characters: "\u{1B}",
+        charactersIgnoringModifiers: "\u{1B}"))
+    XCTAssertTrue(
+      ConfirmationInterpreter.accepts(charactersIgnoringModifiers: "y", modifierFlags: posted))
+    XCTAssertTrue(
+      ConfirmationInterpreter.accepts(
+        charactersIgnoringModifiers: "y", modifierFlags: posted.union(.shift)))
+    XCTAssertFalse(
+      ConfirmationInterpreter.accepts(
+        charactersIgnoringModifiers: "y", modifierFlags: posted.union(.command)))
+    XCTAssertEqual(
+      posted.intersection(.modifierKeys), [], "the bit belongs to no modifier key")
+    XCTAssertEqual(
+      NSEvent.ModifierFlags.modifierKeys.subtracting(.deviceIndependentFlagsMask), [],
+      "every modifier key is device independent")
+  }
+
   func testRepeatableMappingRepeatsOnItsFinalKey() {
     let first = transition(pending: "[", chars: "a")
     XCTAssertEqual(first.command, .appPrev)
