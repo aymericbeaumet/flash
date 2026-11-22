@@ -36,6 +36,7 @@ const reservedFiles = new Set([
   "404.html",
   "sitemap.xml",
   "robots.txt",
+  "social-card.jpg",
   ".nojekyll",
   "index.html",
 ]);

@@ -92,6 +92,9 @@ command it most likely meant, and the upgrade notes below say what to write.
 - Lock the mise development tools across macOS and Linux, and use the same
   pinned environment and frozen dependency resolution locally and in CI.
   `mise.toml` names the oldest mise it is verified with (`min_version`).
+- A link to the manual shows a card when it is shared: every published page
+  names `docs/assets/social-card.jpg` as its preview image
+  (`mise run build:social-card` renders it).
 - Separate released installation instructions from the development manual,
   with a short first-hint walkthrough and explicit Accessibility limitations.
 

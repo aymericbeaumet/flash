@@ -120,6 +120,7 @@ else.
 | `build:inspector` | `Scripts/build-inspector.sh` | Frontend edits: rebuild the committed `inspector.html` |
 | `build:schema` | `Inspector/scripts/state-types.ts`, then `ConfigSchemaTests`, `HelpRoutesTests` and the command manual and topic table tests with `FLASH_WRITE_SCHEMA=1` | Config key or default changes: rewrite the committed `docs/schema/flash.schema.json`. A new help page: rewrite `Inspector/src/lib/help-routes.json`. A new command, or a changed syntax or summary: rewrite the rows of the command reference in `docs/commands.md`. A new topic, once it has a category in `URLEventHandler.topicsByCategory`: rewrite `Inspector/src/lib/topic-categories.json`. A change to `docs/schema/inspector/state.schema.json`: rewrite the help's snapshot types, `Inspector/src/lib/state.generated.ts` |
 | `build:site` | `Scripts/build-site.sh` | Docs changes: the published documentation and its link check |
+| `build:social-card` | `Scripts/build-social-card.sh`, with headless Chrome | After editing `Scripts/social-card.html`: the image a shared link shows, `docs/assets/social-card.jpg` |
 | `build:tmux-oracle` | `Scripts/build-tmux-oracle.sh` | The pinned tmux the status-format tests compare against |
 | `build:release` | `Scripts/build.sh --release` | The universal release package, as CI builds it |
 | `install:dev` | `Scripts/install.sh --dev` | Deploy every verified iteration |

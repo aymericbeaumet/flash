@@ -81,6 +81,10 @@ run = "./Scripts/build-inspector.sh"
 description = "Build the published manual into build/site, failing on a broken link or anchor"
 run = "./Scripts/build-site.sh"
 
+[tasks."build:social-card"]
+description = "Render Scripts/social-card.html into docs/assets/social-card.jpg, the image a shared link shows (-- <Chrome executable>)"
+run = "./Scripts/build-social-card.sh"
+
 [tasks."build:tmux-oracle"]
 description = "Build the pinned tmux and utf8proc status-format oracle into build/tmux-oracle"
 run = "./Scripts/build-tmux-oracle.sh"

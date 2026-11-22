@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { readFileSync, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,6 +85,12 @@ test("the published site stays within its size budget", async () => {
     assert.ok(sizes.pages > 50, "the build has the manual's pages");
     const problems = overBudget(sizes, budget);
     assert.deepEqual(problems, [], problems.join("\n"));
+    // A shared link shows the card: every page names it and the build ships it.
+    assert.match(
+      readFileSync(join(out, "hints/index.html"), "utf8"),
+      /<meta property="og:image" content="https:\/\/[^"]+\/social-card\.jpg" \/>/,
+    );
+    assert.ok(statSync(join(out, "social-card.jpg")).size > 10_000, "the build ships the card");
   } finally {
     await rm(out, { recursive: true, force: true });
   }

@@ -28,6 +28,11 @@ import { searchSections, type Problem } from "./docs-bundle.ts";
 import { docsDirectory, loadDocs } from "./docs-source.ts";
 
 const inspector = join(dirname(fileURLToPath(import.meta.url)), "..");
+/**
+ * The card a shared link shows: `docs/assets/social-card.jpg`, 1280 by 640
+ * (`mise run build:social-card`), published at the site's root.
+ */
+const socialCard = "social-card.jpg";
 
 function fail(problems: Problem[]): never {
   console.error(
@@ -276,6 +281,7 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
   const navigationFile = await asset("nav", index);
   const speculation = `<script type="speculationrules">${scriptJSON(speculationRules(root))}</script>`;
   const description = escapeHTML(bundle.site.description);
+  const card = escapeHTML(new URL(socialCard, bundle.site.url).href);
   const page = (route: string) => {
     const rendered = renderPage("public", bundle, route);
     const head = [
@@ -284,7 +290,10 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
       `<meta property="og:type" content="website" />`,
       `<meta property="og:site_name" content="${escapeHTML(bundle.site.name)}" />`,
       `<meta property="og:description" content="${description}" />`,
-      `<meta name="twitter:card" content="summary" />`,
+      `<meta property="og:image" content="${card}" />`,
+      `<meta property="og:image:width" content="1280" />`,
+      `<meta property="og:image:height" content="640" />`,
+      `<meta name="twitter:card" content="summary_large_image" />`,
       // What the page hydrates from: the address it was rendered for, and
       // the navigation, fetched while the script loads.
       `<meta name="flash-route" content="${escapeHTML(route)}" />`,
@@ -349,7 +358,8 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
     `User-agent: *\nAllow: /\n\nSitemap: ${new URL("sitemap.xml", bundle.site.url).href}\n`,
   );
   await write(join(out, ".nojekyll"), "");
-  for (const file of ["sitemap.xml", "robots.txt"]) assets.add(file);
+  await copyFile(join(docsDirectory, "assets", socialCard), join(out, socialCard));
+  for (const file of ["sitemap.xml", "robots.txt", socialCard]) assets.add(file);
 
   problems.push(...checkPublished(new Map([...html, ...stubs]), assets, root, bundle.site.url));
   for (const [file, text] of html) {

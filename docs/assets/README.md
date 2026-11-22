@@ -17,3 +17,12 @@ under 500 KB.
 | `flashlight.png` | The command bar open with `tab ` typed: browser tabs and tmux windows ranked, and below it a second shot or a split with `1234 eur in usd` showing the inline answer. |
 | `statusbar-widgets.png` | Full desktop, no windows: the bar on top with `docs/examples/statusbar/flash.toml` (feed, quotas, CPU/MEM/DSK/NET/BAT, clock), the system panel widget from `docs/examples/widgets/system-panel.toml` in the top-right, the clock and agenda widget bottom-left. |
 | `popup-btop.png` | Same desktop, the pointer hovering the CPU segment of the bar, the terminal popup below it running btop. |
+
+## The link card
+
+`social-card.jpg` (1280×640) is the image a shared link shows: the published
+site names it as every page's preview image, the README shows it until
+`hero.gif` is recorded, and it is the file to upload as the repository's
+social preview (Settings › General › Social preview; GitHub has no API for
+it). It is drawn, not recorded: `Scripts/social-card.html`, rendered by
+`mise run build:social-card`.
