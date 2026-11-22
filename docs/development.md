@@ -65,7 +65,8 @@ Xcode 26.6 explicitly.
 
 Before the first build: install Xcode (the Swift toolchain and `swift
 format` come from it; Xcode 26.6 is the verified version, older ones are
-untested) and [mise](https://mise.jdx.dev) (CI uses 2026.11.6). A task downloads
+untested) and [mise](https://mise.jdx.dev) (2026.11.9 or later, which
+`mise.toml` requires; CI uses 2026.11.12). A task downloads
 the pinned tools (Python, Rust, Node, pnpm, Zig, cargo-about, gh) on first use; the
 first build compiles libghostty-vt from Ghostty's pinned revision with Zig,
 which takes several minutes and keeps a few hundred megabytes of sources and

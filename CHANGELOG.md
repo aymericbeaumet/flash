@@ -82,13 +82,16 @@ command it most likely meant, and the upgrade notes below say what to write.
   types and topic categories are generated (`mise run build:schema`), and
   `mise run check:concurrency` holds the app's strict-concurrency
   diagnostics to a count that only falls.
-- Refresh the Rust and browser-tooling dependencies, including SQLite through
-  rusqlite 0.42, the pinned Ghostty terminal library and the Electron 45
-  integration fixture. TypeScript stays on
-  6.0.3 until the Svelte checker supports the native compiler without a second
-  compiler installation.
+- Refresh every pinned dependency: Rust 1.100, Node 26.13.1, pnpm 12.21 and
+  gh 2.105 through mise; the plugin crates (jiff 1.0, nix 0.32, SQLite
+  through rusqlite 0.43); SwiftProtobuf 1.41; Svelte 5.59 and Vite 8.3.8 in
+  the help UI; the Ghostty terminal library at its current `main`; and the
+  Electron 45.4 integration fixture. TypeScript stays on 6.0.3: the Svelte
+  checker and typescript-eslint need the JavaScript API the native 7.0
+  compiler does not have.
 - Lock the mise development tools across macOS and Linux, and use the same
   pinned environment and frozen dependency resolution locally and in CI.
+  `mise.toml` names the oldest mise it is verified with (`min_version`).
 - Separate released installation instructions from the development manual,
   with a short first-hint walkthrough and explicit Accessibility limitations.
 

@@ -10,12 +10,12 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
-nix = { version = "0.31.3", default-features = false, features = ["event", "hostname", "user"] }
+nix = { version = "0.32.0", default-features = false, features = ["event", "hostname", "user"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-regex = "1.13.1"
+regex = "1.13.2"
 unicode-width = "0.2.3"
-toml = "1.2.1"
+toml = "1.2.2"
 tokio = { version = "1.54.1", default-features = false, features = [
   "rt",
   "macros",

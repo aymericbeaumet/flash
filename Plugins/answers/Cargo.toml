@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 fend-core = "=1.5.9"
 flash_plugin = { path = "../_flash_plugin_rust" }
-jiff = { version = "0.2.42", default-features = false, features = [
+jiff = { version = "1.0.2", default-features = false, features = [
   "std",
   "tz-system",
   "tz-fat",

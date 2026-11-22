@@ -14,7 +14,7 @@ flash_plugin = { path = "../_flash_plugin_rust" }
 libc = "0.2.191"
 # `time` for the boot-relative uptime clock, `net` and `hostname` for the
 # address catalog.
-nix = { version = "0.31.3", default-features = false, features = ["hostname", "net", "time"] }
+nix = { version = "0.32.0", default-features = false, features = ["hostname", "net", "time"] }
 tokio = { version = "1.54.1", default-features = false, features = [
   "rt",
   "macros",

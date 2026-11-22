@@ -5,6 +5,10 @@
 # here, never a Makefile, justfile, Taskfile or wrapper script (the guardrails
 # enforce it). Task arguments follow `--`: `mise run test:plugins -- --lane units`.
 
+# The oldest mise these tasks and mise.lock are verified with; an older one
+# stops here instead of resolving tools differently.
+min_version = "2026.11.9"
+
 [settings]
 lockfile = true
 lockfile_platforms = ["macos-arm64", "macos-x64", "linux-x64"]
@@ -273,10 +277,10 @@ run = "./Scripts/update-homebrew-cask.sh"
 # manual (Scripts/build-site.sh) and the Electron fixture.
 [tools]
 python = "3.15.2"
-rust = { version = "1.99.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"] }
-node = "26.13.0"
-pnpm = "12.18.0"
+rust = { version = "1.100.0", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"] }
+node = "26.13.1"
+pnpm = "12.21.0"
 zig = "0.17.1"
-gh = "2.103.3"
+gh = "2.105.0"
 # License notices for the Rust dependencies shipped inside bundled plugins.
 "cargo:cargo-about" = { version = "0.9.3", features = ["cli"] }

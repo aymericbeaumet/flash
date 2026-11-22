@@ -823,6 +823,10 @@ network, bytes and requests are what a visit costs.
 | Search: text read and results complete | 16 ms |
 | Typing in the search: per key, median / p95 | 2.1 / 10.4 ms |
 
+Svelte 5.59 (2026-11-22) added 10.6 KiB to the site's JavaScript, now
+92.0 KiB (33.8 KiB gzipped): a first visit transfers about 4 KiB more than
+the table says.
+
 As one file, the search would cost 1,529 KiB (493 KiB gzipped) before its
 first result. Chrome refuses to render a page ahead while DevTools
 drives the tab (`PrerenderingDisabledByDevTools`), so the benchmark sees the

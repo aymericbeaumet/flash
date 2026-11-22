@@ -11,66 +11,66 @@ specifiers = ["0.9.3"]
 features = "cli"
 
 [[tools.gh]]
-version = "2.103.3"
+version = "2.105.0"
 backend = "aqua:cli/cli"
-specifiers = ["2.103.3"]
+specifiers = ["2.105.0"]
 
 [tools.gh."platforms.linux-x64"]
-checksum = "sha256:4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d"
-url = "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/679195621"
+checksum = "sha256:79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f"
+url = "https://github.com/cli/cli/releases/download/v2.105.0/gh_2.105.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/761188566"
 provenance = "github-attestations"
 
 [tools.gh."platforms.macos-arm64"]
-checksum = "sha256:d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062"
-url = "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_macOS_arm64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/679195704"
+checksum = "sha256:2a5d03103ae444927383b93d9ffd65579a26e2eb900ce1cf11f55258d5319ded"
+url = "https://github.com/cli/cli/releases/download/v2.105.0/gh_2.105.0_macOS_arm64.zip"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/761188673"
 provenance = "github-attestations"
 
 [tools.gh."platforms.macos-x64"]
-checksum = "sha256:a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682"
-url = "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_macOS_amd64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/679195693"
+checksum = "sha256:23602cbccbbdc6285a8520745b714cb927ce2ca621779373c2a20cd8e33fda66"
+url = "https://github.com/cli/cli/releases/download/v2.105.0/gh_2.105.0_macOS_amd64.zip"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/761188667"
 provenance = "github-attestations"
 
 [[tools.node]]
-version = "26.13.0"
+version = "26.13.1"
 backend = "core:node"
-specifiers = ["26.13.0"]
+specifiers = ["26.13.1"]
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455"
-url = "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.gz"
+checksum = "sha256:518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778"
+url = "https://nodejs.org/dist/v26.13.1/node-v26.13.1-linux-x64.tar.gz"
 
 [tools.node."platforms.macos-arm64"]
-checksum = "sha256:d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6"
-url = "https://nodejs.org/dist/v26.13.0/node-v26.13.0-darwin-arm64.tar.gz"
+checksum = "sha256:aec2514ea1ceb2ba52455e9ec65986f6749a06dd759e5db2a72e6889668c9735"
+url = "https://nodejs.org/dist/v26.13.1/node-v26.13.1-darwin-arm64.tar.gz"
 
 [tools.node."platforms.macos-x64"]
-checksum = "sha256:525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e"
-url = "https://nodejs.org/dist/v26.13.0/node-v26.13.0-darwin-x64.tar.gz"
+checksum = "sha256:82bb96078a24ca50b9c9a38f2379e6be6d87171fcd400fc14c8934b3bce96e2f"
+url = "https://nodejs.org/dist/v26.13.1/node-v26.13.1-darwin-x64.tar.gz"
 
 [[tools.pnpm]]
-version = "12.18.0"
+version = "12.21.0"
 backend = "aqua:pnpm/pnpm"
-specifiers = ["12.18.0"]
+specifiers = ["12.21.0"]
 
 [tools.pnpm."platforms.linux-x64"]
-checksum = "sha256:3726060e236c0db3e7124c0a5af123c840ba0cb76682149b63ea0baf290017c2"
-url = "https://github.com/pnpm/pnpm/releases/download/v12.18.0/pnpm-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/711505542"
+checksum = "sha256:84c4773bcf4a217f4083cd7b2a91e4cee6103cf42426c1282ef37d308f55a410"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.21.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/744357264"
 provenance = "github-attestations"
 
 [tools.pnpm."platforms.macos-arm64"]
-checksum = "sha256:9b647f634d7e8f23162c9d3d1d0e0950d1152402ca0f4c331583ed7c75cd3706"
-url = "https://github.com/pnpm/pnpm/releases/download/v12.18.0/pnpm-darwin-arm64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/711505537"
+checksum = "sha256:5c4d73018e00dd602531ce714625594fb693cbe110e6719df2b043b0ae62ab1a"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.21.0/pnpm-darwin-arm64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/744357270"
 provenance = "github-attestations"
 
 [tools.pnpm."platforms.macos-x64"]
-checksum = "sha256:34cc90fbaa060c458b587fbdb1f3f9477e97e3fd3f8e9ffb2d43ca45c0c9b005"
-url = "https://github.com/pnpm/pnpm/releases/download/v12.18.0/pnpm-darwin-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/711505550"
+checksum = "sha256:415c05ae4262c89b8f24ca58c693be5d969856ae909c086aa06996951fca30ea"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.21.0/pnpm-darwin-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/744357251"
 provenance = "github-attestations"
 
 [[tools.protoc]]
@@ -114,9 +114,9 @@ url = "https://github.com/astral-sh/python-build-standalone/releases/download/20
 provenance = "github-attestations"
 
 [[tools.rust]]
-version = "1.99.1"
+version = "1.100.0"
 backend = "core:rust"
-specifiers = ["1.99.1"]
+specifiers = ["1.100.0"]
 
 [tools.rust.options]
 components = "clippy,rustfmt"

@@ -15,12 +15,14 @@ import { measureSite, overBudget, type SiteBudget, type SiteSizes } from "./scri
 // (`mise run bench:help -- --site`, docs/performance.md, "The published site").
 // The largest page is the plugin protocol, which grows with every host RPC
 // and capability: its budget was measured again the same day, at 155.9 KiB.
+// The script was measured again on 2026-11-22, at 92.0 KiB (33.8 KiB gzipped):
+// Svelte 5.59's runtime, with its custom renderer API, is 10.6 KiB larger.
 const KiB = 1024;
 const budget: SiteBudget = {
   html: { raw: 8700 * KiB, gzip: 1860 * KiB },
   medianPage: { raw: 45 * KiB, gzip: 9 * KiB },
   largestPage: { raw: 175 * KiB, gzip: 49.5 * KiB },
-  js: { raw: 92 * KiB, gzip: 33.5 * KiB },
+  js: { raw: 103 * KiB, gzip: 37.8 * KiB },
   css: { raw: 40.5 * KiB, gzip: 7.9 * KiB },
   navigation: { raw: 39.5 * KiB, gzip: 5.8 * KiB },
   searchOutline: { raw: 66 * KiB, gzip: 12.4 * KiB },
@@ -53,7 +55,7 @@ test("a site within its budget has nothing to report; each figure over it is nam
     ),
     [
       "the largest page (commands/index.html) is 512.0 KiB, over its 175.0 KiB budget",
-      "the site's JavaScript is 54.5 KiB gzipped, over its 33.5 KiB budget",
+      "the site's JavaScript is 54.5 KiB gzipped, over its 37.8 KiB budget",
     ],
   );
   // The search text is the manual's own words: it is measured, not held.

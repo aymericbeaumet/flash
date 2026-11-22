@@ -10,7 +10,7 @@ import subprocess
 import tarfile
 
 
-REVISION = "a622196c930138f312884382ab784e45b9ab653b"
+REVISION = "4dd09c4688ada3315daf235135b6cb15cacfa9a2"
 PACKAGES = {
     "translate-c": "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5",
     "highway": "N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE",

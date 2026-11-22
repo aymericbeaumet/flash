@@ -24,9 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: node pnpm
       - name: Build the published manual and check every link
         # The same build the Docs workflow deploys: every page of docs/,
@@ -42,9 +42,9 @@ jobs:
       - name: Show swift-format version
         run: swift format --version
       # swift-format ships with Xcode: the tasks need mise but no tools.
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install: false
       - name: Check formatting
         # Run the formatter in-place, then require a clean working tree.
@@ -62,9 +62,9 @@ jobs:
       - name: Show swift-format version
         run: swift format --version
       # swift-format ships with Xcode: the tasks need mise but no tools.
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install: false
       - name: Lint
         run: mise run lint
@@ -74,9 +74,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python
       - name: Check hard-rule guardrails
         run: mise run guardrails
@@ -104,9 +104,9 @@ jobs:
           key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('mise.lock', 'Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python rust
       - name: Plugin gate
         # `mise run test:plugins -- --lane all` is the whole Rust gate: `lint`
@@ -124,9 +124,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python zig
       - name: Test Ghostty bootstrap in a tagged repository
         run: mise run test:ghostty
@@ -136,9 +136,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python zig
       - name: Cache libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -171,9 +171,9 @@ jobs:
       FLASH_REQUIRE_TMUX_ORACLE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python rust zig
       - name: Cache pinned tmux oracle
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -234,9 +234,9 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python zig
       - name: Cache libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -256,9 +256,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: node pnpm
       - name: Type-check and unit-test the inspector
         run: mise run test:inspector
@@ -277,9 +277,9 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python rust zig node pnpm cargo:cargo-about gh
       - name: Cache Cargo sources
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -359,9 +359,9 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
-          version: 2026.11.6
+          version: 2026.11.12
           install_args: python rust zig node pnpm cargo:cargo-about gh
 
       # Developer ID signing and notarization are opt-in through repository
