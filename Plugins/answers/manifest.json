@@ -6,13 +6,21 @@
   "exec": [
     "./flash-plugin-answers"
   ],
+  "settings": {
+    "target_currencies": {
+      "type": "string_array",
+      "description": "The currencies a bare amount converts to, as ISO 4217 codes; the first eight count.",
+      "default": [
+        "USD"
+      ]
+    }
+  },
   "capabilities": [
     "network_fetch"
   ],
   "fetch_urls": [
     "https://www.ecb.europa.eu/"
   ],
-  "sandbox": {},
   "query": {
     "prefixes": [
       "="

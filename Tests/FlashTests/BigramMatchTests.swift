@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import FlashCore
 import XCTest
@@ -265,20 +266,18 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertEqual(BigramSearch.hintWindow(.zero, fallback: window), window)
   }
 
-  func testTmuxGridPlacesALetterOnItsCellAndFindsTheClientOfTheFocusedApp() {
+  func testTerminalGridPlacesALetterOnItsCell() {
     let window = CGRect(x: 10, y: 20, width: 800, height: 400)
-    let cells = TmuxBigramGrid.metrics(
-      bundleIdentifier: "com.example.term", window: window, columns: 80, rows: 20)
-    let grid = TmuxBigramGrid.Grid(
-      cellWidth: cells.cellWidth,
-      cellHeight: cells.cellHeight,
+    let cells = TerminalTextGrid.evenCell(window: window, columns: 80, rows: 20)
+    let grid = TerminalTextGrid.Grid(
+      cellWidth: cells.width,
+      cellHeight: cells.height,
       padX: cells.padX,
       padY: cells.padY,
       origin: CGPoint(x: window.minX, y: window.minY),
       windowHeight: window.height,
-      topOffset: 0,
-      panes: [TmuxBigramGrid.Pane(left: 0, top: 0, lines: ["v"])])
-    let targets = grid.targets(matching: "v", pid: 7, bundleIdentifier: "com.example.term")
+      lines: [TerminalTextGrid.contentLine("v", row: 0, origin: 0)])
+    let targets = grid.targets(matching: "v", pid: 7)
     XCTAssertEqual(targets.count, 1)
     XCTAssertEqual(
       targets[0].resolvedClickPoint(preferred: .zero),
@@ -296,50 +295,36 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertEqual(
       targets[0].frame.maxY, window.maxY, accuracy: 0.01,
       "row 0 sits on the top edge of the window")
-    XCTAssertEqual(
-      TmuxBigramGrid.clientTTY(
-        lines: ["100 /dev/ttys001", "200 /dev/ttys002"],
-        focusedPID: 50,
-        parent: { pid in
-          switch pid {
-          case 200: return 50
-          default: return nil
-          }
-        }),
-      "/dev/ttys002")
-    XCTAssertEqual(TmuxBigramGrid.statusTopOffset(status: "on", position: "top"), 1)
-    XCTAssertEqual(TmuxBigramGrid.statusTopOffset(status: "on", position: "bottom"), 0)
   }
 
-  func testTmuxLetterSearchIncludesTheStatusLineAndCentredPaneTitles() throws {
-    let snapshot = try XCTUnwrap(
-      TmuxBigramGrid.parseSnapshot(
-        geometry: "20 6 on top|||#[fg=colour178 bold]za",
-        paneList: """
-          %7 10 1 9 4 top|||#[align=centre] a
-          %8 0 1 9 4 off|||#[align=left]hidden
-          """))
-    XCTAssertEqual(snapshot.topOffset, 1)
-    let status = try XCTUnwrap(snapshot.status)
+  /// The tmux plugin's grid for a top status, a centred top-border title
+  /// and a pane below both: the formats lay out on their own cells.
+  func testTerminalLetterSearchIncludesTheStatusLineAndCentredPaneTitles() throws {
+    let reply = PluginTextGrid(
+      columns: 20, rows: 6,
+      lines: [
+        .format(row: 0, column: 0, width: 20, format: "#[fg=colour178 bold]za"),
+        .format(row: 1, column: 10, width: 9, format: "#[align=centre] a"),
+        .text(row: 2, column: 10, text: "xa"),
+      ])
+    let placed = TerminalTextGrid.placedLines(reply)
+    XCTAssertEqual(placed.count, 3)
+    let status = placed[0]
     XCTAssertEqual(status.row, 0)
     XCTAssertFalse(status.text.contains("#"))
     XCTAssertFalse(status.text.contains("colour"))
     XCTAssertEqual(status.span(location: 1, length: 1)?.column, 1)
-
-    XCTAssertEqual(snapshot.panes.count, 2)
-    XCTAssertNil(snapshot.panes[1].title)
-    let title = try XCTUnwrap(snapshot.panes[0].title)
+    let title = placed[1]
     XCTAssertEqual(title.row, 1)
     XCTAssertFalse(title.text.contains("#"))
     let titleHit = try XCTUnwrap(BigramMatcher.occurrences(in: title.text, query: "a").first)
     XCTAssertEqual(title.span(location: titleHit.location, length: 1)?.column, 14)
 
-    let grid = TmuxBigramGrid.Grid(
-      cellWidth: 10, cellHeight: 10, padX: 0, padY: 0,
-      origin: .zero, windowHeight: 60, topOffset: snapshot.topOffset,
-      panes: [TmuxBigramGrid.Pane(left: 10, top: 1, lines: ["xa"])],
-      chrome: [status, title])
-    let hits = grid.targets(matching: "a", pid: 3, bundleIdentifier: "org.alacritty")
+    let window = CGRect(x: 0, y: 0, width: 200, height: 60)
+    let grid = try XCTUnwrap(TerminalTextGrid.grid(reply, window: window))
+    XCTAssertEqual(grid.cellWidth, 10, accuracy: 0.01)
+    XCTAssertEqual(grid.cellHeight, 10, accuracy: 0.01)
+    let hits = grid.targets(matching: "a", pid: 3)
     XCTAssertEqual(hits.count, 3)
     XCTAssertEqual(hits.map(\.frame.maxY).sorted(by: >), [60, 50, 40])
     let content = try XCTUnwrap(hits.first { $0.frame.maxY == 40 })
@@ -349,24 +334,64 @@ final class BigramMatchTests: XCTestCase {
     let titleHitFrame = try XCTUnwrap(hits.first { $0.frame.maxY == 50 })
     XCTAssertEqual(titleHitFrame.frame.minX, 140, accuracy: 0.01)
     XCTAssertEqual(hits.map(\.accessibilityLabel), ["a", "a", "a"])
+
+    // A grid whose only line lays out blank has nothing to search.
+    let blank = PluginTextGrid(
+      columns: 4, rows: 1, lines: [.format(row: 0, column: 0, width: 4, format: "#[fg=red]  ")])
+    XCTAssertNil(TerminalTextGrid.grid(blank, window: window))
   }
 
-  func testTmuxStatusAndPaneTitleRowsFollowTheClientGrid() throws {
+  /// A terminal that centres its grid says where the cells are; the host
+  /// places a letter there and reads no terminal's configuration.
+  func testAMeasuredCellPlacesTheGridWhereThePluginSays() throws {
+    let window = CGRect(x: 100, y: 50, width: 803, height: 603)
+    let reply = PluginTextGrid(
+      columns: 80, rows: 30, lines: [.text(row: 2, column: 4, text: "a")],
+      cell: PluginTextGrid.Cell(width: 10, height: 20, padX: 1.5, padY: 1.5))
+    let hit = try XCTUnwrap(
+      TerminalTextGrid.grid(reply, window: window)?.targets(matching: "a", pid: 9).first)
     XCTAssertEqual(
-      TmuxBigramGrid.paneTitleRow(border: "top", topOffset: 1, paneTop: 1, paneHeight: 68), 1)
-    XCTAssertEqual(TmuxBigramGrid.statusRow(status: "on", position: "top", clientRows: 70), 0)
-    XCTAssertNil(
-      TmuxBigramGrid.paneTitleRow(border: "off", topOffset: 1, paneTop: 0, paneHeight: 10))
-    let bottom = try XCTUnwrap(
-      TmuxBigramGrid.parseSnapshot(
-        geometry: "9 5 on bottom|||#[align=left]s",
-        paneList: "%1 0 0 9 3 bottom|||#[align=left]t"))
-    XCTAssertEqual(bottom.topOffset, 0)
-    XCTAssertEqual(bottom.status?.row, 4)
-    XCTAssertEqual(bottom.panes.first?.title?.row, 3)
+      hit.frame,
+      CGRect(x: 100 + 1.5 + 4 * 10, y: 50 + 603 - 1.5 - 3 * 20, width: 10, height: 20))
 
+    // Without one, the window is divided evenly.
+    let even = PluginTextGrid(
+      columns: 80, rows: 30, lines: [.text(row: 2, column: 4, text: "a")])
+    let evenHit = try XCTUnwrap(
+      TerminalTextGrid.grid(even, window: window)?.targets(matching: "a", pid: 9).first)
+    XCTAssertEqual(evenHit.frame.width, 803.0 / 80, accuracy: 0.001)
+    XCTAssertEqual(evenHit.frame.minX, 100 + 4 * 803.0 / 80, accuracy: 0.001)
+  }
+
+  func testATextGridReplyDecodesItsCellOrIsRefusedWhole() {
+    let grid: [String: Any] = [
+      "ok": true, "columns": 80, "rows": 24,
+      "lines": [["row": 0, "column": 0, "text": "a"]],
+    ]
+    XCTAssertNil(PluginWireCodec.textGrid(from: grid)?.cell)
+    var measured = grid
+    measured["cell"] = ["width": 9, "height": 18.5, "pad_x": 0, "pad_y": 5.5]
+    XCTAssertEqual(
+      PluginWireCodec.textGrid(from: measured)?.cell,
+      PluginTextGrid.Cell(width: 9, height: 18.5, padX: 0, padY: 5.5))
+    for cell: Any in [
+      ["width": 0, "height": 18, "pad_x": 0, "pad_y": 0],
+      ["width": 9, "height": 18, "pad_x": -1, "pad_y": 0],
+      ["width": 9, "height": 18],
+      ["width": 9, "height": 18, "pad_x": 0, "pad_y": 0, "baseline": 14],
+      ["width": "9", "height": 18, "pad_x": 0, "pad_y": 0],
+      ["width": true, "height": 18, "pad_x": 0, "pad_y": 0],
+      "9x18",
+    ] {
+      var refused = grid
+      refused["cell"] = cell
+      XCTAssertNil(PluginWireCodec.textGrid(from: refused), "\(cell)")
+    }
+  }
+
+  func testStatusFormatsLayOutWithoutStyleMarkers() throws {
     let statusLine = try XCTUnwrap(
-      TmuxBigramGrid.placedLine(
+      TerminalTextGrid.placedLine(
         format:
           "#[align=left] #[fg=colour178 bold][scratch@macbook]#[fg=colour245 nobold]  #[range=user|3 fg=colour245]3:flash#[norange fg=colour245]  ",
         width: 256, row: 0, origin: 0))
@@ -376,7 +401,7 @@ final class BigramMatchTests: XCTestCase {
     XCTAssertEqual(statusLine.units.first?.column, 0)
 
     let live = try XCTUnwrap(
-      TmuxBigramGrid.placedLine(
+      TerminalTextGrid.placedLine(
         format: "#[align=centre] [codex busy] Mirror | tma-monorepo ",
         width: 128, row: 1, origin: 0))
     XCTAssertFalse(live.text.contains("#"))
@@ -389,6 +414,130 @@ final class BigramMatchTests: XCTestCase {
       XCTAssertGreaterThanOrEqual(column, 0)
       XCTAssertLessThan(column, 128)
     }
+  }
+
+  /// Providers answer in hint order, one at a time; an empty or missing grid
+  /// passes to the next and the first grid with a line ends the search.
+  func testTheFirstHintProviderWithAGridWins() {
+    let grid = PluginTextGrid(columns: 1, rows: 1, lines: [.text(row: 0, column: 0, text: "a")])
+    let replies: [String: PluginTextGrid?] = [
+      "missing": nil,
+      "empty": PluginTextGrid(columns: 0, rows: 0, lines: []),
+      "grid": grid,
+      "later": grid,
+    ]
+    var asked: [String] = []
+    var answers: [PluginTextGrid?] = []
+    TerminalTextGrid.firstGrid(
+      from: ["missing", "empty", "grid", "later"][...],
+      request: { name, reply in
+        asked.append(name)
+        reply(replies[name] ?? nil)
+      },
+      completion: { answers.append($0) })
+    XCTAssertEqual(asked, ["missing", "empty", "grid"])
+    XCTAssertEqual(answers, [grid])
+
+    answers = []
+    TerminalTextGrid.firstGrid(
+      from: ["missing", "empty"][...],
+      request: { name, reply in reply(replies[name] ?? nil) },
+      completion: { answers.append($0) })
+    XCTAssertEqual(answers, [nil])
+  }
+
+  /// A null front window collects no Accessibility text, as a terminal that
+  /// draws its own glyphs does, so the search asks for a text grid.
+  private func gridlessTerminal() -> AppContext {
+    AppContext(
+      bundleIdentifier: "com.example.term", processID: 4242,
+      runningApp: NSRunningApplication.current, frontWindowFrame: .null,
+      allScreensFrame: .null)
+  }
+
+  /// Run every block main has queued so far.
+  private func drainMain() {
+    let drained = expectation(description: "main drained")
+    DispatchQueue.main.async { drained.fulfill() }
+    wait(for: [drained], timeout: 5)
+  }
+
+  /// Replies the test answers by hand, recorded on the search queue.
+  private final class OwedGrids {
+    var replies: [(PluginTextGrid?) -> Void] = []
+  }
+
+  private func startGridSearch(
+    _ search: BigramSearch, owed: OwedGrids,
+    deliver: @escaping (BigramSearch.Result) -> Void
+  ) {
+    search.start(
+      context: gridlessTerminal(), screenH: 900,
+      discoverFrame: { _ in CGRect(x: 0, y: 0, width: 200, height: 60) },
+      requestTextGrid: { _, reply in owed.replies.append(reply) },
+      deliver: deliver)
+  }
+
+  /// The grid arrives after the letter: the search waits for it rather than
+  /// answering from an empty corpus, and the AX queue is free meanwhile.
+  func testALetterTypedBeforeItsTextGridArrivesWaitsForIt() throws {
+    let queue = DispatchQueue(label: "flash.tests.bigram")
+    let search = BigramSearch(queue: queue)
+    let owed = OwedGrids()
+    var results: [BigramSearch.Result] = []
+    let generation = search.invalidate()
+    startGridSearch(search, owed: owed) { results.append($0) }
+    search.setQuery("a")
+    queue.sync {}
+    drainMain()
+    XCTAssertTrue(results.isEmpty)
+    XCTAssertEqual(owed.replies.count, 1)
+
+    owed.replies[0](
+      PluginTextGrid(columns: 20, rows: 6, lines: [.text(row: 2, column: 10, text: "xa")]))
+    queue.sync {}
+    drainMain()
+    let result = try XCTUnwrap(results.first)
+    XCTAssertEqual(results.count, 1)
+    XCTAssertEqual(result.generation, generation)
+    XCTAssertEqual(result.runCount, 1)
+    let target = try XCTUnwrap(result.targets.first)
+    XCTAssertEqual(result.targets.count, 1)
+    XCTAssertEqual(target.frame.minX, 110, accuracy: 0.01)
+    XCTAssertEqual(target.frame.maxY, 40, accuracy: 0.01)
+  }
+
+  /// A replaced session never presents the previous session's grid: its
+  /// late reply is dropped, and the new one answers from its own.
+  func testALateTextGridOfAReplacedSessionIsDropped() throws {
+    let queue = DispatchQueue(label: "flash.tests.bigram")
+    let search = BigramSearch(queue: queue)
+    let owed = OwedGrids()
+    var results: [BigramSearch.Result] = []
+    search.invalidate()
+    startGridSearch(search, owed: owed) { results.append($0) }
+    queue.sync {}
+    let current = search.invalidate()
+    startGridSearch(search, owed: owed) { results.append($0) }
+    search.setQuery("a")
+    queue.sync {}
+    XCTAssertEqual(owed.replies.count, 2)
+
+    let stale = PluginTextGrid(
+      columns: 20, rows: 6, lines: [.text(row: 0, column: 0, text: "aaaa")])
+    owed.replies[0](stale)
+    queue.sync {}
+    drainMain()
+    XCTAssertTrue(results.isEmpty, "the current session still waits for its own grid")
+
+    owed.replies[1](nil)
+    queue.sync {}
+    drainMain()
+    let result = try XCTUnwrap(results.first)
+    XCTAssertEqual(results.count, 1)
+    XCTAssertEqual(result.generation, current)
+    XCTAssertTrue(result.targets.isEmpty)
+    XCTAssertEqual(result.runCount, 0)
   }
 
   func testABigramCommitAimsOnePointLeftOfTheMatchCenter() {
@@ -404,6 +553,8 @@ final class BigramMatchTests: XCTestCase {
       BigramMatcher.clickPoint(in: frame))
   }
 
+  /// The letter jump is `s`, one of Flash's jump and mouse keys with `f` and
+  /// `F`.
   func testDefaultSClicksABigram() {
     let config = Config.default
     let key = NormalModeInterpreter.canonicalizeMappingKey("s")

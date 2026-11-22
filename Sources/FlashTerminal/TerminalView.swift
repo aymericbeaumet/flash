@@ -9,7 +9,7 @@ import QuartzCore
 /// bounding box. The cursor and blinking text are separate layers whose
 /// opacity Core Animation blinks in the render server: no timer and no
 /// redraw while they blink.
-public final class TerminalView: NSView, NSTextInputClient {
+public final class TerminalView: NSView, @preconcurrency NSTextInputClient {
   public var inputInterceptor: ((NSEvent) -> Bool)?
   public var onFocusRequested: (() -> Void)?
   public var openURL: (URL) -> Void = { url in
@@ -287,7 +287,7 @@ public final class TerminalView: NSView, NSTextInputClient {
     }
   }
 
-  static func blinkAnimation(beginTime: CFTimeInterval) -> CAAnimation {
+  nonisolated static func blinkAnimation(beginTime: CFTimeInterval) -> CAAnimation {
     let animation = CAKeyframeAnimation(keyPath: "opacity")
     animation.values = [1, 0]
     animation.keyTimes = [0, 0.5]
@@ -462,7 +462,7 @@ public final class TerminalView: NSView, NSTextInputClient {
       encode(event)
       return
     }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let modifiers = event.modifierFlags.intersection(.modifierKeys)
     if modifiers.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "c" {
       localCommandKeys.insert(event.keyCode)
       copy(nil)
@@ -759,7 +759,8 @@ final class TerminalRowLayer: CALayer {
 
 /// Layer delegate for the view's sublayers: draws through the view and
 /// disables every implicit animation.
-final class TerminalLayerPainter: NSObject, CALayerDelegate {
+@MainActor
+final class TerminalLayerPainter: NSObject, @preconcurrency CALayerDelegate {
   weak var view: TerminalView?
   init(view: TerminalView) { self.view = view }
   func draw(_ layer: CALayer, in context: CGContext) { view?.paint(layer, in: context) }

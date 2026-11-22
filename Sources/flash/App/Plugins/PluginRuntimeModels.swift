@@ -42,42 +42,59 @@ enum PluginOrigin: Equatable {
   }
 }
 
-/// The five-state lifecycle machine:
+/// The lifecycle machine as a status reader sees it:
 /// stopped → installing → launching → running → stopped, with `failed` the
-/// parked terminal (no auto-restart; watchers stay armed). Manifest-only
-/// plugins never enter the machine and report a static label instead.
+/// parked terminal (no auto-restart; watchers stay armed) and `published`
+/// the rest of a `publish_then_exit` plugin whose child published its
+/// catalog and exited 0 (the host keeps the catalog; a reload runs it
+/// again). Manifest-only plugins never enter the machine and report a
+/// static label instead.
 enum PluginRuntimeState: String {
   case stopped
   case installing
   case launching
   case running
+  case published
   case failed
 }
 
 /// How (and whether) a plugin's child process is scheduled. Derived from the
 /// manifest and, for a status-bound plugin, whether a status surface shows it.
 enum PluginActivation: String {
-  /// Spawned at startup and kept running: the manifest declares `sources`,
-  /// `query`, `hints`, `status`, or `listen` — a status-bound plugin
-  /// (`PluginManifest.isStatusBound`) only while the enabled bar or a desktop
-  /// widget shows it.
+  /// Spawned at startup and kept running: the manifest declares pushed
+  /// `sources`, `query`, `hints`, `status`, or `listen` — a status-bound
+  /// plugin (`PluginManifest.isStatusBound`) only while the enabled bar or a
+  /// desktop widget shows it, and never for the `listen` of a live-bound one
+  /// (`PluginManifest.isLiveBound`).
   case resident
-  /// Stays unspawned until its first `perform` (the perform deadline absorbs
-  /// the startup budget), then remains running.
+  /// Stays unspawned until its first `perform` or `search` (the perform
+  /// deadline absorbs the startup budget), then remains running. One whose command a
+  /// configured mapping runs is spawned once startup has settled instead
+  /// (`PluginWarmPolicy`).
   case onDemand = "on_demand"
+  /// Manifest `lifecycle: publish_then_exit`: spawned at startup like a
+  /// resident plugin, but its child publishes its catalog and exits 0; the
+  /// host keeps the catalog and spawns it again only when its data can have
+  /// changed (its settings, a file its `watch_settings` name, its own
+  /// files, `plugins reload`).
+  case publishThenExit = "publish_then_exit"
   /// No `exec`: no child process ever runs; the host serves the manifest's
   /// inline surfaces alone.
   case manifestOnly = "manifest_only"
+
+  /// Whether the host spawns the child at startup rather than for a perform.
+  var spawnsAtStart: Bool {
+    switch self {
+    case .resident, .publishThenExit: return true
+    case .onDemand, .manifestOnly: return false
+    }
+  }
 }
 
 struct PluginEvent {
   var name: String
   var payload: [String: Any]
   var bundleID: String?
-  /// Front window frame (screen coordinates). Optional — only meaningful
-  /// for app-scoped events like `focus.changed`, `ax.changed`. Passed
-  /// through to plugins as `payload.front_window_frame`.
-  var frontWindowFrame: CGRect?
   /// Process id of the focused app for the event. Some events embed this
   /// in `payload.pid` already.
   var pid: pid_t?
@@ -93,9 +110,39 @@ struct PluginEvent {
   /// ones that cannot change what it reads.
   static func axChanged(pid: pid_t, notification: String, bundleID: String?) -> PluginEvent {
     PluginEvent(
-      name: PluginProtocol.axChangedEvent,
-      payload: ["notification": notification, "pid": Int(pid)],
-      bundleID: bundleID)
+      .axChanged, payload: ["notification": notification, "pid": Int(pid)], bundleID: bundleID)
+  }
+
+  /// `core:window.focus.changed`: the focused or main window of the app
+  /// `pid` changed, so a subscriber re-reads which of its windows is on top.
+  static func windowFocusChanged(pid: pid_t, bundleID: String) -> PluginEvent {
+    PluginEvent(
+      .windowFocusChanged, payload: ["pid": Int(pid), "bundle_id": bundleID],
+      bundleID: bundleID, pid: pid)
+  }
+
+  /// `core:apps.changed`: the complete snapshot of the running regular apps,
+  /// each `{bundle_id, pid, localized_name}`.
+  static func appsChanged(_ runningApplications: [[String: Any]]) -> PluginEvent {
+    PluginEvent(.appsChanged, payload: ["running_applications": runningApplications])
+  }
+}
+
+extension PluginEvent {
+  /// A host event: its name comes from the catalog (`HostEvent`).
+  init(
+    _ event: HostEvent, payload: [String: Any] = [:], bundleID: String? = nil, pid: pid_t? = nil
+  ) {
+    self.init(name: event.rawValue, payload: payload, bundleID: bundleID, pid: pid)
+  }
+
+  /// The payload every subscriber reads, a plugin or a socket client:
+  /// `bundle_id` and `pid` folded in where the payload has none of its own.
+  var wirePayload: [String: Any] {
+    var payload = self.payload
+    if let bundleID, payload["bundle_id"] == nil { payload["bundle_id"] = bundleID }
+    if let pid, payload["pid"] == nil { payload["pid"] = Int(pid) }
+    return payload
   }
 }
 
@@ -131,13 +178,18 @@ struct PluginStatus {
   /// Runtime status-bar segments keyed by the manifest-declared segment name.
   var statusSegments: [String: String]
 
+  /// How much of a status segment the inspector snapshot carries. A
+  /// carousel or a popup preview can run to tens of kilobytes; the snapshot
+  /// is rebuilt on main on every change a browser watches, so it shows a
+  /// preview and the bar renders the value.
+  static let segmentPreviewCharacters = 256
+
+  /// The inspector's row. Its commands are not repeated here: the top-level
+  /// `commands` already lists every plugin command with its `source`.
   var jsonObject: [String: Any] {
     [
       "activation": activation,
       "command_count": commandCount,
-      "commands": commands.map {
-        ["command": $0.command, "subcommand": $0.subcommand, "description": $0.description]
-      },
       "cpu_time_ms": cpuTimeMs ?? NSNull(),
       "description": description,
       "id": id,
@@ -154,7 +206,10 @@ struct PluginStatus {
       "source_count": sourceCount,
       "started_at_unix_ms": startedAtUnixMs ?? NSNull(),
       "state": state,
-      "status_segments": statusSegments,
+      "status_segments": statusSegments.mapValues { value in
+        value.count <= Self.segmentPreviewCharacters
+          ? value : String(value.prefix(Self.segmentPreviewCharacters)) + "…"
+      },
       "version": version,
     ]
   }
@@ -163,13 +218,16 @@ struct PluginStatus {
 /// One published status segment: plain markup, or a carousel whose lines the
 /// host rotates on its own clock (`FlashStatusBarCycleState`), rendering
 /// `prefix` once before the visible line and wrapping that line in
-/// `#[cyc]…#[nocyc]` so it takes the carousel transition.
+/// `#[cyc=<key>]…#[nocyc]` (`StatusCycleKey.wrap`) so it takes the carousel
+/// transition and a scroll over it steps this carousel.
 enum PluginStatusSegment: Equatable {
   case text(String)
   case carousel(prefix: String, lines: [String], cycleSeconds: TimeInterval)
 
-  static func carouselLine(prefix: String, line: String) -> String {
-    prefix + "#[cyc]" + line + "#[nocyc]"
+  static func carouselLine(
+    key: String, prefix: String, line: String, backward: Bool = false
+  ) -> String {
+    prefix + StatusCycleKey.wrap(line, key: key, backward: backward)
   }
 
   /// The segment as the debug inspector shows it.
@@ -190,6 +248,20 @@ struct PluginStatusBarInfo {
   var state: String
   var hasError: Bool
   var statusSegments: [String: PluginStatusSegment]
+  /// The names in `statusSegments` whose value the host kept after its
+  /// plugin cleared it while nobody showed it: the last one published, not
+  /// one being read now (`PluginProcess.heldStatusSegments`).
+  var heldStatusSegments: Set<String> = []
+  /// The child's latest process spawn; nil before its first.
+  var lastSpawn: PluginSpawnTiming? = nil
+}
+
+/// How long one plugin launch spent spawning its process (`posix_spawn`,
+/// where a busy `syspolicyd` stalls an exec), and when it did.
+struct PluginSpawnTiming: Equatable {
+  var milliseconds: Double
+  /// Uptime nanoseconds at the spawn, to order launches across plugins.
+  var at: UInt64
 }
 
 /// One reply to the unified `perform` method: the universal trichotomy.
@@ -198,9 +270,64 @@ struct PluginStatusBarInfo {
 /// timeout, and crash all coerce here — the action may still land late and a
 /// keystroke fallback would double-fire).
 enum PluginPerformOutcome: Equatable {
-  case performed(pid: pid_t?, navigationURL: URL?, message: String?)
+  case performed(pid: pid_t?, navigationURL: URL?, message: String?, alert: PluginAlert? = nil)
   case unhandled
   case failed(String)
+}
+
+/// The alert a `perform` reply asks the host to show (`perform_alert`): a
+/// one-line message, or a title over a one-line value.
+struct PluginAlert: Equatable {
+  var title: String
+  /// Nil for a one-line message.
+  var value: String?
+  /// The widest value the alert shows, so its box keeps one size.
+  var widestValue: String?
+
+  /// The one centred alert it is drawn as.
+  var statusAlert: StatusAlert {
+    StatusAlert(title: title, value: value, valueAnchor: widestValue)
+  }
+}
+
+/// How a plugin's own command or bang ended, for whoever ran it.
+struct PluginCommandResult: Equatable {
+  var ok: Bool
+  /// An app the command asked Flash to raise.
+  var targetPID: pid_t?
+  /// The route recorded into movement history for `ctrl-o` / `ctrl-i`.
+  var navigationURL: URL?
+  /// The command's output: its caller presents it, a banner otherwise.
+  var message: String?
+  /// The centred alert to show wherever the command ran.
+  var alert: PluginAlert?
+  /// Why the plugin's command broke; nil when it was not the plugin's.
+  var error: String?
+
+  static let unhandled = PluginCommandResult(ok: false)
+
+  /// What the resident draws once the command ran.
+  enum Presentation: Equatable {
+    case alert(StatusAlert)
+    case banner(String)
+    case nothing
+  }
+
+  /// The alert wherever the command ran (a key, the CLI, the command line);
+  /// else the output on a banner, unless a caller presents it: the CLI
+  /// prints it and the command line shows it.
+  func presentation(callerPresentsOutput: Bool) -> Presentation {
+    if let alert { return .alert(alert.statusAlert) }
+    guard !callerPresentsOutput, let message, !message.isEmpty else { return .nothing }
+    return .banner(message)
+  }
+
+  /// The plugin's own reason for a failure, when it is short enough for an
+  /// alert; a longer one stays in the log and with the caller.
+  var failureAlert: String? {
+    guard let error, error.utf8.count <= PluginProtocol.maxAlertTitleBytes else { return nil }
+    return error
+  }
 }
 
 struct PluginWireTarget {
@@ -211,7 +338,6 @@ struct PluginWireTarget {
   var url: String?
   var contextID: String? = nil
   var pid: pid_t?
-  var entersInsertMode: Bool
   var sourceID: String
   /// Source-declared target salience. `.important` and `.urgent` render with
   /// the accent hint style.
@@ -220,7 +346,35 @@ struct PluginWireTarget {
   func capturedTarget(contextPID: pid_t) -> JumpTarget {
     JumpTarget(
       id: id, frame: frame, role: role, accessibilityLabel: label, url: url,
-      contextID: contextID, pid: pid ?? contextPID, entersInsertMode: entersInsertMode,
-      priority: priority, providerID: sourceID)
+      contextID: contextID, pid: pid ?? contextPID,
+      isTextInput: JumpTarget.textInputRoles.contains(role ?? ""), priority: priority,
+      providerID: sourceID)
   }
+}
+
+/// One validated `text_grid` reply: `columns` × `rows` cells and the lines
+/// inside them, row 0 at the top. No lines means no grid.
+struct PluginTextGrid: Equatable {
+  /// Where the cells are inside the window, in points, as the plugin
+  /// measured them: one cell's size, and the padding between the window's
+  /// left and top edges and the grid.
+  struct Cell: Equatable {
+    var width: CGFloat
+    var height: CGFloat
+    var padX: CGFloat
+    var padY: CGFloat
+  }
+
+  enum Line: Equatable {
+    /// Captured cell text, one UTF-16 unit per cell from `column` on.
+    case text(row: Int, column: Int, text: String)
+    /// An expanded status format laid out across `width` cells from `column`.
+    case format(row: Int, column: Int, width: Int, format: String)
+  }
+
+  var columns: Int
+  var rows: Int
+  var lines: [Line]
+  /// Nil when the plugin measured none: the grid fills the window evenly.
+  var cell: Cell?
 }

@@ -40,7 +40,8 @@ pub struct ObservedCadences {
 #[derive(Default)]
 struct State {
     /// `None` until the host's first report, which arrives right after
-    /// initialize: until then the cadences run.
+    /// initialize, or at launch once the status surfaces first evaluate:
+    /// until then the cadences run.
     observed: Option<bool>,
     polls: Vec<(PollHandle, Duration)>,
 }

@@ -61,6 +61,8 @@ done
 mkdir -p "$TAP_DIR/Casks"
 CASK_PATH="$TAP_DIR/Casks/$TOKEN.rb"
 
+# The heredoc is unquoted so the version, URL and checksum expand: a dollar
+# sign or a backtick anywhere in it, comments included, runs as shell.
 cat >"$CASK_PATH" <<RUBY
 # This cask is automatically updated by aymericbeaumet/flash. DO NOT EDIT.
 
@@ -74,10 +76,17 @@ cask "$TOKEN" do
   desc "Keyboard hints to click any on-screen control"
   homepage "https://github.com/aymericbeaumet/flash"
 
-  depends_on macos: ">= :sonoma"
+  # Flash updates itself in place ([app] updates, docs/updates.md), so
+  # brew upgrade leaves it alone unless run with --greedy.
+  auto_updates true
+  depends_on macos: ">= :ventura"
 
   app "Flash.app"
   binary "#{appdir}/Flash.app/Contents/MacOS/flash", target: "flash"
+  manpage "#{appdir}/Flash.app/Contents/Resources/flash.1"
+  bash_completion "#{appdir}/Flash.app/Contents/Resources/completions/flash.bash"
+  zsh_completion "#{appdir}/Flash.app/Contents/Resources/completions/_flash"
+  fish_completion "#{appdir}/Flash.app/Contents/Resources/completions/flash.fish"
 
   # Autostart is owned by the app (SMAppService, [app] autostart). Remove the
   # LaunchAgent that earlier casks installed, then start Flash so it registers

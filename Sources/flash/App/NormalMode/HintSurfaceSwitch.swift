@@ -15,11 +15,14 @@ enum HintSurfaceSwitching {
   /// The activation `kind` leads to from `current`, or nil when that surface
   /// has no equivalent of the session's shape. The grid has no adjustment,
   /// search, path or sticky session, so those become the click they carry;
-  /// screen scope is click-only, as `mouse_target --scope=screen` is.
+  /// screen scope is click-only, as `mouse target --scope=screen` is.
   static func request(
     from current: HintActivationRequest, kind: HintSurfaceSwitch
   ) -> HintActivationRequest? {
     switch (kind, current) {
+    case (.grid, .target(.copyURL, _)), (.grid, .target(.copyText, _)):
+      // The grid has no targets, so no URL or text to copy.
+      return nil
     case (.grid, .target(let command, let context)), (.grid, .words(let command, let context)):
       return .grid(MouseGridRequest(command.asClick), context)
     case (.grid, .screen(let command)), (.grid, .positions(let command)):

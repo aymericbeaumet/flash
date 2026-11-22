@@ -1,7 +1,7 @@
 # Plugin performance
 
-Flash keeps one sandboxed child per resident plugin. The process boundary is
-intentional: it gives each integration an explicit capability profile,
+Flash keeps one child per resident plugin. Most run under a deny-default
+sandbox built from their manifest. The process boundary is intentional: it gives each integration an explicit capability profile,
 independent crash recovery, bounded requests, and deterministic lifecycle.
 Official plugins are all native Rust binaries so that isolation no longer
 requires six language runtimes or host-injected SDK bridges.
@@ -26,8 +26,9 @@ MiB before the migration. All 28 initialized concurrently in 219 ms, the
 slowest handshake took 26 ms, and none timed out. Treat these figures as a
 machine-specific reference, not a portable guarantee.
 
-The five system-monitor plugins added on 2026-09-04 (`cpu`, `memory`, `disks`,
-`network`, and `power`) measured 15,336 KiB aggregate median RSS across 20
+The five system-monitor plugins added on 2026-09-04 (cpu, memory, disks,
+network and power, since merged into the one `sysinfo` plugin) measured
+15,336 KiB aggregate median RSS across 20
 samples each. Their cold-initialize p95 values were 2.09–2.30 ms and settled
 ping p95 values were 0.19–0.22 ms. The same build's 36 direct plugin binaries
 measured 121,504 KiB aggregate median RSS across five samples. The installed
@@ -35,10 +36,35 @@ dev app settled at a 126.54 MiB median physical footprint for Flash plus its
 33 resident children across five measurements (127.01 MiB maximum), remaining
 inside the existing 130 MiB budget.
 
-Those figures predate status-bound activation. The status-only monitors
-(`cpu`, `memory`, `disks`, `power`, `caffeinate`, `feed`) now
-spawn only while the enabled status bar shows one of their segments, so with
-the bar off (the default) none of them runs until its command does.
+`searchproviders` (2026-10-20) keeps about 14,500 bangs as their stored
+text plus a sorted trigger index, about 4 MiB live. It publishes its
+10,000-row catalog about 90 ms after start (80 ms of CPU) and settles near
+17 MiB physical footprint, most of it the freed publish buffers; `publish`
+serializes rows straight into the frame rather than through a JSON tree,
+which took the same start from 29 MiB. Those figures predate the move of its
+list download to `host.fetch`, which removed its HTTP and TLS stack; the
+footprint has not been measured again since.
+
+Those counts describe the plugin set of their dates. Twenty-one plugins are
+bundled today, seven of them resident by default
+([what starts at launch](architecture.md#what-starts-at-launch)), so the 28
+and 33 resident children above no longer exist as such. The figures also
+predate status-bound activation. A status-only plugin such as
+`feed` now spawns only while the enabled status bar reads one of its
+segments, so with the bar off (the default) it does not run until its command
+does, unless a mapping keeps it warm (see
+[warm plugins](#process-creation-and-warm-plugins)). `sysinfo` publishes the
+`network.addresses` catalog, so it stays resident, but each of its domains
+samples only while a surface shows one of that domain's segments.
+
+Running and sampling are decided apart. A status-bound child runs while the
+configuration reads one of its segments, a text popup's included, open or
+not: an idle Rust child is 2–4 MiB and no wake-up, and opening a popup never
+waits on a spawn. It samples only while a surface shows a segment now
+([status observation](plugin-protocol.md#status-observation)): the bar, a
+visible widget, a monitor, an open popup. A popup-only value therefore costs
+its plugin's registrations for as long as the popup is up, and one
+`core:status.observed` frame each way.
 
 Use these regression budgets when changing the runtime or an official plugin:
 
@@ -60,17 +86,175 @@ regression tripwires. Hardware, signing,
 seatbelt compilation, TCC state, and debug versus release builds all affect
 absolute startup numbers.
 
+## Process creation and warm plugins
+
+Starting a child costs more than its initialize handshake. The host execs
+`sandbox-exec`, which execs the plugin, and a bare runtime name resolves
+through `mise which` first. While `syspolicyd` is saturated each of those
+execs can stall for seconds, so an on-demand plugin used to make the
+keypress that first needed it wait for every one of them, sometimes past its
+perform deadline.
+
+- **Resolution is remembered.** `PluginSandbox.resolveExecutable` keeps each
+  bare-name answer (the plugin's own runtime, the tmux grid capture's
+  `tmux`) for the life of the resident. The key is the
+  name, the directory `mise which` runs in and the login `PATH` the fallback
+  walk reads. A remembered path is served only while it is still an
+  executable file; otherwise it is dropped and resolved again. A failed
+  resolution is never remembered, so a tool installed later is found on the
+  next lookup. A miss still spawns `mise`, so callers stay off the main
+  thread (a guardrail allowlists them).
+- **Mapped plugins are warm.** A plugin is warm when a configured mapping can
+  run one of its commands. That covers every mode and app scope, an enabled
+  status-bar click and a plugin's own `mappings`. A command reference
+  resolves the way dispatch does: the exact `(command, subcommand)` owner,
+  else the command's `*` wildcard. App selectors are ignored. Ten seconds
+  after each reconcile (`core:plugin_prewarm`, priority `low`), every warm
+  on-demand plugin that is still idle is spawned. That includes a
+  status-bound one that no surface shows. A warm status-bound plugin then
+  keeps its child when its segments go off screen, and so does one a command
+  started. Unobserved, a monitor that follows `core:status.observed` stops
+  its cadences and only answers commands.
+  `PluginWarmPolicy` holds these rules as pure, unit-tested functions.
+- **Everything else is unchanged.** A command that no mapping runs, whether
+  typed on the command line, sent with `flash <command> <subcommand>` or
+  given as a bang, still spawns its plugin on first use. The plugin then
+  stays running. A status plugin that nothing maps still follows its
+  surfaces. A configuration with no plugin mappings starts no extra process.
+
+A warm plugin costs an idle child, about 2–4 MiB RSS for an official Rust
+plugin, from launch instead of from first use. Its one-time startup work,
+such as a status monitor's first sample, also moves to launch. Remove the
+mapping, or disable the plugin, to give that back.
+
+## Live sources
+
+A pushed source costs a resident child and a catalog in host memory, which
+is what makes the flashlight's first paint a memory read. A source nobody
+sees until they ask for it by type does not need either. Declared `live`
+([manifest `sources`](plugin-protocol.md#manifest)), it is pulled with
+`search` only while a query is scoped to it, and a plugin whose sources are
+all live is on demand: no process at launch and no catalog.
+
+- **The first scoped query spawns the child.** Typing `@<type>` (or a bang
+  bound to the source) sends the first `search`, which starts the plugin
+  like a first `perform` does. The search then waits for the child, up to the
+  `startup` deadline, and its own 1 s deadline starts when the request is
+  written. A cold start slower than a second still answers the query that
+  asked, and the rows appear when the reply lands. While the child starts,
+  only the newest query of a source waits; the ones typed past answer
+  nothing. A mapping that runs one of the plugin's commands keeps it warm
+  like any on-demand plugin, and the query then finds it running.
+- **`per_scope` is one request per scope.** The host asks once, with no
+  text, keeps the rows on screen and filters them itself as the user types,
+  so the ranker's caches stay warm. Use it for a short fixed list.
+  `per_query` asks again on every change of the text; the flashlight drops
+  the reply to a query the user has typed past.
+- **The child stays up afterwards**, as after a first command: the next
+  query costs a round trip, not a spawn.
+- **Stale rows are announced, not polled.** The host shows what the last
+  `search` answered. A plugin whose rows change afterwards sends `changed`
+  ([protocol](plugin-protocol.md#plugin-host-notifications)), and the host
+  searches again only while a query is scoped to that source: a change
+  nobody looks at costs one small frame and no search. One query is pulled
+  again at most once per 500 ms, the first notification at once and a burst
+  once more at its end, so a plugin that announces a change with every
+  reply costs two searches a second.
+
+The bundled `system` plugin is the `per_scope` example: nine fixed rows
+behind `@system` and nine commands, no process until the first of either.
+`processes` is the `per_query` one: `@processes` asks again as the query
+changes, the plugin answers from one read of the process table per two
+seconds, so the CPU and memory shares on screen follow the typing, and the
+host ranks the rows either way.
+
+`menus` is `per_scope` with rows that cost something to read: `@menus`
+needs the menu bar of the app you are in, which only the host may walk. Its
+one `search` asks the host for a snapshot (`host.ax_snapshot`, `root:
+"menu_bar"`), builds the rows from the flat nodes and answers; `per_scope`
+is what keeps that walk off the keystrokes that follow. Measured on an
+Apple M4 Pro, macOS 26.6.2, warm, from the query to the rows on the main
+thread (medians):
+
+| Menu bar | Elements read | Rows | Query to rows |
+| --- | --- | --- | --- |
+| Finder | 332 | 60 | 12 ms |
+| Firefox | 489 | 279 | 20–29 ms |
+| Notes | 392 | 35 | 38 ms |
+
+The walk is most of it: 35 to 80 µs per element, one batched Accessibility
+read each, the Apple menu's 75 to 85 elements included, which the plugin
+then leaves out (about 3 ms). Around the walk, the plugin path costs the
+host's encode, two frames and the row decode: 4 ms for 500 elements and
+18 ms for 2,500, whose snapshot is a 308 KB frame and whose 2,000 rows come
+back in another. A menu bar of 2,500 elements therefore lists in 110 to
+220 ms, against the 1 s `search` deadline. The first `@menus` after launch
+adds the spawn: 33 to 84 ms in all on those three apps.
+
+`notes`, `reminders` and `contacts` are `per_scope` over a list the plugin
+keeps: the items of an app only the host may read (`host.notes`,
+`host.reminders`, `host.contacts`). Each answers `search` from the last list
+it read and reads again on events: the app launching, focus leaving it, the
+flashlight opening on a list a minute old. A manifest whose sources are live
+keeps no process for the events it listens to, so the three cost nothing
+until the first query or command, and hear their events from then on.
+Measured on an Apple M4 Pro, macOS 26.6.2, with synthetic contacts served
+by a stub in place of the Contacts framework (medians, from the query to
+the rows on the main thread):
+
+| Contacts | Listing reply | Search reply | First query (spawn, list, answer) | Later queries |
+| --- | --- | --- | --- | --- |
+| 1,000 | 93 KB | 175 KB | 18–19 ms | 6 ms |
+| 5,000 | 469 KB | 879 KB | 61–74 ms | 31–33 ms |
+
+A listing holds at most 10,000 items and 2 MiB, and a search reply 10,000
+rows and 4 MiB: 10,000 such contacts are 0.94 MB and 1.76 MB. The time the
+framework or Notes' script takes to read the real list is added to the
+first query only; a query that meets a listing in flight waits for it up to
+0.2 s, then answers from the previous one, and up to 0.7 s when it has
+none. A listing that lands after its query answered, with rows that differ
+from the ones answered, costs one `changed` frame and, if the scope is
+still on screen, one more search; the listing a waiting query answers with
+is that reply, and costs neither. `menus` and `system` hold no rows
+between two searches, and `processes` reads its table again as the query
+changes: none of them sends `changed`.
+
+## Publish-then-exit plugins
+
+A plugin that only provides data has no reason to stay resident. With
+`"lifecycle": "publish_then_exit"` in its manifest
+([process model](plugin-protocol.md#process-model-and-lifecycle)) the child
+answers initialize, publishes its catalog from `on_start` and exits 0; the
+host reads its stdout to the end before resting the plugin as `published`,
+keeps the catalog in its store as it does across every restart, and counts
+the exit as success: no restart, no failure budget, no liveness ping, no
+event delivery. It spawns the child again only when the data can have
+changed — the plugin's `[plugins.<id>]` settings, a file one of its
+`watch_settings` names (snippets' `file`), its own binary or manifest, or
+`plugins reload` — and the run costs what a start costs, a few milliseconds
+of CPU, after which the process is gone.
+
+`emojis` and `snippets` run this way, which gives back the 2–4 MiB each idle
+Rust child held (the emoji catalog's own copy of its 2,037 rows included) and
+two of the resident processes the steady-state footprint counted. A catalog
+plugin that must also answer a command, a bang or an event keeps its child:
+`shortcuts` has commands and relists on focus changes, `searchproviders`
+answers bangs. The flashlight never notices the difference: its rows are a
+host-memory read either way, and a published plugin's performs are
+`unhandled` because its rows carry host effects.
+
 ## Measuring
 
-Build the native-architecture binaries, then run the report-only benchmark:
+The benchmark builds the native-architecture binaries it measures, then
+reports:
 
 ```bash
-./Scripts/benchmark-plugins.py --build --samples 5
-./Scripts/benchmark-plugins.py --samples 10 --json > plugin-benchmark.json
-./Scripts/benchmark-plugins.py --plugin browsers --samples 20
+mise run bench:plugins -- --samples 5
+mise run bench:plugins -- --samples 10 --json > plugin-benchmark.json
+mise run bench:plugins -- --plugin browsers --samples 20
 ```
 
-`Scripts/measure-footprint.sh [sample-seconds] [log-window-minutes]` is the
+`mise run bench:footprint -- [sample-seconds] [log-window-minutes]` is the
 whole-system counterpart: it samples the running resident and every child
 (CPU, idle wakeups, memory, descriptors, threads) and summarises watchdog
 stalls, tap re-enables, and log lines per minute over the window. It is
@@ -119,22 +303,38 @@ least 50 ms.
   request callbacks may overlap and must coordinate shared refresh state.
   Async I/O and `spawn_blocking` retain concurrency without multiplying idle
   worker threads.
-- Full catalog replacements that are semantically unchanged do not advance
-  the store generation, timestamp, or subscriber notifications.
-- Browser refreshes are single-flight, publish only changed rows, and log
-  state transitions or rate-limited warnings instead of every refresh.
-- Catalog plugins do not poll the apps they mirror. `browsers`, `windows`
-  and `kitty` refresh on app lifecycle and focus events and on the
-  `core:ax.changed` notifications that can change their rows, ignoring the
-  rest — every keystroke's `AXValueChanged` among them: `windows` on a window
-  retitled, created or destroyed; `kitty` on those plus its window focus
-  moving; `browsers` on a window retitled or created (web content posts
-  element creation and destruction on every DOM update). Relevant bursts —
+- A publish is proportional to the change. The host decodes every publish in
+  full, so volatile and static rows are separate sources, each published
+  alone with `publish_source` ([protocol](plugin-protocol.md#plugin-host-notifications)):
+  `browsers` publishes a browser's tab source on a tab change (tens of rows)
+  and its history and bookmark sources only on their own refresh (thousands
+  of rows, at most once a minute), where one publish used to carry all of
+  them on every tab switch — 788 times a day at 700 KB, 61 s of decode. The
+  byte quota is read off the frame the reader already holds (each row's span
+  on the wire), never by serializing the rows a second time.
+- The host decodes catalogs on a per-plugin `.utility` catalog queue that
+  carries no replies, so a reply frame behind a large publish is not delayed
+  by its decode; the plugin's lifecycle, reader and writer queues run
+  `.userInitiated`, because `hints`, `evaluate`, `perform` and `ping` replies
+  are waited on and a utility-class thread is what the kernel starves first
+  under load. The store compares a publish against what it holds outside
+  its lock, so the flashlight's reads never wait on a comparison.
+- Catalog replacements that are semantically unchanged, whole or per
+  source, do not advance the store generation, timestamp, or subscriber
+  notifications.
+- Browser refreshes are single-flight, publish only the sources whose rows
+  changed, and log state transitions or rate-limited warnings instead of
+  every refresh.
+- Catalog plugins do not poll the apps they mirror. `browsers` refreshes on
+  app lifecycle and focus events and on the `core:ax.changed` notifications
+  that can change its rows, ignoring the rest — every keystroke's
+  `AXValueChanged` among them: a window retitled or created (web content
+  posts element creation and destruction on every DOM update). Relevant bursts —
   a shell retitling around each command, a closing window's subtree — refresh
   once quiet for 300 ms, and at most ten seconds after they began. The host
   observes an app's AX only once it has been focused; changes it cannot see
   catch up when focus or the flashlight next touches the app.
-- `tmux` never re-reads its local servers on a timer. Each server a user's
+- `terminals` never re-reads its local tmux servers on a timer. Each server a user's
   client is attached to is followed by one control-mode client (`no-output`,
   `ignore-size`; it never starts a server or applies `update-environment`),
   and one inventory read follows each burst of the notifications that can
@@ -151,6 +351,30 @@ least 50 ms.
   transiently is retried once per backoff step (5, 15, then 60 s). Remote
   hosts in `ssh_hosts`, which no local notification reaches, keep a
   five-second refresh.
+- `terminals` sends its local tmux commands — `]t` and the other actions, hint and
+  letter-search (`text_grid`) captures, inventory reads — as lines to that
+  same control-mode client instead of spawning a `tmux` client per command. On a busy Mac, every
+  fork/exec can wait seconds on the system's exec policy daemon
+  (`syspolicyd`), while a line on an open connection runs as fast as a tmux
+  key binding. Each request ends with a marker command, and every reply block
+  tmux flags as answering that client up to the marker's belongs to the
+  request, so hook output never leaks in. A spawned client runs a command
+  only where no observer is attached yet, and a written request that goes
+  unanswered fails and reattaches the observer rather than running twice.
+  The process tree that maps a terminal to its tmux client comes from libproc
+  (`flash_plugin::sys::process_parents`), not `ps`.
+- Plugin AppleScript runs in the resident through `ctx.applescript` and
+  `host.applescript`: browser tab listing, selection, moves and route
+  restores, Shortcuts, and AI-provider autosend share the host's OSA runtime.
+  No plugin loads its own AppleScript runtime or spawns `osascript`.
+  Capability and target checks run before execution; at most four requests
+  per plugin may wait or run, with bounded scripts, results and deadlines.
+  The host serializes complete OSA lifetimes off the main thread to keep
+  compiler work and runtime teardown from overlapping. Queueing uses
+  the request's original deadline; a timed-out running script retains the
+  runtime until its component closes and its autorelease pool drains. `browsers` and
+  `shortcuts` now keep their default-deny sandboxes; `aiproviders` remains
+  unsandboxed for its credentialed quota helpers.
 - Debug plugin logs remain available in the log file but do not invalidate
   status/inspector snapshots.
 - The NDJSON frame collector scans appended bytes once and compacts the

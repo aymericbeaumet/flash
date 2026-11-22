@@ -12,6 +12,9 @@ import AppKit
 final class ClipboardMonitor {
   private let pasteboard: NSPasteboard
   private let onChange: (ClipboardCapture.Item) -> Void
+  /// A history entry Flash put back on the clipboard (`clipboard restore`):
+  /// it is moved to the front, not recorded again.
+  private let onRestore: (String) -> Void
   /// The 2 Hz poll runs on a utility queue. `NSPasteboard` reads are
   /// thread-safe, and image or HTML conversion must stay off the main run
   /// loop that hosts the keyboard tap.
@@ -32,14 +35,19 @@ final class ClipboardMonitor {
 
   static let clientID = "core:clipboard"
 
+  /// Flash's own mark on a history entry it restores, holding the entry's id.
+  static let restoredEntryType = NSPasteboard.PasteboardType("com.flash.app.clipboard-entry")
+
   init(
     pasteboard: NSPasteboard = .general,
     scheduler: PollScheduler = .shared,
-    onChange: @escaping (ClipboardCapture.Item) -> Void
+    onChange: @escaping (ClipboardCapture.Item) -> Void,
+    onRestore: @escaping (String) -> Void = { _ in }
   ) {
     self.pasteboard = pasteboard
     self.scheduler = scheduler
     self.onChange = onChange
+    self.onRestore = onRestore
     self.lastChangeCount = pasteboard.changeCount
   }
 
@@ -65,9 +73,25 @@ final class ClipboardMonitor {
     let current = pasteboard.changeCount
     guard current != lastChangeCount else { return }
     lastChangeCount = current
-    guard Self.isRecordable(pasteboard.types ?? []) else { return }
+    let types = pasteboard.types ?? []
+    if let id = Self.restoredEntryID(pasteboard, types: types) {
+      onRestore(id)
+      return
+    }
+    guard Self.isRecordable(types) else { return }
     guard let item = ClipboardCapture.read(pasteboard) else { return }
     onChange(item)
+  }
+
+  /// The history entry `pasteboard` holds because Flash restored it, if any.
+  static func restoredEntryID(
+    _ pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]
+  ) -> String? {
+    guard types.contains(restoredEntryType),
+      let data = pasteboard.data(forType: restoredEntryType),
+      let id = String(data: data, encoding: .utf8), ClipboardCapture.isEntryID(id)
+    else { return nil }
+    return id
   }
 
   /// Whether a payload declaring `types` may enter clipboard history.

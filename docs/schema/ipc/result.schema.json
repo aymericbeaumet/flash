@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/result.schema.json",
+  "title": "result",
+  "description": "Resident to client: how a request's run ended. result is the object flash --json prints.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "id",
+    "result"
+  ],
+  "properties": {
+    "type": {
+      "const": "result"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Chosen by the client, 1 to 128 bytes; the reply carries it back. Distinct among the connection's requests in flight."
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "rejected",
+            "local"
+          ],
+          "description": "succeeded: it ran (exit 0). failed: it ran and failed, or found nothing to act on (exit 1). rejected: the words name no command, or more than one (exit 2). local: a query the client runs itself, named by query."
+        },
+        "output": {
+          "type": "string",
+          "description": "What the command printed."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why it failed or was rejected."
+        },
+        "query": {
+          "type": "string",
+          "description": "For local: the query's words, such as config check or events watch."
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "For local: the query's --name=value arguments."
+        }
+      }
+    }
+  }
+}

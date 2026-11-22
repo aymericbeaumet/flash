@@ -53,7 +53,7 @@ final class HintSessionPhaseTests: XCTestCase {
     let delegate = AppDelegate()
     delegate.overlay = OverlayPanel()
     delegate.modeStore.dispatch(.startup(advancedEnabled: true))
-    delegate.modeStore.dispatch(.enterInsert(targetPID: nil))
+    delegate.modeStore.dispatch(.enterInsert(.explicitCommand))
     delegate.refreshOverlayInputRouting()
     XCTAssertEqual(delegate.overlay.inputMode, .passive)
 

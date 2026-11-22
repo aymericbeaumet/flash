@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.calendar_events.schema.json",
+  "title": "host.calendar_events",
+  "description": "Plugin to host: read the access macOS grants Flash to the user's calendars, ask for it, or list the events of a window of at most 14 days. Each operation takes exactly its own fields. Only request_access shows macOS's prompt, and only while the user is using the plugin.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.calendar_events"
+    },
+    "params": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "access"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "request_access"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "start",
+            "end"
+          ],
+          "$comment": "start is before end, and the two are at most 1209600 seconds apart: an order a schema does not state.",
+          "properties": {
+            "operation": {
+              "const": "list"
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 253402300799,
+              "description": "The window's start, in whole Unix seconds."
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 253402300799,
+              "description": "The window's end, in whole Unix seconds, after start."
+            },
+            "calendars": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "description": "Calendar titles as Calendar shows them; absent or empty reads every event calendar."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

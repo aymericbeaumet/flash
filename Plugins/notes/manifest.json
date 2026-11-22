@@ -1,0 +1,38 @@
+{
+  "id": "notes",
+  "name": "Notes",
+  "version": "0.1.0",
+  "description": "Your notes as `@notes` rows in the flashlight, listed while Notes runs: pick one to show it in Notes. `notes open` opens Notes and `notes refresh` relists them now.",
+  "exec": [
+    "./flash-plugin-notes"
+  ],
+  "commands": [
+    {
+      "command": "notes",
+      "subcommand": "open",
+      "description": "Open Notes"
+    },
+    {
+      "command": "notes",
+      "subcommand": "refresh",
+      "description": "Relist your notes in @notes now"
+    }
+  ],
+  "listen": [
+    "core:apps.launched",
+    "core:apps.terminated",
+    "core:focus.changed",
+    "core:session.opened"
+  ],
+  "sources": [
+    {
+      "name": "notes.notes",
+      "type": "notes",
+      "live": "per_scope"
+    }
+  ],
+  "capabilities": [
+    "notes",
+    "open"
+  ]
+}

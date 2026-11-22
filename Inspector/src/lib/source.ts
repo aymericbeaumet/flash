@@ -12,9 +12,11 @@ export function sourceFromOrigin(origin: string | undefined): SourceRef {
   if (split > 0) {
     const kind = origin.slice(0, split);
     const label = origin.slice(split + 1);
-    if (kind === "plugin" || kind === "config" || kind === "env" || kind === "cli") return { kind, label };
+    if (kind === "plugin" || kind === "config" || kind === "env" || kind === "cli")
+      return { kind, label };
   }
-  if (origin === "config" || origin === "env" || origin === "cli") return { kind: origin, label: "" };
+  if (origin === "config" || origin === "env" || origin === "cli")
+    return { kind: origin, label: "" };
   return { kind: "config", label: origin };
 }
 

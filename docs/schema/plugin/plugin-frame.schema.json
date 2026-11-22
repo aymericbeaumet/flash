@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/plugin-frame.schema.json",
+  "title": "plugin frame",
+  "description": "Any frame a plugin writes to its stdout: the reply to a request, a notification, or a host RPC. Replies are told apart by the request they answer, not by their content, so this is a union rather than a discriminated choice.",
+  "anyOf": [
+    {
+      "$ref": "initialize.reply.schema.json"
+    },
+    {
+      "$ref": "ping.reply.schema.json"
+    },
+    {
+      "$ref": "evaluate.reply.schema.json"
+    },
+    {
+      "$ref": "hints.reply.schema.json"
+    },
+    {
+      "$ref": "text_grid.reply.schema.json"
+    },
+    {
+      "$ref": "search.reply.schema.json"
+    },
+    {
+      "$ref": "perform.reply.schema.json"
+    },
+    {
+      "$ref": "publish.schema.json"
+    },
+    {
+      "$ref": "changed.schema.json"
+    },
+    {
+      "$ref": "status.schema.json"
+    },
+    {
+      "$ref": "poll.schema.json"
+    },
+    {
+      "$ref": "log.schema.json"
+    },
+    {
+      "$ref": "host.ping.schema.json"
+    },
+    {
+      "$ref": "host.fetch.schema.json"
+    },
+    {
+      "$ref": "host.wifi_info.schema.json"
+    },
+    {
+      "$ref": "host.applescript.schema.json"
+    },
+    {
+      "$ref": "host.audio_devices.schema.json"
+    },
+    {
+      "$ref": "host.system_action.schema.json"
+    },
+    {
+      "$ref": "host.process_signal.schema.json"
+    },
+    {
+      "$ref": "host.process_table.schema.json"
+    },
+    {
+      "$ref": "host.calendar_events.schema.json"
+    },
+    {
+      "$ref": "host.notes.schema.json"
+    },
+    {
+      "$ref": "host.reminders.schema.json"
+    },
+    {
+      "$ref": "host.contacts.schema.json"
+    },
+    {
+      "$ref": "host.normal_mode_target.schema.json"
+    },
+    {
+      "$ref": "host.activate.schema.json"
+    },
+    {
+      "$ref": "host.open.schema.json"
+    },
+    {
+      "$ref": "host.post_keys.schema.json"
+    },
+    {
+      "$ref": "host.ax_snapshot.schema.json"
+    },
+    {
+      "$ref": "host.ax_perform.schema.json"
+    },
+    {
+      "$ref": "host.ax_set.schema.json"
+    },
+    {
+      "$ref": "host.ax_select_child.schema.json"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.activate.schema.json",
+  "title": "host.activate",
+  "description": "Plugin to host: bring a running app to the front.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.activate"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid"
+      ],
+      "properties": {
+        "pid": {
+          "$ref": "definitions.schema.json#/definitions/pid"
+        }
+      }
+    }
+  }
+}

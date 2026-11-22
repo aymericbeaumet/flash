@@ -14,11 +14,14 @@ SPEC.loader.exec_module(summary)
 
 
 def line(trace, time_ms, ms, origin="key", prepared="hit", app_class="native",
-         surface="targets", targets=12, bundle="com.example.app", outcome="hit"):
+         surface="targets", targets=12, bundle="com.example.app", outcome="hit",
+         miss_reason=None):
     message = (
         f"[latency] hints_visible ms={ms} origin={origin} prepared={prepared} "
         f"targets={targets} class={app_class} surface={surface} bundle={bundle} "
         f"outcome={outcome}")
+    if miss_reason is not None:
+        message += f" miss_reason={miss_reason}"
     return json.dumps({
         "level": "info", "message": message, "source": "core:x", "pid": 1,
         "time_unix_ms": time_ms, "trace": trace,
@@ -154,6 +157,30 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(
             [row.label for row in summary.summarize_by_bundle(samples, origin=None)],
             ["org.mozilla.firefox", "com.apple.Notes", "org.alacritty"])
+
+    def test_by_bundle_breaks_misses_down_by_reason(self):
+        # A hit carries `miss_reason=-`; a miss or a retried walk says why the
+        # prepared model could not serve it; a line from before the field
+        # counts as `?`.
+        samples = summary.read_samples([
+            line("f1", 100, 160, bundle="org.mozilla.firefox", prepared="miss", outcome="miss",
+                 miss_reason="expired"),
+            line("f2", 200, 90, bundle="org.mozilla.firefox", prepared="miss", outcome="miss",
+                 miss_reason="expired"),
+            line("f3", 300, 120, bundle="org.mozilla.firefox", prepared="miss",
+                 outcome="retried", miss_reason="invalidated"),
+            line("f4", 400, 10, bundle="org.mozilla.firefox", miss_reason="-"),
+            line("f5", 500, 80, bundle="org.mozilla.firefox", prepared="miss", outcome="miss"),
+        ])
+        self.assertEqual(samples[0].miss_reason, "expired")
+        self.assertEqual(samples[3].miss_reason, "-")
+        self.assertEqual(samples[4].miss_reason, "")
+        (firefox,) = summary.summarize_by_bundle(samples, origin=None)
+        self.assertEqual((firefox.count, firefox.prepared_hits), (5, 1))
+        self.assertEqual(firefox.misses, {"expired": 2, "invalidated": 1, "?": 1})
+        table = summary.format_table([firefox], label="app")
+        self.assertIn("misses", table.splitlines()[0])
+        self.assertIn("expired=2 invalidated=1 ?=1", table)
 
     def test_windows_or_by_bundle_is_required(self):
         with self.assertRaises(SystemExit):

@@ -1,3 +1,4 @@
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -11,7 +12,8 @@ final class SecureInputReleaseTests: XCTestCase {
     role: String? = nil,
     subrole: String? = nil,
     running: [String] = [],
-    ownPID: pid_t = 1
+    ownPID: pid_t = 1,
+    browsers: BrowserEngineTable = .sample
   ) -> SecureInputRelease.Snapshot {
     SecureInputRelease.Snapshot(
       enabled: enabled,
@@ -20,7 +22,8 @@ final class SecureInputReleaseTests: XCTestCase {
       frontmostBundleID: frontmostBundleID,
       focused: SecureInputRelease.Focus(role: role, subrole: subrole),
       runningBundleIDs: running,
-      ownPID: ownPID)
+      ownPID: ownPID,
+      browsers: browsers)
   }
 
   private func holder(_ pid: pid_t, _ bundleID: String?) -> SecureInputRelease.Holder {
@@ -175,16 +178,61 @@ final class SecureInputReleaseTests: XCTestCase {
       ]))
   }
 
+  /// The engine is declared data. A browser no manifest declares is an app
+  /// like any other: activated when the registry names it, never blurred.
+  func testTheDeclaredEngineDecidesHowABrowserIsReleased() {
+    func kinds(_ browsers: BrowserEngineTable) -> [SecureInputRelease.Kind] {
+      let decision = SecureInputRelease.decide(
+        snapshot(
+          holders: [
+            holder(20, "com.example.Chromium"), holder(21, "com.example.WebKit"),
+            holder(22, "com.example.Gecko"),
+          ], browsers: browsers))
+      guard case .release(let requests) = decision else { return [] }
+      return requests.map(\.kind)
+    }
+    XCTAssertEqual(
+      kinds(
+        BrowserEngineTable([
+          "com.example.Chromium": .chromium, "com.example.WebKit": .webkit,
+          "com.example.Gecko": .gecko,
+        ])), [.chromium, .addressBar, .addressBar])
+    XCTAssertEqual(kinds(BrowserEngineTable()), [.activate, .activate, .activate])
+
+    // With nobody named, only a declared Chromium browser is asked.
+    let unnamed = snapshot(
+      running: ["com.example.Chromium", "com.example.Gecko", "com.google.Chrome"],
+      browsers: BrowserEngineTable(["com.example.Chromium": .chromium]))
+    XCTAssertEqual(
+      SecureInputRelease.decide(unnamed),
+      .release([
+        SecureInputRelease.Request(
+          bundleID: "com.example.Chromium", kind: .chromium,
+          returnTo: "com.apple.Terminal", frontmost: false)
+      ]))
+  }
+
   func testABundleIDThatCouldEscapeAppleScriptIsRejected() {
-    XCTAssertNil(SecureInputRelease.chromiumBlurScript(bundleID: "com.google.Chrome\"; say"))
-    XCTAssertNil(SecureInputRelease.chromiumBlurScript(bundleID: "not a bundle"))
-    XCTAssertNil(SecureInputRelease.chromiumBlurScript(bundleID: "com.bitwarden.desktop"))
+    let hostile = BrowserEngineTable(["com.google.Chrome\"; say": .chromium])
+    XCTAssertNil(
+      SecureInputRelease.chromiumBlurScript(
+        bundleID: "com.google.Chrome\"; say", browsers: hostile),
+      "a declared id is still checked before it reaches a script")
+    for bundleID in ["not a bundle", "com.bitwarden.desktop", "com.apple.Safari"] {
+      XCTAssertNil(
+        SecureInputRelease.chromiumBlurScript(bundleID: bundleID, browsers: .sample), bundleID)
+    }
+    XCTAssertNil(
+      SecureInputRelease.chromiumBlurScript(
+        bundleID: "com.google.Chrome", browsers: BrowserEngineTable()),
+      "no plugin declares it")
     XCTAssertFalse(SecureInputRelease.isBundleID(""))
     XCTAssertFalse(SecureInputRelease.isBundleID(".chrome"))
   }
 
   func testTheChromiumScriptBlursWithoutActivatingAndTheAddressBarIsAFixedShortcut() {
-    let script = SecureInputRelease.chromiumBlurScript(bundleID: "com.google.Chrome")
+    let script = SecureInputRelease.chromiumBlurScript(
+      bundleID: "com.google.Chrome", browsers: .sample)
     XCTAssertEqual(
       script?.contains("tell application id \"com.google.Chrome\""), true)
     XCTAssertEqual(script?.contains("document.activeElement.blur()"), true)
@@ -251,5 +299,35 @@ final class SecureInputReleaseTests: XCTestCase {
     XCTAssertEqual(machine.consider(.release([request])), .wait)
     machine.noteCleared()
     XCTAssertEqual(machine.consider(.release([request])), .perform([request]))
+  }
+
+  /// The poll runs every two seconds for the life of the resident, and the
+  /// flag is almost always off. Off decides nothing, so nothing past the flag
+  /// is gathered: no pass over every running app on main, no Accessibility
+  /// read, no registry walk.
+  func testTheOffFlagGathersNothingElse() {
+    var gathered = 0
+    let off = SecureInputFixer.observe(
+      enabled: { false }, ownPID: 7,
+      gather: {
+        gathered += 1
+        return self.snapshot()
+      })
+    XCTAssertEqual(gathered, 0)
+    XCTAssertEqual(
+      off,
+      snapshot(
+        enabled: false, frontmostPID: nil, frontmostBundleID: nil, ownPID: 7,
+        browsers: BrowserEngineTable()))
+    XCTAssertEqual(SecureInputRelease.decide(off), .idle)
+
+    let on = SecureInputFixer.observe(
+      enabled: { true }, ownPID: 7,
+      gather: {
+        gathered += 1
+        return self.snapshot(holders: [self.holder(20, "com.google.Chrome")])
+      })
+    XCTAssertEqual(gathered, 1, "an enable reads the holders, apps and focus")
+    XCTAssertEqual(on.holders, [holder(20, "com.google.Chrome")])
   }
 }

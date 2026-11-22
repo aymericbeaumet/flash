@@ -2,33 +2,53 @@
   "id": "caffeinate",
   "name": "Caffeinate",
   "version": "0.1.0",
-  "description": "Keep the Mac awake through /usr/bin/caffeinate: `:caffeinate on [minutes]`, `:caffeinate off`, `:caffeinate toggle`, with a status-bar segment.",
+  "description": "Keep the Mac awake with the power assertions `caffeinate -dimsu` takes: `caffeinate on [--minutes=N]`, `caffeinate off`, `caffeinate toggle [--minutes=N]` and `caffeinate status`, with a `state` status segment that reads `on` while the hold lasts.",
+  "sandbox": {
+    "mach": [
+      "com.apple.PowerManagement.control"
+    ]
+  },
   "exec": [
     "./flash-plugin-caffeinate"
-  ],
-  "capabilities": [
-    "subprocess"
   ],
   "commands": [
     {
       "command": "caffeinate",
-      "subcommand": "status",
-      "description": "Show whether a caffeinate assertion is active"
-    },
-    {
-      "command": "caffeinate",
       "subcommand": "on",
-      "description": "Keep the Mac awake (an optional positive minutes argument bounds it)"
+      "description": "Keep the Mac awake, for --minutes or until caffeinate off",
+      "args": [
+        {
+          "name": "minutes",
+          "type": "integer",
+          "min": 1,
+          "max": 4294967295,
+          "description": "How long to keep the Mac awake"
+        }
+      ]
     },
     {
       "command": "caffeinate",
       "subcommand": "off",
-      "description": "Release the caffeinate assertion"
+      "description": "Let the Mac sleep again"
     },
     {
       "command": "caffeinate",
       "subcommand": "toggle",
-      "description": "Toggle the caffeinate assertion"
+      "description": "Keep the Mac awake, for --minutes or until toggled again, or let it sleep again",
+      "args": [
+        {
+          "name": "minutes",
+          "type": "integer",
+          "min": 1,
+          "max": 4294967295,
+          "description": "How long to keep the Mac awake"
+        }
+      ]
+    },
+    {
+      "command": "caffeinate",
+      "subcommand": "status",
+      "description": "Show whether the Mac is kept awake"
     }
   ],
   "status": [

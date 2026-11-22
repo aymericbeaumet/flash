@@ -2,24 +2,41 @@
   "id": "processes",
   "name": "Processes",
   "version": "0.1.0",
-  "description": "List and terminate running processes, and publish live focused-app resource details and top-process tables for status surfaces.",
+  "description": "The processes of this Mac: the busiest ones by CPU and by memory as status tables, the focused app's resource summary, every process as an `@processes` row in the flashlight, and `process kill --pid=<pid>`, which asks before it terminates one.",
   "exec": [
     "./flash-plugin-processes"
   ],
-  "sandbox": {},
+  "settings": {
+    "top_count": {
+      "type": "integer",
+      "description": "Rows of #{flash.plugin.processes.top_cpu} and #{flash.plugin.processes.top_mem}: aligned tables of the busiest processes by CPU and by resident memory (conky's ${top}), sampled every 2 seconds only while the bar, a popup or a widget shows one of them.",
+      "default": 5,
+      "min": 1,
+      "max": 20
+    }
+  },
   "commands": [
     {
-      "command": "processes",
-      "subcommand": "refresh",
-      "description": "Refresh the process list"
+      "command": "process",
+      "subcommand": "kill",
+      "description": "Terminate one process, after asking",
+      "confirm": "Kill this process?",
+      "args": [
+        {
+          "name": "pid",
+          "type": "integer",
+          "min": 2,
+          "max": 2147483647,
+          "required": true,
+          "description": "The process to terminate"
+        }
+      ]
     }
   ],
   "listen": [
-    "core:apps.launched",
-    "core:apps.terminated",
+    "core:status.observed",
     "core:focus.changed",
-    "core:session.opened",
-    "core:status.observed"
+    "core:apps.changed"
   ],
   "status": [
     "focused_app_details",
@@ -29,21 +46,13 @@
   "sources": [
     {
       "name": "processes.processes",
-      "priority": "normal"
+      "type": "processes",
+      "live": "per_query"
     }
   ],
   "capabilities": [
     "app_control",
-    "process_control"
-  ],
-  "bangs": {
-    "command": "processes",
-    "items": [
-      {
-        "token": "kill",
-        "description": "Kill a process: !kill <pid|name>",
-        "source": "processes.processes"
-      }
-    ]
-  }
+    "process_signal",
+    "process_table"
+  ]
 }

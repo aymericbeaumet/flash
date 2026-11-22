@@ -254,8 +254,9 @@ final class StatusFormatLayoutTests: XCTestCase {
     #endif
     guard
       (try? String(contentsOf: stampURL, encoding: .utf8))?
-        .trimmingCharacters(in: .whitespacesAndNewlines) == "3.8-2.12.0-\(architecture)"
-    else { throw oracleUnavailable("Run Scripts/build-tmux-oracle.sh to pin tmux and utf8proc") }
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        == "3.8-2.12.0-2.1.13-stable-\(architecture)"
+    else { throw oracleUnavailable("Run `mise run build:tmux-oracle` to pin tmux and utf8proc") }
     return executable
   }
 

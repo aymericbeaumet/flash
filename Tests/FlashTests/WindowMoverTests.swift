@@ -304,11 +304,8 @@ final class WindowMoverTests: XCTestCase {
         yPercent: 10,
         widthPercent: 80,
         heightPercent: 80))
-    let plan = WindowMover.recoveryPlan(
-      layout: layout,
-      screenID: 2,
-      currentFrame: nil,
-      screens: [primary, resizedSecondary])
+    let plan = WindowLayoutIntent(layout: layout, home: "display-2", screenID: 2).recoveryPlan(
+      currentFrame: nil, screens: [primary, resizedSecondary])
 
     XCTAssertEqual(plan?.screen, resizedSecondary)
     XCTAssertEqual(
@@ -348,17 +345,65 @@ final class WindowMoverTests: XCTestCase {
         to: [primary]))
   }
 
+  /// The regression: a window stretched across two displays that both stay
+  /// connected was shrunk onto one of them by any display change, a Dock or
+  /// status bar change to a usable area included. Only a frame that leaves
+  /// every connected display behind in part is the fit's to move.
+  func testAWindowAcrossConnectedDisplaysIsLeftAlone() throws {
+    let primary = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+      usableFrame: CGRect(x: 0, y: 0, width: 1920, height: 1050))
+    let external = WindowScreenLayout(
+      id: 2,
+      frame: CGRect(x: 1920, y: 0, width: 2560, height: 1440),
+      usableFrame: CGRect(x: 1920, y: 0, width: 2560, height: 1410))
+    // The Dock autohid on the external: same displays, another usable area.
+    let externalNoDock = WindowScreenLayout(
+      id: 2,
+      frame: external.frame,
+      usableFrame: CGRect(x: 1920, y: 0, width: 2560, height: 1440))
+    let spanning = CGRect(x: 1200, y: 100, width: 1600, height: 800)
+    XCTAssertNil(
+      WindowMover.relocatedFrame(
+        spanning, from: [primary, external], to: [primary, externalNoDock]))
+    XCTAssertNil(
+      WindowMover.relocatedFrame(spanning, from: [primary, external], to: [primary, external]))
+    // The same frame once the external is gone does leave a display behind.
+    let placed = try XCTUnwrap(
+      WindowMover.relocatedFrame(spanning, from: [primary, external], to: [primary]))
+    XCTAssertTrue(primary.usableFrame.contains(placed), "\(placed)")
+  }
+
+  /// `--screen=+1` walks the displays as they are arranged, left to right
+  /// then top to bottom, wrapping; `NSScreen.screens` only promises the
+  /// primary first, so stepping through it jumped across a three-display row.
+  func testARelativeScreenMoveWalksTheDisplaysLeftToRight() {
+    func screen(_ id: CGDirectDisplayID, x: CGFloat, y: CGFloat = 0) -> WindowScreenLayout {
+      let frame = CGRect(x: x, y: y, width: 1000, height: 800)
+      return WindowScreenLayout(id: id, frame: frame, usableFrame: frame)
+    }
+    // NSScreen order: the primary (middle), then the right, then the left.
+    let screens = [screen(1, x: 0), screen(2, x: 1000), screen(3, x: -1000)]
+    XCTAssertEqual(WindowMover.relativeScreenIndex(from: 0, offset: 1, screens: screens), 1)
+    XCTAssertEqual(WindowMover.relativeScreenIndex(from: 1, offset: 1, screens: screens), 2)
+    XCTAssertEqual(WindowMover.relativeScreenIndex(from: 2, offset: 1, screens: screens), 0)
+    XCTAssertEqual(WindowMover.relativeScreenIndex(from: 0, offset: -1, screens: screens), 2)
+    XCTAssertEqual(WindowMover.relativeScreenIndex(from: 2, offset: -4, screens: screens), 1)
+    XCTAssertEqual(WindowMover.relativeScreenIndex(from: 1, offset: 0, screens: screens), 1)
+    // Stacked displays: the higher one first.
+    let stacked = [screen(1, x: 0), screen(2, x: 0, y: 800)]
+    XCTAssertEqual(WindowMover.relativeScreenIndex(from: 1, offset: 1, screens: stacked), 0)
+  }
+
   func testLayoutRecoveryFallsBackToRelocatedScreenAfterUnplug() {
     let primary = WindowScreenLayout(
       id: 1,
       frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
       usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 780))
     let layout = WindowLayout.position(.rightHalf)
-    let plan = WindowMover.recoveryPlan(
-      layout: layout,
-      screenID: 2,
-      currentFrame: CGRect(x: 100, y: 100, width: 500, height: 500),
-      screens: [primary])
+    let plan = WindowLayoutIntent(layout: layout, home: "display-2", screenID: 2).recoveryPlan(
+      currentFrame: CGRect(x: 100, y: 100, width: 500, height: 500), screens: [primary])
 
     XCTAssertEqual(plan?.screen, primary)
     XCTAssertEqual(plan?.frame, WindowMover.rectFor(layout: layout, in: primary.usableFrame))
@@ -388,26 +433,22 @@ final class WindowMoverTests: XCTestCase {
     ]
 
     for layout in layouts {
+      var intent = WindowLayoutIntent(layout: layout, placedOn: external)
       let unplugged = try XCTUnwrap(
-        WindowMover.recoveryPlan(
-          layout: layout,
-          screenID: external.id,
-          currentFrame: CGRect(x: 100, y: 100, width: 800, height: 600),
-          screens: [primary]))
+        intent.recoveryPlan(
+          currentFrame: CGRect(x: 100, y: 100, width: 800, height: 600), screens: [primary]))
       XCTAssertEqual(
         unplugged.frame,
         WindowMover.rectFor(layout: layout, in: primary.usableFrame),
         "unplug changed \(WindowMover.description(of: layout))")
+      intent.recovered(on: unplugged.screen)
 
+      // The display it was placed on is back: so is the window, same layout.
       let replugged = try XCTUnwrap(
-        WindowMover.recoveryPlan(
-          layout: layout,
-          screenID: unplugged.screen.id,
-          currentFrame: unplugged.frame,
-          screens: [primary, external]))
+        intent.recoveryPlan(currentFrame: unplugged.frame, screens: [primary, external]))
       XCTAssertEqual(
         replugged.frame,
-        WindowMover.rectFor(layout: layout, in: primary.usableFrame),
+        WindowMover.rectFor(layout: layout, in: external.usableFrame),
         "replug changed \(WindowMover.description(of: layout))")
     }
   }
@@ -433,7 +474,7 @@ final class WindowMoverTests: XCTestCase {
     XCTAssertEqual(WindowMover.position(matching: onePointTall, in: slot), .maximized)
     XCTAssertFalse(
       WindowMover.framesMatchPlacement(onePointTall, slot),
-      "a restore that calls this done leaves the point the next window_move closes")
+      "a restore that calls this done leaves the point the next window move closes")
     XCTAssertTrue(
       WindowMover.framesMatchPlacement(
         CGRect(x: 219, y: 120, width: 1610, height: 880),
@@ -495,6 +536,7 @@ final class WindowMoverTests: XCTestCase {
     var events: [String] = []
     let manager = WindowLayoutManager(
       screenRecoveryDelaysMs: [0, 1],
+      recoveryApplications: { [] },
       screenLayouts: { _, _ in
         events.append("slots")
         return [screen]
@@ -531,7 +573,14 @@ final class WindowMoverTests: XCTestCase {
   }
 
   func testSecondaryDisplayChangeNotifiesAfterEveryLayoutRecoveryPass() {
-    let manager = WindowLayoutManager(screenRecoveryDelaysMs: [0, 1, 2])
+    let applicationsRequested = expectation(description: "recovery uses isolated app discovery")
+    applicationsRequested.expectedFulfillmentCount = 3
+    let manager = WindowLayoutManager(
+      screenRecoveryDelaysMs: [0, 1, 2],
+      recoveryApplications: {
+        applicationsRequested.fulfill()
+        return []
+      })
     let primary = WindowScreenLayout(
       id: 1,
       frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
@@ -553,6 +602,33 @@ final class WindowMoverTests: XCTestCase {
       recovered.fulfill()
     }
 
+    wait(for: [recovered, applicationsRequested], timeout: 1)
+  }
+
+  func testSuspendedScreenRecoveryNotifiesWithoutDiscoveringApplications() {
+    let manager = WindowLayoutManager(
+      screenRecoveryDelaysMs: [0],
+      recoveryApplications: {
+        XCTFail("a locked or sleeping session must not perform window discovery")
+        return []
+      })
+    let initial = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+      usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 770))
+    let changed = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+      usableFrame: CGRect(x: 0, y: 0, width: 1200, height: 870))
+    let recovered = expectation(description: "suspended recovery reports settled screens")
+
+    manager.setSessionSuspended(true, statusBarReservesSpace: false, statusBarMonitor: .primary)
+    manager.screenParametersDidChange(screens: [initial])
+    manager.screenParametersDidChange(screens: [changed]) { screens in
+      XCTAssertEqual(screens, [changed])
+      recovered.fulfill()
+    }
+
     wait(for: [recovered], timeout: 1)
   }
 
@@ -568,6 +644,7 @@ final class WindowMoverTests: XCTestCase {
     var snapshots = [[initial], [settled]]
     let manager = WindowLayoutManager(
       screenRecoveryDelaysMs: [0],
+      recoveryApplications: { [] },
       screenLayouts: { _, monitor in
         XCTAssertEqual(monitor, .primary)
         return snapshots.removeFirst()
@@ -602,6 +679,7 @@ final class WindowMoverTests: XCTestCase {
       usableFrame: secondaryWithBar.frame)
     let manager = WindowLayoutManager(
       screenRecoveryDelaysMs: [0],
+      recoveryApplications: { [] },
       screenLayouts: { _, monitor in
         monitor == .all
           ? [primary, secondaryWithBar]
@@ -653,5 +731,52 @@ final class WindowMoverTests: XCTestCase {
         currentValue: true,
         isSettable: true,
         engine: .chromium))
+  }
+
+  /// The catalog reads a window's frame, minimized state, role and subrole
+  /// in one batch, and keeps only user windows: Finder's desktop, a
+  /// full-screen `AXScrollArea` in its window list, would otherwise be
+  /// adopted as a maximized window the status bar's inset then fights over.
+  func testOneBatchReadsAUserWindowsFrameAndMinimizedState() throws {
+    var point = CGPoint(x: 10, y: 20)
+    var size = CGSize(width: 300, height: 200)
+    let position = try XCTUnwrap(AXValueCreate(.cgPoint, &point))
+    let extent = try XCTUnwrap(AXValueCreate(.cgSize, &size))
+    var failure = AXError.attributeUnsupported
+    let error = try XCTUnwrap(AXValueCreate(.axError, &failure))
+    let window = kAXWindowRole as String
+    let standard = kAXStandardWindowSubrole as String
+    func parse(_ values: [Any]) -> (frame: CGRect, minimized: Bool, subrole: String?)? {
+      WindowMover.parseWindowGeometry(values, primaryHeight: 1000)
+    }
+
+    let minimized = try XCTUnwrap(
+      parse([position, extent, kCFBooleanTrue as Any, window, standard]))
+    XCTAssertTrue(minimized.minimized)
+    XCTAssertEqual(minimized.frame, CGRect(x: 10, y: 780, width: 300, height: 200))
+    XCTAssertEqual(minimized.subrole, standard, "tiling floats what is not a standard window")
+    XCTAssertEqual(
+      parse([position, extent, error, window, standard])?.minimized, false,
+      "no minimized attribute: not minimized")
+    XCTAssertNotNil(
+      parse([position, extent, kCFBooleanFalse as Any, window, error]), "no subrole: kept")
+    XCTAssertNil(
+      parse([position, extent, kCFBooleanFalse as Any, "AXScrollArea", error]), "Finder's desktop")
+    XCTAssertNil(
+      parse([position, extent, kCFBooleanFalse as Any, window, kAXFloatingWindowSubrole as String]),
+      "a palette")
+    XCTAssertNil(parse([error, extent, kCFBooleanFalse as Any, window, standard]), "no position")
+    XCTAssertNil(parse([position, extent, kCFBooleanFalse as Any]))
+
+    // The stranded-window fit keeps every window subrole (a palette left on a
+    // departed display is still rescued) but never Finder's desktop.
+    func anyWindow(_ values: [Any]) -> (frame: CGRect, minimized: Bool, subrole: String?)? {
+      WindowMover.parseWindowGeometry(values, primaryHeight: 1000, subroles: nil)
+    }
+    XCTAssertNotNil(
+      anyWindow([
+        position, extent, kCFBooleanFalse as Any, window, kAXFloatingWindowSubrole as String,
+      ]))
+    XCTAssertNil(anyWindow([position, extent, kCFBooleanFalse as Any, "AXScrollArea", error]))
   }
 }

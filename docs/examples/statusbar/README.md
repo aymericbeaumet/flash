@@ -19,19 +19,21 @@ can reach 100% and is not padded. `p-4` reserves NET's four cells.
 Detail reports retain the true value. NET is download plus upload on the
 default-route interface, in decimal bytes per second.
 
-The example metrics are unpadded and capped at 99 by the command that prints
+The quota metrics are unpadded and capped at 99 by the plugin that prints
 them, because they change slowly.
 
 Cld/Cdx/Grk, aggr, and CPU/MEM/DSK/NET/BAT use `#[label]`. The grey value
-beside each one is whatever `#{flash.source.cld}` or `#{flash.plugin.cpu.label}`
-prints. Declare the quota sources with
-your own commands. They share one popup, tokscale's own TUI: tokens and cost
+beside each one is whatever `#{flash.plugin.aiproviders.claude}` or
+`#{flash.plugin.sysinfo.cpu_label}` prints. The bundled `aiproviders` plugin publishes
+the weekly quotas: Claude's from the sample Claude Code's status line saves,
+Codex's from `codex app-server`, Grok's from a read-only billing request (see
+[AI quotas](../../status-plugins.md#ai-quotas)). A reading stays until a newer
+one replaces it. They share one popup, tokscale's own TUI: tokens and cost
 by day and model, with every subscription's session, weekly and model quotas
 under its Usage tab. The popup is persistent, so hovering shows it at once and
 keeps the tab you left it on; tokscale's `autoRefreshEnabled` setting keeps it
 current. Left-click a label to open that provider’s usage page; right-click
-pins the popup. Flash does not fetch the quotas. A source that prints an empty
-string keeps its previous value.
+pins the popup.
 
 CPU/MEM/DSK/NET/BAT hover is the popup wrapped around that name. The example
 points each one at the bundled plugin’s full
@@ -61,6 +63,14 @@ its week, month, quarter and year, and time-zone, daylight-saving and moon
 information. It has no appointments or tasks. It uses the same pager as the
 metric popups.
 
+The same calendar view includes numeric local time and an ASCII analog clock
+with hour and minute hands. It updates once a minute and shows no milliseconds.
+
+The app-name hover shows identity, resource totals and the busiest helpers of
+the focused app's process tree. For interactive filtering, graphs and process
+details, [btop](https://github.com/aristocratos/btop) fits a terminal popup;
+the compact app summary keeps the macOS app and bundle context.
+
 Text popups fit their widest line between `[popup] min_width` (480 points,
 50 content columns at the standard font and padding) and `max_width` (750
 points, 80 columns, room for the calendar). The pager reserves one footer row.
@@ -72,7 +82,7 @@ pinned. Left-click follows an action or link where present and otherwise leaves
 the preview unchanged. The configuration has no separate right-click binding.
 Hovered pagers refresh when the collected values change. Focused pagers
 hold content and search stable; reopening or Command-R shows the latest collected
-data. The shared terminal-mode mappings apply, and `leave_mode` restores the
+data. The shared terminal-mode mappings apply, and `mode leave` restores the
 prior mode and app.
 
 Command-W dismisses a text popup and removes its private snapshot file;
@@ -89,4 +99,4 @@ writes it. Hovering the name runs `[popup.feed]`. Hovering the headline runs
 URL. Bind `#{flash.plugin.feed.summary}`
 instead when a headline should carry its own excerpt popup.
 
-See [popups](../../popups.md) for kinds, lifecycles and verbs.
+See [popups](../../popups.md) for kinds, lifecycles and commands.

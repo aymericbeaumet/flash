@@ -38,7 +38,7 @@ extension OverlayPanel {
 
     for item in visualItems {
       let marker = item.isSelected ? "> " : "  "
-      let line = marker + item.title
+      let line = marker + item.title + Self.candidateDetailSuffix(item)
       plainLines.append(line)
     }
 
@@ -184,7 +184,8 @@ extension OverlayPanel {
     fontSize: CGFloat,
     emptyMessage: Bool = false
   ) -> NSAttributedString {
-    let line = marker + item.title
+    let detail = candidateDetailSuffix(item)
+    let line = marker + item.title + detail
     let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let selectedFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let highlightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
@@ -203,6 +204,13 @@ extension OverlayPanel {
         .foregroundColor,
         value: markerColor,
         range: NSRange(location: 0, length: min(1, attributed.length)))
+    }
+    if !detail.isEmpty {
+      // What an ex command runs, dimmed after its name.
+      let length = (detail as NSString).length
+      attributed.addAttributes(
+        [.foregroundColor: Self.nordSnowStorm0, .font: baseFont],
+        range: NSRange(location: attributed.length - length, length: length))
     }
     for range in item.highlightedRanges {
       guard range.lowerBound >= 0, range.upperBound <= item.title.count else { continue }
@@ -224,6 +232,12 @@ extension OverlayPanel {
     }
     CandidateEmojiSupport.applyEmojiFont(to: attributed, line: line, fontSize: fontSize)
     return attributed
+  }
+
+  /// The row text after the title: two spaces and the detail, or nothing.
+  static func candidateDetailSuffix(_ item: CandidateDisplayItem) -> String {
+    guard let detail = item.detail, !detail.isEmpty else { return "" }
+    return "  " + detail
   }
 
   static func candidateFinderResultsWidth(

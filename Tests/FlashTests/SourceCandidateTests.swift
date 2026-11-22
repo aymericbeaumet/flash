@@ -541,9 +541,9 @@ final class SourceCandidateTests: XCTestCase {
       kind: .plugin("note"), source: "notes.notes", name: "shopping",
       subtitle: "note", bundleIdentifier: "")
     let emoji = candidate(
-      kind: CandidateFinder.emojiKind, source: "emojis.glyphs", name: "🔥 fire",
+      kind: .plugin("emoji"), source: "emojis.glyphs", name: "🔥 fire",
       subtitle: "emoji", bundleIdentifier: "")
-    let source = CandidateFinder.sourceCompletionCandidate("notes.notes")
+    let source = CandidateFinder.sourceCompletionCandidate(type: "notes", providers: [])
 
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(tmux))
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(tab))
@@ -625,6 +625,57 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(aliasPrefixOnly.map(\.candidate.source), ["tmux", "core.apps"])
   }
 
+  func testEmojiKeywordAliasesExtendNamesWithoutOutrankingThem() {
+    // The emojis plugin adds a CLDR keyword as an alias only where no emoji
+    // name or shortcode carries the word: an exact alias beats a name, and
+    // equal alias hits retain the host's existing title ordering. Pin the
+    // ranking that policy relies on. `thumbs` puts 👍 first
+    // by its name and its shorter shortcode; `hooray` and `idk` reach their
+    // emoji through a keyword alone; `party` keeps the existing party emojis
+    // ahead of 🍹, which carries no
+    // `party` alias although CLDR tags it so.
+    func emoji(_ title: String, payload: String, aliases: String) -> Candidate {
+      CandidateFinder.prepare(
+        candidate(
+          kind: .plugin("emoji"), source: "emojis.glyphs", name: title,
+          subtitle: "emoji", bundleIdentifier: "", sourcePayload: payload,
+          searchAliases: aliases))
+    }
+    let pool = [
+      emoji(
+        "🍹 tropical drink", payload: "🍹",
+        aliases: "tropical_drink alcohol booze drinking drinks drunk mai tai tropics"),
+      emoji("🥳 face with party horn and party hat", payload: "🥳", aliases: "party_face"),
+      emoji("👎 thumbs down sign", payload: "👎", aliases: "thumbsdown -1 thumb_down"),
+      emoji("🤷 shrug", payload: "🤷", aliases: "doubt dunno guess idk maybe whatever"),
+      emoji(
+        "🎉 party popper", payload: "🎉",
+        aliases: "tada party celebrate awesome excited hooray woohoo"),
+      emoji("👍 thumbs up sign", payload: "👍", aliases: "thumbsup +1 yes thumb_up like"),
+    ]
+    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    func ranked(_ query: String) -> [(payload: String, tier: CandidateFinder.MatchTier)] {
+      CandidateFinder.sortedMatches(
+        CandidateFinder.scoreMatches(
+          pool: pool, normalizedQuery: query, fuzzyScore: fuzzy, allowParallel: false)
+      ).map { ($0.candidate.sourcePayload ?? "", $0.tier) }
+    }
+
+    let thumbs = ranked("thumbs")
+    XCTAssertEqual(thumbs.prefix(2).map(\.payload), ["👍", "👎"])
+    XCTAssertEqual(thumbs.prefix(2).map(\.tier), [.prefix, .prefix])
+
+    XCTAssertEqual(ranked("hooray").map(\.payload), ["🎉"])
+    XCTAssertEqual(ranked("hooray").map(\.tier), [.exact])
+    XCTAssertEqual(ranked("idk").first?.payload, "🤷")
+    XCTAssertEqual(ranked("idk").first?.tier, .exact)
+
+    let party = ranked("party")
+    XCTAssertEqual(Set(party.prefix(2).map(\.payload)), ["🎉", "🥳"])
+    XCTAssertEqual(party.prefix(2).map(\.tier), [.exact, .exact])
+    XCTAssertFalse(party.map(\.payload).contains("🍹"))
+  }
+
   func testBangCandidatesAlwaysWinEvenAgainstStrongerNonBangScores() {
     // The one strict band: a registered bang must surface above every
     // non-bang candidate, however well it scores. A typed `!yt` means
@@ -684,7 +735,8 @@ final class SourceCandidateTests: XCTestCase {
         subtitle: "browser tab",
         bundleIdentifier: "org.mozilla.firefox",
         pid: 123,
-        url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
+        url: URL(string: "https://mail.google.com/mail/u/0/#inbox"),
+        isLocation: true))
 
     XCTAssertNotNil(CandidateFinder.score(query: "gmail.com", candidate: tab))
   }
@@ -820,7 +872,8 @@ final class SourceCandidateTests: XCTestCase {
       title: "Inbox",
       subtitle: "browser tab",
       bundleIdentifier: DummyRunningApplication.app.bundleIdentifier ?? "",
-      url: URL(string: "https://mail.example.test/inbox"))
+      url: URL(string: "https://mail.example.test/inbox"),
+      isLocation: true)
     let prepared = CandidateFinder.prepare(candidate)
 
     XCTAssertEqual(prepared.displayTitle, "[safari] Inbox · https://mail.example.test/inbox")
@@ -954,12 +1007,12 @@ final class SourceCandidateTests: XCTestCase {
 
     // Whitespace right after the token → already confirmed, no
     // completion (the source-filter parser takes over).
-    XCTAssertNil(CandidateFinder.parseAtSourceCompletion("@firefox.tabs "))
-    XCTAssertNil(CandidateFinder.parseAtSourceCompletion("@firefox.tabs gmail"))
+    XCTAssertNil(CandidateFinder.parseAtSourceCompletion("@tabs "))
+    XCTAssertNil(CandidateFinder.parseAtSourceCompletion("@tabs gmail"))
 
     // Multiple `@` filters: only the last (unconfirmed) one drives
     // the completion list.
-    let trailing = CandidateFinder.parseAtSourceCompletion("@notes.notes @sl")
+    let trailing = CandidateFinder.parseAtSourceCompletion("@notes @sl")
     XCTAssertEqual(trailing?.token, "sl")
 
     // No `@` in the query → no completion.
@@ -972,7 +1025,7 @@ final class SourceCandidateTests: XCTestCase {
       "fire")
     XCTAssertNil(CandidateFinder.sourceCompletionState(query: "!google @fire"))
     XCTAssertNil(
-      CandidateFinder.sourceCompletionState(query: "@firefox.tabs gmail"))
+      CandidateFinder.sourceCompletionState(query: "@tabs gmail"))
     XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@source:fire"))
   }
 
@@ -982,7 +1035,7 @@ final class SourceCandidateTests: XCTestCase {
     let aliases = [
       "!g": "!google",
       "!gh": "!github",
-      "@ft": "@firefox.tabs",
+      "@ft": "@tabs",
     ]
     // Cursor right after the just-typed whitespace.
     let bang = CandidateFinder.expandFlashlightAlias(
@@ -993,8 +1046,8 @@ final class SourceCandidateTests: XCTestCase {
     // Source-filter aliases work via the same matching rule.
     let source = CandidateFinder.expandFlashlightAlias(
       text: ":flashlight @ft ", cursorIndex: 16, aliases: aliases)
-    XCTAssertEqual(source?.text, ":flashlight @firefox.tabs ")
-    XCTAssertEqual(source?.cursorIndex, 26)
+    XCTAssertEqual(source?.text, ":flashlight @tabs ")
+    XCTAssertEqual(source?.cursorIndex, 18)
 
     // Existing canonical word is left alone.
     let canonical = CandidateFinder.expandFlashlightAlias(
@@ -1178,7 +1231,7 @@ final class SourceCandidateTests: XCTestCase {
       candidate(
         kind: .plugin("browser_tab"), source: "firefox", name: "Gmail",
         subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/")))
+        url: URL(string: "https://mail.google.com/"), isLocation: true))
     XCTAssertEqual(titled.displayTitle, "[firefox] Gmail · https://mail.google.com/")
 
     // When the title is missing we fall through to URL-only display —
@@ -1187,8 +1240,51 @@ final class SourceCandidateTests: XCTestCase {
       candidate(
         kind: .plugin("browser_tab"), source: "firefox", name: "",
         subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/")))
+        url: URL(string: "https://mail.google.com/"), isLocation: true))
     XCTAssertEqual(urlOnly.displayTitle, "[firefox] https://mail.google.com/")
+  }
+
+  /// What a location row shows and is found by comes from its fields, never
+  /// from the kind its plugin chose.
+  func testALocationRowShowsItsURLElseItsSubtitleWhateverItsKind() {
+    let page = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("page"), source: "reader.pages", name: " Gmail ",
+        subtitle: "", bundleIdentifier: "",
+        url: URL(string: "https://mail.google.com/"), isLocation: true))
+    XCTAssertEqual(page.displayTitle, "[reader.pages] Gmail · https://mail.google.com/")
+    XCTAssertEqual(
+      page.normalizedScoringFields.secondary, "https mail google com gmail com",
+      "its title words are searchable under its URL's top-level domain")
+
+    let session = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("session"), source: "zellij.sessions", name: "flash",
+        subtitle: "main · zsh · ~/work", bundleIdentifier: "", isLocation: true))
+    XCTAssertEqual(session.displayTitle, "[zellij.sessions] flash · main · zsh · ~/work")
+
+    let bare = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("session"), source: "zellij.sessions", name: "flash",
+        subtitle: "", bundleIdentifier: "", isLocation: true))
+    XCTAssertEqual(bare.displayTitle, "[zellij.sessions] flash")
+
+    // A row that is no location keeps its title: a bookmark's URL and a
+    // note's subtitle are searched, not shown.
+    let bookmark = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("bookmark"), source: "firefox.bookmarks", name: "Gmail",
+        subtitle: "bookmark", bundleIdentifier: "",
+        url: URL(string: "https://mail.google.com/")))
+    XCTAssertEqual(bookmark.displayTitle, "[firefox.bookmarks] Gmail")
+    XCTAssertEqual(bookmark.normalizedScoringFields.secondary, "bookmark https mail google com")
+    // An app is a location Flash feeds itself; its bundle path is not shown.
+    let app = CandidateFinder.prepare(
+      candidate(
+        kind: .app, source: "core.apps", name: "Mail", subtitle: "app",
+        bundleIdentifier: "com.apple.mail",
+        url: URL(fileURLWithPath: "/System/Applications/Mail.app"), isLocation: true))
+    XCTAssertEqual(app.displayTitle, "[core.apps] Mail")
   }
 
   func testPrecedenceTableDefaultsUseCandidateKinds() {
@@ -1227,7 +1323,7 @@ final class SourceCandidateTests: XCTestCase {
     // A user can pin a sub-source above its parent: `firefox.bookmarks`
     // > `firefox`. Longer pattern wins regardless of dict ordering.
     let table = CandidateFinder.PrecedenceTable(
-      sources: [CandidateSourceDescriptor(name: "firefox", kind: .locations)],
+      sources: [CandidateSourceDescriptor(name: "firefox", type: "firefox", kind: .locations)],
       overrides: ["firefox.bookmarks": 120],
       aliveBonus: 0)
     let tab = candidate(
@@ -1243,9 +1339,9 @@ final class SourceCandidateTests: XCTestCase {
   func testPrecedenceTableUsesSourceDescriptors() {
     let table = CandidateFinder.PrecedenceTable(
       sources: [
-        CandidateSourceDescriptor(name: "terminal.windows", kind: .locations),
-        CandidateSourceDescriptor(name: "web.pages", kind: .locations),
-        CandidateSourceDescriptor(name: "projects.locations", kind: .locations),
+        CandidateSourceDescriptor(name: "terminal.windows", type: "windows", kind: .locations),
+        CandidateSourceDescriptor(name: "web.pages", type: "pages", kind: .locations),
+        CandidateSourceDescriptor(name: "projects.locations", type: "locations", kind: .locations),
       ],
       overrides: [:],
       aliveBonus: 0)
@@ -1270,8 +1366,10 @@ final class SourceCandidateTests: XCTestCase {
   func testPrecedenceTableUsesSourceDescriptorPriority() {
     let table = CandidateFinder.PrecedenceTable(
       sources: [
-        CandidateSourceDescriptor(name: "terminal.windows", kind: .locations, priority: .high),
-        CandidateSourceDescriptor(name: "web.pages", kind: .locations, priority: .low),
+        CandidateSourceDescriptor(
+          name: "terminal.windows", type: "windows", kind: .locations, priority: .high),
+        CandidateSourceDescriptor(
+          name: "web.pages", type: "pages", kind: .locations, priority: .low),
       ],
       overrides: [:],
       aliveBonus: 0)
@@ -1314,8 +1412,8 @@ final class SourceCandidateTests: XCTestCase {
   func testDefaultFlashlightVisibilityUsesDescriptorsWithoutTreatingOverridesAsOptIn() {
     let table = CandidateFinder.PrecedenceTable(
       sources: [
-        CandidateSourceDescriptor(name: "terminal.windows", kind: .locations),
-        CandidateSourceDescriptor(name: "notes.notes", kind: .standard),
+        CandidateSourceDescriptor(name: "terminal.windows", type: "windows", kind: .locations),
+        CandidateSourceDescriptor(name: "notes.notes", type: "notes", kind: .standard),
       ],
       overrides: [
         "terminal.windows": 5,
@@ -1339,23 +1437,14 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(bookmark, precedence: table))
   }
 
-  func testInsertsTextOnlyForEmojiKind() {
-    // `app_open?name=` resolution skips text-insertion candidates so a
-    // glyph in the emoji pool can't be typed into the focused field.
-    // Bangs are not "text insertion" — selecting one canonicalizes the
-    // buffer in the flashlight, not the focused app.
-    let emoji = candidate(
-      kind: .plugin("emoji"), source: "emoji", name: "fire",
-      subtitle: "emoji", bundleIdentifier: "")
-    let bang = candidate(
-      kind: .plugin("bang"), source: "bang", name: "!g",
-      subtitle: "", bundleIdentifier: "")
-    let app = candidate(
-      kind: .app, source: "core.apps", name: "Safari",
-      subtitle: "app", bundleIdentifier: "com.apple.Safari")
-    XCTAssertTrue(CandidateFinder.insertsText(emoji))
-    XCTAssertFalse(CandidateFinder.insertsText(bang))
-    XCTAssertFalse(CandidateFinder.insertsText(app))
+  /// One character is typed, leaving the clipboard alone; longer text is
+  /// pasted.
+  func testInsertedTextOfOneCharacterIsTyped() {
+    XCTAssertTrue(CandidateFinder.insertionTypesDirectly("🔥"))
+    XCTAssertTrue(CandidateFinder.insertionTypesDirectly("👨‍👩‍👧"))
+    XCTAssertTrue(CandidateFinder.insertionTypesDirectly("§"))
+    XCTAssertFalse(CandidateFinder.insertionTypesDirectly("ok"))
+    XCTAssertFalse(CandidateFinder.insertionTypesDirectly(""))
   }
 
   func testCandidateFinderScoreReturnsNilForUnmatchableQuery() {
@@ -1382,7 +1471,8 @@ final class SourceCandidateTests: XCTestCase {
         kind: .plugin("browser_tab"), source: "firefox", name: "Inbox",
         subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox",
         pid: 4242,
-        url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
+        url: URL(string: "https://mail.google.com/mail/u/0/#inbox"),
+        isLocation: true))
     let titleQuery = try XCTUnwrap(CandidateFinder.score(query: "Inbox", candidate: tab))
     let urlQuery = try XCTUnwrap(CandidateFinder.score(query: "gmail.com", candidate: tab))
     XCTAssertGreaterThan(titleQuery, 0)
@@ -1420,24 +1510,63 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sorted.map(\.candidate.title), ["🙏 folded hands", "📿 prayer beads"])
   }
 
-  func testEmojiCandidatesWithoutLocalColorGlyphAreHiddenFromCommandBar() {
-    let supported = Candidate(
-      kind: CandidateFinder.emojiKind,
-      sourceID: "plugin:reference",
-      source: "emojis.glyphs",
-      title: "🙏 person with folded hands",
-      subtitle: "emoji",
-      sourcePayload: "🙏")
-    let unsupported = Candidate(
-      kind: CandidateFinder.emojiKind,
-      sourceID: "plugin:reference",
-      source: "emojis.glyphs",
-      title: "🕲 no piracy",
-      subtitle: "emoji",
-      sourcePayload: "🕲")
+  /// A row that types one glyph the emoji font cannot draw would show as a
+  /// blank: it is left out, whichever plugin listed it.
+  func testARowTypingAGlyphTheEmojiFontLacksIsHiddenFromCommandBar() {
+    func row(_ title: String, _ effect: CandidateEffect?) -> Candidate {
+      Candidate(
+        kind: .plugin("symbol"), sourceID: "plugin:reference", source: "symbols.glyphs",
+        title: title, effect: effect)
+    }
+    XCTAssertTrue(
+      AppDelegate.candidateCanRenderInCommandBar(
+        row("🙏 person with folded hands", .insertText("🙏"))))
+    XCTAssertFalse(
+      AppDelegate.candidateCanRenderInCommandBar(row("🕲 no piracy", .insertText("🕲"))))
+    // Text the font was never asked to draw stays: a snippet, a plain
+    // symbol, a copied value, a row with no effect.
+    XCTAssertTrue(
+      AppDelegate.candidateCanRenderInCommandBar(row("sig", .insertText("🕲 Regards, A."))))
+    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(row("section sign", .insertText("§"))))
+    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(row("🕲 no piracy", .copyText("🕲"))))
+    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(row("🕲 no piracy", nil)))
+  }
 
-    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(supported))
-    XCTAssertFalse(AppDelegate.candidateCanRenderInCommandBar(unsupported))
+  /// A catalog row is labelled with where it comes from whether or not
+  /// selecting it runs a host effect; an evaluator's answer and a
+  /// `menu choose` line are the text alone.
+  func testACatalogRowWithAnEffectKeepsItsLabel() {
+    let emoji = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("emoji"), source: "emojis.glyphs", name: "🔥 fire",
+        subtitle: "emoji", bundleIdentifier: "", effect: .insertText("🔥")))
+    XCTAssertEqual(emoji.displayTitle, "[emojis.glyphs] 🔥 fire")
+    let snippet = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("snippet"), source: "snippets.snippets", name: "sig",
+        subtitle: "", bundleIdentifier: "", effect: .insertText("Regards, A.")))
+    XCTAssertEqual(snippet.displayTitle, "[snippets.snippets] sig")
+
+    let answer = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("query_answer"), source: "answers", name: "2",
+        subtitle: "", bundleIdentifier: "", effect: .copyText("2")))
+    XCTAssertEqual(answer.displayTitle, "2")
+    XCTAssertEqual(
+      CandidateFinder.prepare(MenuChoice.candidates(["main"])[0]).displayTitle, "main")
+  }
+
+  /// A row that inserts text is committed by Return and by Tab, like every
+  /// row with a host effect: it is never completed into the query.
+  func testARowThatInsertsTextIsAFinalDestination() {
+    let emoji = candidate(
+      kind: .plugin("emoji"), source: "emojis.glyphs", name: "🔥 fire",
+      subtitle: "emoji", bundleIdentifier: "", effect: .insertText("🔥"))
+    XCTAssertTrue(CandidateFinder.isFinalDestination(emoji))
+    XCTAssertTrue(
+      CandidateFinder.selectionSubmits(
+        emoji, query: "fi", submit: false, allowFinisher: false, submitFinalDestinations: true))
+    XCTAssertTrue(CandidateFinder.selectionSubmits(emoji, query: "fi", submit: false))
   }
 
   func testEmojiAliasPreparationTokenizesNormalizedAliases() throws {
@@ -1458,28 +1587,6 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertNotNil(CandidateFinder.score(query: "laugh", candidate: candidate))
   }
 
-  func testExpandEmoticonsRewritesStandaloneTokens() {
-    // The faces the user asked for, with and without noses, plus a couple of
-    // case-folded and multi-token forms.
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":)"), "slightly_smiling_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":-)"), "slightly_smiling_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":("), "slightly_frowning_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":-("), "slightly_frowning_face")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(";)"), "wink")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(";-)"), "wink")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons(":D"), "grinning")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("XD"), "laughing")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("<3"), "heart")
-    // Ordinary queries are untouched (and skip the work via the punctuation
-    // guard), including a colon that isn't a standalone emoticon.
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("fire"), "fire")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("slack general"), "slack general")
-    XCTAssertEqual(NormalModeDispatcher.expandEmoticons("foo:bar"), "foo:bar")
-    // Only the emoticon token is rewritten in a mixed query.
-    XCTAssertEqual(
-      NormalModeDispatcher.expandEmoticons("happy :)"), "happy slightly_smiling_face")
-  }
-
   func testEmoticonQuerySurfacesIntendedGlyph() throws {
     // End-to-end: mirror the coordinator pipeline (expand → score → sort) and
     // assert each emoticon ranks its intended glyph first.
@@ -1496,9 +1603,14 @@ final class SourceCandidateTests: XCTestCase {
         kind: .plugin("emoji"), source: "emojis.glyphs", name: "😉 winking face",
         subtitle: "emoji", bundleIdentifier: "", searchAliases: "wink winking"))
     let pool = [smiling, frowning, winking]
+    let aliases = QueryAliasTable([
+      ":)": "slightly_smiling_face", ":-)": "slightly_smiling_face",
+      ":(": "slightly_frowning_face", ":-(": "slightly_frowning_face",
+      ";)": "wink", ";-)": "wink",
+    ])
 
     func topGlyph(for emoticon: String) throws -> String {
-      let query = NormalModeDispatcher.expandEmoticons(emoticon)
+      let query = aliases.expand(emoticon)
       let scored = pool.compactMap { candidate -> CandidateMatch? in
         guard let score = CandidateFinder.score(query: query, candidate: candidate) else {
           return nil
@@ -1517,34 +1629,36 @@ final class SourceCandidateTests: XCTestCase {
   }
 
   func testSourceCompletionCandidateHasStableShapeAndRanksByToken() throws {
-    let firefox = CandidateFinder.prepare(
-      CandidateFinder.sourceCompletionCandidate("firefox.tabs"))
+    let tabs = CandidateFinder.prepare(
+      CandidateFinder.sourceCompletionCandidate(type: "tabs", providers: ["chrome", "firefox"]))
     let notes = CandidateFinder.prepare(
-      CandidateFinder.sourceCompletionCandidate("notes.notes"))
+      CandidateFinder.sourceCompletionCandidate(type: "notes", providers: []))
 
-    XCTAssertEqual(firefox.kind, CandidateFinder.sourceKind)
-    XCTAssertEqual(firefox.source, "source")
-    XCTAssertEqual(firefox.sourcePayload, "firefox.tabs")
-    XCTAssertEqual(firefox.displayTitle, "[source] @firefox.tabs")
-    XCTAssertNil(firefox.url)
-    XCTAssertFalse(firefox.finishesCommand)
+    XCTAssertEqual(tabs.kind, CandidateFinder.sourceKind)
+    XCTAssertEqual(tabs.source, "type")
+    XCTAssertEqual(tabs.sourcePayload, "tabs")
+    XCTAssertEqual(tabs.displayTitle, "[type] @tabs")
+    XCTAssertEqual(tabs.subtitle, "chrome, firefox")
+    XCTAssertEqual(notes.subtitle, "")
+    XCTAssertNil(tabs.url)
+    XCTAssertFalse(tabs.finishesCommand)
 
-    let query = NormalModeDispatcher.normalizedSearchText("fire")
+    let query = NormalModeDispatcher.normalizedSearchText("ta")
     let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
     let matches = CandidateFinder.scoreMatches(
-      pool: [notes, firefox],
+      pool: [notes, tabs],
       normalizedQuery: query,
       fuzzyScore: fuzzy,
       allowParallel: false)
     let sorted = CandidateFinder.sortedMatches(matches)
-    XCTAssertEqual(sorted.first?.candidate.sourcePayload, "firefox.tabs")
+    XCTAssertEqual(sorted.first?.candidate.sourcePayload, "tabs")
   }
 
   func testCommandInsertionTextUsesCanonicalTokensAndSourceQualifiedTitles() {
     XCTAssertEqual(
       CandidateFinder.commandInsertionText(
-        CandidateFinder.sourceCompletionCandidate("firefox.tabs")),
-      "@firefox.tabs ")
+        CandidateFinder.sourceCompletionCandidate(type: "tabs", providers: [])),
+      "@tabs ")
     XCTAssertEqual(
       CandidateFinder.commandInsertionText(
         candidate(
@@ -1564,15 +1678,36 @@ final class SourceCandidateTests: XCTestCase {
           subtitle: "app",
           bundleIdentifier: "com.apple.MobileSMS")),
       "@apps Messages ")
+    let tab = candidate(
+      kind: .plugin("browser_tab"),
+      source: "Firefox.Tabs",
+      name: "Gmail",
+      subtitle: "browser tab",
+      bundleIdentifier: "org.mozilla.firefox")
     XCTAssertEqual(
-      CandidateFinder.commandInsertionText(
-        candidate(
-          kind: .plugin("browser_tab"),
-          source: "firefox",
-          name: "Gmail",
-          subtitle: "browser tab",
-          bundleIdentifier: "org.mozilla.firefox")),
-      "@firefox Gmail ")
+      CandidateFinder.commandInsertionText(tab, types: ["firefox.tabs": "tabs"]), "@tabs Gmail ")
+    XCTAssertEqual(
+      CandidateFinder.commandInsertionText(tab), "Gmail ",
+      "a source of no known type inserts no scope: its name is not one")
+  }
+
+  /// The line an insert-first row writes filters to that row again: the word
+  /// after `@` is the type the row's source feeds, never the source's name.
+  func testAnInsertedRowIsFoundByTheLineItWrote() {
+    let types = ["menus.items": "menus", "notes.notes": "notes"]
+    let item = candidate(
+      kind: .plugin("menu_item"),
+      source: "menus.items",
+      name: "Edit › Select All",
+      subtitle: "menu item",
+      bundleIdentifier: "")
+    let line = CandidateFinder.commandInsertionText(item, types: types)
+    XCTAssertEqual(line, "@menus Edit › Select All ")
+    let parsed = NormalModeDispatcher.candidateFinderQuery(line)
+    XCTAssertEqual(parsed.scope, .type("menus"))
+    XCTAssertEqual(parsed.scope?.matches(item, types: types), true)
+    XCTAssertTrue(
+      CandidateFinder.selectionFinishes(item, query: line), "the second Return performs the row")
   }
 
   func testCandidateSelectionFinishesForFinalDestinationsMarkedRowsAndExactPrimaryTitle() {
@@ -1590,7 +1725,7 @@ final class SourceCandidateTests: XCTestCase {
       bundleIdentifier: "",
       isLocation: true)
     let browserTab = candidate(
-      kind: CandidateFinder.browserTabKind,
+      kind: .plugin("browser_tab"),
       source: "firefox.tabs",
       name: "Gmail",
       subtitle: "browser tab",
@@ -1601,6 +1736,7 @@ final class SourceCandidateTests: XCTestCase {
       metadata: [
         CandidateMetadataKey.source: "answers",
         CandidateMetadataKey.sourceID: "plugin:answers",
+        CandidateMetadataKey.kind: "query_answer",
       ],
       effect: .copyText("2"))
 
@@ -1613,11 +1749,11 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(CandidateFinder.selectionFinishes(tmux, query: "scr"))
     XCTAssertTrue(CandidateFinder.isFinalDestination(answer))
     XCTAssertEqual(CandidateFinder.prepare(answer).displayTitle, "2")
-    var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
+    var source = CandidateFinder.sourceCompletionCandidate(type: "terminals", providers: [])
     source.metadata[CandidateMetadataKey.finishesCommand] = "1"
     XCTAssertFalse(CandidateFinder.isFinalDestination(source))
-    XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@tmux"))
-    XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@tmux.windows "))
+    XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@term"))
+    XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@terminals "))
     XCTAssertTrue(
       CandidateFinder.selectionFinishes(
         candidate(
@@ -1631,12 +1767,12 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(
       CandidateFinder.selectionFinishes(
         candidate(
-          kind: CandidateFinder.emojiKind,
+          kind: .plugin("emoji"),
           source: "emoji",
           name: "grinning face",
           subtitle: "emoji",
           bundleIdentifier: "",
-          sourcePayload: "😀"),
+          effect: .insertText("😀")),
         query: "grin"))
   }
 
@@ -1662,7 +1798,7 @@ final class SourceCandidateTests: XCTestCase {
       bundleIdentifier: "org.mozilla.firefox",
       isLocation: true)
     let answer = Candidate(title: "2", effect: .copyText("2"))
-    var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
+    var source = CandidateFinder.sourceCompletionCandidate(type: "terminals", providers: [])
     source.metadata[CandidateMetadataKey.finishesCommand] = "1"
 
     XCTAssertTrue(
@@ -1758,7 +1894,7 @@ final class SourceCandidateTests: XCTestCase {
     let noise = [
       CandidateFinder.prepare(
         candidate(
-          kind: CandidateFinder.browserTabKind,
+          kind: .plugin("browser_tab"),
           source: "safari.tabs",
           name: "Numbers | CallRail",
           subtitle: "browser tab",
@@ -1842,7 +1978,8 @@ final class SourceCandidateTests: XCTestCase {
         source: "tmux.windows",
         name: "flash",
         subtitle: "scratch:2 · zsh · ~/workspace/flash",
-        bundleIdentifier: ""))
+        bundleIdentifier: "",
+        isLocation: true))
 
     XCTAssertEqual(
       tmux.displayTitle,
@@ -1858,7 +1995,7 @@ final class SourceCandidateTests: XCTestCase {
       ("tmux", CandidateKind.plugin("tmux_window"), "scratch:1 flash", pid_t(77)),
       ("notes.notes", CandidateKind.plugin("note"), "Flash notes", nil),
       ("bang", CandidateFinder.bangKind, "!google", nil),
-      ("emojis.glyphs", CandidateFinder.emojiKind, "🔥 fire", nil),
+      ("emojis.glyphs", CandidateKind.plugin("emoji"), "🔥 fire", nil),
     ]
     for i in 0..<120 {
       let item = names[i % names.count]
@@ -1892,7 +2029,7 @@ final class SourceCandidateTests: XCTestCase {
     let pool = (0..<900).map { i in
       CandidateFinder.prepare(
         candidate(
-          kind: CandidateFinder.emojiKind,
+          kind: .plugin("emoji"),
           source: "emojis.glyphs",
           name: "emoji sample \(i) fire flame heart",
           subtitle: "emoji",
@@ -1923,54 +2060,67 @@ final class SourceCandidateTests: XCTestCase {
     }
   }
 
-  // MARK: - @<source> narrow
+  // MARK: - @<type> narrow
 
-  func testSourceFilterParsesAtSourceAndPreservesResidualText() {
-    let none = NormalModeDispatcher.candidateFinderSourceFilter("inbox")
-    XCTAssertNil(none.sourceFilter)
+  func testTheQueryParsesAtTypeAndPreservesResidualText() {
+    let none = NormalModeDispatcher.candidateFinderQuery("inbox")
+    XCTAssertNil(none.scope)
     XCTAssertEqual(none.text, "inbox")
 
-    let bare = NormalModeDispatcher.candidateFinderSourceFilter("@firefox.tabs gmail")
-    XCTAssertEqual(bare.sourceFilter, "firefox.tabs")
-    XCTAssertEqual(bare.text, "gmail")
+    let tabs = NormalModeDispatcher.candidateFinderQuery("@Tabs gmail")
+    XCTAssertEqual(tabs.scope, .type("tabs"), "a type reads lowercased")
+    XCTAssertEqual(tabs.text, "gmail")
 
-    // Just a confirmed source with no residual — lists every candidate from
-    // that source.
-    let empty = NormalModeDispatcher.candidateFinderSourceFilter("@emojis.glyphs ")
-    XCTAssertEqual(empty.sourceFilter, "emojis.glyphs")
+    // Just a confirmed type with no residual: every row of that type.
+    let empty = NormalModeDispatcher.candidateFinderQuery("@emojis ")
+    XCTAssertEqual(empty.scope, .type("emojis"))
     XCTAssertEqual(empty.text, "")
 
-    // Bare `@` (no token) is not a source filter.
-    let dangling = NormalModeDispatcher.candidateFinderSourceFilter("@")
-    XCTAssertNil(dangling.sourceFilter)
+    // Bare `@` (no token) is no type.
+    let dangling = NormalModeDispatcher.candidateFinderQuery("@")
+    XCTAssertNil(dangling.scope)
     XCTAssertEqual(dangling.text, "@")
   }
 
-  func testSourceLabelFilterUsesCandidateDottedPrefixSemantics() {
-    XCTAssertTrue(CandidateFinder.sourceLabel("emojis.glyphs", matchesFilter: "emojis"))
-    XCTAssertTrue(CandidateFinder.sourceLabel("emojis.glyphs", matchesFilter: "EMOJIS.GLYPHS"))
-    XCTAssertFalse(CandidateFinder.sourceLabel("notes.notes", matchesFilter: "emojis"))
-  }
-
-  func testCandidateMatchesSourceFilterAcceptsExactAndPrefix() {
-    let firefoxTabs = candidate(
-      kind: .plugin("browser_tab"), source: "firefox.tabs",
-      name: "Inbox", subtitle: "browser tab",
-      bundleIdentifier: "org.mozilla.firefox",
-      url: URL(string: "https://mail.example.test/"))
+  /// `@<type>` reads every source of the type, across apps; a dotted source
+  /// name is no type and matches nothing.
+  func testATypeScopeMatchesEverySourceOfThatTypeAndNothingElse() {
+    let types = [
+      "firefox.tabs": "tabs", "safari.tabs": "tabs", "firefox.history": "history",
+      "chrome.bookmarks": "bookmarks",
+    ]
+    let firefoxTab = candidate(
+      kind: .plugin("browser_tab"), source: "firefox.tabs", name: "Inbox",
+      subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox")
+    let safariTab = candidate(
+      kind: .plugin("browser_tab"), source: "safari.tabs", name: "Docs",
+      subtitle: "browser tab", bundleIdentifier: "com.apple.Safari")
+    let visit = candidate(
+      kind: .plugin("history"), source: "firefox.history", name: "Docs",
+      subtitle: "history", bundleIdentifier: "")
     let app = candidate(
-      kind: .app, source: "core.apps",
-      name: "Safari", subtitle: "app",
+      kind: .app, source: "core.apps", name: "Safari", subtitle: "app",
       bundleIdentifier: "com.apple.Safari")
 
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "firefox.tabs"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "firefox"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(app, filter: "apps"))
+    XCTAssertTrue(SourceScope.type("tabs").matches(firefoxTab, types: types))
+    XCTAssertTrue(SourceScope.type("tabs").matches(safariTab, types: types))
+    XCTAssertFalse(SourceScope.type("tabs").matches(visit, types: types))
+    XCTAssertTrue(SourceScope.type("history").matches(visit, types: types))
+    XCTAssertTrue(SourceScope.type("apps").matches(app, types: types))
     XCTAssertFalse(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "safari"))
+      SourceScope.type("firefox.tabs").matches(firefoxTab, types: types),
+      "a dotted source name is no type")
+    XCTAssertFalse(SourceScope.type("firefox").matches(firefoxTab, types: types))
+    // A bang binds one source exactly.
+    XCTAssertTrue(SourceScope.source("firefox.history").matches(visit, types: types))
+    XCTAssertFalse(SourceScope.source("firefox.history").matches(firefoxTab, types: types))
+  }
+
+  func testATypeScopeMatchesTheDescriptorsOfItsType() {
+    let tabs = CandidateSourceDescriptor(name: "arc.tabs", type: "tabs", kind: .locations)
+    XCTAssertTrue(SourceScope.type("tabs").matches(tabs))
+    XCTAssertFalse(SourceScope.type("history").matches(tabs))
+    XCTAssertTrue(SourceScope.source("ARC.TABS").matches(tabs))
   }
 
   /// Precedence table mirroring the bundled source declarations: tmux
@@ -1979,13 +2129,17 @@ final class SourceCandidateTests: XCTestCase {
   private var bundledPrecedence: CandidateFinder.PrecedenceTable {
     CandidateFinder.PrecedenceTable(
       sources: [
-        CandidateSourceDescriptor(name: "core.apps", kind: .locations, priority: .high),
-        CandidateSourceDescriptor(name: "tmux.windows", kind: .locations, priority: .important),
-        CandidateSourceDescriptor(name: "firefox.tabs", kind: .locations, priority: .high),
-        CandidateSourceDescriptor(name: "safari.tabs", kind: .locations, priority: .high),
-        CandidateSourceDescriptor(name: "projects.locations", kind: .locations),
-        CandidateSourceDescriptor(name: "notes.notes", kind: .standard),
-        CandidateSourceDescriptor(name: "processes.processes", kind: .standard),
+        CandidateSourceDescriptor(
+          name: "core.apps", type: "apps", kind: .locations, priority: .high),
+        CandidateSourceDescriptor(
+          name: "tmux.windows", type: "terminals", kind: .locations, priority: .important),
+        CandidateSourceDescriptor(
+          name: "firefox.tabs", type: "tabs", kind: .locations, priority: .high),
+        CandidateSourceDescriptor(
+          name: "safari.tabs", type: "tabs", kind: .locations, priority: .high),
+        CandidateSourceDescriptor(name: "projects.locations", type: "locations", kind: .locations),
+        CandidateSourceDescriptor(name: "notes.notes", type: "notes", kind: .standard),
+        CandidateSourceDescriptor(name: "processes.processes", type: "processes", kind: .standard),
       ],
       overrides: [:],
       aliveBonus: 10)
@@ -2004,7 +2158,8 @@ final class SourceCandidateTests: XCTestCase {
     finishesCommand: Bool = false,
     isLocation: Bool = false,
     isCurrentLocation: Bool = false,
-    priority: FlashPriority = .normal
+    priority: FlashPriority = .normal,
+    effect: CandidateEffect? = nil
   ) -> Candidate {
     Candidate(
       kind: kind,
@@ -2020,7 +2175,8 @@ final class SourceCandidateTests: XCTestCase {
       finishesCommand: finishesCommand,
       isLocation: isLocation,
       isCurrentLocation: isCurrentLocation,
-      priority: priority)
+      priority: priority,
+      effect: effect)
   }
 }
 

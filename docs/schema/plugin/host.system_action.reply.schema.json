@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.system_action.reply.schema.json",
+  "title": "host.system_action reply",
+  "description": "Host to plugin: macOS took the request, or why the host did not make it or it failed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "definitions.schema.json#/definitions/ok"
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

@@ -1,15 +1,23 @@
 import AppKit
 import FlashCore
 
+/// The inspector snapshot's configuration-only parts.
+struct InspectorConfigSnapshot {
+  let config: Any
+  let sources: [String: Any]
+  let mappingRows: [[String: String]]
+}
+
 /// The HTTP inspector's app state: what `/api/state` and the `/api/events`
 /// stream carry, and the changes that push it. The inspector has no clock;
 /// `DebugServer.stateDidChange` coalesces a burst of these into one snapshot,
 /// taken only while someone can read it.
 extension AppDelegate {
   /// Every change the state reflects calls this (main thread); a no-op while
-  /// the inspector is off.
-  func debugStateDidChange() {
-    debugServer?.stateDidChange()
+  /// the inspector is off. A change that can move only some sections names
+  /// them, so the snapshot it causes rebuilds no more than that.
+  func debugStateDidChange(_ scope: DebugServer.StateScope = .all) {
+    debugServer?.stateDidChange(scope)
   }
 
   func configureDebugServer(for cfg: Config) {
@@ -27,7 +35,7 @@ extension AppDelegate {
   func startDebugServer(host: String, port: Int) {
     stopDebugServer()
     let server = DebugServer(
-      host: host, port: port,
+      host: host, port: port, accessToken: helpAccessToken,
       clipboardHTTP: { [weak self] method, id, completion in
         guard let self else {
           completion(
@@ -35,6 +43,14 @@ extension AppDelegate {
           return
         }
         self.serveClipboardHTTP(method: method, id: id, completion: completion)
+      },
+      clipboardPinHTTP: { [weak self] pinned, id, completion in
+        guard let self else {
+          completion(
+            "503 Service Unavailable", "application/json; charset=utf-8", Data("{}".utf8))
+          return
+        }
+        self.serveClipboardPinHTTP(pinned: pinned, id: id, completion: completion)
       },
       clipboardHistoryHTTP: { [weak self] offset, completion in
         guard let self else {
@@ -44,14 +60,18 @@ extension AppDelegate {
         }
         self.serveClipboardHistoryHTTP(offset: offset, completion: completion)
       },
-      configHTTP: { [weak self] method, purge, body, completion in
+      configHTTP: { [weak self] operation, body, completion in
         guard let self else {
           completion(
             "503 Service Unavailable", "application/json; charset=utf-8",
             Self.configJSON(["error": "unavailable"]))
           return
         }
-        self.serveConfigHTTP(method: method, purge: purge, body: body, completion: completion)
+        self.serveConfigHTTP(operation: operation, body: body, completion: completion)
+      },
+      telemetryHTTP: { [store = telemetry.store] in store.snapshotJSON() },
+      sectionsProvider: { [weak self] sections in
+        self?.debugStateJSON(sections: sections) ?? [:]
       },
       stateProvider: { [weak self] in
         self?.debugStateJSON() ?? [:]
@@ -61,25 +81,69 @@ extension AppDelegate {
     server.start()
   }
 
+  /// Replace the configuration file's text. A dotfiles checkout links
+  /// `flash.toml` into place: the atomic write renames over its target, so
+  /// the link survives and the file it names carries the new text.
+  static func writeConfig(_ text: String, to url: URL) throws {
+    let target = url.resolvingSymlinksInPath()
+    try FileManager.default.createDirectory(
+      at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(text.utf8).write(to: target, options: .atomic)
+  }
+
+  /// Parses the editor's text for `POST /api/config/check`, one at a time
+  /// and never on main: a parse takes tens of milliseconds.
+  private static let configCheckQueue = DispatchQueue(
+    label: "flash.inspector.config-check", qos: .utility)
+
   /// `GET /api/config` reads the file Flash loaded. `PUT` replaces it after
   /// the body parses as TOML. `POST /api/config/purge` returns the editor
-  /// text with bundled defaults removed and does not write.
+  /// text with bundled defaults removed and does not write. `POST
+  /// /api/config/check` returns what `flash config check` reports for the
+  /// editor text as that file, and does not write either.
   func serveConfigHTTP(
-    method: String, purge: Bool, body: Data,
+    operation: DebugServer.ConfigOperation, body: Data,
     completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
   ) {
     let type = "application/json; charset=utf-8"
+    if operation == .check {
+      // The server's completion runs on any queue (`ConfigHTTPHandler`).
+      nonisolated(unsafe) let completion = completion
+      Self.configCheckQueue.async {
+        guard let text = String(data: body, encoding: .utf8) else {
+          completion(
+            "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
+          return
+        }
+        let url = ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment)
+        let rows = ConfigCheck.rows(
+          fileURL: url, text: text, defaultLayer: ConfigLoader.embeddedDefaultLayer(),
+          pluginSettings: .bundled())
+        completion(
+          "200 OK", type,
+          Self.configJSON([
+            "path": url.path,
+            "diagnostics": rows.map { row -> [String: Any] in
+              var object: [String: Any] = ["path": row.path, "message": row.message]
+              object["line"] = row.line
+              object["column"] = row.column
+              return object
+            },
+          ]))
+      }
+      return
+    }
     DispatchQueue.main.async { [weak self] in
       guard self != nil else {
         completion("503 Service Unavailable", type, Self.configJSON(["error": "unavailable"]))
         return
       }
       let url = ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment)
-      switch (method, purge) {
-      case ("GET", false):
+      switch operation {
+      case .read:
         let toml = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         completion("200 OK", type, Self.configJSON(["path": url.path, "toml": toml]))
-      case ("PUT", false):
+      case .write:
         guard let text = String(data: body, encoding: .utf8) else {
           completion(
             "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
@@ -90,9 +154,7 @@ extension AppDelegate {
           return
         }
         do {
-          try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-          try Data(text.utf8).write(to: url, options: .atomic)
+          try Self.writeConfig(text, to: url)
         } catch {
           completion(
             "500 Internal Server Error", type,
@@ -100,7 +162,7 @@ extension AppDelegate {
           return
         }
         completion("200 OK", type, Self.configJSON(["ok": true]))
-      case ("POST", true):
+      case .purge:
         guard let text = String(data: body, encoding: .utf8) else {
           completion(
             "400 Bad Request", type, Self.configJSON(["error": "configuration must be UTF-8"]))
@@ -114,9 +176,8 @@ extension AppDelegate {
         }
         let toml = ConfigPurge.purgeDefaults(in: text, defaults: defaults)
         completion("200 OK", type, Self.configJSON(["toml": toml]))
-      default:
-        completion(
-          "405 Method Not Allowed", type, Self.configJSON(["error": "method not allowed"]))
+      case .check:
+        break  // Answered above, off main.
       }
     }
   }
@@ -137,16 +198,18 @@ extension AppDelegate {
       }
       self.clipboardHistoryStore.page(offset: offset) { [weak self] page in
         let type = "application/json; charset=utf-8"
-        guard let page, let data = try? JSONEncoder().encode(page) else {
-          completion("503 Service Unavailable", type, Data("{}".utf8))
-          return
-        }
-        guard let self else {
+        guard let page, let self else {
           completion("503 Service Unavailable", type, Data("{}".utf8))
           return
         }
         self.clipboardImageMimes.remember(page.entries, offset: offset)
-        completion("200 OK", type, data)
+        // A page carries up to its byte budget of text: encode it off main.
+        DispatchQueue.global(qos: .userInitiated).async {
+          guard let data = try? JSONEncoder().encode(page) else {
+            return completion("503 Service Unavailable", type, Data("{}".utf8))
+          }
+          completion("200 OK", type, data)
+        }
       }
     }
   }
@@ -216,17 +279,66 @@ extension AppDelegate {
     }
   }
 
+  /// `PUT /api/clipboard/<id>/pin` pins the entry, `DELETE` unpins it: 404
+  /// for no such entry, 409 with the reason when pins would fill the history.
+  func serveClipboardPinHTTP(
+    pinned: Bool, id: String,
+    completion: @escaping (_ status: String, _ contentType: String, _ body: Data) -> Void
+  ) {
+    let type = "application/json; charset=utf-8"
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        completion("503 Service Unavailable", type, Self.configJSON(["error": "unavailable"]))
+        return
+      }
+      self.clipboardHistoryStore.setPinned(id: id, pinned) { result in
+        switch result {
+        case .changed, .unchanged:
+          completion("200 OK", type, Self.configJSON(["ok": true]))
+        case .missing:
+          completion("404 Not Found", type, Self.configJSON(["error": "not found"]))
+        case .full(let capacity):
+          completion(
+            "409 Conflict", type,
+            Self.configJSON(["error": Self.clipboardPinsFullMessage(capacity)]))
+        case .failed:
+          completion(
+            "500 Internal Server Error", type,
+            Self.configJSON(["error": "could not write clipboard history"]))
+        }
+      }
+    }
+  }
+
   static func clipboardDataDir() -> URL {
     ClipboardHistoryStore.defaultDirectory()
   }
 
   /// The components whose changes the state reads report them here; wired
-  /// once at launch, and a no-op while the inspector is off.
+  /// once at launch. Inspector publication is a no-op while it is off; popup
+  /// visibility also scopes the live status clock.
+  ///
+  /// The status bar republishes as its values change, several times a second
+  /// with a clock or a graph on it: its snapshot rebuilds only the bar and
+  /// the popup anchors it places, not the mappings, commands and plugins.
   func wireInspectorChangeSources() {
-    overlay.statusBarDidChange = { [weak self] in self?.debugStateDidChange() }
-    overlay.statusPopupController.didChange = { [weak self] in self?.debugStateDidChange() }
-    widgetController?.didChange = { [weak self] in self?.debugStateDidChange() }
+    overlay.statusBarDidChange = { [weak self] in
+      self?.debugStateDidChange(.sections(Self.statusBarSections))
+    }
+    overlay.statusPopupController.didChange = { [weak self] in
+      guard let self else { return }
+      let popups = self.overlay.statusPopupController
+      self.statusBarController?.setPopups(
+        shown: popups.visibleNames, live: Set([popups.previewName].compactMap { $0 }))
+      self.debugStateDidChange(.sections(["terminals"]))
+    }
+    widgetController?.didChange = { [weak self] in
+      self?.debugStateDidChange(.sections(["widgets"]))
+    }
   }
+
+  /// What a status bar publish can move: the bar, and the popup anchors it lays out.
+  static let statusBarSections: Set<String> = ["statusbar", "terminals"]
 
   /// Adopt `server` along with the observers only the inspector needs.
   func attachDebugServer(_ server: DebugServer) {
@@ -251,7 +363,7 @@ extension AppDelegate {
   /// | `snapshot_at_unix_ms` | Stamped on each snapshot |
   /// | `runtime.version`, `build`, `pid`, `started_at_unix_ms`, `config_path` | Fixed for the process (uptime is derived client-side) |
   /// | `runtime.accessibility_trusted` | The system's Accessibility trust-list notification; the grant starting the tap |
-  /// | `runtime.keyboard_capture_active`, `secure_input` | The tap installing (`keyboardCaptureTap`); `noteSecureInput` |
+  /// | `runtime.keyboard_capture_active`, `secure_input` | The tap installing (`keyboardCaptureTap`) or suspending (`applyModeOverlay`); `noteSecureInput` |
   /// | `runtime.advanced_mode`, `mode`, `overlay` | `applyModeOverlay`; `refreshOverlayInputRouting` |
   /// | `runtime.config_error`, `config`, `config_sources`, `docs` | Config reload (`configureDebugServer`); plugin state for plugin topics |
   /// | `commands`, `plugins` | `pluginStateDidChange` (lifecycle, status publishes, logs, reloads) |
@@ -261,20 +373,82 @@ extension AppDelegate {
   /// | `keyboard` | Config reload (layout, alphabet, grid keys); `hintSession` (what the keys do now) |
   /// | `clipboard` | `clipboardEntries` (the core clipboard history page) |
   /// | `statusbar`, `terminals`, `widgets` | Status model publishes and menu-bar yielding; popup presentation and terminal sessions; widget placement; their windows' notifications (below) |
+  /// | `monitors` | `monitorsDidChange`: a monitor evaluated to a new value, message or state, alerted, or its definition changed |
+  /// | `telemetry` | `TelemetryCoordinator.configure`; the receiver's and exporter's status changes and each received request (`TelemetryStatePush`, one push per main turn) |
   /// | `windows` | Flash's windows moving, resizing, ordering in or out, changing screen or key status, or closing; the active Space |
   ///
   /// Plugin `memory_bytes` and `cpu_time_ms` and the status bar's in-flight
   /// animation opacities have no change notification: they are sampled with
   /// every snapshot and on an explicit `/api/state?refresh=1`.
-  func debugStateJSON() -> [String: Any] {
-    let configJSON: Any
+  ///
+  /// Built on main, so the snapshot names itself to the watchdog and logs
+  /// its cost (`[latency] inspector_snapshot`), and carries previews rather
+  /// than values: clipboard text, HTML and plugin command lists live behind
+  /// their own endpoints and the top-level `commands`.
+  ///
+  /// With `sections`, only those (and the snapshot's time) are rebuilt, for
+  /// a change that named them; the server keeps the rest of the last
+  /// snapshot, plugin samples included.
+  func debugStateJSON(sections: Set<String>? = nil) -> [String: Any] {
+    MainThreadActivity.note("inspector_snapshot")
+    let startedAt = DispatchTime.now()
+    let state = sections.map(buildDebugStateSections) ?? buildDebugStateJSON()
+    let elapsedMs =
+      Double(DispatchTime.now().uptimeNanoseconds &- startedAt.uptimeNanoseconds) / 1_000_000
+    FlashLog.trace(
+      String(format: "[latency] inspector_snapshot ms=%.1f", elapsedMs),
+      fields: [
+        "sections": sections.map { $0.sorted().joined(separator: ",") } ?? "all",
+        "clipboard": "\(clipboardEntries.count)",
+        "plugins": "\((state["plugins"] as? [Any])?.count ?? 0)",
+        "mappings": "\(((state["mappings"] as? [String: Any])?["rows"] as? [Any])?.count ?? 0)",
+      ])
+    return state
+  }
+
+  /// The sections a scoped change names, built as the whole snapshot builds
+  /// them. Any other name rebuilds the whole state: a section is never
+  /// silently left out.
+  private func buildDebugStateSections(_ sections: Set<String>) -> [String: Any] {
+    var state: [String: Any] = [
+      "snapshot_at_unix_ms": Int64(Date().timeIntervalSince1970 * 1000)
+    ]
+    for section in sections {
+      switch section {
+      case "statusbar": state[section] = overlay?.statusBarDiagnostics() ?? [:]
+      case "terminals": state[section] = statusTerminalDebugState()
+      case "widgets": state[section] = widgetController?.diagnostics() ?? [:]
+      default: return buildDebugStateJSON()
+      }
+    }
+    return state
+  }
+
+  /// The core command catalog is built from static tables: once.
+  static let inspectorCoreCommands = NormalModeDispatcher.coreCommandCatalog()
+
+  /// What a snapshot derives from the configuration alone — about half of
+  /// a snapshot's own cost — built once per `config`, whose assignment
+  /// drops it.
+  func inspectorConfigSnapshot() -> InspectorConfigSnapshot {
+    if let cached = inspectorConfigCache { return cached }
+    let json: Any
     if let data = config.resolvedConfigJSON.data(using: .utf8),
       let object = try? JSONSerialization.jsonObject(with: data)
     {
-      configJSON = object
+      json = object
     } else {
-      configJSON = config.resolvedConfigJSON
+      json = config.resolvedConfigJSON
     }
+    let snapshot = InspectorConfigSnapshot(
+      config: json, sources: config.resolvedConfigSources(),
+      mappingRows: NormalModeDispatcher.mappingsJSON(mode: config.mode))
+    inspectorConfigCache = snapshot
+    return snapshot
+  }
+
+  private func buildDebugStateJSON() -> [String: Any] {
+    let configSnapshot = inspectorConfigSnapshot()
     let app = NSWorkspace.shared.frontmostApplication
     let focusedPID: Any = app.map { Int($0.processIdentifier) } ?? NSNull()
     let mappingApp = currentNonFlashRunningApplication() ?? app
@@ -283,21 +457,24 @@ extension AppDelegate {
     // Before launch wiring (tests) there is no monitor or registry to ask.
     let registry: SourceRegistry? = self.registry
     let appContext = mappingApp.flatMap { app in monitor.flatMap { $0.makeContext(for: app) } }
-    let actionRows = Self.actionResolutionRows(
-      resolutions: pluginManager.actionBindingResolutions(in: mappingContext)
-    ) { action in
+    let commandRows = Self.commandResolutionRows(
+      resolutions: pluginManager.commandBindingResolutions(in: mappingContext)
+    ) { name in
       guard let registry, let appContext else { return [] }
-      return registry.claimants(of: action, in: appContext)
+      return registry.claimants(of: name, in: appContext)
     }
     let bundleInfo = Bundle.main.infoDictionary ?? [:]
     let secureInput = secureInputObserved
     let statuses = pluginManager.pluginStatuses()
-    var commands = NormalModeDispatcher.coreCommandCatalog()
+    var commands = Self.inspectorCoreCommands
     for status in statuses {
       for command in status.commands {
+        // The arguments its manifest entry declares, as a core command's.
+        let arguments = command.arguments?.syntax ?? ""
         commands.append([
           "name": ":\(command.command) \(command.subcommand)",
-          "syntax": ":\(command.command) \(command.subcommand)",
+          "syntax": ":\(command.command) \(command.subcommand)"
+            + (arguments.isEmpty ? "" : " " + arguments),
           "command": command.command,
           "subcommand": command.subcommand,
           "description": command.description,
@@ -306,22 +483,17 @@ extension AppDelegate {
         ])
       }
     }
-    // Docs are Markdown in `HelpTopic.body`; the inspector's Docs tab renders
-    // them (and `:help [topic]` deep-links there). Ship the raw Markdown so the
-    // browser owns rendering, collapsibles, and topic navigation.
-    let docs = HelpDocs.allTopics(
-      config: config,
-      showModes: modeBadgeEnabled,
-      pluginTopics: pluginManager.pluginHelpTopics()
+    // The manual comes from the bundle (`/api/docs`); the snapshot carries
+    // only the plugins' own help topics, as raw Markdown the browser renders
+    // at `/docs/<topic>`.
+    let docs = HelpDocs.pluginTopics(
+      pluginManager.pluginHelpTopics(), reserved: manualTopicNames
     ).map { topic -> [String: Any] in
       [
         "name": topic.name,
         "title": topic.title,
         "summary": topic.summary,
         "body": topic.body,
-        "aliases": topic.aliases,
-        "group": topic.group,
-        "manual": topic.manual.map { HelpDocs.manual($0) } as Any,
       ]
     }
     return [
@@ -332,7 +504,8 @@ extension AppDelegate {
         "pid": ProcessInfo.processInfo.processIdentifier,
         "started_at_unix_ms": Int64(runtimeStartedAt.timeIntervalSince1970 * 1000),
         "accessibility_trusted": PermissionCheck.isAccessibilityTrusted,
-        "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput,
+        "keyboard_capture_active": keyboardCaptureTap != nil && !secureInput
+          && !frontmostAppIsFullScreen,
         "secure_input": secureInput,
         "advanced_mode": modeBadgeEnabled,
         "config_path": ConfigLoader.resolvePath(
@@ -340,8 +513,8 @@ extension AppDelegate {
         ).path,
         "config_error": config.loadingErrorAlertMessage as Any? ?? NSNull(),
       ] as [String: Any],
-      "config": configJSON,
-      "config_sources": config.resolvedConfigSources(),
+      "config": configSnapshot.config,
+      "config_sources": configSnapshot.sources,
       "commands": commands,
       "clipboard": clipboardEntries.map(Self.clipboardStateObject),
       "clipboard_registers": registers.snapshot().map { entry in
@@ -352,9 +525,9 @@ extension AppDelegate {
       "docs": docs,
       "mappings": [
         "normal_leader": config.mode.normalLeader ?? "",
-        "rows": NormalModeDispatcher.mappingsJSON(mode: config.mode),
+        "rows": configSnapshot.mappingRows,
         "effective_rows": NormalModeDispatcher.mappingsJSON(mode: effectiveMappings),
-        "actions": actionRows,
+        "commands": commandRows,
         "bundle_id": mappingApp?.bundleIdentifier as Any? ?? NSNull(),
         "localized_name": mappingApp?.localizedName as Any? ?? NSNull(),
       ] as [String: Any],
@@ -363,7 +536,8 @@ extension AppDelegate {
         "localized_name": app?.localizedName ?? NSNull(),
         "pid": focusedPID,
       ],
-      "mode": String(describing: modeStore.mode.label),
+      // A layer by its own name, as `flash resident status` reports it.
+      "mode": modeStore.mode.layer?.name ?? String(describing: modeStore.mode.label),
       "hint_session": FlashStatusReport.hintSessionPhase(
         route: hintSession.keyRoute, active: hintSession.isActive,
         discovering: activationInFlight),
@@ -373,7 +547,7 @@ extension AppDelegate {
           "label": hint.label,
           "accessibility_label": hint.target.accessibilityLabel ?? "",
           "role": hint.target.role ?? "",
-          "enters_insert_mode": hint.target.entersInsertMode,
+          "text_input": hint.target.isTextInput,
           "frame": [
             "x": hint.target.frame.origin.x,
             "y": hint.target.frame.origin.y,
@@ -401,46 +575,47 @@ extension AppDelegate {
         ]
       },
       "plugins": statuses.map(\.jsonObject),
+      "monitors": monitorsJSON(),
+      "telemetry": telemetry.stateJSON(for: config.telemetry),
     ]
   }
 }
 
 extension AppDelegate {
-  /// One row per action for the focused app, in the order dispatch tries
-  /// them: `claimed_by` lists the sources (and Flash's own step) that get
-  /// first try, then `binding` is what runs otherwise and `source` who
+  /// One row per binding key for the focused app, in the order dispatch
+  /// tries them: `claimed_by` lists the sources (and Flash's own step) that
+  /// get first try, then `binding` is what runs otherwise and `source` who
   /// declared it — a plugin id, `flash` for Flash's own scrolling, or null
   /// when nothing happens.
-  static func actionResolutionRows(
-    resolutions: [(SourceActionName, ActionBindingIndex.Resolution)],
-    claimants: (SourceAction) -> [String]
+  static func commandResolutionRows(
+    resolutions: [(CommandBindingKey, CommandBindingIndex.Resolution)],
+    claimants: (CommandName) -> [String]
   ) -> [[String: Any]] {
-    let byName = Dictionary(resolutions, uniquingKeysWith: { first, _ in first })
-    return SourceActionName.allCases.map { name in
-      let action =
-        name == .appReloadForce ? .reload(force: true) : SourceAction.byWireName[name.rawValue]
-      var claimedBy =
-        action.map(claimants)?.map {
-          "source:" + ($0.hasPrefix("plugin:") ? String($0.dropFirst("plugin:".count)) : $0)
-        } ?? []
-      if name == .windowClose { claimedBy.append("flash:close_button") }
+    let byKey = Dictionary(resolutions, uniquingKeysWith: { first, _ in first })
+    let windowClose = CommandName("window", "close")
+    return URLEventHandler.sourceCommandBindingKeys.map { key in
+      var claimedBy = claimants(key.name).map {
+        "source:" + ($0.hasPrefix("plugin:") ? String($0.dropFirst("plugin:".count)) : $0)
+      }
+      if key.name == windowClose { claimedBy.append("flash:close_button") }
       var binding: Any = NSNull()
       var source: Any = NSNull()
-      if let resolution = byName[name] {
+      if let resolution = byKey[key] {
         binding = resolution.spec.display
         source = resolution.pluginID
-      } else if let flashOwned = SourceActionFallback.flashOwned[name] {
+      } else if key.flags.isEmpty, let flashOwned = SourceCommandFallback.flashOwned[key.name] {
         binding = flashOwned.inspectorDescription
         source = "flash"
       }
       return [
-        "action": name.rawValue, "binding": binding, "source": source, "claimed_by": claimedBy,
+        "command": key.description, "binding": binding, "source": source,
+        "claimed_by": claimedBy,
       ]
     }
   }
 }
 
-extension SourceActionFallback {
+extension SourceCommandFallback {
   /// Flash's own step as the inspector names it.
   fileprivate var inspectorDescription: String {
     switch self {
@@ -461,7 +636,7 @@ extension HintSession {
         new.label == old.label && new.target.frame == old.target.frame
           && new.target.role == old.target.role
           && new.target.accessibilityLabel == old.target.accessibilityLabel
-          && new.target.entersInsertMode == old.target.entersInsertMode
+          && new.target.isTextInput == old.target.isTextInput
       }
   }
 }

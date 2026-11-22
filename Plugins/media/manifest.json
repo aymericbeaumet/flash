@@ -2,85 +2,67 @@
   "id": "media",
   "name": "Media",
   "version": "0.1.0",
-  "description": "System media controls, now-playing info, and audio device selection.",
-  "sandbox": {
-    "exec": [
-      "/usr/bin/osascript"
-    ],
-    "appleevents": true
-  },
+  "description": "The output volume and its mute, the default audio input and output, and what the media apps are playing: `volume up`, `volume down`, `volume mute`, `audio input`, `audio output` and `media status`.",
   "exec": [
     "./flash-plugin-media"
   ],
   "commands": [
     {
-      "command": "media",
-      "subcommand": "play",
-      "description": "Resume playback in the active media app"
+      "command": "volume",
+      "subcommand": "up",
+      "description": "Raise the output volume one step"
     },
     {
-      "command": "media",
-      "subcommand": "pause",
-      "description": "Pause playback in the active media app"
+      "command": "volume",
+      "subcommand": "down",
+      "description": "Lower the output volume one step"
     },
     {
-      "command": "media",
-      "subcommand": "toggle",
-      "description": "Toggle play/pause in the active media app"
-    },
-    {
-      "command": "media",
-      "subcommand": "next",
-      "description": "Skip to next track"
-    },
-    {
-      "command": "media",
-      "subcommand": "previous",
-      "description": "Skip to previous track"
-    },
-    {
-      "command": "media",
-      "subcommand": "volumeup",
-      "description": "Raise system output volume"
-    },
-    {
-      "command": "media",
-      "subcommand": "volumedown",
-      "description": "Lower system output volume"
-    },
-    {
-      "command": "media",
+      "command": "volume",
       "subcommand": "mute",
-      "description": "Toggle system output mute"
+      "description": "Mute or unmute the output"
     },
     {
-      "command": "media",
-      "subcommand": "get",
-      "description": "Report the currently playing track"
+      "command": "audio",
+      "subcommand": "input",
+      "description": "List the audio inputs, or select one with --device",
+      "args": [
+        {
+          "name": "device",
+          "type": "string",
+          "description": "The input to select, by name or UID"
+        }
+      ]
+    },
+    {
+      "command": "audio",
+      "subcommand": "output",
+      "description": "List the audio outputs, or select one with --device",
+      "args": [
+        {
+          "name": "device",
+          "type": "string",
+          "description": "The output to select, by name or UID"
+        }
+      ]
     },
     {
       "command": "media",
       "subcommand": "status",
-      "description": "Report which media apps are running and their state"
-    },
-    {
-      "command": "media",
-      "subcommand": "input",
-      "description": "List or select the default audio input device by name or UID"
-    },
-    {
-      "command": "media",
-      "subcommand": "output",
-      "description": "List or select the default audio output device by name or UID"
-    },
-    {
-      "command": "media",
-      "subcommand": "run",
-      "description": "Run osascript with raw arguments"
+      "description": "Show what the media apps are playing and the volume"
     }
   ],
+  "listen": [
+    "core:apps.changed"
+  ],
   "capabilities": [
-    "media_keys",
-    "audio_devices"
+    "audio_devices",
+    "apple_events"
+  ],
+  "apple_events_targets": [
+    "com.spotify.client",
+    "com.apple.Music",
+    "com.apple.TV",
+    "com.apple.podcasts"
   ]
 }

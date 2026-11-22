@@ -11,8 +11,8 @@ bg = "#2E3440B3"
 interval = 10 # seconds between #() re-runs
 template = """
 #[fg=#A3BE8C bold]tmux#[default] \
-#{?flash.plugin.tmux.session,#{flash.plugin.tmux.session}:#{flash.plugin.tmux.window} \
-#[fg=#81A1C1]#{flash.plugin.tmux.pane},#[fg=#4C566A]no attached client}
+#{?flash.plugin.terminals.session,#{flash.plugin.terminals.session}:#{flash.plugin.terminals.window} \
+#[fg=#81A1C1]#{flash.plugin.terminals.pane},#[fg=#4C566A]no attached client}
 #[fg=#EBCB8B bold]git#[default]  #(git -C ~/src/project branch --show-current 2>/dev/null) \
 #[fg=#BF616A]#(git -C ~/src/project status --porcelain 2>/dev/null | wc -l | tr -d ' ') changed
 #[fg=#4C566A]#{R:─,#{flash.widget.columns}}#[default]

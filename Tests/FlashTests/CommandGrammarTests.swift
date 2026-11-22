@@ -1,0 +1,426 @@
+import FlashCore
+import Foundation
+import XCTest
+
+@testable import flash
+
+/// Every Flash command is `flash <topic> <action>`: two words of
+/// `[a-z][a-z0-9_]*`, the topic first. Core commands, CLI queries and bundled
+/// plugin commands share the shape and one topic namespace.
+final class CommandGrammarTests: XCTestCase {
+  private static let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+  func testEveryCoreCommandIsATopicAndAnAction() {
+    let keys = URLEventHandler.commandTableKeys
+    XCTAssertFalse(keys.isEmpty)
+    for key in keys {
+      XCTAssertNotNil(CommandName(key), "\(key) is not `<topic> <action>`")
+    }
+    XCTAssertEqual(URLEventHandler.commandNames.count, keys.count)
+    for query in FlashQuery.allCases {
+      XCTAssertNotNil(CommandName(query.name.description), query.name.description)
+      XCTAssertTrue(URLEventHandler.isTopic(query.name.topic), query.name.description)
+      XCTAssertNil(
+        URLEventHandler.summary(of: query.name), "\(query.name) is a query, not a command")
+    }
+    XCTAssertTrue(
+      URLEventHandler.commandNames.allSatisfy {
+        !(URLEventHandler.summary(of: $0) ?? "").isEmpty
+      })
+  }
+
+  func testWordsAreLowercaseIdentifiers() {
+    for word in ["tab", "half_page_up", "f1", "look_up"] {
+      XCTAssertTrue(CommandName.isWord(word), word)
+    }
+    for word in ["", "Tab", "1tab", "_tab", "tab-next", "tab next", "tab.next", "é"] {
+      XCTAssertFalse(CommandName.isWord(word), word)
+    }
+    XCTAssertNil(CommandName("tab"))
+    XCTAssertNil(CommandName("tab next now"))
+    XCTAssertNil(CommandName("tab  next"))
+    XCTAssertEqual(CommandName("tab next"), CommandName("tab", "next"))
+  }
+
+  /// Arguments for the commands that cannot run bare.
+  private static let sampleArguments: [String: [String: String]] = [
+    "alert confirm": ["prompt": "Close it?", "command": "tab close"],
+    "alert show": ["message": "hello"],
+    "app open": ["name": "Safari"],
+    "clipboard delete": ["id": String(repeating: "a", count: 32)],
+    "clipboard pin": ["id": String(repeating: "a", count: 32)],
+    "clipboard restore": [
+      "id": String(repeating: "a", count: 32), "paste": "true", "plain": "true",
+    ],
+    "clipboard unpin": ["id": String(repeating: "a", count: 32)],
+    "cursor line": ["index": "5"],
+    "key arrow": ["direction": "left"],
+    "key function": ["key": "f1"],
+    "key send": ["keys": "cmd+t"],
+    "key sequence": ["keys": "g,i"],
+    "key system": ["key": "brightness_down"],
+    "mark jump": ["letter": "a"],
+    "mark set": ["letter": "a"],
+    "menu choose": ["file": "/tmp/branches.txt"],
+    "menu press": ["path": "File,Print…"],
+    "macro record": ["register": "a"],
+    "status clear": ["name": "workspace"],
+    "status refresh": ["name": "workspace"],
+    "status set": ["name": "workspace", "value": "3"],
+    "logs write": ["message": "hello"],
+    "metrics record": ["name": "build.duration", "value": "42"],
+    "notify send": ["title": "Build done"],
+    "mode layer": ["name": "resize"],
+    "mouse button": ["state": "down"],
+    "mouse gesture": ["fingers": "3", "motion": "swipe_up"],
+    "mouse nudge": ["direction": "down"],
+    "mouse position": ["action": "save"],
+    "mouse step": ["direction": "up"],
+    "tile join": ["direction": "left"],
+    "tile layout": ["type": "accordion"],
+    "tile move": ["direction": "right"],
+    "tile resize": ["dimension": "width", "amount": "-50"],
+    "tile swap": ["direction": "up"],
+    "window focus": ["direction": "left"],
+    "window move": ["position": "lefthalf"],
+    "workspace move_to_monitor": ["direction": "next"],
+    "workspace move_window": ["name": "2"],
+    "workspace switch": ["name": "web"],
+  ]
+
+  /// Every command parses, and writes itself back as the same two words
+  /// through a mapping and the command line.
+  func testEveryCommandRoundTripsThroughItsArgv() throws {
+    for name in URLEventHandler.commandNames {
+      let args = Self.sampleArguments[name.description] ?? [:]
+      let command = try XCTUnwrap(
+        URLEventHandler.parse(topic: name.topic, action: name.action, args: args),
+        "\(name) \(args)")
+      XCTAssertEqual(Array(command.argv.prefix(3)), ["flash", name.topic, name.action])
+      XCTAssertEqual(
+        parseMappingCommand(argv: command.argv), .flashCommand(command), name.description)
+      XCTAssertEqual(
+        NormalModeDispatcher.commandLineCoreCommand(
+          ":" + command.argv.dropFirst().joined(separator: " ")),
+        command, name.description)
+    }
+    XCTAssertEqual(
+      Set(Self.sampleArguments.keys).subtracting(URLEventHandler.commandNames.map(\.description)),
+      [], "every sample names a command")
+  }
+
+  /// One word is never a canonical command: `["flash", "tab_next"]` and
+  /// `["flash", "quit"]` are unknown in a mapping. What is typed (`:quit`,
+  /// `flash quit`) reads vim's ex commands instead (`CommandInvocationTests`).
+  func testOneWordFormsAreRejected() {
+    for word in ["tab_next", "quit", "enter_normal_mode", "mouse_target", "status", "tab"] {
+      XCTAssertNil(parseMappingCommand(argv: ["flash", word]), word)
+      XCTAssertNil(NormalModeDispatcher.commandLineCoreCommand(":" + word), word)
+    }
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "tab", "next", "now"]))
+  }
+
+  /// Every command that asks the focused app for something is a source
+  /// command: its name is a key of the table, and every binding key a plugin
+  /// may declare is that name plus the bool flags that still yield one.
+  func testSourceCommandsAreCommandsOfTheTable() throws {
+    let names = URLEventHandler.sourceCommandNames
+    XCTAssertEqual(names.count, 112)
+    XCTAssertTrue(names.isSubset(of: Set(URLEventHandler.commandNames)))
+    for name in names {
+      let command = try XCTUnwrap(
+        URLEventHandler.parse(topic: name.topic, action: name.action, args: [:]), "\(name)")
+      XCTAssertEqual(command.sourceCommand?.name, name)
+      XCTAssertEqual(command.sourceCommand?.arguments, [])
+      XCTAssertEqual(command.sourceCommand?.bindingKey, name.description)
+    }
+    for name in ["app quit", "app open", "mode insert", "window move", "scroll down", "key send"] {
+      XCTAssertFalse(names.contains(CommandName(name)!), "\(name) is Flash's own")
+    }
+    let keys = URLEventHandler.sourceCommandBindingKeys
+    XCTAssertEqual(keys.count, 114)
+    XCTAssertEqual(keys, keys.sorted(), "rows and the inspector read them in one order")
+    XCTAssertEqual(Set(keys.map(\.name)), names)
+    XCTAssertEqual(
+      keys.filter { !$0.flags.isEmpty }.map(\.description),
+      ["app reload --force", "window new --private"])
+    XCTAssertTrue(keys.contains(CommandBindingKey("tab select")!))
+    XCTAssertEqual(
+      URLEventHandler.parse(topic: "app", action: "reload", args: ["force": "1"])?.sourceCommand?
+        .bindingKey, "app reload --force")
+    let select = URLEventHandler.parse(topic: "tab", action: "select", args: ["index": "3"])?
+      .sourceCommand
+    XCTAssertEqual(
+      select, SourceCommand(name: CommandName("tab", "select"), arguments: ["--index=3"]))
+    XCTAssertEqual(select?.argument("index"), "3")
+    XCTAssertEqual(select?.bindingKey, "tab select")
+    XCTAssertEqual(URLCommand.scroll(.top).sourceCommand?.name, CommandName("scroll", "top"))
+    XCTAssertNil(URLCommand.scroll(.down).sourceCommand, "a wheel scroll is Flash's own")
+    XCTAssertFalse(URLCommand.tabFirst.sourceCommandRepeats)
+    XCTAssertTrue(URLCommand.tabNext.sourceCommandRepeats)
+  }
+
+  /// Bundled plugin commands are two words of `[a-z][a-z0-9_]*`. An entry
+  /// under one of Flash's topics is a core command the plugin performs, so it
+  /// names a source command; any other entry is the plugin's own, and the
+  /// ones that ask first are `process kill` and the `system` plugin's four
+  /// that nothing undoes.
+  func testBundledPluginCommandsShareTheShapeAndCoreTopicsNameSourceCommands() throws {
+    let plugins = Self.root.appendingPathComponent("Plugins")
+    var commands: [(plugin: String, command: String, subcommand: String, confirm: String?)] = []
+    for entry in try FileManager.default.contentsOfDirectory(atPath: plugins.path).sorted() {
+      let manifest = plugins.appendingPathComponent(entry).appendingPathComponent("manifest.json")
+      guard let data = FileManager.default.contents(atPath: manifest.path) else { continue }
+      let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+      for command in object["commands"] as? [[String: Any]] ?? [] {
+        commands.append(
+          (
+            entry, command["command"] as? String ?? "",
+            command["subcommand"] as? String ?? "", command["confirm"] as? String
+          ))
+      }
+    }
+    XCTAssertFalse(commands.isEmpty)
+    var core: [String: [String]] = [:]
+    var asking: [String] = []
+    for (plugin, command, subcommand, confirm) in commands {
+      XCTAssertNotNil(
+        CommandName("\(command) \(subcommand)"),
+        "\(plugin): flash \(command) \(subcommand) is not two words of [a-z][a-z0-9_]*")
+      if URLEventHandler.isTopic(command) {
+        XCTAssertTrue(
+          URLEventHandler.sourceCommandNames.contains(CommandName(command, subcommand)),
+          "\(plugin): flash \(command) \(subcommand) is not a command Flash asks of the app")
+        core[plugin, default: []].append("\(command) \(subcommand)" + (confirm == nil ? "" : "?"))
+      } else if confirm != nil {
+        asking.append("\(plugin): \(command) \(subcommand)")
+      }
+    }
+    XCTAssertEqual(
+      asking,
+      [
+        "processes: process kill",
+        "system: system restart", "system: system shutdown", "system: system logout",
+        "system: trash empty",
+      ])
+    XCTAssertEqual(
+      core["browsers"],
+      [
+        "tab select", "tab next", "tab previous", "tab first", "tab last", "tab move_previous",
+        "tab move_next",
+      ])
+    XCTAssertEqual(core["terminals"]?.count, 17)
+    XCTAssertTrue(core["terminals"]?.contains("tab close?") == true)
+    XCTAssertTrue(core["terminals"]?.contains("pane close?") == true)
+    XCTAssertTrue(core["terminals"]?.contains("app reload") == true)
+    XCTAssertNil(core["defaults"], "a manifest-only plugin performs nothing")
+  }
+
+  /// A manifest command that breaks the shape fails to load.
+  func testManifestRejectsAMalformedCommand() {
+    for (command, subcommand) in [
+      ("kitty", "focus-tab"), ("Kitty", "tab"), ("kitty_", "Tab"), ("2fa", "show"),
+    ] {
+      let manifest = PluginManifest(
+        id: "fixture", name: "fixture", version: "1", description: "fixture",
+        exec: ["/usr/bin/true"],
+        commands: [PluginCommandRegistration(command: command, subcommand: subcommand)])
+      XCTAssertThrowsError(try manifest.validate(), "\(command) \(subcommand)") { error in
+        XCTAssertTrue("\(error)".contains("two words"), "\(error)")
+      }
+    }
+    let wildcard = PluginManifest(
+      id: "fixture", name: "fixture", version: "1", description: "fixture",
+      exec: ["/usr/bin/true"],
+      commands: [PluginCommandRegistration(command: "calc", subcommand: "*")])
+    XCTAssertNoThrow(try wildcard.validate())
+  }
+
+  /// `[plugins.<id>]` sits beside `[plugins]`' own keys, so no plugin may take
+  /// one of them as its id.
+  func testManifestRejectsAnIdThatIsAPluginsSetting() {
+    for id in ConfigLoader.pluginsSettingKeys {
+      let manifest = PluginManifest(
+        id: id, name: id, version: "1", description: "fixture", exec: ["/usr/bin/true"])
+      XCTAssertThrowsError(try manifest.validate(), id) { error in
+        XCTAssertTrue("\(error)".contains("is a [plugins] setting"), "\(error)")
+      }
+    }
+  }
+
+  /// The inspector groups bindings by topic: its table names exactly
+  /// Flash's topics, so every other topic is a plugin command.
+  /// A topic is the noun of what its commands act on, in one number: the
+  /// plural when that noun is a collection the commands add to, read or
+  /// show as a whole (`logs write`, `plugins reload`), the singular when
+  /// each command addresses one thing, named or focused (`mark set`,
+  /// `tab close`); a verb topic (`notify send`) has no number. Every topic
+  /// picks a side here, so one noun never appears in both (`log` beside
+  /// `logs`), and a new topic has to say which it is.
+  enum TopicKind { case one, many, verb }
+
+  private static let topicKinds: [String: TopicKind] = [
+    "about": .one, "alert": .one, "app": .one, "appwindows": .many,
+    "cli": .one, "clipboard": .one,
+    "commands": .many, "config": .one, "controlcenter": .one,
+    "cursor": .one, "desktop": .one, "document": .one, "events": .many,
+    "help": .one, "hints": .many, "history": .one, "input": .one, "key": .one,
+    "launchpad": .one, "logs": .many, "macro": .one, "mappings": .many,
+    "mark": .one, "menu": .one, "metrics": .many, "missioncontrol": .one,
+    "mode": .one, "monitors": .many, "mouse": .one, "move": .verb, "movement": .one,
+    "notificationcenter": .one, "notify": .verb, "pane": .one,
+    "plugins": .many, "popup": .one, "register": .one,
+    "resident": .one, "resource": .one, "scroll": .verb,
+    "selection": .one, "startup": .one, "status": .one, "tab": .one,
+    "telemetry": .one,
+    "tile": .verb, "updates": .many, "url": .one,
+    "window": .one, "workspace": .one,
+  ]
+
+  /// Singular nouns that end in `s` anyway.
+  private static let singularNounsEndingInS: Set<String> = ["status"]
+
+  func testEveryTopicNamesItsNounKind() {
+    XCTAssertEqual(
+      Set(Self.topicKinds.keys), URLEventHandler.topics,
+      "every topic is listed with its kind, and only topics are")
+    for (topic, kind) in Self.topicKinds {
+      switch kind {
+      case .many:
+        XCTAssertTrue(topic.hasSuffix("s"), "\(topic) acts on a collection: plural")
+      case .one:
+        XCTAssertTrue(
+          !topic.hasSuffix("s") || Self.singularNounsEndingInS.contains(topic),
+          "\(topic) acts on one thing: singular")
+      case .verb:
+        XCTAssertFalse(topic.hasSuffix("s"), "\(topic) is a verb")
+      }
+    }
+    for topic in URLEventHandler.topics {
+      XCTAssertFalse(
+        URLEventHandler.isTopic(topic + "s"), "\(topic) and \(topic)s would be one noun twice")
+    }
+  }
+
+  /// A renamed topic has no alias: its old spelling parses nothing, and the
+  /// rejection, in a mapping and under `config check` alike, names the new
+  /// one.
+  func testARenamedTopicIsRejectedWithItsNewSpelling() {
+    for (old, new) in [
+      ("log write --message=hi", "logs write"), ("marks set --letter=a", "mark set"),
+      ("marks jump --letter=a", "mark jump"),
+    ] {
+      let words = old.split(separator: " ").map(String.init)
+      XCTAssertFalse(URLEventHandler.isTopic(words[0]), words[0])
+      XCTAssertNil(URLEventHandler.parse(words: words), old)
+      let message = URLEventHandler.rejectionMessage("flash " + old)
+      XCTAssertTrue(message.contains("Did you mean `\(new)`?"), message)
+    }
+    let config = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "<leader>a" = ["flash", "marks", "jump", "--letter=a"]
+      "<leader>l" = ["flash", "log", "write", "--message=hi"]
+      """)
+    for new in ["mark jump", "logs write"] {
+      XCTAssertTrue(
+        config.loadingDiagnostics.contains { $0.message.contains("Did you mean `\(new)`?") },
+        "\(new): \(config.loadingDiagnostics.map(\.message))")
+    }
+  }
+
+  /// The help groups a binding by its topic's category
+  /// (`URLEventHandler.topicsByCategory`), which the frontend reads from
+  /// Inspector/src/lib/topic-categories.json.
+  /// `FLASH_WRITE_SCHEMA=1 swift test --filter CommandGrammarTests` (or
+  /// `mise run build:schema`) rewrites the committed copy.
+  func testInspectorTopicTableMatchesTheTopics() throws {
+    let listed = URLEventHandler.topicsByCategory.flatMap(\.topics)
+    XCTAssertEqual(
+      Dictionary(grouping: listed, by: { $0 }).filter { $0.value.count > 1 }.keys.sorted(), [],
+      "a topic has one category")
+    XCTAssertEqual(
+      URLEventHandler.topics.subtracting(listed).sorted(), [],
+      "every topic has a category in URLEventHandler.topicsByCategory")
+    XCTAssertEqual(
+      Set(listed).subtracting(URLEventHandler.topics).sorted(), [],
+      "only Flash's topics have one")
+    XCTAssertEqual(Set(URLEventHandler.topicCategories.keys), URLEventHandler.topics)
+
+    let url = Self.root.appendingPathComponent("Inspector/src/lib/topic-categories.json")
+    let rows = URLEventHandler.topicCategories.sorted { $0.key < $1.key }.map {
+      "  \"\($0.key)\": \"\($0.value.rawValue)\""
+    }
+    let generated = "{\n" + rows.joined(separator: ",\n") + "\n}\n"
+    if ProcessInfo.processInfo.environment["FLASH_WRITE_SCHEMA"] == "1" {
+      try generated.write(to: url, atomically: true, encoding: .utf8)
+    }
+    XCTAssertEqual(
+      try? String(contentsOf: url, encoding: .utf8), generated,
+      "Inspector/src/lib/topic-categories.json is stale: run mise run build:schema")
+  }
+
+  /// The rows of the table under `header` in `lines`: where its first row
+  /// starts and where the table ends.
+  private static func table(_ header: String, in lines: [String]) throws -> Range<Int> {
+    let head = try XCTUnwrap(lines.firstIndex(of: header), "no table under \(header)")
+    let first = head + 2
+    let end = lines[first...].firstIndex { !$0.hasPrefix("| ") } ?? lines.endIndex
+    return first..<end
+  }
+
+  /// The bundled plugins' own commands as `docs/commands.md` lists them:
+  /// each with the arguments its manifest entry declares, its plugin and
+  /// its description. A `*` wildcard names no command to list.
+  private static func bundledPluginCommandRows() throws -> [String] {
+    var rows: [(name: String, row: String)] = []
+    for root in PluginRepository.officialPluginRoots() {
+      let manifest = try PluginManifest.load(from: root)
+      for command in manifest.pluginCommands {
+        guard let arguments = command.arguments else { continue }
+        let name = "\(command.command) \(command.subcommand)"
+        let syntax = arguments.syntax.isEmpty ? name : "\(name) \(arguments.syntax)"
+        rows.append((name, "| `\(syntax)` | `\(manifest.id)` | \(command.description) |"))
+      }
+    }
+    return rows.sorted { $0.name < $1.name }.map(\.row)
+  }
+
+  /// `docs/commands.md` carries the full command table: one row per
+  /// command, in order, with its syntax and summary, and under it the
+  /// bundled plugins' commands with the arguments they declare.
+  /// `FLASH_WRITE_SCHEMA=1 swift test --filter CommandGrammarTests` (or
+  /// `mise run build:schema`) rewrites the rows of the committed tables.
+  func testTheCommandManualListsEveryCommand() throws {
+    let url = Self.root.appendingPathComponent("docs/commands.md")
+    let coreHeader = "| Command | What it does |"
+    let pluginHeader = "| Plugin command | Plugin | What it does |"
+    let expected = URLEventHandler.commandNames.map { name in
+      "| `\(URLEventHandler.syntax(for: name, prefix: "") ?? "")` | "
+        + "\(URLEventHandler.summary(of: name) ?? "") |"
+    }
+    let expectedPlugins = try Self.bundledPluginCommandRows()
+    if ProcessInfo.processInfo.environment["FLASH_WRITE_SCHEMA"] == "1" {
+      var lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
+      lines.replaceSubrange(try Self.table(coreHeader, in: lines), with: expected)
+      lines.replaceSubrange(try Self.table(pluginHeader, in: lines), with: expectedPlugins)
+      try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+    let manual = try String(contentsOf: url, encoding: .utf8)
+    let lines = manual.components(separatedBy: "\n")
+    let rows = Array(lines[try Self.table(coreHeader, in: lines)])
+    XCTAssertEqual(rows, expected, "docs/commands.md's table drifted from the command table")
+    for (row, line) in zip(rows, expected) where row != line {
+      XCTFail("expected \(line)\n     got \(row)")
+    }
+    let pluginRows = Array(lines[try Self.table(pluginHeader, in: lines)])
+    XCTAssertEqual(
+      pluginRows, expectedPlugins,
+      "docs/commands.md's plugin table drifted from the bundled manifests: "
+        + "run mise run build:schema")
+    for query in FlashQuery.allCases {
+      XCTAssertTrue(manual.contains("flash \(query.name)"), "\(query.name)")
+    }
+  }
+}

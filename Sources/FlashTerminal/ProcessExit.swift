@@ -21,12 +21,14 @@ public enum ProcessExit {
   /// Reap child `pid` as soon as the kernel reports its exit, with no thread
   /// waiting meanwhile, then run `completion` on the reaper queue. A child
   /// already a zombie is reaped at once.
-  public static func reapWhenExited(_ pid: pid_t, completion: @escaping () -> Void = {}) {
+  public static func reapWhenExited(
+    _ pid: pid_t, completion: @escaping @Sendable () -> Void = {}
+  ) {
     let source = DispatchSource.makeProcessSource(
       identifier: pid, eventMask: .exit, queue: reaperQueue)
     // Both paths run on the serial reaper queue; the first one finishes.
-    var finished = false
-    let finish = { (reaped: Bool) in
+    nonisolated(unsafe) var finished = false
+    let finish: @Sendable (Bool) -> Void = { reaped in
       guard !finished else { return }
       finished = true
       // Cancelling releases the handler, and with it this closure's hold on

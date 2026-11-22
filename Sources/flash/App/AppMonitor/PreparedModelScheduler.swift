@@ -15,6 +15,10 @@ enum ModelRefreshReason: Equatable {
   case queued
   /// An Accessibility notification from the app, by name.
   case axEvent(String)
+  /// Value or title churn, by notification name: typing, a ticking label, a
+  /// document title. It says nothing about layout, so it walks once the app
+  /// has gone quiet instead of after every change.
+  case axChurn(String)
   /// A Flash action that changed the app (`normal_scroll`, …).
   case userAction(String)
   /// The walk a readiness ladder ends in, after a degenerate automatic walk
@@ -25,18 +29,26 @@ enum ModelRefreshReason: Equatable {
   /// AX churn and queued follow-ups honor the minimum interval between walks.
   var isThrottled: Bool {
     switch self {
-    case .axEvent, .queued: return true
+    case .axEvent, .axChurn, .queued: return true
     default: return false
     }
+  }
+
+  /// Churn waits for a quiet window instead of the burst debounce.
+  var isChurn: Bool {
+    if case .axChurn = self { return true }
+    return false
   }
 
   /// Rebuilds nobody is waiting on, paused while an app storms or walks slow.
   var isSpeculative: Bool { isThrottled || self == .maintenance }
 
-  /// A pending refresh is never demoted to a lower-priority reason.
+  /// A pending refresh is never demoted to a lower-priority reason, and
+  /// churn never postpones a walk something else already asked for.
   var priority: Int {
-    if isThrottled { return 0 }
-    return self == .maintenance ? 1 : 2
+    if isChurn { return 0 }
+    if isThrottled { return 1 }
+    return self == .maintenance ? 2 : 3
   }
 
   var logValue: String {
@@ -50,6 +62,7 @@ enum ModelRefreshReason: Equatable {
     case .maintenance: return "maintenance"
     case .queued: return "queued"
     case .axEvent(let notification): return "ax:\(notification)"
+    case .axChurn(let notification): return "ax_quiet:\(notification)"
     case .userAction(let action): return action
     case .readiness: return "readiness"
     }
@@ -97,18 +110,27 @@ struct PreparedModelScheduler {
     let ticket: Ticket
     var deadline: UInt64
     var request: Request
+    /// A refresh whose deadline is the app's interval, not the debounce.
+    var throttled = false
   }
 
   private let debounceNs: UInt64
+  private let churnQuietNs: UInt64
   private let minimumIntervalNs: UInt64
   private let defaultFreshnessNs: UInt64
   private let maintenanceLeadNs: UInt64
   private var generation: UInt64 = 0
   private var entries: [Key: Entry] = [:]
   private var lastStartedAt: [pid_t: UInt64] = [:]
+  /// Apps whose maintenance fired and was dropped because the user was idle.
+  private var suspendedMaintenance: Set<pid_t> = []
 
-  init(debounceMs: Int, minimumIntervalMs: Int, freshnessMs: Int, maintenanceLeadMs: Int) {
+  init(
+    debounceMs: Int, churnQuietMs: Int, minimumIntervalMs: Int, freshnessMs: Int,
+    maintenanceLeadMs: Int
+  ) {
     debounceNs = UInt64(debounceMs) * 1_000_000
+    churnQuietNs = UInt64(churnQuietMs) * 1_000_000
     minimumIntervalNs = UInt64(minimumIntervalMs) * 1_000_000
     defaultFreshnessNs = UInt64(freshnessMs) * 1_000_000
     maintenanceLeadNs = UInt64(maintenanceLeadMs) * 1_000_000
@@ -123,12 +145,46 @@ struct PreparedModelScheduler {
     entries[Key(pid: pid, kind: .readiness)] != nil
   }
 
-  mutating func scheduleRefresh(pid: pid_t, reason: ModelRefreshReason, now: UInt64) -> Arm? {
-    let key = Key(pid: pid, kind: .refresh)
-    var deadline = now + debounceNs
-    if reason.isThrottled, let last = lastStartedAt[pid] {
-      deadline = max(deadline, last + minimumIntervalNs)
+  /// The pending refresh's deadline, if one is armed.
+  func refreshDeadline(pid: pid_t) -> UInt64? {
+    entries[Key(pid: pid, kind: .refresh)]?.deadline
+  }
+
+  /// What is armed to rebuild `pid`'s model and how far away it is, the wake
+  /// that walks soonest first: a refresh, then a readiness ladder, then
+  /// maintenance. A readiness probe in flight has no time of its own.
+  func pending(pid: pid_t, now: UInt64) -> (state: PreparedModelMissContext.Pending, inMs: Int?) {
+    func remainingMs(_ entry: Entry) -> Int? {
+      guard entry.deadline != .max else { return nil }
+      return entry.deadline > now ? Int((entry.deadline - now + 999_999) / 1_000_000) : 0
     }
+    if let refresh = entries[Key(pid: pid, kind: .refresh)] {
+      return (refresh.throttled ? .throttled : .debounce, remainingMs(refresh))
+    }
+    if let readiness = entries[Key(pid: pid, kind: .readiness)] {
+      return (.readiness, remainingMs(readiness))
+    }
+    if let maintenance = entries[Key(pid: pid, kind: .maintenance)] {
+      return (.maintenance, remainingMs(maintenance))
+    }
+    return (suspendedMaintenance.contains(pid) ? .suspended : .none, nil)
+  }
+
+  /// `minimumIntervalNs` is the app's own spacing for throttled reasons —
+  /// what its walks cost (`AppMonitor.eventRefreshSpacingMs`) — and never
+  /// shortens the fixed minimum. Churn settles for its quiet window, every
+  /// other reason for the burst debounce; later churn extends a pending
+  /// churn wake and leaves any other pending refresh alone.
+  mutating func scheduleRefresh(
+    pid: pid_t, reason: ModelRefreshReason, now: UInt64, minimumIntervalNs: UInt64? = nil
+  ) -> Arm? {
+    let key = Key(pid: pid, kind: .refresh)
+    let debounced = now + (reason.isChurn ? churnQuietNs : debounceNs)
+    var deadline = debounced
+    if reason.isThrottled, let last = lastStartedAt[pid] {
+      deadline = max(deadline, last + max(minimumIntervalNs ?? 0, self.minimumIntervalNs))
+    }
+    let throttled = deadline > debounced
     if var existing = entries[key], case .refresh(let previousReason) = existing.request {
       // AX events may invalidate the model while a focus/config refresh is
       // pending, but must not demote that refresh into a throttled AX request.
@@ -138,13 +194,14 @@ struct PreparedModelScheduler {
       if deadline >= existing.deadline {
         existing.deadline = deadline
         existing.request = .refresh(reason)
+        existing.throttled = throttled
         entries[key] = existing
         return nil
       }
       // An earlier deadline needs a new wake now. Its identity makes the
       // already-enqueued later callback harmless when it eventually arrives.
     }
-    return replace(key: key, deadline: deadline, request: .refresh(reason))
+    return replace(key: key, deadline: deadline, request: .refresh(reason), throttled: throttled)
   }
 
   /// Maintenance wakes `maintenanceLeadMs` before the model's own freshness
@@ -155,6 +212,7 @@ struct PreparedModelScheduler {
   ) -> Arm {
     let freshness = freshnessNs ?? defaultFreshnessNs
     let delay = freshness > maintenanceLeadNs ? freshness - maintenanceLeadNs : 0
+    suspendedMaintenance.remove(pid)
     return replace(
       key: Key(pid: pid, kind: .maintenance),
       deadline: computedAt + delay,
@@ -223,6 +281,14 @@ struct PreparedModelScheduler {
 
   mutating func cancelMaintenance(pid: pid_t) {
     entries.removeValue(forKey: Key(pid: pid, kind: .maintenance))
+    suspendedMaintenance.remove(pid)
+  }
+
+  /// `pid`'s maintenance fired with nobody at the desk and armed nothing: its
+  /// model expires. Remembered until maintenance is armed or cancelled again,
+  /// so the activation that then misses can say why.
+  mutating func noteMaintenanceSuspended(pid: pid_t) {
+    suspendedMaintenance.insert(pid)
   }
 
   mutating func suppressSpeculativeRefresh(pid: pid_t) {
@@ -243,12 +309,16 @@ struct PreparedModelScheduler {
   mutating func reset() {
     entries.removeAll()
     lastStartedAt.removeAll()
+    suspendedMaintenance.removeAll()
   }
 
-  private mutating func replace(key: Key, deadline: UInt64, request: Request) -> Arm {
+  private mutating func replace(
+    key: Key, deadline: UInt64, request: Request, throttled: Bool = false
+  ) -> Arm {
     generation &+= 1
     let ticket = Ticket(pid: key.pid, generation: generation)
-    entries[key] = Entry(ticket: ticket, deadline: deadline, request: request)
+    entries[key] = Entry(
+      ticket: ticket, deadline: deadline, request: request, throttled: throttled)
     return Arm(ticket: ticket, kind: key.kind, deadline: deadline)
   }
 }

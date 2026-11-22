@@ -11,21 +11,21 @@ set -euo pipefail
 # per activation; this script reads them from ~/Library/Logs/Flash/flash.log*
 # by trace id, within the window each oracle measured.
 #
-# Usage:
-#   ./Scripts/benchmark-hints.sh [--runs=N] [--class=native|browser|electron|all]
-#                                [--trigger=key|cli] [--skip-npm-ci]
-#                                [--large-table=ROWS]
+# Usage (the bench:hints task, arguments after --):
+#   mise run bench:hints -- [--runs=N] [--class=native|browser|electron|all]
+#                           [--trigger=key|cli] [--skip-npm-ci]
+#                           [--large-table=ROWS]
 #
 #   --runs=N        measured activations per class (default 30), after two
 #                   unmeasured warm-up runs
 #   --class=...     which fixtures to measure (default all)
 #   --trigger=key   press f in NORMAL (default; needs advanced mode), or
-#   --trigger=cli   run `flash mouse_target`
+#   --trigger=cli   run `flash mouse target`
 #   --skip-npm-ci   reuse the Electron fixture's installed dependencies
 #   --large-table=ROWS  native only: time the fixture's ROWS-row table window
 #                   instead of its control window
 #
-# Requirements: an installed resident (Scripts/install.sh --dev), the debug
+# Requirements: an installed resident (mise run install:dev), the debug
 # inspector enabled ([debug] http_inspector_enabled = true, or run :logs once),
 # an unlocked console session, and the integration scripts' own requirements
 # (the "Flash Dev" signing identity, Firefox for browser, npm for electron).
@@ -87,14 +87,19 @@ STATE_URL="http://127.0.0.1:4242/api/state"
 
 echo "==> Preflight"
 if [[ ! -x "$FLASH_CLI" ]]; then
-  echo "ERROR: $FLASH_CLI not found. Install Flash first: ./Scripts/install.sh --dev" >&2
+  echo "ERROR: $FLASH_CLI not found. Install Flash first: mise run install:dev" >&2
   exit 1
 fi
-if ! "$FLASH_CLI" status >/dev/null; then
-  echo "ERROR: the Flash resident did not answer 'flash status'." >&2
+if ! "$FLASH_CLI" resident status >/dev/null; then
+  echo "ERROR: the Flash resident did not answer 'flash resident status'." >&2
   exit 1
 fi
-if ! curl -fsS -o /dev/null --max-time 2 "$STATE_URL"; then
+# The inspector answers its data only with your access token, read from the
+# private file Flash keeps; curl takes the header on stdin so it never shows
+# in the process list.
+HELP_TOKEN="$(cat "$HOME/Library/Application Support/Flash/help-token" 2>/dev/null || true)"
+if ! printf 'header = "Authorization: Bearer %s"\n' "$HELP_TOKEN" \
+  | curl --config - -fsS -o /dev/null --max-time 2 "$STATE_URL"; then
   cat <<MSG >&2
 ERROR: the debug inspector is not reachable at $STATE_URL.
 Set [debug] http_inspector_enabled = true in your flash.toml, or run :logs once.

@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.process_table.schema.json",
+  "title": "host.process_table",
+  "description": "Plugin to host: read the process table, which the host reads through libproc. list reads the figures of every process the user may measure, or, of the pids it names, their figures and names; tree reads one process and every descendant reachable from it, with more detail. Each operation takes exactly its own fields. A process's arguments and environment are never read.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.process_table"
+    },
+    "params": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "list"
+            },
+            "pids": {
+              "type": "array",
+              "maxItems": 4096,
+              "uniqueItems": true,
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "description": "Only these processes, in this order, each with its name; absent reads every process the user may measure, in the kernel's order, without names."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "pid"
+          ],
+          "properties": {
+            "operation": {
+              "const": "tree"
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647,
+              "description": "The process whose tree is read: itself first, then every descendant reachable now, breadth first."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

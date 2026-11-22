@@ -1,10 +1,73 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildOnboarding, type Step } from "./src/lib/onboarding.ts";
-import type { InspectorState, MappingRow } from "./src/lib/types.ts";
+import type {
+  InspectorState,
+  MappingRow,
+  MappingsState,
+  PluginInfo,
+  StateSnapshot,
+} from "./src/lib/types.ts";
 
 function row(scope: string, key: string, action: string, origin = "default"): MappingRow {
-  return { scope, key, action, origin };
+  return { scope, key, action, origin, explanation: "" };
+}
+
+/** A resident with input working, but for what a test says otherwise. */
+function runtime(over: Partial<StateSnapshot["runtime"]>): StateSnapshot["runtime"] {
+  return {
+    version: "1.0.0",
+    build: "1",
+    pid: 1,
+    started_at_unix_ms: 0,
+    accessibility_trusted: true,
+    keyboard_capture_active: true,
+    secure_input: false,
+    advanced_mode: true,
+    config_path: "",
+    config_error: null,
+    ...over,
+  };
+}
+
+function plugin(
+  id: string,
+  name: string,
+  state: PluginInfo["state"],
+  last_error: string | null = null,
+): PluginInfo {
+  return {
+    id,
+    name,
+    version: "1",
+    description: "",
+    origin: "bundled",
+    root: "",
+    state,
+    activation: "resident",
+    pid: null,
+    started_at_unix_ms: null,
+    source_count: 0,
+    command_count: 0,
+    restart_count: 0,
+    last_error,
+    last_log: null,
+    cpu_time_ms: null,
+    memory_bytes: null,
+    only_bundle_ids: [],
+    priority: 0,
+    status_segments: {},
+  };
+}
+
+function mappings(table: Pick<MappingsState, "normal_leader" | "rows">): MappingsState {
+  return {
+    ...table,
+    effective_rows: table.rows,
+    commands: [],
+    bundle_id: null,
+    localized_name: null,
+  };
 }
 
 function find(steps: Step[], id: string): Step {
@@ -15,13 +78,13 @@ function find(steps: Step[], id: string): Step {
 
 const ready: InspectorState = {
   snapshot_at_unix_ms: 1,
-  runtime: {
+  runtime: runtime({
     accessibility_trusted: true,
     keyboard_capture_active: true,
     secure_input: false,
     config_path: "/Users/ab/.config/flash/flash.toml",
     config_error: null,
-  },
+  }),
   config: {
     statusbar: { enabled: true },
     widgets: { cpu: { enabled: true }, hidden: { enabled: false } },
@@ -29,22 +92,19 @@ const ready: InspectorState = {
     mode: { apps: { "com.apple.finder": {} } },
   },
   config_sources: { statusbar: { $: { layer: "config", where: "config · flash.toml" } } },
-  plugins: [
-    { id: "cpu", name: "CPU", version: "1", state: "running" },
-    { id: "tmux", name: "tmux", version: "1", state: "ready" },
-  ],
-  mappings: {
+  plugins: [plugin("cpu", "CPU", "running"), plugin("tmux", "tmux", "running")],
+  mappings: mappings({
     normal_leader: "<space>",
     rows: [
-      row("all", "cmd+shift+space", "flash mouse_target", "config"),
-      row("all", "cmd+shift+alt+space", "flash mouse_grid", "config"),
-      row("all", "cmd+ctrl+alt+space", 'flash enter_command_mode --input=:flashlight ', "config"),
-      row("all", "cmd+ctrl+[", "flash enter_normal_mode", "config"),
-      row("all", "cmd+ctrl+i", "flash enter_insert_mode", "config"),
-      row("normal", "s", "flash mouse_bigram"),
-      row("normal", "ctrl+s", "flash mouse_bigram --secondary"),
+      row("all", "cmd+shift+space", "flash mouse target", "config"),
+      row("all", "cmd+shift+alt+space", "flash mouse grid", "config"),
+      row("all", "cmd+ctrl+alt+space", "flash mode flashlight", "config"),
+      row("all", "cmd+ctrl+[", "flash mode normal", "config"),
+      row("all", "cmd+ctrl+i", "flash mode insert", "config"),
+      row("normal", "s", "flash mouse bigram"),
+      row("normal", "ctrl+s", "flash mouse bigram --secondary"),
     ],
-  },
+  }),
 };
 
 test("an empty page waits instead of inventing failures", () => {
@@ -86,23 +146,35 @@ test("a configured Mac is done except for guides it has not opened", () => {
 });
 
 test("a starter install still needs the commented shortcuts", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 2,
-    runtime: {
-      accessibility_trusted: true,
-      keyboard_capture_active: true,
-      secure_input: false,
-      config_path: "/Users/ab/.config/flash/flash.toml",
-      config_error: null,
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 2,
+      runtime: runtime({
+        accessibility_trusted: true,
+        keyboard_capture_active: true,
+        secure_input: false,
+        config_path: "/Users/ab/.config/flash/flash.toml",
+        config_error: null,
+      }),
+      config: {
+        statusbar: { enabled: false },
+        widgets: {},
+        popup: { popups: {} },
+        mode: { apps: {} },
+      },
+      plugins: [plugin("cpu", "CPU", "running")],
+      mappings: mappings({
+        normal_leader: "<space>",
+        rows: [row("all", "cmd+shift+space", "flash mouse target", "config")],
+      }),
     },
-    config: { statusbar: { enabled: false }, widgets: {}, popup: { popups: {} }, mode: { apps: {} } },
-    plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
-    mappings: { normal_leader: "<space>", rows: [row("all", "cmd+shift+space", "flash mouse_target", "config")] },
-  }, true, new Set());
+    true,
+    new Set(),
+  );
   const steps = model.sections.flatMap((section) => section.steps);
   assert.equal(find(steps, "hints").status, "done");
   assert.equal(find(steps, "grid").status, "todo");
-  assert.match(find(steps, "grid").snippet ?? "", /mouse_grid/);
+  assert.match(find(steps, "grid").snippet ?? "", /"mouse", "grid"/);
   assert.equal(find(steps, "flashlight").status, "todo");
   assert.equal(find(steps, "normal").status, "todo");
   assert.match(find(steps, "normal").evidence, /No key enters NORMAL/);
@@ -111,19 +183,26 @@ test("a starter install still needs the commented shortcuts", () => {
 });
 
 test("permission, config, and plugin failures are the missing list", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 3,
-    runtime: {
-      accessibility_trusted: false,
-      keyboard_capture_active: false,
-      secure_input: false,
-      config_path: "/Users/ab/.config/flash/flash.toml",
-      config_error: 'popup.bonsai.size must be "COLUMNSxROWS"',
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 3,
+      runtime: runtime({
+        accessibility_trusted: false,
+        keyboard_capture_active: false,
+        secure_input: false,
+        config_path: "/Users/ab/.config/flash/flash.toml",
+        config_error: 'popup.bonsai.size must be "COLUMNSxROWS"',
+      }),
+      plugins: [plugin("feed", "Feed", "failed", "dns")],
+      mappings: mappings({ normal_leader: "", rows: [] }),
     },
-    plugins: [{ id: "feed", name: "Feed", version: "1", state: "failed", last_error: "dns" }],
-    mappings: { normal_leader: "", rows: [] },
-  }, true, new Set());
-  assert.deepEqual(model.blockers.map((step) => step.id), ["accessibility", "config", "plugins"]);
+    true,
+    new Set(),
+  );
+  assert.deepEqual(
+    model.blockers.map((step) => step.id),
+    ["accessibility", "config", "plugins"],
+  );
   assert.equal(model.title, "Something still needs you");
   assert.match(model.blockers[1].evidence, /COLUMNSxROWS/);
   assert.match(model.blockers[2].evidence, /feed/);
@@ -132,28 +211,45 @@ test("permission, config, and plugin failures are the missing list", () => {
 });
 
 test("secure input is its own attention item once Accessibility is granted", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 4,
-    runtime: { accessibility_trusted: true, keyboard_capture_active: false, secure_input: true, config_error: null },
-    plugins: [],
-    mappings: { normal_leader: "", rows: [] },
-  }, true, new Set());
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 4,
+      runtime: runtime({
+        accessibility_trusted: true,
+        keyboard_capture_active: false,
+        secure_input: true,
+        config_error: null,
+      }),
+      plugins: [],
+      mappings: mappings({ normal_leader: "", rows: [] }),
+    },
+    true,
+    new Set(),
+  );
   const keyboard = find(model.sections[0].steps, "keyboard");
   assert.equal(keyboard.status, "attention");
   assert.match(keyboard.evidence, /Secure input/);
 });
 
 test("one side of NORMAL is not enough", () => {
-  const model = buildOnboarding({
-    snapshot_at_unix_ms: 5,
-    runtime: { accessibility_trusted: true, keyboard_capture_active: true, config_error: null },
-    plugins: [{ id: "cpu", name: "CPU", version: "1", state: "running" }],
-    mappings: {
-      normal_leader: "<space>",
-      rows: [row("all", "cmd+ctrl+[", "flash enter_normal_mode")],
+  const model = buildOnboarding(
+    {
+      snapshot_at_unix_ms: 5,
+      runtime: runtime({
+        accessibility_trusted: true,
+        keyboard_capture_active: true,
+        config_error: null,
+      }),
+      plugins: [plugin("cpu", "CPU", "running")],
+      mappings: mappings({
+        normal_leader: "<space>",
+        rows: [row("all", "cmd+ctrl+[", "flash mode normal")],
+      }),
+      config: { statusbar: { enabled: false } },
     },
-    config: { statusbar: { enabled: false } },
-  }, true, new Set( ["getting-started", "hints", "normal-mode", "config"]));
+    true,
+    new Set(["getting-started", "hints", "normal-mode", "configuration"]),
+  );
   const normal = find(model.sections[2].steps, "normal");
   assert.equal(normal.status, "todo");
   assert.match(normal.evidence, /all cmd\+ctrl\+\[ enters NORMAL/);

@@ -38,6 +38,17 @@ struct StatusJobSchedule: Equatable {
     return true
   }
 
+  /// `status refresh`: an idle job is due now; a running one runs again as
+  /// soon as it completes, so the next output is at least as new as the
+  /// request.
+  mutating func expedite(now: TimeInterval) {
+    switch phase {
+    case .idle(let dueAt): phase = .idle(dueAt: min(dueAt, now))
+    case .running(let token, let start, let dueAt):
+      phase = .running(token: token, startedAt: start, nextDueAt: min(dueAt, now))
+    }
+  }
+
   mutating func reschedule(now: TimeInterval, interval: TimeInterval) {
     let due = interval > 0 ? now + interval : .infinity
     switch phase {

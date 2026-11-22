@@ -1,0 +1,38 @@
+{
+  "id": "reminders",
+  "name": "Reminders",
+  "version": "0.1.0",
+  "description": "Your open reminders as `@reminders` rows in the flashlight, listed while Reminders runs: pick one to show it in Reminders. `reminders open` opens Reminders and `reminders refresh` relists them now.",
+  "exec": [
+    "./flash-plugin-reminders"
+  ],
+  "commands": [
+    {
+      "command": "reminders",
+      "subcommand": "open",
+      "description": "Open Reminders"
+    },
+    {
+      "command": "reminders",
+      "subcommand": "refresh",
+      "description": "Relist your open reminders in @reminders now"
+    }
+  ],
+  "listen": [
+    "core:apps.launched",
+    "core:apps.terminated",
+    "core:focus.changed",
+    "core:session.opened"
+  ],
+  "sources": [
+    {
+      "name": "reminders.tasks",
+      "type": "reminders",
+      "live": "per_scope"
+    }
+  ],
+  "capabilities": [
+    "reminders",
+    "open"
+  ]
+}

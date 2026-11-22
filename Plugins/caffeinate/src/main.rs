@@ -1,209 +1,105 @@
-use std::io;
-use std::mem;
-use std::os::fd::{AsFd, AsRawFd, RawFd};
-use std::sync::Arc;
+//! Keep the Mac awake.
+//!
+//! `caffeinate on` takes, in this process, the power assertions
+//! `/usr/bin/caffeinate -dimsu` takes; `off`, the end of a `--minutes` bound
+//! and shutdown release them, and powerd drops them with the process
+//! whatever ends it. The `state` segment is `on` while a hold lasts.
+
+mod power;
+mod state;
+
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use flash_plugin::status::StatusValue;
 use flash_plugin::{
-    CommandRequest, Context, ManagedChild, ManagedChildError, PerformResponse, StatusValue, run,
-    spawn_managed,
+    CommandRequest, Context, Deadline, PerformAlert, PerformResponse, PollPriority, run,
 };
-use nix::errno::Errno;
-use nix::libc::timespec;
-use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent, Kqueue};
-use tokio::io::Interest;
-use tokio::io::unix::AsyncFd;
-use tokio::sync::Mutex;
 
-const CAFFEINATE: &str = "/usr/bin/caffeinate";
-const TERMINATION_GRACE: Duration = Duration::from_millis(250);
-const USAGE: &str = "usage: caffeinate on|toggle [minutes]";
+use power::{AssertionId, IoKitPower, Power, PowerError};
+use state::{Effect, Request, State};
 
-/// No timer of its own: a timed assertion is bounded by caffeinate's own
-/// `-t`, and its exit — at that bound, killed, or stopped — is observed on
-/// the kernel's exit event (`watch_exit`).
+/// The longest deadline the host arms (`poll.max_seconds`): a longer bound
+/// is counted down a day at a time.
+const MAX_DEADLINE_SECONDS: u64 = 86_400;
+
+/// The hold and what it took: the state, the assertions powerd holds for it
+/// and the deadline of its bound.
+struct Keeper {
+    state: State,
+    held: Vec<AssertionId>,
+    power: Box<dyn Power>,
+    expiry: Option<Deadline>,
+}
+
+type Shared = Arc<Mutex<Keeper>>;
+
+fn lock(shared: &Shared) -> MutexGuard<'_, Keeper> {
+    shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 struct Caffeinate {
-    state: Arc<Mutex<AssertionState>>,
-    command_prefix: Vec<String>,
-}
-
-impl Default for Caffeinate {
-    fn default() -> Self {
-        Self {
-            state: Arc::new(Mutex::new(AssertionState::Stopped)),
-            command_prefix: vec![CAFFEINATE.to_string()],
-        }
-    }
-}
-
-enum AssertionState {
-    Stopped,
-    Running { child: ManagedChild },
-    ShuttingDown,
-}
-
-impl AssertionState {
-    fn child_mut(&mut self) -> Option<&mut ManagedChild> {
-        match self {
-            Self::Stopped | Self::ShuttingDown => None,
-            Self::Running { child } => Some(child),
-        }
-    }
-
-    fn pid(&self) -> Option<u32> {
-        match self {
-            Self::Stopped | Self::ShuttingDown => None,
-            Self::Running { child } => Some(child.id()),
-        }
-    }
-}
-
-flash_plugin::plugin!(Caffeinate);
-
-impl FlashPlugin for Caffeinate {
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
-        let starts = matches!(command.subcommand.as_str(), "on" | "toggle");
-        let minutes = match parse_minutes(&command.args) {
-            Ok(minutes) => minutes,
-            Err(()) if starts => return PerformResponse::fail(USAGE),
-            Err(()) => None,
-        };
-        let mut state = self.state.lock().await;
-        if matches!(*state, AssertionState::ShuttingDown) {
-            return PerformResponse::fail("plugin is shutting down");
-        }
-        if let Err(error) = reconcile(&mut state) {
-            return PerformResponse::fail(error.diagnostic());
-        }
-        match command.subcommand.as_str() {
-            "status" => performed(&state),
-            "on" => self.start_and_report(&ctx, &mut state, minutes).await,
-            "off" => stop_and_report(&ctx, &mut state).await,
-            "toggle" if state.pid().is_some() => stop_and_report(&ctx, &mut state).await,
-            "toggle" => self.start_and_report(&ctx, &mut state, minutes).await,
-            other => PerformResponse::fail(format!("unknown subcommand: {other}")),
-        }
-    }
-
-    async fn on_shutdown(&self, _ctx: Context) {
-        let mut state = self.state.lock().await;
-        let _ = terminate_into(&mut state, AssertionState::ShuttingDown).await;
-    }
+    keeper: Shared,
 }
 
 impl Caffeinate {
-    async fn start(
-        &self,
-        ctx: &Context,
-        state: &mut AssertionState,
-        minutes: Option<u64>,
-    ) -> Result<(), ManagedChildError> {
-        stop(state).await?;
-        let mut argv = self.command_prefix.clone();
-        argv.extend(caffeinate_args(
-            std::process::id(),
-            minutes.map(|minutes| minutes * 60),
-        ));
-        let child = spawn_managed(ctx, &argv)?;
-        watch_exit(self.state.clone(), ctx.clone(), child.id());
-        *state = AssertionState::Running { child };
-        Ok(())
-    }
-
-    async fn start_and_report(
-        &self,
-        ctx: &Context,
-        state: &mut AssertionState,
-        minutes: Option<u64>,
-    ) -> PerformResponse {
-        match self.start(ctx, state, minutes).await {
-            Ok(()) => {
-                emit_state(ctx, state);
-                performed(state)
-            }
-            Err(error) => PerformResponse::fail(error.diagnostic()),
+    fn new(power: Box<dyn Power>) -> Self {
+        Self {
+            keeper: Arc::new(Mutex::new(Keeper {
+                state: State::default(),
+                held: Vec::new(),
+                power,
+                expiry: None,
+            })),
         }
     }
 }
 
-async fn stop_and_report(ctx: &Context, state: &mut AssertionState) -> PerformResponse {
-    match stop(state).await {
-        Ok(()) => {
-            emit_state(ctx, state);
-            performed(state)
-        }
-        Err(error) => PerformResponse::fail(error.diagnostic()),
+/// The request a command names. `on` and `toggle` take `--minutes`, which
+/// the manifest declares as a whole number from 1; `off` and `status`
+/// declare no argument. The host holds every invocation to that before the
+/// command arrives.
+fn parse(command: &CommandRequest) -> Result<Request, String> {
+    let name = command.name();
+    match name.as_str() {
+        "caffeinate on" => minutes(command, &name).map(Request::On),
+        "caffeinate toggle" => minutes(command, &name).map(Request::Toggle),
+        "caffeinate off" => Ok(Request::Off),
+        "caffeinate status" => Ok(Request::Status),
+        _ => Err(format!("unknown command: {name}")),
     }
 }
 
-/// The optional `[minutes]` argument, a positive whole number; `Err` for
-/// anything else rather than silently keeping the Mac awake indefinitely —
-/// `caffeinate -t 0` would mean no bound at all.
-fn parse_minutes(args: &[String]) -> Result<Option<u64>, ()> {
-    args.first()
-        .map(|argument| match argument.parse::<u32>() {
-            Ok(minutes) if minutes > 0 => Ok(u64::from(minutes)),
-            _ => Err(()),
-        })
-        .transpose()
-}
-
-/// Every sleep the tool can hold off, for `seconds` if bounded: display (`-d`),
-/// idle system (`-i`), disk (`-m`), system (`-s`, honoured on AC only) and a
-/// user-active declaration (`-u`). `-di` alone left the disk free to spin down
-/// and the system free to sleep on AC, so "awake" was not what it claimed.
-///
-/// `-w` ties the assertion to this plugin: should the plugin die without
-/// reaping it (a crash, a SIGKILL past the shutdown grace), caffeinate exits
-/// with it instead of keeping the Mac awake with no owner.
-fn caffeinate_args(plugin_pid: u32, seconds: Option<u64>) -> Vec<String> {
-    let mut args = vec![
-        "-dimsu".to_string(),
-        "-w".to_string(),
-        plugin_pid.to_string(),
-    ];
-    if let Some(seconds) = seconds {
-        args.push("-t".to_string());
-        args.push(seconds.to_string());
+/// The `--minutes` bound, when one was given. The usage answers a number
+/// the declaration would have refused.
+fn minutes(command: &CommandRequest, name: &str) -> Result<Option<u32>, String> {
+    if command.value("minutes").is_none() {
+        return Ok(None);
     }
-    args
+    command
+        .integer("minutes")
+        .and_then(|minutes| u32::try_from(minutes).ok())
+        .filter(|minutes| *minutes > 0)
+        .map(Some)
+        .ok_or_else(|| format!("usage: {name} [--minutes=<n>]"))
 }
 
-fn reconcile(state: &mut AssertionState) -> Result<(), ManagedChildError> {
-    let Some(child) = state.child_mut() else {
-        return Ok(());
-    };
-    if !child.is_running()? {
-        *state = AssertionState::Stopped;
+/// What a request answers once the Mac is, or is not, held awake. On, off
+/// and toggle change the state, so their alert shows wherever they ran;
+/// `status` asks, and its answer is the command's output alone.
+fn reply(request: Request, on: bool) -> PerformResponse {
+    let state = if on { "on" } else { "off" };
+    let response = PerformResponse::ok().message(format!("caffeinate {state}"));
+    if request == Request::Status {
+        return response;
     }
-    Ok(())
+    response.alert(PerformAlert::value("caffeinate", state).widest_value("off"))
 }
 
-async fn stop(state: &mut AssertionState) -> Result<(), ManagedChildError> {
-    terminate_into(state, AssertionState::Stopped).await
-}
-
-async fn terminate_into(
-    state: &mut AssertionState,
-    replacement: AssertionState,
-) -> Result<(), ManagedChildError> {
-    let mut previous = mem::replace(state, replacement);
-    let Some(child) = previous.child_mut() else {
-        return Ok(());
-    };
-    child.terminate(TERMINATION_GRACE).await
-}
-
-fn performed(state: &AssertionState) -> PerformResponse {
-    match state.pid() {
-        // These phrases share Flash's alert box with `volume 100%`.
-        Some(_) => PerformResponse::ok().message("caffeinate on"),
-        None => PerformResponse::ok().message("caffeinate off"),
-    }
-}
-
-fn emit_state(ctx: &Context, state: &AssertionState) {
-    let value = if state.pid().is_some() {
+fn publish(ctx: &Context, on: bool) {
+    let value = if on {
         StatusValue::text("on")
     } else {
         StatusValue::empty()
@@ -211,94 +107,147 @@ fn emit_state(ctx: &Context, state: &AssertionState) {
     ctx.status([("state", value)]);
 }
 
-/// Clear the status the moment the assertion's process exits on its own —
-/// killed, or its `-t` bound reached — rather than at the next command.
-/// Stopping or replacing it exits it too; the pid check makes that a no-op.
-fn watch_exit(state: Arc<Mutex<AssertionState>>, ctx: Context, pid: u32) {
-    tokio::spawn(async move {
-        if exited(pid).await.is_err() {
-            // No watch: the next command still reconciles.
-            return;
+/// One transition, its effects, and the change it made: whether the Mac is
+/// held awake afterwards.
+fn apply(
+    shared: &Shared,
+    ctx: &Context,
+    change: impl FnOnce(&mut State) -> Vec<Effect>,
+) -> Result<bool, PowerError> {
+    let mut keeper = lock(shared);
+    let was_on = keeper.state.is_on();
+    let mut failure = None;
+    for effect in change(&mut keeper.state) {
+        match effect {
+            Effect::Release => {
+                if let Some(expiry) = keeper.expiry.take() {
+                    expiry.cancel();
+                }
+                let held = std::mem::take(&mut keeper.held);
+                keeper.power.release(&held);
+            }
+            Effect::Acquire(hold) => match keeper.power.acquire(hold.seconds) {
+                Ok(held) => {
+                    keeper.held = held;
+                    if let Some(seconds) = hold.seconds {
+                        arm(&mut keeper, shared, ctx, hold.generation, seconds);
+                    }
+                }
+                Err(error) => {
+                    keeper.state.acquisition_failed(hold.generation);
+                    failure = Some(error);
+                }
+            },
         }
-        let mut state = state.lock().await;
-        if state.pid() != Some(pid) {
-            return;
-        }
-        if reconcile(&mut state).is_ok() && state.pid().is_none() {
-            emit_state(&ctx, &state);
-        }
-    });
-}
-
-/// `Kqueue` exposes `AsFd`; Tokio's reactor wants `AsRawFd`.
-struct Queue(Kqueue);
-
-impl AsRawFd for Queue {
-    fn as_raw_fd(&self) -> RawFd {
-        self.0.as_fd().as_raw_fd()
+    }
+    let is_on = keeper.state.is_on();
+    if is_on != was_on {
+        publish(ctx, is_on);
+        ctx.log(
+            "info",
+            if is_on {
+                "[caffeinate] on"
+            } else {
+                "[caffeinate] off"
+            },
+        );
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(is_on),
     }
 }
 
-const NO_WAIT: timespec = timespec {
-    tv_sec: 0,
-    tv_nsec: 0,
-};
+/// Arm the deadline that ends hold `generation` in `remaining` seconds, on
+/// the host's clock. `low`: powerd already enforces the bound, so a late
+/// tick only delays the status value.
+fn arm(keeper: &mut Keeper, shared: &Shared, ctx: &Context, generation: u64, remaining: u64) {
+    let step = remaining.min(MAX_DEADLINE_SECONDS);
+    let left = remaining - step;
+    let shared = shared.clone();
+    keeper.expiry = Some(ctx.after(
+        Duration::from_secs(step),
+        PollPriority::Low,
+        move |ctx| async move {
+            if left == 0 {
+                // A power failure cannot happen here: an expiry releases.
+                let _ = apply(&shared, &ctx, |state| state.expire(generation));
+                return;
+            }
+            let mut keeper = lock(&shared);
+            if keeper.state.hold().map(|hold| hold.generation) == Some(generation) {
+                arm(&mut keeper, &shared, &ctx, generation, left);
+            }
+        },
+    ));
+}
 
-/// Resolves when `pid` exits: kqueue's `EVFILT_PROC`/`NOTE_EXIT`, waited on
-/// through Tokio's reactor, so nothing polls. The child stays unreaped until
-/// `reconcile`, so its pid cannot be reused meanwhile.
-async fn exited(pid: u32) -> io::Result<()> {
-    // Readable only: a kqueue descriptor rejects a write filter.
-    // SAFETY: Queue owns the kqueue descriptor and never replaces it while
-    // AsyncFd is alive, so its AsRawFd value remains valid and stable.
-    let queue =
-        unsafe { AsyncFd::register_with_interest(Queue(Kqueue::new()?), Interest::READABLE)? };
-    let exit = KEvent::new(
-        pid as usize,
-        EventFilter::EVFILT_PROC,
-        EvFlags::EV_ADD | EvFlags::EV_ONESHOT,
-        FilterFlag::NOTE_EXIT,
-        0,
-        0,
-    );
-    match queue.get_ref().0.kevent(&[exit], &mut [], Some(NO_WAIT)) {
-        Ok(_) => {}
-        // Already gone.
-        Err(Errno::ESRCH) => return Ok(()),
-        Err(error) => return Err(error.into()),
+flash_plugin::plugin!(Caffeinate);
+
+impl FlashPlugin for Caffeinate {
+    /// A restarted plugin holds nothing: say so before a surface keeps
+    /// showing the previous run's `on`.
+    async fn on_start(&self, ctx: Context) {
+        publish(&ctx, lock(&self.keeper).state.is_on());
     }
-    loop {
-        let mut ready = queue.readable().await?;
-        let mut events = [exit];
-        let count = queue.get_ref().0.kevent(&[], &mut events, Some(NO_WAIT))?;
-        ready.clear_ready();
-        if count > 0 {
-            return Ok(());
+
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
+        let request = match parse(&command) {
+            Ok(request) => request,
+            Err(usage) => return PerformResponse::fail(usage),
+        };
+        match apply(&self.keeper, &ctx, |state| state.apply(request)) {
+            Ok(on) => reply(request, on),
+            Err(error) => PerformResponse::fail(error.to_string()),
         }
+    }
+
+    async fn on_shutdown(&self, ctx: Context) {
+        let _ = apply(&self.keeper, &ctx, |state| state.apply(Request::Off));
     }
 }
 
 fn main() {
-    run(Caffeinate::default());
+    run(Caffeinate::new(Box::new(IoKitPower)));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use flash_plugin::testing::Harness;
+    use serde_json::{Value, json};
 
-    async fn fixture() -> (Caffeinate, Harness) {
-        let harness = Harness::new("caffeinate-test");
-        tokio::fs::create_dir_all(harness.data_dir()).await.unwrap();
-        let script = harness.data_dir().join("fake-caffeinate.sh");
-        tokio::fs::write(&script, "trap 'exit 0' TERM\nwhile :; do sleep 1; done\n")
-            .await
-            .unwrap();
-        let plugin = Caffeinate {
-            command_prefix: vec!["/bin/sh".to_string(), script.to_string_lossy().into_owned()],
-            ..Caffeinate::default()
-        };
-        (plugin, harness)
+    /// What the stubbed powerd saw.
+    #[derive(Default)]
+    struct Calls {
+        acquired: Vec<Option<u64>>,
+        released: Vec<Vec<AssertionId>>,
+        next_id: AssertionId,
+        failure: Option<PowerError>,
+    }
+
+    struct StubPower(Arc<Mutex<Calls>>);
+
+    impl Power for StubPower {
+        fn acquire(&mut self, seconds: Option<u64>) -> Result<Vec<AssertionId>, PowerError> {
+            let mut calls = self.0.lock().unwrap();
+            if let Some(failure) = calls.failure {
+                return Err(failure);
+            }
+            calls.acquired.push(seconds);
+            calls.next_id += 1;
+            Ok(vec![calls.next_id])
+        }
+
+        fn release(&mut self, assertions: &[AssertionId]) {
+            self.0.lock().unwrap().released.push(assertions.to_vec());
+        }
+    }
+
+    fn fixture() -> (Caffeinate, Arc<Mutex<Calls>>, Harness) {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let plugin = Caffeinate::new(Box::new(StubPower(calls.clone())));
+        (plugin, calls, Harness::new("caffeinate"))
     }
 
     fn command(subcommand: &str, args: &[&str]) -> CommandRequest {
@@ -306,7 +255,7 @@ mod tests {
             command: "caffeinate".to_string(),
             subcommand: subcommand.to_string(),
             args: args.iter().map(ToString::to_string).collect(),
-            raw: String::new(),
+            ..CommandRequest::default()
         }
     }
 
@@ -315,176 +264,318 @@ mod tests {
         harness: &Harness,
         subcommand: &str,
         args: &[&str],
-    ) -> PerformResponse {
-        plugin
+    ) -> Value {
+        let response = plugin
             .on_command(harness.context(), command(subcommand, args))
-            .await
+            .await;
+        serde_json::to_value(response).unwrap()
     }
 
-    #[tokio::test]
-    async fn on_replaces_the_previous_process_and_off_reaps_it() {
-        let (plugin, harness) = fixture().await;
-        assert!(invoke(&plugin, &harness, "on", &[]).await.is_ok());
-        let first_pid = plugin.state.lock().await.pid().unwrap();
-
-        assert!(invoke(&plugin, &harness, "on", &[]).await.is_ok());
-        let second_pid = plugin.state.lock().await.pid().unwrap();
-        assert_ne!(first_pid, second_pid);
-
-        assert!(invoke(&plugin, &harness, "off", &[]).await.is_ok());
-        assert!(matches!(
-            *plugin.state.lock().await,
-            AssertionState::Stopped
-        ));
+    fn changed(state: &str) -> Value {
+        json!({ "ok": true, "message": format!("caffeinate {state}"), "alert": {
+            "title": "caffeinate", "value": state, "widest_value": "off"
+        } })
     }
 
-    #[tokio::test]
-    async fn toggle_moves_between_indefinite_and_stopped() {
-        let (plugin, harness) = fixture().await;
-        assert!(invoke(&plugin, &harness, "toggle", &[]).await.is_ok());
-        assert!(matches!(
-            *plugin.state.lock().await,
-            AssertionState::Running { .. }
-        ));
-        assert!(invoke(&plugin, &harness, "toggle", &[]).await.is_ok());
-        assert!(matches!(
-            *plugin.state.lock().await,
-            AssertionState::Stopped
-        ));
+    /// What the plugin sent since the last look: each `state` it published,
+    /// and the deadline its last registration set holds, as `(name, seconds)`.
+    struct Sent {
+        states: Vec<String>,
+        /// `None` when no set was registered; `Some(None)` for an empty one.
+        deadline: Option<Option<(String, f64)>>,
     }
 
-    /// A timed assertion is bounded by caffeinate's own `-t`: the plugin
-    /// arms no timer and registers no host deadline, and the bound ending
-    /// the process clears the status through its exit event.
-    #[tokio::test]
-    async fn a_timed_assertion_ends_with_its_own_bound() {
-        let (plugin, mut harness) = fixture().await;
-        let bounded = harness.data_dir().join("fake-bounded-caffeinate.sh");
-        // Exits as `-t` would: at once, standing in for the bound running out.
-        tokio::fs::write(
-            &bounded,
-            "case \"$*\" in *-t*) exit 0 ;; esac\nwhile :; do sleep 1; done\n",
-        )
-        .await
-        .unwrap();
-        let plugin = Caffeinate {
-            command_prefix: vec![
-                "/bin/sh".to_string(),
-                bounded.to_string_lossy().into_owned(),
-            ],
-            ..plugin
+    fn sent(harness: &mut Harness) -> Sent {
+        let mut sent = Sent {
+            states: Vec::new(),
+            deadline: None,
         };
-        assert!(invoke(&plugin, &harness, "on", &["5"]).await.is_ok());
-        for _ in 0..200 {
-            if matches!(*plugin.state.lock().await, AssertionState::Stopped) {
-                let frames = harness.drain();
-                assert!(
-                    !frames.iter().any(|frame| frame["method"] == "poll"),
-                    "{frames:?}"
-                );
-                let status: Vec<_> = frames
-                    .iter()
-                    .filter(|frame| frame["method"] == "status")
-                    .collect();
-                assert_eq!(status.last().unwrap()["params"]["segments"]["state"], "");
-                return;
+        for frame in harness.drain() {
+            match frame["method"].as_str() {
+                Some("status") => sent.states.push(
+                    frame["params"]["segments"]["state"]
+                        .as_str()
+                        .expect("a state")
+                        .to_string(),
+                ),
+                Some("poll") => {
+                    let registrations = frame["params"]["registrations"].as_object().unwrap();
+                    assert!(registrations.len() <= 1, "{registrations:?}");
+                    sent.deadline = Some(registrations.iter().next().map(|(name, entry)| {
+                        assert_eq!(entry["priority"], "low");
+                        (name.clone(), entry["after"].as_f64().unwrap())
+                    }));
+                }
+                _ => {}
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("the bounded assertion did not end");
-    }
-
-    /// A caffeinate that dies on its own (killed, or its `-t` ran out) clears
-    /// the status as it exits, not at the next command.
-    #[tokio::test]
-    async fn an_assertion_that_dies_clears_its_status_without_a_command() {
-        let (plugin, mut harness) = fixture().await;
-        assert!(invoke(&plugin, &harness, "on", &[]).await.is_ok());
-        let pid = plugin.state.lock().await.pid().unwrap();
-        assert_eq!(harness.drain_status().last().unwrap()["state"], "on");
-        let killed = tokio::process::Command::new("/bin/kill")
-            .args(["-9", &pid.to_string()])
-            .status()
-            .await
-            .unwrap();
-        assert!(killed.success());
-        for _ in 0..200 {
-            if matches!(*plugin.state.lock().await, AssertionState::Stopped) {
-                assert_eq!(harness.drain_status().last().unwrap()["state"], "");
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("a dead assertion kept its status");
-    }
-
-    #[tokio::test]
-    async fn a_replacement_reaps_the_previous_timed_assertion() {
-        let (plugin, harness) = fixture().await;
-        assert!(invoke(&plugin, &harness, "on", &["1"]).await.is_ok());
-        let timed = plugin.state.lock().await.pid().unwrap();
-        assert!(invoke(&plugin, &harness, "on", &[]).await.is_ok());
-        let indefinite = plugin.state.lock().await.pid().unwrap();
-        assert_ne!(timed, indefinite);
-        assert!(matches!(
-            *plugin.state.lock().await,
-            AssertionState::Running { .. }
-        ));
-        plugin.on_shutdown(harness.context()).await;
-    }
-
-    #[tokio::test]
-    async fn shutdown_reaps_the_owned_assertion() {
-        let (plugin, harness) = fixture().await;
-        assert!(invoke(&plugin, &harness, "on", &[]).await.is_ok());
-        let pid = plugin.state.lock().await.pid().unwrap();
-        plugin.on_shutdown(harness.context()).await;
-        assert!(matches!(
-            *plugin.state.lock().await,
-            AssertionState::ShuttingDown
-        ));
-        assert!(pid > 0);
-
-        let response = invoke(&plugin, &harness, "on", &[]).await;
-        assert_eq!(response.error_message(), Some("plugin is shutting down"));
+        sent
     }
 
     #[test]
-    fn the_assertion_is_tied_to_the_plugin_and_bounded_by_minutes() {
-        assert_eq!(caffeinate_args(42, None), ["-dimsu", "-w", "42"]);
-        assert_eq!(
-            caffeinate_args(42, Some(300)),
-            ["-dimsu", "-w", "42", "-t", "300"]
-        );
-        assert_eq!(parse_minutes(&[]), Ok(None));
-        assert_eq!(parse_minutes(&["5".to_string()]), Ok(Some(5)));
-        for invalid in ["-5", "0", "1h", "", "4294967296"] {
-            assert_eq!(parse_minutes(&[invalid.to_string()]), Err(()), "{invalid}");
+    fn commands_parse_their_minutes() {
+        let cases = [
+            ("on", vec![], Request::On(None)),
+            ("on", vec!["--minutes=30"], Request::On(Some(30))),
+            ("off", vec![], Request::Off),
+            ("toggle", vec![], Request::Toggle(None)),
+            ("toggle", vec!["--minutes=1"], Request::Toggle(Some(1))),
+            ("status", vec![], Request::Status),
+            (
+                "on",
+                vec!["--minutes=4294967295"],
+                Request::On(Some(u32::MAX)),
+            ),
+        ];
+        for (subcommand, args, request) in cases {
+            assert_eq!(
+                parse(&command(subcommand, &args)),
+                Ok(request),
+                "{subcommand} {args:?}"
+            );
         }
     }
 
-    #[tokio::test]
-    async fn invalid_minutes_fail_without_starting_a_process() {
-        let (plugin, harness) = fixture().await;
+    /// The host holds `--minutes` to its declaration; a number outside it
+    /// still takes nothing here.
+    #[test]
+    fn a_bound_outside_the_declaration_is_refused_with_the_usage() {
         for subcommand in ["on", "toggle"] {
-            let response = invoke(&plugin, &harness, subcommand, &["-5"]).await;
-            assert_eq!(response.error_message(), Some(USAGE));
+            let usage = format!("usage: caffeinate {subcommand} [--minutes=<n>]");
+            for args in [
+                vec!["--minutes=0"],
+                vec!["--minutes=-5"],
+                vec!["--minutes=1h"],
+                vec!["--minutes="],
+                vec!["--minutes=4294967296"],
+            ] {
+                assert_eq!(
+                    parse(&command(subcommand, &args)),
+                    Err(usage.clone()),
+                    "{subcommand} {args:?}"
+                );
+            }
         }
-        assert!(matches!(
-            *plugin.state.lock().await,
-            AssertionState::Stopped
-        ));
-        assert!(invoke(&plugin, &harness, "off", &["-5"]).await.is_ok());
+        assert_eq!(
+            parse(&command("wat", &[])),
+            Err("unknown command: caffeinate wat".to_string())
+        );
+    }
+
+    /// The manifest declares what `parse` reads: `--minutes` on `on` and
+    /// `toggle`, a whole number from 1 to the largest bound it holds.
+    #[test]
+    fn the_manifest_declares_the_minutes_the_commands_read() {
+        let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        for command in manifest["commands"].as_array().unwrap() {
+            let bounded = matches!(command["subcommand"].as_str(), Some("on" | "toggle"));
+            let expected = if bounded {
+                json!([{
+                    "name": "minutes", "type": "integer", "min": 1, "max": u32::MAX,
+                    "description": "How long to keep the Mac awake"
+                }])
+            } else {
+                Value::Null
+            };
+            assert_eq!(command["args"], expected, "{}", command["subcommand"]);
+        }
     }
 
     #[tokio::test]
-    async fn unknown_commands_fail_without_starting_a_process() {
-        let (plugin, harness) = fixture().await;
-        let response = invoke(&plugin, &harness, "wat", &[]).await;
-        assert_eq!(response.error_message(), Some("unknown subcommand: wat"));
-        assert!(matches!(
-            *plugin.state.lock().await,
-            AssertionState::Stopped
-        ));
+    async fn a_refused_command_takes_no_assertion() {
+        let (plugin, calls, mut harness) = fixture();
+        assert_eq!(
+            invoke(&plugin, &harness, "on", &["--minutes=0"]).await,
+            json!({ "ok": false, "error": "usage: caffeinate on [--minutes=<n>]" })
+        );
+        assert!(calls.lock().unwrap().acquired.is_empty());
+        let sent = sent(&mut harness);
+        assert_eq!(sent.states, Vec::<String>::new());
+        assert_eq!(sent.deadline, None);
+    }
+
+    /// On, off and toggle show the state they left wherever they ran;
+    /// `status` only answers.
+    #[tokio::test]
+    async fn the_state_is_every_commands_output() {
+        let (plugin, calls, mut harness) = fixture();
+        assert_eq!(
+            invoke(&plugin, &harness, "status", &[]).await,
+            json!({ "ok": true, "message": "caffeinate off" })
+        );
+        assert_eq!(invoke(&plugin, &harness, "off", &[]).await, changed("off"));
+        assert_eq!(
+            invoke(&plugin, &harness, "toggle", &[]).await,
+            changed("on")
+        );
+        assert_eq!(
+            invoke(&plugin, &harness, "status", &[]).await,
+            json!({ "ok": true, "message": "caffeinate on" })
+        );
+        assert_eq!(calls.lock().unwrap().acquired, [None]);
+        // Toggle ignores its minutes to stop.
+        assert_eq!(
+            invoke(&plugin, &harness, "toggle", &["--minutes=5"]).await,
+            changed("off")
+        );
+        assert_eq!(calls.lock().unwrap().released, [[1]]);
+        let sent = sent(&mut harness);
+        assert_eq!(sent.states, ["on", ""]);
+        assert_eq!(sent.deadline, None, "an unbounded hold arms nothing");
+    }
+
+    #[tokio::test]
+    async fn a_bounded_hold_arms_its_expiry_and_releases_when_it_fires() {
+        let (plugin, calls, mut harness) = fixture();
+        assert_eq!(
+            invoke(&plugin, &harness, "on", &["--minutes=2"]).await,
+            changed("on")
+        );
+        assert_eq!(calls.lock().unwrap().acquired, [Some(120)]);
+        let armed = sent(&mut harness);
+        assert_eq!(armed.states, ["on"]);
+        let (name, seconds) = armed.deadline.flatten().expect("the bound's deadline");
+        assert_eq!(seconds, 120.0);
+
+        harness
+            .deliver_poll_tick(&name)
+            .expect("the deadline fires")
+            .await
+            .unwrap();
+        assert_eq!(calls.lock().unwrap().released, [[1]]);
+        assert_eq!(sent(&mut harness).states, [""]);
+        assert_eq!(
+            invoke(&plugin, &harness, "status", &[]).await["message"],
+            "caffeinate off"
+        );
+    }
+
+    #[tokio::test]
+    async fn replacing_a_hold_cancels_its_expiry_and_ignores_its_late_fire() {
+        let (plugin, calls, mut harness) = fixture();
+        invoke(&plugin, &harness, "on", &["--minutes=1"]).await;
+        let armed = sent(&mut harness);
+        assert_eq!(armed.states, ["on"]);
+        let (name, _) = armed.deadline.flatten().expect("the bound's deadline");
+        assert_eq!(invoke(&plugin, &harness, "on", &[]).await, changed("on"));
+        assert_eq!(calls.lock().unwrap().acquired, [Some(60), None]);
+        assert_eq!(calls.lock().unwrap().released, [[1]]);
+        let replaced = sent(&mut harness);
+        assert_eq!(
+            replaced.deadline,
+            Some(None),
+            "the replaced hold's deadline is cancelled"
+        );
+        assert_eq!(
+            replaced.states,
+            Vec::<String>::new(),
+            "replacing a hold never reads as off in between"
+        );
+        assert!(
+            harness.deliver_poll_tick(&name).is_none(),
+            "a cancelled deadline runs nothing"
+        );
+        assert_eq!(
+            invoke(&plugin, &harness, "status", &[]).await["message"],
+            "caffeinate on"
+        );
+
+        assert_eq!(
+            invoke(&plugin, &harness, "toggle", &[]).await,
+            changed("off")
+        );
+        assert_eq!(calls.lock().unwrap().released, [[1], [2]]);
+        assert_eq!(sent(&mut harness).states, [""]);
+    }
+
+    /// The host arms a day at most: a longer bound is counted down in
+    /// steps, and only the last one releases.
+    #[tokio::test]
+    async fn a_bound_longer_than_a_day_is_counted_down_in_steps() {
+        let (plugin, calls, mut harness) = fixture();
+        // 36 hours.
+        invoke(&plugin, &harness, "on", &["--minutes=2160"]).await;
+        assert_eq!(calls.lock().unwrap().acquired, [Some(129_600)]);
+        let armed = sent(&mut harness);
+        assert_eq!(armed.states, ["on"]);
+        let (first, seconds) = armed.deadline.flatten().expect("the first step");
+        assert_eq!(seconds, 86_400.0);
+        harness
+            .deliver_poll_tick(&first)
+            .expect("the first step fires")
+            .await
+            .unwrap();
+        assert!(calls.lock().unwrap().released.is_empty());
+        let stepped = sent(&mut harness);
+        assert_eq!(stepped.states, Vec::<String>::new(), "still held");
+        let (second, seconds) = stepped.deadline.flatten().expect("the second step");
+        assert_eq!(seconds, 43_200.0);
+        harness
+            .deliver_poll_tick(&second)
+            .expect("the last step fires")
+            .await
+            .unwrap();
+        assert_eq!(calls.lock().unwrap().released, [[1]]);
+        assert_eq!(sent(&mut harness).states, [""]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_assertion_reports_and_holds_nothing() {
+        let (plugin, calls, mut harness) = fixture();
+        calls.lock().unwrap().failure = Some(PowerError(0xE000_02BDu32 as i32));
+        assert_eq!(
+            invoke(&plugin, &harness, "on", &["--minutes=5"]).await,
+            json!({ "ok": false, "error": "caffeinate: power assertion failed (0xe00002bd)" })
+        );
+        let sent = sent(&mut harness);
+        assert_eq!(sent.deadline, None);
+        assert_eq!(sent.states, Vec::<String>::new());
+        assert_eq!(
+            invoke(&plugin, &harness, "status", &[]).await["message"],
+            "caffeinate off"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_releases_the_hold() {
+        let (plugin, calls, mut harness) = fixture();
+        invoke(&plugin, &harness, "on", &["--minutes=30"]).await;
+        assert!(sent(&mut harness).deadline.flatten().is_some());
+        plugin.on_shutdown(harness.context()).await;
+        assert_eq!(calls.lock().unwrap().released, [[1]]);
+        let stopped = sent(&mut harness);
+        assert_eq!(stopped.deadline, Some(None), "its deadline is cancelled");
+        assert_eq!(stopped.states, [""]);
+    }
+
+    /// A started plugin says it holds nothing, so a surface drops the `on`
+    /// a previous run left.
+    #[tokio::test]
+    async fn a_started_plugin_publishes_that_it_holds_nothing() {
+        let (plugin, calls, mut harness) = fixture();
+        plugin.on_start(harness.context()).await;
+        assert_eq!(sent(&mut harness).states, [""]);
+        assert!(calls.lock().unwrap().acquired.is_empty());
+    }
+
+    /// The commands the manifest declares are the ones parsed here.
+    #[test]
+    fn the_manifest_declares_exactly_the_parsed_commands() {
+        let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
+        let mut declared: Vec<&str> = manifest["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                assert_eq!(entry["command"], "caffeinate");
+                entry["subcommand"].as_str().unwrap()
+            })
+            .collect();
+        declared.sort_unstable();
+        assert_eq!(declared, ["off", "on", "status", "toggle"]);
+        for subcommand in declared {
+            assert!(parse(&command(subcommand, &[])).is_ok(), "{subcommand}");
+        }
+        assert_eq!(manifest["status"], json!(["state"]));
     }
 }

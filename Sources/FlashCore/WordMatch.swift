@@ -1,6 +1,6 @@
 import Foundation
 
-/// Pure word segmentation for `mouse_target --words`: where the words of a
+/// Pure word segmentation for `mouse target --words`: where the words of a
 /// string sit, in UTF-16 indexes so a range can be handed to
 /// `kAXBoundsForRangeParameterizedAttribute` and sliced from an `NSString`.
 public enum WordMatcher {

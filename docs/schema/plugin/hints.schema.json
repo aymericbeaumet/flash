@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/hints.schema.json",
+  "title": "hints",
+  "description": "Host to plugin: the focused app whose hint targets a declared provider lists.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params",
+    "deadline_ms"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "hints"
+    },
+    "params": {
+      "$ref": "definitions.schema.json#/definitions/spatial_context"
+    },
+    "deadline_ms": {
+      "$ref": "definitions.schema.json#/definitions/deadline_ms"
+    },
+    "trace": {
+      "$ref": "definitions.schema.json#/definitions/trace"
+    }
+  }
+}

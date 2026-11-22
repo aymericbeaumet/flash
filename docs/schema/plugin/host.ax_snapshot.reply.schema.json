@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.ax_snapshot.reply.schema.json",
+  "title": "host.ax_snapshot reply",
+  "description": "Host to plugin: the nodes in walk order, each with the handle later host.ax_* calls name.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "nodes"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "pid": {
+              "$ref": "definitions.schema.json#/definitions/pid",
+              "description": "The app a menu_bar snapshot walked. Absent from a windows snapshot, and when no app but Flash owns the menu bar."
+            },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "handle",
+                  "root",
+                  "attrs"
+                ],
+                "properties": {
+                  "handle": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "root": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The index of the root the node descends from."
+                  },
+                  "attrs": {
+                    "type": "object",
+                    "$comment": "Open by design: the attributes the request named and the element has.",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "parent": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

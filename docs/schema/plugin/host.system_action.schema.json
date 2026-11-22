@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.system_action.schema.json",
+  "title": "host.system_action",
+  "description": "Plugin to host: carry out one machine or session action. A destructive one (restart, shutdown, logout, empty_trash) is honoured only inside a perform the user confirmed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.system_action"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "lock_screen",
+            "sleep",
+            "display_sleep",
+            "screensaver",
+            "toggle_appearance",
+            "restart",
+            "shutdown",
+            "logout",
+            "empty_trash"
+          ]
+        }
+      }
+    }
+  }
+}

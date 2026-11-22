@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/perform.schema.json",
+  "title": "perform",
+  "description": "Host to plugin: resolve a committed row, run a command, or navigate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params",
+    "deadline_ms"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "perform"
+    },
+    "params": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "row"
+          ],
+          "properties": {
+            "kind": {
+              "const": "resolve"
+            },
+            "row": {
+              "$ref": "definitions.schema.json#/definitions/row"
+            },
+            "confirmed": {
+              "const": true,
+              "description": "The user answered y to the row's confirm."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "command",
+            "subcommand",
+            "args"
+          ],
+          "properties": {
+            "kind": {
+              "const": "command"
+            },
+            "command": {
+              "type": "string"
+            },
+            "subcommand": {
+              "type": "string"
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The argument words: a core command's as a mapping writes them, a bang's query, and for the plugin's own command the arguments its manifest entry declares, in the host's one spelling."
+            },
+            "context": {
+              "$ref": "definitions.schema.json#/definitions/context"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 999,
+              "description": "The NORMAL count typed before the key of the plugin's own command; absent means 1."
+            },
+            "confirmed": {
+              "const": true,
+              "description": "The user answered y to a question before this command."
+            }
+          },
+          "$comment": "context comes with a core command the manifest declares under one of Flash's topics, never with the plugin's own command or a bang. count comes only with the plugin's own command, when it is above 1. confirmed comes only with a command the user confirmed, and is never false."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url"
+          ],
+          "properties": {
+            "kind": {
+              "const": "navigate"
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "deadline_ms": {
+      "$ref": "definitions.schema.json#/definitions/deadline_ms"
+    },
+    "trace": {
+      "$ref": "definitions.schema.json#/definitions/trace"
+    }
+  }
+}

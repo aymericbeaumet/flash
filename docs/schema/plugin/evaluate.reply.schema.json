@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/evaluate.reply.schema.json",
+  "title": "evaluate reply",
+  "description": "Plugin to host: the answers to a query, or a failure the host serves as none.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "answers"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "answers": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "$ref": "definitions.schema.json#/definitions/answer"
+              },
+              "$comment": "At most 262144 bytes in its compact encoding."
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

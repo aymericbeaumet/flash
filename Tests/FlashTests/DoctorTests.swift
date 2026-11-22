@@ -33,8 +33,42 @@ final class DoctorTests: XCTestCase {
         "accessibility", "keyboard_tap", "secure_input", "signature", "residents", "config",
         "hotkeys", "plugins", "keyboard_layout",
       ])
-    XCTAssertNil(check(report, "screen_recording"), "checked only with the screenshot plugin")
+    XCTAssertNil(check(report, "screen_recording"), "checked only for a plugin that declares it")
     XCTAssertNil(check(report, "hint_activations"), "reported only once hints were asked for")
+  }
+
+  /// A bar segment whose plugin is gone, disabled or never published that
+  /// name shows nothing and fails no check: the doctor names each one and
+  /// the value it most likely meant (a merged plugin's `<old>_<name>`, or the
+  /// same name under another plugin).
+  func testStatusValuesNoPluginPublishesAreNamedWithTheirReplacement() throws {
+    var inputs = healthy()
+    inputs.statusSegmentsRead = [
+      "cpu": ["label"], "tmux": ["session"], "feed": ["label"], "sysinfo": ["cpu_temp"],
+      "spotify": ["track"], "aiproviders": ["claude"],
+    ]
+    inputs.statusSegmentsDeclared = [
+      "sysinfo": ["cpu_label", "cpu_percent"], "terminals": ["session", "window"],
+      "feed": ["label", "summary"], "aiproviders": ["claude"],
+    ]
+    inputs.disabledPlugins = ["feed"]
+    let found = try XCTUnwrap(check(Doctor.run(inputs), "status_values"))
+    XCTAssertEqual(found.status, .warn)
+    XCTAssertEqual(
+      found.details,
+      [
+        "flash.plugin.cpu.label: no cpu plugin is loaded; did you mean flash.plugin.sysinfo.cpu_label?",
+        "flash.plugin.feed.label: the feed plugin is disabled ([plugins] disabled)",
+        "flash.plugin.spotify.track: no spotify plugin is loaded",
+        "flash.plugin.sysinfo.cpu_temp: the sysinfo plugin publishes no cpu_temp "
+          + "(it has cpu_label, cpu_percent)",
+        "flash.plugin.tmux.session: no tmux plugin is loaded; did you mean flash.plugin.terminals.session?",
+      ])
+
+    inputs.statusSegmentsRead = ["sysinfo": ["cpu_label"]]
+    XCTAssertEqual(check(Doctor.run(inputs), "status_values")?.status, .ok)
+    inputs.statusSegmentsRead = [:]
+    XCTAssertNil(check(Doctor.run(inputs), "status_values"), "nothing reads a plugin value")
   }
 
   func testPopupCommandsMissingFromTheLoginPathWarnWithTheirPopup() {
@@ -50,6 +84,71 @@ final class DoctorTests: XCTestCase {
     XCTAssertEqual(check(Doctor.run(inputs), "popup_commands")?.status, .ok)
     inputs.popupCommands = [:]
     XCTAssertNil(check(Doctor.run(inputs), "popup_commands"), "only with terminal popups")
+  }
+
+  /// A status link whose scheme is neither web, mail nor allowlisted does
+  /// nothing; the doctor names each refused scheme once, with the setting
+  /// that would allow it. Nothing refused, nothing said.
+  func testRefusedStatusLinkSchemesAreNotedOnceWithTheSettingThatAllowsThem() throws {
+    var inputs = healthy()
+    XCTAssertNil(check(Doctor.run(inputs), "status_links"))
+    inputs.refusedLinkSchemes = ["file", "slack"]
+    let found = try XCTUnwrap(check(Doctor.run(inputs), "status_links"))
+    XCTAssertEqual(found.status, .warn)
+    XCTAssertEqual(found.summary, "2 status link schemes were refused since launch: file, slack")
+    XCTAssertEqual(
+      found.details,
+      [
+        "A #[link] opens only http, https and mailto URLs; a refused link does nothing.",
+        "Allow a scheme with [statusbar] link_schemes = [\"file\", \"slack\"] "
+          + "when you trust what writes those links.",
+      ])
+    XCTAssertEqual(Doctor.run(inputs).issues, 0, "a refused link is a warning, not an issue")
+  }
+
+  func testAMissingLinkSchemeIsNotSuggestedAsAnAllowlistEntry() throws {
+    let check = try XCTUnwrap(Doctor.statusLinksCheck(["(none)", "slack"]))
+    XCTAssertFalse(check.details.joined().contains("\"(none)\""))
+    XCTAssertTrue(check.details.joined().contains("link_schemes = [\"slack\"]"))
+    XCTAssertTrue(check.details.joined().contains("absolute URL"))
+    let relativeOnly = try XCTUnwrap(Doctor.statusLinksCheck(["(none)"]))
+    XCTAssertFalse(relativeOnly.details.joined().contains("link_schemes ="))
+  }
+
+  /// The OTLP receiver listens on loopback, which every account and program
+  /// on the Mac shares. Without a token that is fine until a monitor runs a
+  /// command from a received metric: then anyone local can fire it.
+  func testAnOpenReceiverWarnsOnlyWhenAMonitorRunsCommandsFromReceivedMetrics() throws {
+    var inputs = healthy()
+    XCTAssertNil(check(Doctor.run(inputs), "telemetry_receiver"), "nothing to say when off")
+    inputs.telemetryReceiver = .init(
+      enabled: false, port: 4318, hasToken: false, monitorsRunOnReceivedMetrics: ["deploy"])
+    XCTAssertNil(check(Doctor.run(inputs), "telemetry_receiver"), "off: no listener to guard")
+
+    inputs.telemetryReceiver = .init(
+      enabled: true, port: 4318, hasToken: false, monitorsRunOnReceivedMetrics: [])
+    XCTAssertEqual(check(Doctor.run(inputs), "telemetry_receiver")?.status, .ok)
+    inputs.telemetryReceiver = .init(
+      enabled: true, port: 4318, hasToken: true, monitorsRunOnReceivedMetrics: ["deploy"])
+    XCTAssertEqual(check(Doctor.run(inputs), "telemetry_receiver")?.status, .ok)
+
+    inputs.telemetryReceiver = .init(
+      enabled: true, port: 4319, hasToken: false,
+      monitorsRunOnReceivedMetrics: ["build_long", "deploy"])
+    let found = try XCTUnwrap(check(Doctor.run(inputs), "telemetry_receiver"))
+    XCTAssertEqual(found.status, .warn)
+    XCTAssertEqual(
+      found.summary,
+      "the OTLP receiver on 127.0.0.1:4319 has no token, and 2 monitors run commands "
+        + "from received metrics: build_long, deploy")
+    XCTAssertEqual(
+      found.details,
+      [
+        "Any program on this Mac, under any account, can post a metric there and fire them.",
+        "Set [telemetry.receiver] token and send it as Authorization: Bearer <token> "
+          + "(OTEL_EXPORTER_OTLP_HEADERS), or drop run from those monitors.",
+      ])
+    XCTAssertEqual(Doctor.run(inputs).issues, 0, "a warning: the receiver is opt-in by design")
   }
 
   func testRecentHintActivationsAreReportedOnceThereAreAny() {
@@ -76,7 +175,7 @@ final class DoctorTests: XCTestCase {
     ]
     let report = Doctor.run(inputs)
     let flagged = check(report, "hint_activations")
-    XCTAssertEqual(flagged?.status, .warn, "a warning never fails `flash doctor`")
+    XCTAssertEqual(flagged?.status, .warn, "a warning never fails `flash resident doctor`")
     XCTAssertEqual(report.issues, 0)
     XCTAssertEqual(
       flagged?.summary,
@@ -113,7 +212,10 @@ final class DoctorTests: XCTestCase {
     inputs.secureInputEnabled = true
     inputs.secureInputHolders = [Doctor.Process(pid: 7, name: "1Password")]
     inputs.signature = .adHoc
-    inputs.screenRecordingGranted = false
+    inputs.pluginPermissions = [
+      Doctor.PluginPermissionState(
+        permission: .screenRecording, granted: false, plugins: ["screenshot"])
+    ]
     let report = Doctor.run(inputs)
     XCTAssertEqual(report.issues, 0)
     XCTAssertEqual(report.warnings, 3)
@@ -126,6 +228,37 @@ final class DoctorTests: XCTestCase {
       } == true)
     XCTAssertTrue(check(report, "signature")?.summary.contains("ad-hoc") == true)
     XCTAssertEqual(check(report, "screen_recording")?.status, .warn)
+    XCTAssertEqual(
+      check(report, "screen_recording")?.summary,
+      "Screen Recording is not granted; the screenshot plugin needs it")
+  }
+
+  /// A permission row comes from what loaded plugins declare: one row per
+  /// permission, naming every plugin that declares it.
+  func testAPermissionRowNamesThePluginsThatDeclareIt() {
+    var inputs = healthy()
+    inputs.pluginPermissions = [
+      Doctor.PluginPermissionState(
+        permission: .screenRecording, granted: true, plugins: ["capture", "screenshot"])
+    ]
+    var report = Doctor.run(inputs)
+    XCTAssertEqual(check(report, "screen_recording")?.status, .ok)
+    XCTAssertEqual(
+      check(report, "screen_recording")?.summary,
+      "Screen Recording granted (capture, screenshot)")
+    XCTAssertEqual(report.warnings, 0)
+
+    inputs.pluginPermissions[0].granted = false
+    report = Doctor.run(inputs)
+    XCTAssertEqual(
+      check(report, "screen_recording")?.summary,
+      "Screen Recording is not granted; the capture and screenshot plugins need it")
+    XCTAssertEqual(
+      check(report, "screen_recording")?.details,
+      [
+        "macOS asks the first time a plugin uses it; "
+          + "allow Flash in System Settings > Privacy & Security > Screen Recording."
+      ])
   }
 
   func testKeysTheReadLayoutCannotTypeAreAnIssue() {

@@ -1,0 +1,223 @@
+{"name": "initialize", "expect": "accept", "reply": "initialize.reply", "frame": {"id":1,"method":"initialize","params":{"protocol_version":1},"deadline_ms":5000}}
+{"name": "initialize.newer-host", "expect": "accept", "reply": "initialize.reply.mismatch", "frame": {"id":1,"method":"initialize","params":{"protocol_version":2},"deadline_ms":5000}}
+{"name": "initialize.without-version", "expect": "reject", "reply": "initialize.reply.mismatch-unversioned", "frame": {"id":1,"method":"initialize","params":{},"deadline_ms":5000}}
+{"name": "ping", "expect": "accept", "reply": "ping.reply", "frame": {"id":2,"method":"ping","params":{},"deadline_ms":10000}}
+{"name": "evaluate", "expect": "accept", "reply": "evaluate.reply", "frame": {"id":3,"method":"evaluate","params":{"query":"2+2"},"deadline_ms":50,"trace":"k3f9"}}
+{"name": "evaluate.unclaimed", "expect": "accept", "reply": "evaluate.reply.empty", "frame": {"id":3,"method":"evaluate","params":{"query":"hello"},"deadline_ms":50}}
+{"name": "evaluate.query-not-a-string", "expect": "reject", "reply": "evaluate.reply.invalid-params", "frame": {"id":3,"method":"evaluate","params":{"query":4},"deadline_ms":50}}
+{"name": "evaluate.params-not-an-object", "expect": "reject", "reply": "evaluate.reply.invalid-params", "frame": {"id":3,"method":"evaluate","params":["2+2"],"deadline_ms":50}}
+{"name": "hints", "expect": "accept", "reply": "hints.reply", "frame": {"id":4,"method":"hints","params":{"bundle_id":"com.example.app","pid":512,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875},"display_scale":2},"deadline_ms":500,"trace":"k3f9"}}
+{"name": "hints.without-display-scale", "expect": "accept", "reply": "hints.reply", "frame": {"id":4,"method":"hints","params":{"bundle_id":"com.example.app","pid":512,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875}},"deadline_ms":500}}
+{"name": "hints.pid-zero", "expect": "reject", "reply": "hints.reply.invalid-params", "frame": {"id":4,"method":"hints","params":{"bundle_id":"com.example.app","pid":0,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875},"display_scale":2},"deadline_ms":500}}
+{"name": "hints.frame-without-height", "expect": "reject", "reply": "hints.reply.invalid-params", "frame": {"id":4,"method":"hints","params":{"bundle_id":"com.example.app","pid":512,"front_window_frame":{"x":0,"y":25,"width":1440},"display_scale":2},"deadline_ms":500}}
+{"name": "text_grid", "expect": "accept", "reply": "text_grid.reply", "frame": {"id":5,"method":"text_grid","params":{"bundle_id":"com.example.app","pid":512,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875},"display_scale":2},"deadline_ms":500,"trace":"k3f9"}}
+{"name": "text_grid.pid-a-string", "expect": "reject", "reply": "text_grid.reply.invalid-params", "frame": {"id":5,"method":"text_grid","params":{"bundle_id":"com.example.app","pid":"512","front_window_frame":{"x":0,"y":25,"width":1440,"height":875},"display_scale":2},"deadline_ms":500}}
+{"name": "search", "expect": "accept", "reply": "search.reply", "frame": {"id":7,"method":"search","params":{"source":"example.live","query":"ro"},"deadline_ms":1000,"trace":"k3f9"}}
+{"name": "search.no-match", "expect": "accept", "reply": "search.reply.empty", "frame": {"id":7,"method":"search","params":{"source":"example.live","query":"zz"},"deadline_ms":1000}}
+{"name": "search.without-source", "expect": "reject", "reply": "search.reply.invalid-params", "frame": {"id":7,"method":"search","params":{"query":"ro"},"deadline_ms":1000}}
+{"name": "search.without-query", "expect": "reject", "reply": "search.reply.invalid-params", "frame": {"id":7,"method":"search","params":{"source":"example.live"},"deadline_ms":1000}}
+{"name": "search.query-not-a-string", "expect": "reject", "reply": "search.reply.invalid-params", "frame": {"id":7,"method":"search","params":{"source":"example.live","query":7},"deadline_ms":1000}}
+{"name": "search.params-not-an-object", "expect": "reject", "reply": "search.reply.invalid-params", "frame": {"id":7,"method":"search","params":["example.live","ro"],"deadline_ms":1000}}
+{"name": "perform.resolve", "expect": "accept", "reply": "perform.reply", "frame": {"id":6,"method":"perform","params":{"kind":"resolve","row":{"source":"example.items","title":"Example row","url":"https://example.com/a","metadata":{"subtitle":"First"},"effect":{"type":"copy_text","text":"Example row"}}},"deadline_ms":10000,"trace":"k3f9"}}
+{"name": "perform.command.core", "expect": "accept", "reply": "perform.reply.full", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"tab","subcommand":"next","args":["--index=3"],"context":{"bundle_id":"com.example.app","pid":512,"front_window_frame":{"x":0,"y":25,"width":1440,"height":875}}},"deadline_ms":10000}}
+{"name": "perform.command.own", "expect": "accept", "reply": "perform.reply.unhandled", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"decline","args":[]},"deadline_ms":10000}}
+{"name": "perform.command.failing", "expect": "accept", "reply": "perform.reply.failure", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"break","args":[]},"deadline_ms":10000}}
+{"name": "perform.command.counted", "expect": "accept", "reply": "perform.reply.counted", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"repeat","args":[],"count":5},"deadline_ms":10000}}
+{"name": "perform.command.uncounted", "expect": "accept", "reply": "perform.reply.uncounted", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"repeat","args":[]},"deadline_ms":10000}}
+{"name": "perform.command.declared", "expect": "accept", "reply": "perform.reply.declared", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"measure","args":["Daft Punk","--times=2","--mode=fast","--dry-run"]},"deadline_ms":10000}}
+{"name": "perform.command.confirmed", "expect": "accept", "reply": "perform.reply.confirmed", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"confirm","args":[],"confirmed":true},"deadline_ms":10000}}
+{"name": "perform.command.unconfirmed", "expect": "accept", "reply": "perform.reply.unconfirmed", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"confirm","args":[]},"deadline_ms":10000}}
+{"name": "perform.resolve.confirmed", "expect": "accept", "reply": "perform.reply", "frame": {"id":6,"method":"perform","params":{"kind":"resolve","row":{"source":"example.items","title":"Restart","metadata":{},"confirm":"Restart this Mac?"},"confirmed":true},"deadline_ms":10000}}
+{"name": "perform.navigate", "expect": "accept", "reply": "perform.reply.navigated", "frame": {"id":6,"method":"perform","params":{"kind":"navigate","url":"https://example.com/a"},"deadline_ms":10000}}
+{"name": "perform.unknown-kind", "expect": "reject", "reply": "perform.reply.unknown-kind", "frame": {"id":6,"method":"perform","params":{"kind":"launch"},"deadline_ms":10000}}
+{"name": "perform.resolve-without-row", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"resolve"},"deadline_ms":10000}}
+{"name": "perform.row-not-an-object", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"resolve","row":["example.items","Alpha"]},"deadline_ms":10000}}
+{"name": "perform.args-not-strings", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"decline","args":[3]},"deadline_ms":10000}}
+{"name": "perform.count-zero", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"repeat","args":[],"count":0},"deadline_ms":10000}}
+{"name": "perform.count-over-the-bound", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"repeat","args":[],"count":1000},"deadline_ms":10000}}
+{"name": "perform.count-not-an-integer", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"repeat","args":[],"count":"5"},"deadline_ms":10000}}
+{"name": "perform.command-confirmed-false", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"command","command":"example","subcommand":"confirm","args":[],"confirmed":false},"deadline_ms":10000}}
+{"name": "perform.resolve-confirmed-not-a-boolean", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"resolve","row":{"source":"example.items","title":"Restart","confirm":"Restart this Mac?"},"confirmed":"yes"},"deadline_ms":10000}}
+{"name": "perform.url-not-a-string", "expect": "reject", "reply": "perform.reply.invalid-params", "frame": {"id":6,"method":"perform","params":{"kind":"navigate","url":7},"deadline_ms":10000}}
+{"name": "request.unknown-method", "expect": "reject", "reply": "reply.unknown-method", "frame": {"id":9,"method":"teleport","params":{},"deadline_ms":1000}}
+{"name": "request.id-zero", "expect": "reject", "frame": {"id":0,"method":"ping","params":{},"deadline_ms":10000}}
+{"name": "request.negative-id", "expect": "reject", "frame": {"id":-2,"method":"ping","params":{},"deadline_ms":10000}}
+{"name": "request.id-a-string", "expect": "reject", "frame": {"id":"2","method":"ping","params":{},"deadline_ms":10000}}
+{"name": "ping.unknown-envelope-key", "expect": "accept", "reply": "ping.reply", "schema": "reject", "frame": {"id":2,"method":"ping","params":{},"deadline_ms":10000,"priority":"high"}}
+{"name": "evaluate.unknown-params-key", "expect": "accept", "reply": "evaluate.reply", "schema": "reject", "frame": {"id":3,"method":"evaluate","params":{"query":"2+2","locale":"en"},"deadline_ms":50}}
+{"name": "search.unknown-params-key", "expect": "accept", "reply": "search.reply", "schema": "reject", "frame": {"id":7,"method":"search","params":{"source":"example.live","query":"ro","limit":20},"deadline_ms":1000}}
+{"name": "event.focus-changed", "expect": "accept", "frame": {"method":"event","params":{"name":"core:focus.changed","payload":{"bundle_id":"com.example.app","pid":512}}}}
+{"name": "event.apps-changed", "expect": "accept", "frame": {"method":"event","params":{"name":"core:apps.changed","payload":{"running_applications":[{"bundle_id":"com.example.app","pid":512,"localized_name":"Example"},{"bundle_id":"com.example.other","pid":640,"localized_name":"Other"}]}}}}
+{"name": "event.apps-changed.none", "expect": "accept", "frame": {"method":"event","params":{"name":"core:apps.changed","payload":{"running_applications":[]}}}}
+{"name": "event.apps-changed.pid-zero", "expect": "reject", "schema": "accept", "frame": {"method":"event","params":{"name":"core:apps.changed","payload":{"running_applications":[{"bundle_id":"com.example.app","pid":0,"localized_name":"Example"}]}}}}
+{"name": "event.ax-changed", "expect": "accept", "frame": {"method":"event","params":{"name":"core:ax.changed","payload":{"pid":512,"notification":"AXValueChanged","bundle_id":"com.example.app"}}}}
+{"name": "event.ax-changed.without-bundle-id", "expect": "accept", "frame": {"method":"event","params":{"name":"core:ax.changed","payload":{"pid":512,"notification":"AXTitleChanged"}}}}
+{"name": "event.ax-changed.without-pid", "expect": "reject", "frame": {"method":"event","params":{"name":"core:ax.changed","payload":{"notification":"AXValueChanged"}}}}
+{"name": "event.ax-changed.empty-notification", "expect": "reject", "frame": {"method":"event","params":{"name":"core:ax.changed","payload":{"pid":512,"notification":""}}}}
+{"name": "event.ax-changed.pid-a-string", "expect": "reject", "frame": {"method":"event","params":{"name":"core:ax.changed","payload":{"pid":"512","notification":"AXValueChanged"}}}}
+{"name": "event.status-observed", "expect": "accept", "frame": {"method":"event","params":{"name":"core:status.observed","payload":{"segments":["summary","feed"]}}}}
+{"name": "event.status-observed.none", "expect": "accept", "frame": {"method":"event","params":{"name":"core:status.observed","payload":{"segments":[]}}}}
+{"name": "event.status-observed.without-segments", "expect": "reject", "frame": {"method":"event","params":{"name":"core:status.observed","payload":{}}}}
+{"name": "event.status-observed.repeated-segment", "expect": "reject", "frame": {"method":"event","params":{"name":"core:status.observed","payload":{"segments":["summary","summary"]}}}}
+{"name": "event.status-observed.empty-segment", "expect": "reject", "frame": {"method":"event","params":{"name":"core:status.observed","payload":{"segments":[""]}}}}
+{"name": "event.session-opened", "expect": "accept", "frame": {"method":"event","params":{"name":"core:session.opened","payload":{}}}}
+{"name": "event.poll-tick", "expect": "accept", "frame": {"method":"event","params":{"name":"core:poll:i0","payload":{}}}}
+{"name": "event.clock-minute", "expect": "accept", "frame": {"method":"event","params":{"name":"core:clock.minute","payload":{"time":"09:30","weekday":"wed","date":"2026-11-18","late_seconds":0}}}}
+{"name": "event.space-changed", "expect": "accept", "frame": {"method":"event","params":{"name":"core:space.changed","payload":{}}}}
+{"name": "event.blank-name", "expect": "reject", "frame": {"method":"event","params":{"name":" ","payload":{}}}}
+{"name": "event.without-name", "expect": "reject", "frame": {"method":"event","params":{"payload":{}}}}
+{"name": "event.name-not-a-string", "expect": "reject", "frame": {"method":"event","params":{"name":7,"payload":{}}}}
+{"name": "event.payload-not-an-object", "expect": "reject", "frame": {"method":"event","params":{"name":"core:space.changed","payload":[]}}}
+{"name": "event.params-not-an-object", "expect": "reject", "frame": {"method":"event","params":["core:space.changed",{}]}}
+{"name": "event.unknown-name", "expect": "accept", "schema": "reject", "frame": {"method":"event","params":{"name":"core:lid.closed","payload":{}}}}
+{"name": "event.without-payload", "expect": "accept", "schema": "reject", "frame": {"method":"event","params":{"name":"core:space.changed"}}}
+{"name": "host.ping.reply", "expect": "accept", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.fetch.reply", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":true,"status":200,"body":"{\"items\":[]}"}}}
+{"name": "host.fetch.reply.outside-the-allowlist", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"url not in the fetch allowlist"}}}
+{"name": "host.fetch.reply.invalid-url", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"host.fetch requires a valid https url param"}}}
+{"name": "host.wifi_info.reply", "expect": "accept", "reply_to": "host.wifi_info", "frame": {"id":1,"result":{"ok":true,"present":true,"ssid":"Atelier"}}}
+{"name": "host.wifi_info.reply.absent", "expect": "accept", "reply_to": "host.wifi_info", "frame": {"id":1,"result":{"ok":true,"present":false}}}
+{"name": "host.wifi_info.reply.invalid-params", "expect": "accept", "reply_to": "host.wifi_info", "frame": {"id":1,"result":{"ok":false,"error":"host.wifi_info requires a boolean request_authorization param"}}}
+{"name": "host.applescript.reply", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":true,"result":"Focus\nRest"}}}
+{"name": "host.applescript.reply.invalid-timeout", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"host.applescript timeout_ms must be an integer 1-30000"}}}
+{"name": "host.applescript.reply.unsupported", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"unsupported AppleScript operation or field"}}}
+{"name": "host.applescript.reply.without-an-operation", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"host.applescript requires a supported operation"}}}
+{"name": "host.applescript.reply.without-the-artist-flag", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"now_playing requires boolean artist"}}}
+{"name": "host.applescript.reply.outside-the-targets", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"operation target is outside apple_events_targets"}}}
+{"name": "host.applescript.reply.invalid-index", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"operation requires a positive integer index"}}}
+{"name": "host.applescript.reply.script-failed", "expect": "accept", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"execution error: no such tab (-1728)","status":1}}}
+{"name": "host.applescript.reply.status-not-an-integer", "expect": "reject", "reply_to": "host.applescript", "frame": {"id":1,"result":{"ok":false,"error":"applescript timed out timeout_ms=10000","status":"124"}}}
+{"name": "host.normal_mode_target.reply", "expect": "accept", "reply_to": "host.normal_mode_target", "frame": {"id":1,"result":{"ok":true,"present":true,"pid":512,"bundle_id":"com.example.app","window_id":4021}}}
+{"name": "host.normal_mode_target.reply.absent", "expect": "accept", "reply_to": "host.normal_mode_target", "frame": {"id":1,"result":{"ok":true,"present":false}}}
+{"name": "host.activate.reply", "expect": "accept", "reply_to": "host.activate", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.activate.reply.invalid-params", "expect": "accept", "reply_to": "host.activate", "frame": {"id":1,"result":{"ok":false,"error":"host.activate requires pid"}}}
+{"name": "host.activate.reply.not-running", "expect": "accept", "reply_to": "host.activate", "frame": {"id":1,"result":{"ok":false,"error":"no running app for pid"}}}
+{"name": "host.audio_devices.reply.list", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":true,"devices":[{"uid":"built-in","name":"MacBook Pro Speakers","default":true},{"uid":"usb-1","name":"USB Audio","default":false}]}}}
+{"name": "host.audio_devices.reply", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.audio_devices.reply.percent", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":true,"percent":50}}}
+{"name": "host.audio_devices.reply.muted", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":true,"muted":true}}}
+{"name": "host.audio_devices.reply.volume", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":true,"percent":38,"muted":false}}}
+{"name": "host.audio_devices.reply.unavailable", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"audio device unavailable: gone"}}}
+{"name": "host.audio_devices.reply.without-an-operation", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"host.audio_devices requires a supported operation"}}}
+{"name": "host.audio_devices.reply.without-a-direction", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"host.audio_devices requires an input or output direction"}}}
+{"name": "host.audio_devices.reply.without-a-uid", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"host.audio_devices select requires a non-empty uid"}}}
+{"name": "host.audio_devices.reply.invalid-ticks", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"host.audio_devices step_volume requires non-zero ticks from -16 to 16"}}}
+{"name": "host.audio_devices.reply.params-refused", "expect": "accept", "reply_to": "host.audio_devices", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.audio_devices params"}}}
+{"name": "host.system_action.reply", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.system_action.reply.unconfirmed", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"requires a perform the user confirmed"}}}
+{"name": "host.system_action.reply.failed", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"power management unavailable"}}}
+{"name": "host.system_action.reply.without-an-action", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"host.system_action requires a supported action"}}}
+{"name": "host.system_action.reply.params-refused", "expect": "accept", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.system_action params"}}}
+{"name": "host.system_action.reply.with-a-status", "expect": "reject", "reply_to": "host.system_action", "frame": {"id":1,"result":{"ok":true,"error":"asleep"}}}
+{"name": "host.process_signal.reply", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.process_signal.reply.unconfirmed", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"requires a perform the user confirmed"}}}
+{"name": "host.process_signal.reply.failed", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"No such process"}}}
+{"name": "host.process_signal.reply.without-a-pid", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"host.process_signal requires a pid above 1 and a supported signal"}}}
+{"name": "host.process_signal.reply.params-refused", "expect": "accept", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.process_signal params"}}}
+{"name": "host.process_signal.reply.with-an-error", "expect": "reject", "reply_to": "host.process_signal", "frame": {"id":1,"result":{"ok":true,"error":"No such process"}}}
+{"name": "host.process_table.reply.list", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[{"pid":4242,"start":77000,"cpu_ns":1500000000,"resident_bytes":268435456},{"pid":4243,"start":78000,"cpu_ns":250000000,"resident_bytes":67108864},{"pid":4300,"start":90000,"cpu_ns":20000000,"resident_bytes":4194304}]}}}
+{"name": "host.process_table.reply.list.pids", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[{"pid":4300,"start":90000,"cpu_ns":20000000,"resident_bytes":4194304,"name":"zsh"}]}}}
+{"name": "host.process_table.reply.tree", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[{"pid":4242,"start":77000,"cpu_ns":1500000000,"resident_bytes":268435456,"name":"Safari","threads":12,"sockets":3,"disk_read_bytes":4096,"disk_write_bytes":8192},{"pid":4243,"start":78000,"cpu_ns":250000000,"resident_bytes":67108864,"name":"com.apple.WebKit.WebContent","threads":5,"sockets":1,"disk_read_bytes":0,"disk_write_bytes":0}],"path":"/Applications/Safari.app/Contents/MacOS/Safari","started_at":1799996400}}}
+{"name": "host.process_table.reply.tree.gone", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[]}}}
+{"name": "host.process_table.reply.truncated", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[{"pid":4242,"start":77000,"cpu_ns":1500000000,"resident_bytes":268435456}],"truncated":true}}}
+{"name": "host.process_table.reply.list.pids.nameless", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[{"pid":4301,"start":91000,"cpu_ns":0,"resident_bytes":16384}]}}}
+{"name": "host.process_table.reply.failed", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":false,"error":"process table unavailable"}}}
+{"name": "host.process_table.reply.without-an-operation", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":false,"error":"host.process_table requires a supported operation"}}}
+{"name": "host.process_table.reply.invalid-pids", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":false,"error":"host.process_table list takes at most 4096 distinct pids above 0"}}}
+{"name": "host.process_table.reply.without-a-pid", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":false,"error":"host.process_table tree requires a pid above 0"}}}
+{"name": "host.process_table.reply.params-refused", "expect": "accept", "reply_to": "host.process_table", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.process_table params"}}}
+{"name": "host.process_table.reply.with-arguments", "expect": "accept", "reply_to": "host.process_table", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[{"pid":4242,"start":77000,"cpu_ns":1500000000,"resident_bytes":268435456,"name":"Safari","arguments":["--private"]}]}}}
+{"name": "host.process_table.reply.with-an-environment", "expect": "accept", "reply_to": "host.process_table", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"at":90000000000,"processes":[{"pid":4242,"start":77000,"cpu_ns":1500000000,"resident_bytes":268435456,"name":"Safari","environment":{"TOKEN":"x"}}]}}}
+{"name": "host.process_table.reply.without-a-clock", "expect": "accept", "reply_to": "host.process_table", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"processes":[{"pid":4300,"start":90000,"cpu_ns":20000000,"resident_bytes":4194304,"name":"zsh"}]}}}
+{"name": "host.calendar_events.reply.access", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":true,"access":"granted"}}}
+{"name": "host.calendar_events.reply.denied", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":true,"access":"denied"}}}
+{"name": "host.calendar_events.reply.undetermined", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":true,"access":"undetermined"}}}
+{"name": "host.calendar_events.reply.list", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":true,"access":"granted","events":[{"id":"E1@1800000720","title":"Standup","start":1800000720,"end":1800002520,"all_day":false,"calendar":"Work","declined":false,"canceled":false,"url":"https://example.com/standup","location":"Room 4","links":["https://zoom.us/j/123?pwd=abc"]},{"id":"E2@1800007200","title":"Lunch","start":1800007200,"end":1800010800,"all_day":false,"calendar":"Home","declined":false,"canceled":false}]}}}
+{"name": "host.calendar_events.reply.list.calendars", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":true,"access":"granted","events":[{"id":"E1@1800000720","title":"Standup","start":1800000720,"end":1800002520,"all_day":false,"calendar":"Work","declined":false,"canceled":false,"url":"https://example.com/standup","location":"Room 4","links":["https://zoom.us/j/123?pwd=abc"]}]}}}
+{"name": "host.calendar_events.reply.list.empty", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":true,"access":"granted","events":[]}}}
+{"name": "host.calendar_events.reply.list.truncated", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":true,"access":"granted","events":[{"id":"E2@1800007200","title":"Lunch","start":1800007200,"end":1800010800,"all_day":false,"calendar":"Home","declined":false,"canceled":false}],"truncated":true}}}
+{"name": "host.calendar_events.reply.user-required", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":false,"error":"requires the user to be using the plugin"}}}
+{"name": "host.calendar_events.reply.failed", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":false,"error":"calendar events unavailable"}}}
+{"name": "host.calendar_events.reply.without-an-operation", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":false,"error":"host.calendar_events requires a supported operation"}}}
+{"name": "host.calendar_events.reply.invalid-window", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":false,"error":"host.calendar_events list requires whole seconds, start before end, at most 1209600 apart"}}}
+{"name": "host.calendar_events.reply.invalid-calendars", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":false,"error":"host.calendar_events list takes at most 64 non-empty calendar titles"}}}
+{"name": "host.calendar_events.reply.params-refused", "expect": "accept", "reply_to": "host.calendar_events", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.calendar_events params"}}}
+{"name": "host.calendar_events.reply.with-notes", "expect": "accept", "reply_to": "host.calendar_events", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"granted","events":[{"id":"E2@1800007200","title":"Lunch","start":1800007200,"end":1800010800,"all_day":false,"calendar":"Home","declined":false,"canceled":false,"notes":"Bring the slides"}]}}}
+{"name": "host.calendar_events.reply.unknown-access", "expect": "accept", "reply_to": "host.calendar_events", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"limited"}}}
+{"name": "host.calendar_events.reply.events-without-the-grant", "expect": "accept", "reply_to": "host.calendar_events", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"denied","events":[]}}}
+{"name": "host.notes.reply.access", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted"}}}
+{"name": "host.notes.reply.list", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"x-coredata://4F1C/ICNote/p12","title":"Groceries"},{"id":"x-coredata://4F1C/ICNote/p27","title":"Taxes 2026"}]}}}
+{"name": "host.notes.reply.show", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.notes.reply.without-an-operation", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"host.notes requires a supported operation"}}}
+{"name": "host.notes.reply.invalid-id", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"host.notes show requires an id of 1 to 1024 bytes without control characters"}}}
+{"name": "host.notes.reply.params-refused", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.notes params"}}}
+{"name": "host.notes.reply.denied", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"denied"}}}
+{"name": "host.notes.reply.undetermined", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"undetermined"}}}
+{"name": "host.notes.reply.list.empty", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[]}}}
+{"name": "host.notes.reply.list.truncated", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"x-coredata://4F1C/ICNote/p12","title":"Groceries"}],"truncated":true}}}
+{"name": "host.notes.reply.user-required", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"requires the user to be using the plugin"}}}
+{"name": "host.notes.reply.show-without-access", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"host.notes show requires access"}}}
+{"name": "host.notes.reply.failed", "expect": "accept", "reply_to": "host.notes", "frame": {"id":1,"result":{"ok":false,"error":"notes unavailable"}}}
+{"name": "host.notes.reply.with-a-body", "expect": "accept", "reply_to": "host.notes", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"x-coredata://4F1C/ICNote/p12","title":"Groceries","body":"Milk, eggs"}]}}}
+{"name": "host.notes.reply.unknown-access", "expect": "accept", "reply_to": "host.notes", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"limited"}}}
+{"name": "host.notes.reply.items-without-the-grant", "expect": "accept", "reply_to": "host.notes", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"denied","items":[]}}}
+{"name": "host.reminders.reply.access", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":true,"access":"granted"}}}
+{"name": "host.reminders.reply.list", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"5F8A-R1","title":"Buy milk","list":"Inbox","list_index":0,"created":1800000000},{"id":"5F8A-R2","title":"Ship release","list":"Work","list_index":1}]}}}
+{"name": "host.reminders.reply.show", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.reminders.reply.without-an-operation", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":false,"error":"host.reminders requires a supported operation"}}}
+{"name": "host.reminders.reply.invalid-id", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":false,"error":"host.reminders show requires an id of 1 to 1024 bytes without control characters"}}}
+{"name": "host.reminders.reply.params-refused", "expect": "accept", "reply_to": "host.reminders", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.reminders params"}}}
+{"name": "host.contacts.reply.access", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":true,"access":"granted"}}}
+{"name": "host.contacts.reply.list", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"5F8A-C1:ABPerson","title":"Ada Lovelace"},{"id":"5F8A-C2:ABPerson","title":"Grace Hopper"}]}}}
+{"name": "host.contacts.reply.show", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.contacts.reply.without-an-operation", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":false,"error":"host.contacts requires a supported operation"}}}
+{"name": "host.contacts.reply.invalid-id", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":false,"error":"host.contacts show requires an id of 1 to 1024 bytes without control characters"}}}
+{"name": "host.contacts.reply.params-refused", "expect": "accept", "reply_to": "host.contacts", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.contacts params"}}}
+{"name": "host.contacts.reply.with-a-phone", "expect": "accept", "reply_to": "host.contacts", "schema": "reject", "frame": {"id":1,"result":{"ok":true,"access":"granted","items":[{"id":"5F8A-C1:ABPerson","title":"Ada Lovelace","phone":"+1 555 0100"}]}}}
+{"name": "host.open.reply", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true,"bundle_id":"com.apple.Safari"}}}
+{"name": "host.open.reply.app", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.open.reply.local-file", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"host.open does not open local files"}}}
+{"name": "host.open.reply.invalid-params", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"host.open requires url or bundle_id"}}}
+{"name": "host.open.reply.unhandled", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"no application opens the URL"}}}
+{"name": "host.post_keys.reply", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.post_keys.reply.invalid-params", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"host.post_keys requires pid and 1-32 keys"}}}
+{"name": "host.post_keys.reply.invalid-key", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"each key needs key_code and non-empty modifiers"}}}
+{"name": "host.post_keys.reply.unknown-modifier", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"unknown modifier: hyper"}}}
+{"name": "host.post_keys.reply.invalid-interval", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"host.post_keys requires an integer interval_ms"}}}
+{"name": "host.ax_snapshot.reply", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":true,"nodes":[{"handle":7,"root":0,"attrs":{"AXRole":"AXWindow","AXTitle":"Example"}},{"handle":8,"root":0,"attrs":{"AXRole":"AXButton"},"parent":7}]}}}
+{"name": "host.ax_snapshot.reply.empty", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":true,"nodes":[]}}}
+{"name": "host.ax_snapshot.reply.menu-bar", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":true,"pid":512,"nodes":[{"handle":7,"root":0,"attrs":{"AXRole":"AXMenuBar"}},{"handle":8,"root":0,"attrs":{"AXRole":"AXMenuBarItem","AXTitle":"File","AXEnabled":"1"},"parent":7}]}}}
+{"name": "host.ax_snapshot.reply.menu-bar-with-a-pid", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_snapshot takes no pid with root menu_bar"}}}
+{"name": "host.ax_snapshot.reply.without-a-pid", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_snapshot requires pid"}}}
+{"name": "host.ax_snapshot.reply.invalid-scalars", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"invalid snapshot scalar params"}}}
+{"name": "host.ax_perform.reply", "expect": "accept", "reply_to": "host.ax_perform", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.ax_perform.reply.stale-handle", "expect": "accept", "reply_to": "host.ax_perform", "frame": {"id":1,"result":{"ok":false,"error":"stale ax handle"}}}
+{"name": "host.ax_perform.reply.without-a-handle", "expect": "accept", "reply_to": "host.ax_perform", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_perform requires handle"}}}
+{"name": "host.ax_set.reply", "expect": "accept", "reply_to": "host.ax_set", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.ax_set.reply.invalid-params", "expect": "accept", "reply_to": "host.ax_set", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_set requires handle and attribute"}}}
+{"name": "host.ax_set.reply.value-not-a-boolean", "expect": "accept", "reply_to": "host.ax_set", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_set value must be a bool"}}}
+{"name": "host.ax_select_child.reply", "expect": "accept", "reply_to": "host.ax_select_child", "frame": {"id":1,"result":{"ok":true}}}
+{"name": "host.ax_select_child.reply.invalid-params", "expect": "accept", "reply_to": "host.ax_select_child", "frame": {"id":1,"result":{"ok":false,"error":"host.ax_select_child requires parent and child"}}}
+{"name": "host.ping.reply.params-refused", "expect": "accept", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ping params"}}}
+{"name": "host.fetch.reply.params-refused", "expect": "accept", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.fetch params"}}}
+{"name": "host.wifi_info.reply.params-refused", "expect": "accept", "reply_to": "host.wifi_info", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.wifi_info params"}}}
+{"name": "host.normal_mode_target.reply.params-refused", "expect": "accept", "reply_to": "host.normal_mode_target", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.normal_mode_target params"}}}
+{"name": "host.activate.reply.params-refused", "expect": "accept", "reply_to": "host.activate", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.activate params"}}}
+{"name": "host.open.reply.params-refused", "expect": "accept", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.open params"}}}
+{"name": "host.post_keys.reply.params-refused", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.post_keys params"}}}
+{"name": "host.ax_snapshot.reply.params-refused", "expect": "accept", "reply_to": "host.ax_snapshot", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_snapshot params"}}}
+{"name": "host.ax_perform.reply.params-refused", "expect": "accept", "reply_to": "host.ax_perform", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_perform params"}}}
+{"name": "host.ax_set.reply.params-refused", "expect": "accept", "reply_to": "host.ax_set", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_set params"}}}
+{"name": "host.ax_select_child.reply.params-refused", "expect": "accept", "reply_to": "host.ax_select_child", "frame": {"id":1,"result":{"ok":false,"error":"invalid host.ax_select_child params"}}}
+{"name": "host.post_keys.reply.uppercase-modifier", "expect": "accept", "reply_to": "host.post_keys", "frame": {"id":1,"result":{"ok":false,"error":"unknown modifier: Command"}}}
+{"name": "host-reply.unknown-method", "expect": "accept", "frame": {"id":1,"result":{"ok":false,"error":"unknown method: host.teleport"}}}
+{"name": "host-reply.without-ok", "expect": "reject", "reply_to": "host.fetch", "frame": {"id":1,"result":{"status":200}}}
+{"name": "host-reply.ok-not-a-boolean", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":1}}}
+{"name": "host-reply.failure-without-an-error", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":false}}}
+{"name": "host-reply.blank-error", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1,"result":{"ok":false,"error":" "}}}
+{"name": "host-reply.error-not-a-string", "expect": "reject", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":404}}}
+{"name": "host-reply.failure-with-another-key", "expect": "reject", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":false,"error":"open failed","detail":"LaunchServices"}}}
+{"name": "host-reply.success-with-an-error", "expect": "reject", "reply_to": "host.open", "frame": {"id":1,"result":{"ok":true,"error":"open failed"}}}
+{"name": "host-reply.status-outside-applescript", "expect": "reject", "reply_to": "host.fetch", "frame": {"id":1,"result":{"ok":false,"error":"fetch failed","status":502}}}
+{"name": "host-reply.result-not-an-object", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1,"result":[]}}
+{"name": "host-reply.without-a-result", "expect": "reject", "reply_to": "host.ping", "frame": {"id":1}}

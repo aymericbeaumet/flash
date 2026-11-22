@@ -1,8 +1,13 @@
-use flash_plugin::{Candidate, Context, Event, run};
+//! User snippets from the file `[plugins.snippets] file` names, published as
+//! `@snippets` rows the host types itself. `lifecycle: publish_then_exit`:
+//! the process reads the file, publishes and exits; the host keeps the
+//! catalog and runs it again when the setting or the file (`watch_settings`)
+//! changes.
+
+use flash_plugin::{Candidate, Context, run};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 use std::time::Instant;
 
 const SOURCE_ITEMS: &str = "snippets.items";
@@ -22,41 +27,29 @@ const _: () = assert!(MAX_SNIPPETS < 10_000);
 const _: () = assert!(MAX_NAME_BYTES <= 4 * 1024);
 const _: () = assert!(MAX_TEXT_BYTES < 64 * 1024);
 
-static REBUILD_GATE: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
-
 struct Snippets;
 
 flash_plugin::plugin!(Snippets);
 
 impl FlashPlugin for Snippets {
     async fn on_start(&self, ctx: Context) {
-        // The config is the single source of truth: every outcome (including
-        // an unset table or an unreadable file) publishes authoritatively —
-        // this runs after the initialize reply and never blocks it.
+        // The whole run: the file is the single source of truth, and every
+        // outcome (including no `file` or an unreadable one) publishes
+        // authoritatively, after the initialize reply. The host runs the
+        // plugin again when `[plugins.snippets]` or the file changes.
         rebuild_catalog(&ctx).await;
-    }
-
-    async fn on_event(&self, ctx: Context, event: Event) {
-        // The inline table rides FLASH_PLUGIN_CONFIG (the host restarts the
-        // process when `[plugin.snippets]` itself changes); this re-read is
-        // what picks up edits to the external `file` catalog.
-        if event.name == "core:config.changed" {
-            rebuild_catalog(&ctx).await;
-        }
     }
 }
 
-/// Rebuild the catalog from the inline `[plugin.snippets.snippets]` table plus
-/// the optional external `file`, and publish it. Config-driven content has no
-/// transient-failure mode: whatever the config resolves to right now is the
-/// authoritative snapshot (a broken file degrades to its rows missing, warned).
+/// Rebuild the catalog from the `[plugins.snippets] file` and publish it.
+/// The snippets live in that file, never in the settings: a plugin's
+/// settings are flat values riding one environment variable. Config-driven
+/// content has no transient-failure mode: whatever the file holds right now
+/// is the authoritative snapshot (a broken file degrades to no rows, warned).
 async fn rebuild_catalog(ctx: &Context) {
-    let _guard = REBUILD_GATE.lock().await;
     let started_at = Instant::now();
-    let inline = inline_snippets(ctx);
     let file = file_snippets(ctx).await;
-    let candidates = compose_candidates(ctx, file, inline);
+    let candidates = compose_candidates(ctx, file);
     let count = candidates.len();
     ctx.publish(candidates);
     log_rebuild(
@@ -68,28 +61,12 @@ async fn rebuild_catalog(ctx: &Context) {
 }
 
 // ---------------------------------------------------------------------------
-// Config reading
+// File reading
 // ---------------------------------------------------------------------------
 
-/// The `[plugin.snippets.snippets]` table: name → text. Non-string values are
-/// skipped (warned content-free), not fatal.
-fn inline_snippets(ctx: &Context) -> BTreeMap<String, String> {
-    let table = ctx
-        .config_json::<BTreeMap<String, Value>>("snippets")
-        .unwrap_or_default();
-    let (snippets, skipped) = string_entries(table);
-    if skipped > 0 {
-        ctx.log(
-            "warn",
-            &format!("[snippets] {skipped} non-string inline snippet value(s) skipped"),
-        );
-    }
-    snippets
-}
-
-/// Snippets from the optional `[plugin.snippets] file` — a TOML or JSON file
-/// of the same shape (either `name = text` at the top level or nested under a
-/// `snippets` table). Every failure degrades to no file rows, warned.
+/// Snippets from the optional `[plugins.snippets] file` — a TOML or JSON file
+/// of `name = text` entries at its top level. Every failure degrades to no
+/// rows, warned.
 async fn file_snippets(ctx: &Context) -> BTreeMap<String, String> {
     let configured = ctx.config_str("file");
     let configured = configured.trim();
@@ -158,13 +135,9 @@ fn parse_snippet_file(raw: &str) -> Result<(BTreeMap<String, String>, usize), &'
     let Some(object) = value.as_object() else {
         return Err("top level must be an object/table");
     };
-    // Same shape as `[plugin.snippets]`: a nested `snippets` table when
-    // present, otherwise the top level itself maps name → text.
-    let table = match object.get("snippets").and_then(Value::as_object) {
-        Some(nested) => nested.clone(),
-        None => object.clone(),
-    };
-    Ok(string_entries(table.into_iter().collect()))
+    // The top level maps name → text; a nested table is a value that is not
+    // text, skipped like any other.
+    Ok(string_entries(object.clone().into_iter().collect()))
 }
 
 /// Keep string-valued entries; count everything else as skipped.
@@ -186,18 +159,10 @@ fn string_entries(table: BTreeMap<String, Value>) -> (BTreeMap<String, String>, 
 // Candidate shaping
 // ---------------------------------------------------------------------------
 
-/// Merge file and inline snippets (inline wins on a name collision — the
-/// user's own `[plugin.snippets.snippets]` table is the more local override)
-/// and shape them into candidates, name-sorted for determinism.
-fn compose_candidates(
-    ctx: &Context,
-    file: BTreeMap<String, String>,
-    inline: BTreeMap<String, String>,
-) -> Vec<Candidate> {
-    let mut merged = file;
-    merged.extend(inline);
-    let total = merged.len();
-    let candidates: Vec<Candidate> = merged
+/// Shape the file's snippets into candidates, name-sorted for determinism.
+fn compose_candidates(ctx: &Context, snippets: BTreeMap<String, String>) -> Vec<Candidate> {
+    let total = snippets.len();
+    let candidates: Vec<Candidate> = snippets
         .into_iter()
         .filter(|(name, text)| acceptable_snippet(name, text))
         .take(MAX_SNIPPETS)
@@ -302,46 +267,19 @@ mod tests {
     }
 
     #[test]
-    fn snippet_files_parse_as_toml_or_json_flat_or_nested() {
-        let toml_flat = "shrug = \"¯\\\\_(ツ)_/¯\"\nsig = \"— A\"";
-        let (snippets, skipped) = parse_snippet_file(toml_flat).unwrap();
+    fn snippet_files_parse_as_toml_or_json() {
+        let toml = "shrug = \"¯\\\\_(ツ)_/¯\"\nsig = \"— A\"";
+        let (snippets, skipped) = parse_snippet_file(toml).unwrap();
         assert_eq!(snippets, map(&[("shrug", "¯\\_(ツ)_/¯"), ("sig", "— A")]));
         assert_eq!(skipped, 0);
 
-        let toml_nested = "[snippets]\nshrug = \"s\"";
-        let (snippets, _) = parse_snippet_file(toml_nested).unwrap();
-        assert_eq!(snippets, map(&[("shrug", "s")]));
-
-        let json_flat = r#"{ "shrug": "s", "bad": 42 }"#;
-        let (snippets, skipped) = parse_snippet_file(json_flat).unwrap();
+        let json = r#"{ "shrug": "s", "bad": 42 }"#;
+        let (snippets, skipped) = parse_snippet_file(json).unwrap();
         assert_eq!(snippets, map(&[("shrug", "s")]));
         assert_eq!(skipped, 1);
 
-        let json_nested = r#"{ "snippets": { "shrug": "s" } }"#;
-        let (snippets, _) = parse_snippet_file(json_nested).unwrap();
-        assert_eq!(snippets, map(&[("shrug", "s")]));
-
         assert!(parse_snippet_file("not = valid = anything").is_err());
         assert!(parse_snippet_file("[1, 2]").is_err());
-    }
-
-    #[test]
-    fn inline_snippets_override_file_snippets_on_collision() {
-        let harness = Harness::new("snippets");
-        let ctx = harness.context();
-        let candidates = compose_candidates(
-            &ctx,
-            map(&[("shrug", "from file"), ("only-file", "f")]),
-            map(&[("shrug", "from inline")]),
-        );
-        let summary: Vec<(&str, Option<&str>)> = candidates
-            .iter()
-            .map(|c| (c.title.as_str(), c.meta("subtitle")))
-            .collect();
-        assert_eq!(
-            summary,
-            vec![("only-file", Some("f")), ("shrug", Some("from inline")),]
-        );
     }
 
     #[test]
@@ -372,7 +310,6 @@ mod tests {
         let ctx = harness.context();
         let candidates = compose_candidates(
             &ctx,
-            BTreeMap::new(),
             map(&[
                 ("", "empty name"),
                 ("  ", "blank name"),
@@ -389,35 +326,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rebuild_publishes_inline_config_snippets() {
-        let mut harness = Harness::with_config(
-            "snippets",
-            json!({ "snippets": { "shrug": "¯\\_(ツ)_/¯", "sig": "— A" } }),
-        );
-        let ctx = harness.context();
-        rebuild_catalog(&ctx).await;
-        let rows = harness.drain_published_rows().unwrap();
-        let titles: Vec<String> = rows.into_iter().map(|c| c.title).collect();
-        assert_eq!(titles, vec!["shrug", "sig"]);
-    }
-
-    #[tokio::test]
-    async fn rebuild_reads_the_external_file_and_inline_overrides_it() {
+    async fn rebuild_publishes_the_file_snippets_by_name() {
         let harness = Harness::new("snippets");
         let dir = harness.data_dir();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let file = dir.join("snips.toml");
-        tokio::fs::write(&file, "shrug = \"file\"\nextra = \"e\"")
+        tokio::fs::write(&file, "shrug = \"¯\\\\_(ツ)_/¯\"\nextra = \"e\"")
             .await
             .unwrap();
 
-        let mut harness = Harness::with_config(
-            "snippets",
-            json!({
-                "file": file.to_string_lossy(),
-                "snippets": { "shrug": "inline" },
-            }),
-        );
+        let mut harness =
+            Harness::with_config("snippets", json!({ "file": file.to_string_lossy() }));
         let ctx = harness.context();
         rebuild_catalog(&ctx).await;
         let rows = harness.drain_published_rows().unwrap();
@@ -427,8 +346,35 @@ mod tests {
             .collect();
         assert_eq!(
             summary,
-            vec![("extra", Some("e")), ("shrug", Some("inline"))]
+            vec![("extra", Some("e")), ("shrug", Some("¯\\_(ツ)_/¯"))]
         );
+    }
+
+    /// A plugin's settings are flat values (`FLASH_PLUGIN_CONFIG`): the host
+    /// rejects a `[plugins.snippets.snippets]` table, so the plugin reads no
+    /// `snippets` setting at all.
+    #[tokio::test]
+    async fn a_snippets_setting_is_never_read() {
+        let mut harness = Harness::with_config(
+            "snippets",
+            json!({ "snippets": { "shrug": "¯\\_(ツ)_/¯" } }),
+        );
+        let ctx = harness.context();
+        rebuild_catalog(&ctx).await;
+        assert!(harness.drain_published_rows().unwrap().is_empty());
+    }
+
+    /// One file shape: `name = text` at the top level. A table is a value
+    /// that is not text, skipped like any other.
+    #[test]
+    fn a_table_in_the_file_is_not_a_snippet() {
+        let (snippets, skipped) = parse_snippet_file("[snippets]\nshrug = \"s\"").unwrap();
+        assert!(snippets.is_empty());
+        assert_eq!(skipped, 1);
+        let (snippets, skipped) =
+            parse_snippet_file(r#"{ "snippets": { "shrug": "s" }, "sig": "A" }"#).unwrap();
+        assert_eq!(snippets, map(&[("sig", "A")]));
+        assert_eq!(skipped, 1);
     }
 
     #[tokio::test]
@@ -438,5 +384,30 @@ mod tests {
         rebuild_catalog(&ctx).await;
         let rows = harness.drain_published_rows().unwrap();
         assert!(rows.is_empty());
+    }
+
+    /// `lifecycle: publish_then_exit`: the process answers initialize,
+    /// publishes the file's snippets and exits 0 on its own; the host keeps
+    /// the rows and runs it again when the setting or the file changes.
+    #[tokio::test]
+    async fn the_run_ends_once_the_catalog_is_published() {
+        use flash_plugin::testing::WireHarness;
+        let dir = std::env::temp_dir().join(format!("flash-snippets-wire-{}", std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let file = dir.join("snips.toml");
+        tokio::fs::write(&file, "shrug = \"s\"").await.unwrap();
+        let mut wire =
+            WireHarness::with_config(Snippets, json!({ "file": file.to_string_lossy() }));
+        wire.send(json!({ "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }))
+            .await;
+        assert_eq!(wire.recv_response(1).await["ok"], true);
+        let publish = wire.recv_notification("publish").await;
+        assert_eq!(publish["rows"][0]["title"], "shrug");
+        let rest = wire.finished().await;
+        assert!(
+            rest.iter().all(|frame| frame["method"] == "log"),
+            "{rest:?}"
+        );
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/status.schema.json",
+  "title": "status",
+  "description": "Plugin to host: values of manifest-declared status segments. Each value is markup (empty clears the segment) or a carousel the host rotates on its own clock.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "method",
+    "params"
+  ],
+  "properties": {
+    "method": {
+      "const": "status"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "segments"
+      ],
+      "properties": {
+        "segments": {
+          "type": "object",
+          "$comment": "Names the manifest does not declare are skipped.",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "$comment": "An inline preview (#[popup=inline:…]) holds at most 16384 percent-encoded bytes; the host draws the markup without a larger one."
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "lines",
+                  "cycle_seconds"
+                ],
+                "properties": {
+                  "prefix": {
+                    "type": "string"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Blank lines are dropped; no lines clears the segment."
+                  },
+                  "cycle_seconds": {
+                    "type": "number",
+                    "minimum": 1
+                  }
+                },
+                "description": "A carousel; a malformed one is rejected whole."
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

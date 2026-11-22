@@ -99,7 +99,7 @@ struct ConfigDiagnostic: Equatable {
   let message: String
   let location: ConfigLocation?
   /// The file whose value raised it, when one did: the user's config for
-  /// its own entries, the bundled defaults for theirs. `flash config_check`
+  /// its own entries, the bundled defaults for theirs. `flash config check`
   /// prints it as the `path` of `path:line:col`.
   var file: String? = nil
 
@@ -111,7 +111,7 @@ struct ConfigDiagnostic: Equatable {
   var alertLine: String { logMessage }
 }
 
-/// A single value inside a `[plugin.<id>]` settings table. Carries enough
+/// A single value inside a `[plugins.<id>]` settings table. Carries enough
 /// type information to round-trip into JSON for the plugin's
 /// `FLASH_PLUGIN_CONFIG`. Equatable so a config reload can detect when a
 /// plugin's settings actually changed and restart only then.
@@ -147,13 +147,6 @@ enum HintPlacement: String, CaseIterable, Equatable {
   case below
 }
 
-/// `[overlay] screen_capture`: whether capture and sharing see Flash's
-/// windows.
-enum ScreenCaptureVisibility: String, CaseIterable, Equatable {
-  case show
-  case hide
-}
-
 struct Config {
   struct App: Equatable {
     /// macOS menu-bar icon (see `StatusItemController.swift`, the single
@@ -169,6 +162,14 @@ struct Config {
     /// ASCII-capable layout while a non-Latin source is selected, an
     /// input-source ID always reads them on that layout.
     var keyboardLayout: String = "auto"
+    /// What Flash does about new releases by itself (`UpdateMode`):
+    /// `install`, `check` or `off`. See `UpdateController`.
+    var updates: UpdateMode = .install
+    /// Ask the window server to leave every Flash window out of
+    /// screenshots, recordings and screen sharing (`NSWindow.sharingType =
+    /// .none`, `CaptureSharing`). A request most capture on macOS 15 and
+    /// later does not honour; see docs/privacy.md#screen-capture.
+    var hideFromCapture = false
   }
 
   /// Logical key positions. Distinct from `app.keyboardLayout`, which only
@@ -203,7 +204,7 @@ struct Config {
     case grid
   }
 
-  /// Which apps share `mouse_position`'s saved positions
+  /// Which apps share `mouse position`'s saved positions
   /// (`[hints] position_history_scope`).
   enum PositionScope: String, Equatable, CaseIterable {
     /// One list for every app.
@@ -220,17 +221,17 @@ struct Config {
     var keyPriority: String = ""
     var labelOrder: LabelOrder = .reading
     var adjustDigits: AdjustDigits = .width
-    /// How many positions `mouse_position` keeps (per app when scoped).
+    /// How many positions `mouse position` keeps (per app when scoped).
     var positionHistorySize: Int = 16
     var positionHistoryScope: PositionScope = .global
     /// A newly focused app brings the pointer to the centre of its window.
     var pointerFollowsFocus = false
-    /// `mouse_pointer` movement: points per keystroke at rest, added per
+    /// `mouse pointer` movement: points per keystroke at rest, added per
     /// autorepeat, and the ceiling.
     var pointerStep: Int = 12
     var pointerAcceleration: Int = 6
     var pointerMaxStep: Int = 90
-    /// Number of selection steps for the `mouse_grid` verb. Larger values
+    /// Number of selection steps for the `mouse grid` command. Larger values
     /// give finer precision but require more keystrokes per click.
     var mouseGridSteps: Int = 3
     /// The grid's key matrix, one string per keyboard row. Empty derives the
@@ -242,8 +243,8 @@ struct Config {
     /// keys that reach each of its cells, so the next key can be read ahead.
     var mouseGridPreview = true
     /// Put the pointer back where it was after a committed hint or grid
-    /// click, drag or selection, and after `mouse_repeat` (`--move` and
-    /// `mouse_pointer` still move it).
+    /// click, drag or selection, and after `mouse repeat` (`--move` and
+    /// `mouse pointer` still move it).
     var restorePointer = false
     /// Opacity (0.0..1.0) applied to every mouse-grid chip so the user
     /// can still see what's underneath the precision overlay. 1.0 is
@@ -281,7 +282,7 @@ struct Config {
     /// Stroke color (`#RRGGBB` / `#RRGGBBAA`), applied to every mode.
     /// Empty (default) keeps the per-mode Nord colors.
     var windowBorderColor: String = ""
-    /// Seconds an `alert_show` toast stays up when the call passes no
+    /// Seconds an `alert show` toast stays up when the call passes no
     /// explicit --duration.
     var alertDuration: Double = 3.0
     /// Milliseconds a transient banner (command output, "Copied: …")
@@ -296,10 +297,6 @@ struct Config {
     /// Draw a short ring where each committed click lands (demos,
     /// screencasts).
     var clickFeedback = false
-    /// Whether screen capture and sharing see Flash's overlay, status bar
-    /// and popup windows. Best effort: `hide` sets `NSWindow.sharingType`
-    /// to none, which recent macOS capture APIs may ignore.
-    var screenCapture: ScreenCaptureVisibility = .show
 
     /// `[overlay.dark]`: the colour keys of `[overlay]`, each empty until set.
     struct DarkHintColors: Equatable {
@@ -354,10 +351,10 @@ struct Config {
     /// Cap on the frecency boost added to the ranker score; 0 disables
     /// frecency outright.
     var frecencyMaxBoost: Int = 600
-    /// Per-keystroke deadline for `live: true` plugin sources (`search`).
-    /// Live sources never join the first paint, so raising this cannot
-    /// regress the flashlight open. A full second by default: Spotlight's
-    /// first output byte alone routinely takes 500–700 ms.
+    /// Per-keystroke deadline of the file search's Spotlight query
+    /// (`@files`, `!f`), which then answers with the rows gathered so
+    /// far. Live sources never join the first paint, so raising this cannot
+    /// regress the flashlight open.
     var liveQueryTimeoutMs: Int = 1000
     /// Word-substitution aliases. The key is the exact whitespace-
     /// delimited token the user types (any leading sigil — `!`, `@`,
@@ -373,15 +370,27 @@ struct Config {
     /// [flashlight.aliases]
     /// "!g"  = "!google"
     /// "!gh" = "!github"
-    /// "@ft" = "@firefox.tabs"
+    /// "@ft" = "@tabs"
     /// ```
     var aliases: [String: String] = [:]
-    /// Source precedence override weights. Keys are source labels (or parent
-    /// prefixes — `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …).
-    /// Higher weight wins. Entries not listed derive their weight from the
-    /// source descriptor the native source or plugin manifest declares:
-    /// location sources start at 50, standard sources at 0, plus the
-    /// `sources[].priority` salience (`low` -20 … `important` +100).
+    /// A bang of the user's own, `[flashlight.bangs]`: `!<name> <query>`
+    /// opens `url` with the query percent-encoded into each `{query}`; a URL
+    /// without one is a quicklink, opened as written. `description` is what
+    /// the `!` list shows under the trigger; empty shows the URL.
+    struct Bang: Equatable {
+      var url: String
+      var description: String = ""
+    }
+    /// The user's bangs by name, one lowercase word of letters and digits.
+    /// Empty by default. A name Flash's own `!f` and `!clip` or a bundled
+    /// plugin's bang owns is rejected at load.
+    var bangs: [String: Bang] = [:]
+    /// Precedence override weights per resource type (`tabs` weighs every
+    /// browser's tabs). Higher weight wins. Sources of an unlisted type
+    /// derive their weight from the descriptor the native source or plugin
+    /// manifest declares: location sources start at 50, standard sources at
+    /// 0, plus the `sources[].priority` salience (`low` -20 … `important`
+    /// +100).
     /// Precedence orders rows inside one match tier only: a row whose own
     /// name is what the user typed (exact, prefix, word, substring) always
     /// leads rows the query merely touches, whatever their sources weigh.
@@ -389,8 +398,8 @@ struct Config {
     /// Example:
     /// ```toml
     /// [flashlight.precedence]
-    /// tmux           = 200
-    /// "firefox.tabs" = 120
+    /// terminals = 200
+    /// tabs      = 120
     /// ```
     var precedence: [String: Int] = [:]
     /// Bonus added to any candidate whose `pid != nil` so running
@@ -400,10 +409,10 @@ struct Config {
     /// before the source's own priority.
     var precedenceAliveBonus: Int = 10
     /// Apps, by name, bundle id or path, left out of the installed-app
-    /// catalog and the `app_open` verb.
+    /// catalog and the `app open` command.
     var ignoredApps: [String] = []
     /// Directories scanned (recursively) and watched for `.app` bundles —
-    /// the flashlight's installed-app catalog and the `app_open` verb's
+    /// the flashlight's installed-app catalog and the `app open` command's
     /// search roots. `~` expands to the user home. The defaults cover
     /// every standard macOS install location, including the Sequoia+ app
     /// cryptex where Safari really lives.
@@ -437,7 +446,7 @@ struct Config {
     /// When true, Flash binds a loopback-only HTTP server *at launch* that
     /// exposes live logs + resolved config + clipboard history for the
     /// inspector dashboard. Off by default (fail-safe): the dashboard-backed
-    /// verbs (`:logs`, `:plugins`, `:commands`, `:help`, …) start the server
+    /// commands (`:logs`, `:plugins show`, `:commands`, `:help`, …) start the server
     /// on demand via `openDebugDashboard`, so they still work with this off —
     /// this flag only controls whether the server listens continuously from
     /// launch. Enable with `debug.http_inspector_enabled = true`.
@@ -448,6 +457,69 @@ struct Config {
     /// TCP port the inspector listens on.
     var httpInspectorPort: Int = 4242
   }
+  /// `[telemetry.receiver]` and `[telemetry.exporter]`: OpenTelemetry in
+  /// and out. Both are off by default.
+  struct Telemetry: Equatable {
+    /// The loopback OTLP/HTTP receiver whose metrics status formats read
+    /// (`#{flash.otel:<metric>}`), and its in-memory retention.
+    struct Receiver: Equatable {
+      var enabled = false
+      /// Bound on 127.0.0.1 only; 4318 is OTLP/HTTP's standard port.
+      var port = 4318
+      /// When set, a request must carry `Authorization: Bearer <token>`:
+      /// every account and process shares the loopback address, and a
+      /// received metric can drive a monitor whose `run` executes. Empty
+      /// asks for none. Never shown, logged or exported.
+      var token = ""
+      var maxSeries = 1000
+      var maxPoints = 60
+      var maxLogs = 1000
+      var maxSpans = 1000
+
+      var limits: TelemetryStore.Limits {
+        TelemetryStore.Limits(
+          maxSeries: maxSeries, maxPoints: maxPoints, maxLogs: maxLogs, maxSpans: maxSpans)
+      }
+    }
+
+    /// Flash's own telemetry, sent to an OTLP/HTTP endpoint.
+    struct Exporter: Equatable {
+      /// The OTLP/HTTP base URL; each signal posts to `<endpoint>/v1/<signal>`.
+      /// Empty turns the exporter off.
+      var endpoint = ""
+      var encoding = OTLPEncoding.protobuf
+      var gzip = false
+      /// Sent with every request. Explicit values only, never logged or
+      /// shown by the inspector.
+      var headers: [String: String] = [:]
+      var serviceName = "flash"
+      var signals: Set<TelemetrySignal> = [.metrics, .traces]
+      var intervalSeconds = 30
+    }
+
+    var receiver = Receiver()
+    var exporter = Exporter()
+
+    /// The endpoint the exporter sends to, or nil: empty, or Flash's own
+    /// receiver (which would feed Flash's telemetry back into itself).
+    var exportEndpoint: URL? {
+      guard !exporter.endpoint.isEmpty, let url = URLParsing.url(exporter.endpoint),
+        !Self.targetsReceiver(url, receiver: receiver)
+      else { return nil }
+      return url
+    }
+
+    /// Whether `url` is the loopback receiver's own address.
+    static func targetsReceiver(_ url: URL, receiver: Receiver) -> Bool {
+      guard receiver.enabled, let host = url.host?.lowercased() else { return false }
+      let loopback =
+        host == "localhost" || host == "::1" || host == "[::1]" || host.hasPrefix("127.")
+        || host == "0.0.0.0"
+      let port = url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
+      return loopback && port == receiver.port
+    }
+  }
+
   struct Plugins: Equatable {
     /// Third-party plugins explicitly requested by the user. Official
     /// bundled plugins are discovered from the app bundle, not this list.
@@ -467,7 +539,7 @@ struct Config {
     /// catalogs publish after it), so this only needs to absorb interpreter
     /// startup — 5 s is the protocol default.
     var startupTimeoutSeconds: Int = 5
-    /// Per-plugin user settings from `[plugin.<id>]` tables. Delivered to
+    /// Per-plugin user settings from `[plugins.<id>]` tables. Delivered to
     /// each plugin as a JSON object via `FLASH_PLUGIN_CONFIG`. Keyed by
     /// plugin id, then by setting name.
     var settings: [String: [String: PluginConfigValue]] = [:]
@@ -634,6 +706,11 @@ struct Config {
     var environment: [String: String] = [:]
     var size: PopupSize = .default
     var lifecycle: PopupLifecycle = .fresh
+    /// `pause_hidden`: a persistent process is stopped (SIGSTOP) while the
+    /// popup is hidden and continued (SIGCONT) when it shows, so it costs
+    /// no CPU in the background; its first frame after showing is the one
+    /// it drew before, until it redraws. Never set on a fresh popup.
+    var pauseHidden: Bool = false
 
     /// The command reads the hovered span's `#[link]` (`$FLASH_STATUS_LINK`).
     /// A prewarmed process would start before any hover, so it is left to
@@ -663,7 +740,7 @@ struct Config {
 
     /// Whether the persistent top status bar is shown. This is the *sole*
     /// condition for the bar's visibility — it is deliberately independent
-    /// of advanced mode (the `enter_normal_mode` binding). Off by default;
+    /// of advanced mode (the `mode normal` binding). Off by default;
     /// set `[statusbar] enabled = true` to opt in.
     var enabled: Bool = false
     /// Which monitors the bar renders on. `[statusbar] monitor = "primary"`
@@ -680,6 +757,10 @@ struct Config {
     var notchMargin: Double = 4
     /// Default cadence for named sources; zero runs only on initial load.
     var refreshIntervalSeconds: Double = 5
+    /// URL schemes a `#[link]` may open beside `http`, `https` and `mailto`
+    /// (`StatusLinkPolicy`): exact lowercase names, as authored. A link is
+    /// text a plugin, a source or a program wrote, so nothing else opens.
+    var linkSchemes: [String] = []
     /// One native tmux format, with Flash presentation styles and values.
     static let defaultTemplateString =
       "#[align=left]#[pill]#{flash.mode}#[nopill]#[align=right]#[fg=#EBCB8B]#{flash.date}"
@@ -689,13 +770,13 @@ struct Config {
     /// What a click on a `#[range=user|<name>]…#[norange]` span does —
     /// tmux's status-line mouse model: the span names an action, the
     /// binding lives outside the string. `[statusbar.click]` values are a
-    /// URL string or a `["flash", "<verb>", …]` action array.
+    /// URL string or a `["flash", "<topic>", "<action>", …]` action array.
     enum ClickAction: Equatable {
       case url(String)
       case command(MappingCommand)
     }
     var clickActions: [String: ClickAction] = Self.defaultClickActions
-    /// The bundled power plugin wraps its battery chip in
+    /// The bundled sysinfo plugin wraps its battery chip in
     /// `#[range=user|bat-prefs]`, so the default map makes that span open
     /// the Battery pane out of the box.
     static let defaultClickActions: [String: ClickAction] = [
@@ -779,6 +860,198 @@ struct Config {
     }
   }
 
+  /// `[startup]`: the commands Flash runs once each time it launches, after
+  /// the configuration loads, and again on `startup run`. Editing them never
+  /// runs them; see `StartupRunner`.
+  struct Startup: Equatable, Sendable {
+    /// In order, each a Flash command or an executable, as a monitor's
+    /// `run` takes them. Empty runs nothing.
+    var run: [MappingCommand] = []
+    /// Seconds each command may take before its process group is stopped.
+    var timeoutSeconds = MonitorRunDefaults.timeoutSeconds
+  }
+
+  /// A `[monitors.<name>]` table, as authored: a status format read as a
+  /// number, the thresholds it is judged against and the alert it raises.
+  /// `monitorSpecs` compiles the enabled ones for the status controller.
+  struct Monitor: Equatable {
+    var enabled = true
+    /// The status format whose expanded text must start with a number.
+    var value = ""
+    /// The alert's title, a status format; empty derives it from the name
+    /// and the threshold crossed.
+    var message = ""
+    /// What is failing, a status format the alert shows under the title in
+    /// place of the value; empty, or empty once expanded, shows the value.
+    var detail = ""
+    var warning: Double?
+    var error: Double?
+    var direction = MonitorDirection.above
+    /// How often the monitor needs a fresh value, in seconds.
+    var intervalSeconds: Double = 60
+    /// Host events to watch instead of a value: the names and globs a
+    /// plugin's `listen` takes (`core:system.woke`, `core:apps.*`).
+    var event: [String] = []
+    /// Narrows app events to one bundle identifier.
+    var app = ""
+    /// Narrows `core:usb.attached` and `core:usb.detached` to one device.
+    var usb: USBDeviceFilter?
+    /// The idle time, in seconds, `core:user.idle` and `core:user.active`
+    /// match at; nil is `IdleWatch.defaultSeconds`.
+    var idleSeconds: Int?
+    /// The times of day `core:clock.minute` fires at; empty is never.
+    var at: [ClockTime] = []
+    /// The days `at` fires on; empty is every day.
+    var days: [Weekday] = []
+    /// What runs when it fires, in order: each a Flash command or an
+    /// executable, as a mapping's value. Empty runs nothing.
+    var run: [MappingCommand] = []
+    /// Seconds the whole run may take; nil is `MonitorRunDefaults.timeoutSeconds`.
+    var timeoutSeconds: Int?
+    /// Seconds after a run starts before the next may; nil is none.
+    var cooldownSeconds: Int?
+    /// Whether a rise shows the centred alert.
+    var alert = true
+    /// Whether a rise, or a matching event, also posts a macOS notification.
+    var notify = false
+
+    var timeout: Int { timeoutSeconds ?? MonitorRunDefaults.timeoutSeconds }
+    var cooldown: Int { cooldownSeconds ?? 0 }
+
+    init(
+      enabled: Bool = true, value: String = "", message: String = "", detail: String = "",
+      warning: Double? = nil, error: Double? = nil, direction: MonitorDirection = .above,
+      intervalSeconds: Double = 60
+    ) {
+      self.enabled = enabled
+      self.value = value
+      self.message = message
+      self.detail = detail
+      self.warning = warning
+      self.error = error
+      self.direction = direction
+      self.intervalSeconds = intervalSeconds
+    }
+
+    /// Why the monitor cannot run once every layer is applied, or nil.
+    var problem: String? {
+      if run.isEmpty, timeoutSeconds != nil || cooldownSeconds != nil {
+        return " has a timeout or a cooldown, which only a run has"
+      }
+      if idleSeconds != nil,
+        !event.contains(where: { pattern in
+          [HostEvent.userIdle, .userActive].contains { PluginPattern(pattern).matches($0.rawValue) }
+        })
+      {
+        return ".idle times core:user.idle and core:user.active; it needs one of them in .event"
+      }
+      if !at.isEmpty || !days.isEmpty,
+        !event.contains(where: { PluginPattern($0).matches(HostEvent.clockMinute.rawValue) })
+      {
+        return ".at and .days time core:clock.minute; it needs it in .event"
+      }
+      if usb != nil,
+        !event.contains(where: { pattern in
+          [HostEvent.usbAttached, .usbDetached].contains {
+            PluginPattern(pattern).matches($0.rawValue)
+          }
+        })
+      {
+        return
+          ".usb narrows core:usb.attached and core:usb.detached; it needs one of them in .event"
+      }
+      if !days.isEmpty, at.isEmpty { return ".days narrows .at; it needs an at" }
+      if at.isEmpty, event.contains(HostEvent.clockMinute.rawValue) {
+        return " listens to core:clock.minute, which needs .at times to fire at (\"09:55\")"
+      }
+      if !event.isEmpty {
+        if !value.isEmpty { return " watches either a value or an event, not both" }
+        if warning != nil || error != nil { return " has thresholds, which only a value has" }
+        if let pattern = event.first(where: { pattern in
+          !PluginProtocol.hostEvents.contains { PluginPattern(pattern).matches($0) }
+        }) {
+          return ".event \"\(pattern)\" matches no host event"
+        }
+        if run.isEmpty, message.isEmpty { return " needs a run or a message for its events" }
+        if notify, message.isEmpty { return " notifies with its message, which is empty" }
+        return nil
+      }
+      if !app.isEmpty { return ".app narrows events; it needs an event" }
+      if value.isEmpty { return ".value or .event is required" }
+      guard warning != nil || error != nil || !run.isEmpty else {
+        return " needs a warning or an error threshold, or a run for when the value changes"
+      }
+      if notify, warning == nil, error == nil {
+        return " notifies on a rise, which needs a warning or an error threshold"
+      }
+      if let warning, let error {
+        switch direction {
+        case .above where warning >= error:
+          return ".warning must be below .error when direction is \"above\""
+        case .below where warning <= error:
+          return ".warning must be above .error when direction is \"below\""
+        default: break
+        }
+      }
+      return nil
+    }
+
+    func spec(name: String) -> StatusMonitorSpec {
+      StatusMonitorSpec(
+        enabled: enabled && problem == nil,
+        origin: Config.defaultMonitors[name] == nil ? .config : .default,
+        value: FlashStatusBarTemplate(
+          template: value, origin: StatusFormatOrigin("monitors.\(name).value")),
+        message: message.isEmpty
+          ? nil
+          : FlashStatusBarTemplate(
+            template: message, origin: StatusFormatOrigin("monitors.\(name).message")),
+        detail: detail.isEmpty
+          ? nil
+          : FlashStatusBarTemplate(
+            template: detail, origin: StatusFormatOrigin("monitors.\(name).detail")),
+        warning: warning, error: error, direction: direction, intervalSeconds: intervalSeconds,
+        fires: run.isEmpty ? .never : (warning == nil && error == nil ? .onChange : .onRise),
+        alerts: alert, notifies: notify)
+    }
+
+    /// The event monitor this table declares; nil for a value monitor.
+    func eventSpec() -> EventMonitorSpec? {
+      guard !event.isEmpty else { return nil }
+      return EventMonitorSpec(
+        patterns: event.map(PluginPattern.init), app: app.isEmpty ? nil : app, usb: usb,
+        message: message.isEmpty ? nil : message, alerts: alert, notifies: notify,
+        idleSeconds: idleSeconds ?? IdleWatch.defaultSeconds, clockTimes: Set(at),
+        weekdays: Set(days))
+    }
+  }
+
+  /// The built-in monitors, mirrored by `config.default.toml`. Each reads a
+  /// value Flash already has: a `sysinfo` plugin segment or a core
+  /// plugin-health value.
+  static let defaultMonitors: [String: Monitor] = [
+    // The charge only while the Mac runs on its battery: charging, full or on
+    // the adapter, the value is empty and nothing alerts.
+    "battery": Monitor(
+      value:
+        "#{?#{==:#{flash.plugin.sysinfo.power_state},discharging},"
+        + "#{flash.plugin.sysinfo.power_percent}%%,}",
+      message: "Battery low", warning: 20, error: 10, direction: .below),
+    "disk": Monitor(
+      value: "#{flash.plugin.sysinfo.disks_percent}%%", message: "Startup disk almost full",
+      warning: 90, error: 97),
+    "memory": Monitor(
+      value: "#{flash.plugin.sysinfo.memory_pressure}%%", message: "Memory pressure high",
+      warning: 85, error: 95),
+    "plugin_errors": Monitor(
+      value: "#{flash.plugin.error_count}", message: "Failing plugins",
+      detail: "#{flash.plugin.errors}", warning: 1),
+    "plugin_spawn": Monitor(
+      value: "#{flash.plugin.spawn_ms} ms", message: "Slow process launch",
+      detail: "#{flash.plugin.spawn_id} #{flash.plugin.spawn_ms} ms", warning: 1000,
+      error: 5000),
+  ]
+
   /// Plugin id → the manifest status names the given templates read.
   static func statusSegments(in templates: [FlashStatusBarTemplate]) -> [String: Set<String>] {
     var segments: [String: Set<String>] = [:]
@@ -791,494 +1064,18 @@ struct Config {
     }
     return segments
   }
-  struct Mode: Equatable {
-    struct AppMappings: Equatable {
-      var all: [ModeMapping] = []
-      var normal: [ModeMapping] = []
-      var insert: [ModeMapping] = []
-      var terminal: [ModeMapping] = []
-      var command: [ModeMapping] = []
-      var hyper: [ModeMapping] = []
-      var hold: [ModeMapping] = []
-      var unmapped: [ModeScope: Set<String>] = [:]
-
-      func mappings(for scope: ModeScope) -> [ModeMapping] {
-        switch scope {
-        case .all: return all
-        case .normal: return normal
-        case .insert: return insert
-        case .terminal: return terminal
-        case .command: return command
-        case .hyper: return hyper
-        case .hold: return hold
-        }
-      }
-
-      mutating func set(_ mapping: ModeMapping, in scope: ModeScope) {
-        let sameKey: (ModeMapping) -> Bool = {
-          $0.key == mapping.key
-            || (mapping.nativeHotkey != nil && $0.nativeHotkey == mapping.nativeHotkey)
-        }
-        if let removed = unmapped[scope] {
-          let remaining = removed.filter {
-            $0 != mapping.key
-              && (mapping.nativeHotkey == nil
-                || ModeMapping.parseNativeHotkey($0) != mapping.nativeHotkey)
-          }
-          unmapped[scope] = remaining.isEmpty ? nil : remaining
-        }
-        switch scope {
-        case .all:
-          all.removeAll(where: sameKey)
-          all.insert(mapping, at: 0)
-        case .normal:
-          normal.removeAll(where: sameKey)
-          normal.insert(mapping, at: 0)
-        case .insert:
-          insert.removeAll(where: sameKey)
-          insert.insert(mapping, at: 0)
-        case .terminal:
-          terminal.removeAll(where: sameKey)
-          terminal.insert(mapping, at: 0)
-        case .command:
-          command.removeAll(where: sameKey)
-          command.insert(mapping, at: 0)
-        case .hyper:
-          hyper.removeAll(where: sameKey)
-          hyper.insert(mapping, at: 0)
-        case .hold:
-          hold.removeAll(where: sameKey)
-          hold.insert(mapping, at: 0)
-        }
-      }
-
-      mutating func remove(_ key: String, in scope: ModeScope) {
-        let chord = ModeMapping.parseNativeHotkey(key)
-        let matches: (ModeMapping) -> Bool = {
-          $0.key == key || (chord != nil && $0.nativeHotkey == chord)
-        }
-        unmapped[scope, default: []].insert(key)
-        switch scope {
-        case .all: all.removeAll(where: matches)
-        case .normal: normal.removeAll(where: matches)
-        case .insert: insert.removeAll(where: matches)
-        case .terminal: terminal.removeAll(where: matches)
-        case .command: command.removeAll(where: matches)
-        case .hyper: hyper.removeAll(where: matches)
-        case .hold: hold.removeAll(where: matches)
-        }
-      }
-    }
-
-    struct Labels: Equatable {
-      var normal: String = "NORMAL"
-      var insert: String = "INSERT"
-      var command: String = "COMMAND"
-      var terminal: String = "TERMINAL"
-      var hyper: String = "HYPER"
-      var hold: String = "HOLD"
-
-      var longestCount: Int {
-        max(
-          normal.count, insert.count, command.count, terminal.count, hyper.count, hold.count)
-      }
-    }
-
-    var all: [ModeMapping] = [
-      ModeMapping(key: "cmd+ctrl+h", action: .flashCommand(.holdMode(.primary)))
-    ]
-    var normal: [ModeMapping] = Self.defaultNormalMappings
-    var insert: [ModeMapping] = []
-    var terminal: [ModeMapping] = Self.defaultTerminalMappings
-    var command: [ModeMapping] = []
-    /// Keys read while the NORMAL leader is held. Not merged with `[mode.all]`:
-    /// a hyper binding replaces NORMAL for that key for the duration of the hold.
-    var hyper: [ModeMapping] = Self.defaultHyperMappings
-    /// Keys read before NORMAL in HOLD (a held button dragging). A key with
-    /// no entry here is NORMAL's.
-    var hold: [ModeMapping] = Self.defaultHoldMappings
-    /// Exact focused-app bundle identifier to per-scope additions/removals.
-    var appMappings: [String: AppMappings] = [:]
-    /// Keys a `"<key>" = false` entry removed, per table, after every layer.
-    /// A later layer mapping the key again takes it back out. Plugin
-    /// mappings on these keys are dropped too (`EffectiveMappings.merge`).
-    var unmapped: [ModeScope: Set<String>] = [:]
-
-    /// Whether a `false` entry in `scope` removed `mapping`'s key, compared
-    /// by physical chord so `cmd+shift+]` also removes `cmd+shift+}`.
-    func removes(_ mapping: ModeMapping, in scope: ModeScope) -> Bool {
-      guard let keys = unmapped[scope], !keys.isEmpty else { return false }
-      if keys.contains(mapping.key) { return true }
-      guard let chord = mapping.nativeHotkey else { return false }
-      return keys.contains { ModeMapping.parseNativeHotkey($0) == chord }
-    }
-
-    /// The proportional layouts `window_move` mappings apply, in any scope.
-    var declaredWindowLayouts: [WindowLayout] {
-      var layouts: [WindowLayout] = []
-      let appEntries = appMappings.sorted { $0.key < $1.key }.flatMap { entry in
-        let app = entry.value
-        return app.all + app.normal + app.insert + app.terminal + app.command + app.hyper
-      }
-      for mapping in all + normal + insert + terminal + command + hyper + appEntries {
-        guard case .flashCommand(.moveWindow(let params)) = mapping.action,
-          case .proportional? = params.layout, let layout = params.layout,
-          !layouts.contains(layout)
-        else { continue }
-        layouts.append(layout)
-      }
-      return layouts
-    }
-    var normalLeader: String? = Self.defaultNormalLeader
-    var labels = Labels()
-    /// How long the interpreter waits for the next key in a pending
-    /// sequence before resolving the longest matching prefix.
-    /// Vim's `timeoutlen`. Lower → faster commits, more two-key
-    /// collisions; higher → slower commits, fewer surprises.
-    var sequenceTimeoutMs: Int = Self.defaultSequenceTimeoutMs
-    /// Pixels per horizontal h/l scroll step.
-    var scrollStep: Int = 60
-    /// Mouse-wheel lines per ctrl+e/ctrl+y scroll step.
-    var scrollStepLines: Int = 3
-    /// Mouse-wheel lines per ctrl+d/ctrl+u scroll step.
-    var scrollPageLines: Int = 20
-    /// Spread each vertical line scroll over this many milliseconds as
-    /// several smaller line events (`SmoothScroll`); 0 posts it at once.
-    var scrollSmoothMs: Int = 0
-    /// Mouse-down→up hold on synthesized clicks; some apps need a
-    /// non-zero press to register.
-    var clickHoldMs: Int = 18
-    /// Delay between chords of a multi-key send_key — terminals and
-    /// remote-desktop apps drop chords sent back-to-back.
-    var sendKeyIntervalMs: Int = 35
-    /// Matches Neovim's `timeoutlen` default so multi-key sequences feel the
-    /// same as in the editor users already have muscle memory for.
-    static let defaultSequenceTimeoutMs = 1000
-
-    /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
-    /// Use `\` bare or `<backslash>` — both resolve to the same key.
-    static let defaultNormalLeader = "\\"
-    /// `mode.normal.hyper`, in mapping-key syntax. `"<leader>"` follows
-    /// `normalLeader` and resolves to nothing when the leader is unset.
-    static let defaultHyperKey = "<leader>"
-    var hyperKey: String = Self.defaultHyperKey
-    /// The physical key that enters HYPER, after `<leader>` substitution.
-    /// Nil when `hyperKey` is `"<leader>"` and no leader is set.
-    private(set) var resolvedHyperKey: String?
-    /// `resolvedHyperKey` prepared for the per-key test: its chord and the
-    /// characters that may spell it, parsed once here rather than per key.
-    private(set) var resolvedHyperMatcher: HyperKeyMatcher?
-    /// `normalLeader` in mapping-atom form, translated once per load.
-    private(set) var resolvedLeaderAtom: String?
-
-    static let defaultNormalMappings: [ModeMapping] = makeDefaultNormalMappings()
-
-    /// Apple function row while HYPER is held: `1`–`9`, `0`, `-`, `=`.
-    /// Shift plus the same key sends F1–F12.
-    static let defaultHyperMappings: [ModeMapping] = {
-      let bindings: [(String, URLCommand)] = [
-        ("1", .systemKey(.brightnessDown)),
-        ("2", .systemKey(.brightnessUp)),
-        ("3", .systemKey(.missionControl)),
-        ("4", .systemKey(.spotlight)),
-        ("5", .systemKey(.dictation)),
-        ("6", .systemKey(.focus)),
-        ("7", .systemKey(.mediaPrevious)),
-        ("8", .systemKey(.mediaPlay)),
-        ("9", .systemKey(.mediaNext)),
-        ("0", .systemKey(.mute)),
-        ("-", .systemKey(.volumeDown)),
-        ("=", .systemKey(.volumeUp)),
-        ("shift+1", .functionKey(1)),
-        ("shift+2", .functionKey(2)),
-        ("shift+3", .functionKey(3)),
-        ("shift+4", .functionKey(4)),
-        ("shift+5", .functionKey(5)),
-        ("shift+6", .functionKey(6)),
-        ("shift+7", .functionKey(7)),
-        ("shift+8", .functionKey(8)),
-        ("shift+9", .functionKey(9)),
-        ("shift+0", .functionKey(10)),
-        ("shift+-", .functionKey(11)),
-        ("shift+=", .functionKey(12)),
-      ]
-      return bindings.map { key, command in
-        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
-          preconditionFailure("invalid default hyper mapping: \(key)")
-        }
-        return ModeMapping(key: canonical, action: .flashCommand(command))
-      }
-    }()
-
-    /// HOLD moves what the held button grabbed: `h` `j` `k` `l` nudge it,
-    /// `H` `J` `K` `L` further, a picked target is where it goes, Return
-    /// drops it and Escape puts it back. `cmd+ctrl+h` enters or leaves it.
-    static let defaultHoldMappings: [ModeMapping] = makeDefaultMappings(
-      "hold",
-      [
-        ("y", .selection(.copy)),
-        ("d", .selection(.cut)),
-        ("x", .selection(.cut)),
-        ("c", .selection(.change)),
-        ("p", .selection(.paste)),
-        ("w", .mouseJump(.nextWord)),
-        ("b", .mouseJump(.previousWord)),
-        ("e", .mouseJump(.wordEnd)),
-        ("0", .mouseJump(.lineStart)),
-        ("$", .mouseJump(.lineEnd)),
-        ("h", .mouseNudge(.left, distance: 16)),
-        ("j", .mouseNudge(.down, distance: 16)),
-        ("k", .mouseNudge(.up, distance: 16)),
-        ("l", .mouseNudge(.right, distance: 16)),
-        ("H", .mouseNudge(.left, distance: 96)),
-        ("J", .mouseNudge(.down, distance: 96)),
-        ("K", .mouseNudge(.up, distance: 96)),
-        ("L", .mouseNudge(.right, distance: 96)),
-        ("f", .mouseTarget(.move)),
-        ("F", .mouseGrid(.init(.move))),
-        ("s", .mouseBigram(.move)),
-        ("<return>", .mouseButton(.init(state: .release, button: .primary, hold: .hold))),
-        ("<esc>", .mouseButton(.init(state: .cancel, button: .primary, hold: .hold))),
-      ])
-
-    private static func makeDefaultMappings(
-      _ table: String, _ bindings: [(String, URLCommand)]
-    ) -> [ModeMapping] {
-      bindings.map { key, command in
-        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
-          preconditionFailure("invalid default \(table) mapping: \(key)")
-        }
-        return ModeMapping(key: canonical, action: .flashCommand(command))
-      }
-    }
-
-    static let defaultTerminalMappings: [ModeMapping] = {
-      let bindings: [(String, URLCommand)] = [
-        ("cmd+q", .popupQuit(name: nil)),
-        ("cmd+r", .popupRestart(name: nil)),
-        ("cmd+w", .leaveMode),
-      ]
-      return bindings.map { key, command in
-        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
-          preconditionFailure("invalid default terminal mapping: \(key)")
-        }
-        return ModeMapping(key: canonical, action: .flashCommand(command))
-      }
-    }()
-
-    private static func makeDefaultNormalMappings() -> [ModeMapping] {
-      let raw: [(String, MappingCommand)] = [
-        ("h", .flashCommand(.scroll(.left))),
-        ("l", .flashCommand(.scroll(.right))),
-        ("ctrl+e", .flashCommand(.scroll(.down))),
-        ("ctrl+y", .flashCommand(.scroll(.up))),
-        ("ctrl+d", .flashCommand(.scroll(.halfPageDown))),
-        ("ctrl+u", .flashCommand(.scroll(.halfPageUp))),
-        ("gg", .flashCommand(.scroll(.top))),
-        ("G", .flashCommand(.scroll(.bottom))),
-        ("[a", .flashCommand(.appPrev)),
-        ("]a", .flashCommand(.appNext)),
-        ("[t", .flashCommand(.tabPrev)),
-        ("]t", .flashCommand(.tabNext)),
-        ("t", .flashCommand(.tabNew)),
-        ("g1", .flashCommand(.tabSelect(index: 1))),
-        ("g2", .flashCommand(.tabSelect(index: 2))),
-        ("g3", .flashCommand(.tabSelect(index: 3))),
-        ("g4", .flashCommand(.tabSelect(index: 4))),
-        ("g5", .flashCommand(.tabSelect(index: 5))),
-        ("g6", .flashCommand(.tabSelect(index: 6))),
-        ("g7", .flashCommand(.tabSelect(index: 7))),
-        ("g8", .flashCommand(.tabSelect(index: 8))),
-        ("g9", .flashCommand(.tabSelect(index: 9))),
-        ("g0", .flashCommand(.tabFirst)),
-        ("g^", .flashCommand(.tabFirst)),
-        ("g$", .flashCommand(.tabLast)),
-        ("[m", .flashCommand(.tabMovePrev)),
-        ("]m", .flashCommand(.tabMoveNext)),
-        ("ctrl+o", .flashCommand(.movementBack)),
-        ("ctrl+i", .flashCommand(.movementForward)),
-        ("H", .flashCommand(.historyBack)),
-        ("L", .flashCommand(.historyForward)),
-        // A mouse action is a prefix and a finisher. Prefixes are none,
-        // `m` (move), `d` (double) and `c` (context, the right-click).
-        // Finishers are `f` (a discovered target), `F` (the grid) and `s`
-        // (one visible letter, then its hint). `c` is the operator Vim and
-        // Vimium leave free; `r` is reload and `s` is already a finisher.
-        // Modifiers on the final hint key (`hints.magic_modifiers`) still
-        // ride the click.
-        //
-        // Every prefix letter must be free of a mapping of its own. The
-        // interpreter parks a key that is both an exact mapping and the prefix
-        // of a longer one until `sequence_timeout_ms` elapses, so binding `t`
-        // here would make a bare `t` (new tab) wait a full second. Triple
-        // click is deliberately unbound for that reason — add `"tf"` in your
-        // own config if you want it, and remove `t` with `"t" = false`.
-        // `s` starts no other mapping, so the EasyMotion jump fires at once.
-        ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        ("F", .flashCommand(.mouseGrid(.init(.click(.leftClick, modifiers: []))))),
-        ("s", .flashCommand(.mouseBigram(.click(.leftClick, modifiers: [])))),
-        ("mf", .flashCommand(.mouseTarget(.move))),
-        ("mF", .flashCommand(.mouseGrid(.init(.move)))),
-        ("ms", .flashCommand(.mouseBigram(.move))),
-        ("df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
-        ("dF", .flashCommand(.mouseGrid(.init(.click(.doubleClick, modifiers: []))))),
-        ("ds", .flashCommand(.mouseBigram(.click(.doubleClick, modifiers: [])))),
-        ("cf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
-        ("cF", .flashCommand(.mouseGrid(.init(.click(.rightClick, modifiers: []))))),
-        ("cs", .flashCommand(.mouseBigram(.click(.rightClick, modifiers: [])))),
-        ("u", .flashCommand(.undo)),
-        ("ctrl+r", .flashCommand(.redo)),
-        ("x", .flashCommand(.tabClose)),
-        ("X", .flashCommand(.tabReopen)),
-        ("r", .flashCommand(.reload(force: false))),
-        ("R", .flashCommand(.reload(force: true))),
-        ("y", .flashCommand(.yankSelection(register: nil))),
-        ("p", .flashCommand(.paste(register: nil))),
-        ("/", .flashCommand(.find)),
-        ("?", .flashCommand(.showMappings)),
-      ]
-      // Every built-in bracket-pair mapping follows vim-unimpaired repetition:
-      // after `[x` or `]x`, additional presses of `x` repeat the action.
-      let repeatableKeys = Set(
-        raw.lazy.map(\.0).filter { $0.hasPrefix("[") || $0.hasPrefix("]") })
-      return raw.map { (key, action) in
-        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
-          preconditionFailure("default mapping key \"\(key)\" failed canonicalization")
-        }
-        return ModeMapping(
-          key: canonical,
-          action: action,
-          repeatsOnFinalKey: repeatableKeys.contains(key))
-      }
-    }
-
-    func mappings(for mode: FlashMode) -> [ModeMapping] {
-      switch mode {
-      case .normal:
-        return Self.resolveMappings(normal + all)
-      case .insert:
-        return Self.resolveMappings(insert + all)
-      }
-    }
-
-    /// Scope-specific entries precede all-mode fallbacks. Chord aliases share
-    /// one winner across the interpreter and native hotkey dispatcher.
-    static func resolveMappings(_ mappings: [ModeMapping]) -> [ModeMapping] {
-      var keys: Set<String> = []
-      var chords: Set<ParsedHotkey> = []
-      return mappings.filter { mapping in
-        guard keys.insert(mapping.key).inserted else { return false }
-        guard let chord = mapping.nativeHotkey else { return true }
-        return chords.insert(chord).inserted
-      }
-    }
-
-    /// O(1)-lookup view used on every keystroke. Refreshed by
-    /// `prepareDerivedValues()` after every config load / reload.
-    private(set) var compiledNormal = CompiledMappings()
-    private(set) var compiledInsert = CompiledMappings()
-    private(set) var compiledTerminal = CompiledMappings()
-    private(set) var compiledHyper = CompiledMappings()
-    /// The table the interpreter reads in HOLD (`heldMappings`).
-    private(set) var compiledHold = CompiledMappings()
-
-    /// What a held-button mode reads: its own entries, then the NORMAL and
-    /// all-mode ones it leaves alone. An own key hides every NORMAL key it
-    /// starts (HOLD's `d` must not wait on NORMAL's `df`), and `false` in
-    /// its table removes a NORMAL key there.
-    func heldMappings(_ purpose: ButtonHold) -> [ModeMapping] {
-      assert(purpose == .hold)
-      let scope: ModeScope = .hold
-      let own = hold
-      let separator = String(NormalModeInterpreter.keyAtomSeparator)
-      let inherited = mappings(for: .normal).filter { base in
-        !removes(base, in: scope)
-          && !own.contains { base.key == $0.key || base.key.hasPrefix($0.key + separator) }
-      }
-      return Self.resolveMappings(own + inherited)
-    }
-
-    var effectiveTerminalMappings: [ModeMapping] {
-      var claimed = Set<String>()
-      let explicit = terminal.filter {
-        claimed.insert(CompiledMappings.physicalIdentity(for: $0.key)).inserted
-      }
-      var insertClaimed = Set<String>()
-      let inherited = mappings(for: .insert).filter {
-        let identity = CompiledMappings.physicalIdentity(for: $0.key)
-        return insertClaimed.insert(identity).inserted
-          && ($0.action.command == .normalMode || $0.action.command == .leaveMode)
-          && !removes($0, in: .terminal)
-          && claimed.insert(identity).inserted
-      }
-      return explicit + inherited
-    }
-
-    mutating func recompileMappings() {
-      compiledNormal = CompiledMappings(mappings(for: .normal))
-      compiledInsert = CompiledMappings(mappings(for: .insert))
-      compiledTerminal = CompiledMappings(effectiveTerminalMappings)
-      compiledHyper = CompiledMappings(Self.resolveMappings(hyper))
-      compiledHold = CompiledMappings(heldMappings(.hold))
-    }
-
-    /// One mapping-key atom, or nil. `"<leader>"` becomes the leader atom, and
-    /// stays nil when the leader itself is unset. Any other single key is
-    /// used as written (`"a"`, `"<space>"`, `"cmd+space"`).
-    static func resolveHyperKey(_ raw: String, leader: String?) -> String? {
-      guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(raw) else { return nil }
-      let atoms = NormalModeInterpreter.keyAtoms(from: canonical)
-      guard atoms.count == 1, let atom = atoms.first else { return nil }
-      if atom == "<leader>" {
-        guard let leader else { return nil }
-        return NormalModeInterpreter.translateLeader(leader)
-      }
-      return atom
-    }
-
-    mutating func refreshLeaderDerivedDefaults() {
-      resolvedHyperKey = Self.resolveHyperKey(hyperKey, leader: normalLeader)
-      resolvedHyperMatcher = resolvedHyperKey.map(HyperKeyMatcher.init(atom:))
-      resolvedLeaderAtom = normalLeader.flatMap(NormalModeInterpreter.translateLeader)
-      guard let leaderRaw = normalLeader,
-        let leaderInternal = NormalModeInterpreter.translateLeader(leaderRaw)
-      else { return }
-      func resolvingLeader(_ mapping: ModeMapping) -> ModeMapping {
-        guard mapping.key.contains("<leader>") else { return mapping }
-        return ModeMapping(
-          key: mapping.key.replacingOccurrences(of: "<leader>", with: leaderInternal),
-          action: mapping.action,
-          repeatsOnFinalKey: mapping.repeatsOnFinalKey,
-          origin: mapping.origin)
-      }
-      normal = normal.map(resolvingLeader)
-      hold = hold.map(resolvingLeader)
-    }
-
-    var containsNormalModeMapping: Bool {
-      let appEntries = appMappings.values.flatMap {
-        $0.all + $0.normal + $0.insert + $0.terminal + $0.command
-      }
-      return (all + normal + insert + command + terminal + appEntries).contains { mapping in
-        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
-      }
-    }
-
-    var containsAdvancedModeMapping: Bool {
-      (all + appMappings.values.flatMap(\.all)).contains { mapping in
-        mapping.action.command == .normalMode || mapping.action.command == .leaveMode
-      }
-    }
-  }
 
   var hints = Hints()
   var app = App()
   var keyboard = Keyboard()
   var clipboard = Clipboard()
+  /// `[tiling]`: tiling and workspaces, off by default (docs/tiling.md).
+  var tiling = TilingSettings()
   var overlay = Overlay()
   var plugins = Plugins()
   var statusBar = StatusBar()
   var widgets: [String: Widget] = [:]
+  var monitors: [String: Monitor] = Self.defaultMonitors
   var popupStyle = PopupStyle()
   /// `[popup.<name>]`: one namespace for text and terminal popups.
   var popups: [String: Popup] = Self.defaultPopups
@@ -1290,7 +1087,9 @@ struct Config {
   var mode = Mode()
   var windowRules: [WindowPlacementRule] = []
   var debug = Debug()
+  var telemetry = Telemetry()
   var flashlight = Flashlight()
+  var startup = Startup()
   var diagnostics: [ConfigDiagnostic] = []
   /// Plain-string view over `diagnostics`. Existed as a parallel
   /// mutable field; collapsed to a computed projection so the two
@@ -1318,7 +1117,31 @@ struct Config {
     widgets.filter { $0.value.enabled && !$0.value.template.template.isEmpty }
   }
 
-  /// `enter_terminal_mode` without `--name` opens this popup.
+  /// The monitors to evaluate: enabled and complete (a problem is diagnosed
+  /// at load).
+  var enabledMonitors: [String: Monitor] {
+    monitors.filter { $0.value.enabled && $0.value.problem == nil }
+  }
+
+  /// Every monitor, compiled for the status controller; a disabled or
+  /// incomplete one is listed but never evaluated.
+  /// The value monitors the status controller evaluates.
+  var monitorSpecs: [String: StatusMonitorSpec] {
+    Dictionary(
+      uniqueKeysWithValues: monitors.filter { $0.value.event.isEmpty }.map {
+        ($0.key, $0.value.spec(name: $0.key))
+      })
+  }
+
+  /// The enabled event monitors that can run, by name.
+  var eventMonitorSpecs: [String: EventMonitorSpec] {
+    monitors.compactMapValues { monitor in
+      guard monitor.enabled, monitor.problem == nil else { return nil }
+      return monitor.eventSpec()
+    }
+  }
+
+  /// `mode terminal` without `--name` opens this popup.
   static let defaultPopupName = "terminal"
   /// The built-in popups, mirrored by `config.default.toml`: a fresh login
   /// shell in the home directory. `$SHELL` and `~` expand at launch.
@@ -1352,7 +1175,7 @@ struct Config {
 
   /// Every popup name a user can open: the enabled bar's markers (template
   /// and text popup bodies) and `[statusbar.click]` commands, and
-  /// `enter_terminal_mode` in every mapping scope, where no name means
+  /// `mode terminal` in every mapping scope, where no name means
   /// `terminal`.
   var referencedPopupNames: Set<String> {
     var names: Set<String> = []
@@ -1372,6 +1195,7 @@ struct Config {
       $0.all + $0.normal + $0.insert + $0.terminal + $0.command
     }
     for mapping in mode.all + mode.normal + mode.insert + mode.terminal + mode.command + appEntries
+      + mode.layerMappingEntries
     {
       collect(mapping.action)
     }
@@ -1388,12 +1212,15 @@ struct Config {
     }
   }
 
-  /// Plugin id → the status segments a live surface shows: the enabled bar
-  /// (template and text popups) and every enabled widget not in
-  /// `hiddenWidgets` (fully covered). The ids keep status-bound plugins
-  /// resident; the segments are what `core:status.observed` reports to each
-  /// plugin.
-  func observedStatusSegments(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
+  /// Plugin id → the status segments the configuration's surfaces read: the
+  /// enabled bar (template and text popups, open or not), every enabled
+  /// widget not in `hiddenWidgets` (covered for a while) and every enabled
+  /// monitor, which watches whether anything shows it. The ids keep
+  /// status-bound plugins resident, so opening a popup spawns nothing. What
+  /// each plugin hears as observed (`core:status.observed`) is narrower: the
+  /// segments a surface shows now, which the status controller reports
+  /// (`PluginManager.setShownStatusSegments`).
+  func statusSegmentsRead(hiddenWidgets: Set<String> = []) -> [String: Set<String>] {
     var segments =
       statusBar.enabled
       ? Self.statusSegments(in: [statusBar.template] + Array(textPopups.values)) : [:]
@@ -1401,7 +1228,23 @@ struct Config {
     for (id, names) in Self.statusSegments(in: shown.values.map(\.template)) {
       segments[id, default: []].formUnion(names)
     }
+    for spec in monitorSpecs.values where spec.enabled {
+      for (id, names) in spec.pluginSegments {
+        segments[id, default: []].formUnion(names)
+      }
+    }
     return segments
+  }
+
+  /// The monitors a received metric can fire, by name: the enabled value
+  /// monitors with a `run` whose `value` reads a `#{flash.otel…}` value. The
+  /// receiver listens on loopback, which every local program shares, so
+  /// these are what `[telemetry.receiver] token` guards (`resident doctor`).
+  func monitorsRunOnReceivedMetrics() -> [String] {
+    monitorSpecs.filter { _, spec in
+      spec.enabled && spec.fires != .never
+        && spec.value.program.dependencies.values.contains(where: TelemetryQuery.isTelemetryKey)
+    }.keys.sorted()
   }
 
   static let `default`: Config = {
@@ -1549,268 +1392,6 @@ struct Config {
     )
   }
 
-  /// JSON object string of the `[plugin.<id>]` settings for `pluginID`,
-  /// suitable for `FLASH_PLUGIN_CONFIG`. Returns `{}` when the plugin has
-  /// no settings.
-  func pluginConfigJSON(for pluginID: String) -> String {
-    let table = plugins.settings[pluginID]?.mapValues(\.jsonValue) ?? [:]
-    guard
-      let data = try? JSONSerialization.data(withJSONObject: table, options: [.sortedKeys]),
-      let json = String(data: data, encoding: .utf8)
-    else {
-      return "{}"
-    }
-    return json
-  }
-
-  var resolvedConfigJSON: String {
-    let modeJSON: [String: Any] = [
-      "all": mode.all.map(Self.mappingJSONValue),
-      "apps": mode.appMappings.mapValues { app in
-        [
-          "all": app.all.map(Self.mappingJSONValue),
-          "normal": app.normal.map(Self.mappingJSONValue),
-          "insert": app.insert.map(Self.mappingJSONValue),
-          "terminal": app.terminal.map(Self.mappingJSONValue),
-          "command": app.command.map(Self.mappingJSONValue),
-          "hyper": app.hyper.map(Self.mappingJSONValue),
-          "hold": app.hold.map(Self.mappingJSONValue),
-          "unmapped": app.unmapped.reduce(into: [String: [String]]()) { result, entry in
-            result[entry.key.rawValue] = entry.value.sorted()
-          },
-        ]
-      },
-      "command": mode.command.map(Self.mappingJSONValue),
-      "insert": mode.insert.map(Self.mappingJSONValue),
-      "terminal": mode.effectiveTerminalMappings.map(Self.mappingJSONValue),
-      "labels": [
-        "command": mode.labels.command,
-        "hyper": mode.labels.hyper,
-        "insert": mode.labels.insert,
-        "normal": mode.labels.normal,
-        "terminal": mode.labels.terminal,
-        "hold": mode.labels.hold,
-      ],
-      "hyper": mode.hyper.map(Self.mappingJSONValue),
-      "hold": mode.hold.map(Self.mappingJSONValue),
-      "hyper_key": mode.hyperKey,
-      "hyper_key_atom": mode.resolvedHyperKey ?? NSNull(),
-      "normal": mode.normal.map(Self.mappingJSONValue),
-      "normal_leader": mode.normalLeader ?? NSNull(),
-      "scroll_smooth_ms": mode.scrollSmoothMs,
-    ]
-    return compactJSON([
-      "debug": [
-        "hints_bounds_bg": debug.hintsBoundsBG,
-        "hints_bounds_fg": debug.hintsBoundsFG,
-        "http_inspector_enabled": debug.httpInspectorEnabled,
-        "http_inspector_host": debug.httpInspectorHost,
-        "http_inspector_port": debug.httpInspectorPort,
-        "log_level": debug.logLevel.name,
-        "show_hints_bounds": debug.showHintsBounds,
-      ],
-      "keyboard": ["layout": keyboard.layout],
-      "hints": [
-        "adjust_digits": hints.adjustDigits.rawValue,
-        "key_priority": hints.keyPriority,
-        "keys": effectiveHintKeys(),
-        "label_order": hints.labelOrder.rawValue,
-        "magic_modifiers": effectiveMagicModifiers,
-        "min_length": hints.minLength,
-        "pointer_acceleration": hints.pointerAcceleration,
-        "pointer_follows_focus": hints.pointerFollowsFocus,
-        "pointer_max_step": hints.pointerMaxStep,
-        "pointer_step": hints.pointerStep,
-        "position_history_scope": hints.positionHistoryScope.rawValue,
-        "position_history_size": hints.positionHistorySize,
-        "mouse_grid_cursor_follow": hints.mouseGridCursorFollow,
-        "mouse_grid_keys": resolvedMouseGridKeys.map { String($0) },
-        "mouse_grid_opacity": hints.mouseGridOpacity,
-        "mouse_grid_preview": hints.mouseGridPreview,
-        "mouse_grid_steps": hints.mouseGridSteps,
-        "restore_pointer": hints.restorePointer,
-      ],
-      "flashlight": [
-        "aliases": flashlight.aliases,
-        "ignored_apps": flashlight.ignoredApps,
-        "precedence": flashlight.precedence,
-        "precedence_alive_bonus": flashlight.precedenceAliveBonus,
-        "suggestion_count": flashlight.suggestionCount,
-      ],
-      "mode": modeJSON,
-      "overlay": [
-        "click_feedback": overlay.clickFeedback,
-        "dark": [
-          "hint_bg_bottom": overlay.dark.hintBGBottom,
-          "hint_bg_top": overlay.dark.hintBGTop,
-          "hint_border": overlay.dark.hintBorder,
-          "hint_fg": overlay.dark.hintFG,
-          "important_hint_bg_bottom": overlay.dark.importantHintBGBottom,
-          "important_hint_bg_top": overlay.dark.importantHintBGTop,
-          "important_hint_border": overlay.dark.importantHintBorder,
-          "important_hint_fg": overlay.dark.importantHintFG,
-        ],
-        "font_size": overlay.fontSize,
-        "hint_bg_bottom": overlay.hintBGBottom,
-        "hint_bg_top": overlay.hintBGTop,
-        "hint_border": overlay.hintBorder,
-        "hint_fg": overlay.hintFG,
-        "hint_placement": overlay.hintPlacement.rawValue,
-        "screen_capture": overlay.screenCapture.rawValue,
-      ],
-      "plugins": [
-        "disabled": plugins.disabled.sorted(),
-        "third_party": plugins.thirdParty.map(\.raw),
-        "watching_enabled": plugins.watchingEnabled,
-        // Diagnostics/inspector JSON is intentionally value-free: per-plugin
-        // settings can contain API tokens and are delivered only to that
-        // plugin through FLASH_PLUGIN_CONFIG.
-        "configured": plugins.settings.keys.sorted(),
-      ],
-      "clipboard": ["history_size": clipboard.historySize],
-      // Kinds, lifecycles and sizes only: commands and environments can
-      // carry credentials.
-      "popup": [
-        "bg": popupStyle.background, "border": popupStyle.borderColor,
-        "border_size": popupStyle.borderWidth, "corner_radius": popupStyle.cornerRadius,
-        "fg": popupStyle.foreground, "max_width": popupStyle.maxWidth,
-        "min_width": popupStyle.minWidth,
-        "offset": popupStyle.offset, "padding": popupStyle.padding,
-        "popups": popups.mapValues { popup -> [String: Any] in
-          switch popup {
-          case .text: return ["kind": "text"]
-          case .terminal(let terminal):
-            return [
-              "kind": "terminal", "persistent": terminal.lifecycle == .persistent,
-              "size": terminal.size.description,
-            ]
-          }
-        },
-      ] as [String: Any],
-      "statusbar": [
-        "enabled": statusBar.enabled,
-        "template": statusBar.template.template,
-        "sources": statusBar.sources.keys.sorted(),
-      ],
-      "widgets": widgets.mapValues { widget in
-        [
-          "enabled": widget.enabled, "template": widget.template.template,
-          "anchor": widget.anchor.rawValue, "columns": widget.columns,
-          "interval": widget.intervalSeconds,
-        ] as [String: Any]
-      },
-      "warnings": warnings,
-    ])
-  }
-
-  private static func mappingJSONValue(_ mapping: ModeMapping) -> [String: Any] {
-    [
-      "command": mapping.action.configValue,
-      "key": mapping.key,
-      "repeat": mapping.repeatsOnFinalKey,
-    ]
-  }
-
-  /// Sparse tree parallel to `resolvedConfigJSON`. A node's `"$"` is
-  /// `{ "layer", "where" }` for the writer that overrode the default. Mapping
-  /// arrays are keyed by mapping key; other arrays of names are keyed by the
-  /// name. Paths the JSON renames (`mode.normal.leader`, named popups) are
-  /// translated onto the JSON shape.
-  func resolvedConfigSources() -> [String: Any] {
-    var tree: [String: Any] = [:]
-    for (path, source) in valueSources {
-      Self.insert(source, at: Self.jsonPath(for: path), into: &tree)
-    }
-    insertMappingSources(into: &tree)
-    if var mode = tree["mode"] as? [String: Any],
-      let hyper = mode["hyper_key"] as? [String: Any],
-      let mark = hyper["$"]
-    {
-      var atom = mode["hyper_key_atom"] as? [String: Any] ?? [:]
-      atom["$"] = mark
-      mode["hyper_key_atom"] = atom
-      tree["mode"] = mode
-    }
-    return tree
-  }
-
-  private static let popupStyleJSONKeys: Set<String> = [
-    "fg", "bg", "border", "border_size", "corner_radius", "padding", "min_width", "max_width",
-    "offset",
-  ]
-
-  private static func jsonPath(for tomlPath: String) -> [String] {
-    switch tomlPath {
-    case "mode.normal.leader": return ["mode", "normal_leader"]
-    case "mode.normal.hyper": return ["mode", "hyper_key"]
-    default: break
-    }
-    var parts = tomlPath.split(separator: ".").map(String.init)
-    if parts.count >= 2, parts[0] == "popup", !popupStyleJSONKeys.contains(parts[1]) {
-      parts.insert("popups", at: 1)
-    }
-    return parts
-  }
-
-  private static func insert(
-    _ source: ConfigValueSource, at path: [String], into node: inout [String: Any]
-  ) {
-    guard let head = path.first else { return }
-    var child = node[head] as? [String: Any] ?? [:]
-    if path.count == 1 {
-      child["$"] = ["layer": source.layer, "where": source.detail]
-    } else {
-      insert(source, at: Array(path.dropFirst()), into: &child)
-    }
-    node[head] = child
-  }
-
-  private static func source(forMappingOrigin origin: String) -> ConfigValueSource? {
-    if origin.isEmpty || origin == ModeMapping.defaultOrigin { return nil }
-    let parts = origin.split(separator: ":", maxSplits: 1).map(String.init)
-    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
-      return ConfigValueSource(layer: origin, detail: origin)
-    }
-    return ConfigValueSource(layer: parts[0], detail: parts[1])
-  }
-
-  private func insertMappingSources(into tree: inout [String: Any]) {
-    func add(_ mappings: [ModeMapping], at path: [String]) {
-      for mapping in mappings {
-        guard let source = Self.source(forMappingOrigin: mapping.origin) else { continue }
-        Self.insert(source, at: path + [mapping.key], into: &tree)
-      }
-    }
-    add(mode.all, at: ["mode", "all"])
-    add(mode.normal, at: ["mode", "normal"])
-    add(mode.insert, at: ["mode", "insert"])
-    add(mode.effectiveTerminalMappings, at: ["mode", "terminal"])
-    add(mode.command, at: ["mode", "command"])
-    add(mode.hyper, at: ["mode", "hyper"])
-    add(mode.hold, at: ["mode", "hold"])
-    for (bundle, app) in mode.appMappings {
-      for scope in ModeScope.allCases {
-        add(app.mappings(for: scope), at: ["mode", "apps", bundle, scope.rawValue])
-      }
-    }
-  }
-
-  var resolvedHintsKeysJSON: String {
-    let scores = Dictionary(
-      uniqueKeysWithValues: resolvedAlphabet.keyScores.map { (String($0.key), $0.value) }
-    )
-    return compactJSON([
-      "chars": String(resolvedAlphabet.chars),
-      "chars_array": resolvedAlphabet.chars.map(String.init),
-      "default": Alphabet.defaultKeys,
-      "key_scores": scores,
-      "layout": resolvedAlphabet.layoutName ?? NSNull(),
-      "left_hand": String(resolvedAlphabet.leftHand.sorted()),
-      "raw": hints.keys,
-      "warning": resolvedAlphabet.warning ?? NSNull(),
-    ])
-  }
-
   var loadingDiagnostics: [ConfigDiagnostic] {
     var diagnostics = self.diagnostics
     if let warning = resolvedAlphabet.warning {
@@ -1834,352 +1415,4 @@ struct Config {
     }
     return lines.joined(separator: "\n")
   }
-
-  private func compactJSON(_ object: Any) -> String {
-    guard JSONSerialization.isValidJSONObject(object),
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
-      let json = String(data: data, encoding: .utf8)
-    else {
-      return "{}"
-    }
-    return json
-  }
-}
-
-extension URLCommand {
-  /// Argv of an in-process verb: `["flash", "<verb>", "--k=v", ...]`.
-  /// Bool flags render only when on. Value flags use hyphenated
-  /// `--name=value`. A value that contains a space stays one element.
-  var argv: [String] {
-    func verb(_ name: String, _ args: [String] = []) -> [String] {
-      ["flash", name] + args
-    }
-    /// Bool-flag arg: `--name` (when on). Off bool flags don't render.
-    func flag(_ name: String) -> String { "--\(name)" }
-    /// Value arg: `--name=value`. The internal key is snake_case; surface
-    /// the hyphenated form so the rendered string can be pasted back into
-    /// a shell or config without translation.
-    func kv(_ name: String, _ value: Any) -> String {
-      let key = name.replacingOccurrences(of: "_", with: "-")
-      return "--\(key)=\(value)"
-    }
-    func percentage(_ value: Double) -> String {
-      value.rounded() == value ? "\(Int(value))%" : "\(value)%"
-    }
-    switch self {
-    case .mouseTarget(let command):
-      return verb("mouse_target", command.argTokens)
-    case .mouseBigram(let command):
-      return verb("mouse_bigram", command.argTokens)
-    case .mouseTargetScreen(let command):
-      return verb("mouse_target", ["--scope=screen"] + command.argTokens)
-    case .mouseTargetWords(let command):
-      return verb("mouse_target", ["--words"] + command.argTokens)
-    case .mouseScreens: return verb("mouse_screens")
-    case .mouseWarp(let request): return verb("mouse_warp", request.argTokens)
-    case .mouseStep(let direction): return verb("mouse_step", ["--direction=\(direction.rawValue)"])
-    case .mouseJump(let jump): return verb("mouse_step", ["--to=\(jump.rawValue)"])
-    case .selection(let action, let register):
-      return verb(
-        "selection", ["--action=\(action.rawValue)"] + (register.map { [kv("register", $0)] } ?? [])
-      )
-    case .mouseNudge(let direction, let distance):
-      return verb("mouse_nudge", ["--direction=\(direction.rawValue)", "--distance=\(distance)"])
-    case .mousePosition(let request): return verb("mouse_position", request.argTokens)
-    case .mouseGrid(let command):
-      return verb("mouse_grid", command.argTokens)
-    case .mouseRepeat: return verb("mouse_repeat")
-    case .mousePointer: return verb("mouse_pointer")
-    case .mouseButton(let request): return verb("mouse_button", request.argTokens)
-    case .holdMode(let button):
-      switch button {
-      case .primary: return verb("enter_hold_mode")
-      case .secondary: return verb("enter_hold_mode", [flag("secondary")])
-      case .middle: return verb("enter_hold_mode", [flag("middle")])
-      }
-    case .focusInput: return verb("focus_input")
-    case .scrollTarget: return verb("scroll_target")
-    case .mouseDock: return verb("mouse_dock")
-    case .mouseMenuBar: return verb("mouse_menubar")
-    case .mouseNotifications: return verb("mouse_notifications")
-    case .normalMode: return verb("enter_normal_mode")
-    case .leaveMode: return verb("leave_mode")
-    case .popupRestart(let name):
-      return verb("popup_restart", name.map { ["--name=\($0)"] } ?? [])
-    case .popupQuit(let name):
-      return verb("popup_quit", name.map { ["--name=\($0)"] } ?? [])
-    case .insertMode: return verb("enter_insert_mode")
-    case .commandMode: return verb("enter_command_mode")
-    case .terminalMode(let name):
-      return verb("enter_terminal_mode", name.map { ["--name=\($0)"] } ?? [])
-    case .scroll(let kind):
-      switch kind {
-      case .left: return verb("scroll_left")
-      case .right: return verb("scroll_right")
-      case .up: return verb("scroll_up")
-      case .down: return verb("scroll_down")
-      case .halfPageUp: return verb("scroll_half_page_up")
-      case .halfPageDown: return verb("scroll_half_page_down")
-      case .top: return verb("scroll_top")
-      case .bottom: return verb("scroll_bottom")
-      }
-    case .reload(let force):
-      return force ? verb("app_reload", [flag("force")]) : verb("app_reload")
-    case .undo: return verb("app_undo")
-    case .redo: return verb("app_redo")
-    case .archive: return verb("resource_archive")
-    case .resourceNext: return verb("resource_next")
-    case .resourcePrevious: return verb("resource_previous")
-    case .tabClose: return verb("tab_close")
-    case .find: return verb("app_find")
-    case .candidateFinder(let all):
-      return all ? verb("app_open_finder", [flag("all")]) : verb("app_open_finder")
-    case .enterCommand(let input, let restoreMode):
-      var args = [kv("input", input)]
-      if restoreMode { args.append(flag("restore-mode")) }
-      return verb("enter_command_mode", args)
-    case .copyURL: return verb("url_copy")
-    case .yankSelection(let register):
-      if let register { return verb("yank_selection", [kv("register", register)]) }
-      return verb("yank_selection")
-    case .paste(let register):
-      if let register { return verb("paste", [kv("register", register)]) }
-      return verb("paste")
-    case .tabNext: return verb("tab_next")
-    case .tabPrev: return verb("tab_previous")
-    case .tabFirst: return verb("tab_first")
-    case .tabLast: return verb("tab_last")
-    case .tabSelect(let index):
-      if let index { return verb("tab_select", [kv("index", index)]) }
-      return verb("tab_select")
-    case .tabMovePrev: return verb("tab_move_previous")
-    case .tabMoveNext: return verb("tab_move_next")
-    case .tabReopen: return verb("tab_reopen")
-    case .paneNext: return verb("pane_next")
-    case .panePrev: return verb("pane_previous")
-    case .paneSplitVertical: return verb("pane_split_vertical")
-    case .paneSplitHorizontal: return verb("pane_split_horizontal")
-    case .paneClose: return verb("pane_close")
-    case .historyBack: return verb("history_back")
-    case .historyForward: return verb("history_forward")
-    case .movementBack: return verb("movement_back")
-    case .movementForward: return verb("movement_forward")
-    case .appPrev: return verb("app_previous")
-    case .appNext: return verb("app_next")
-    case .quitApp(let force):
-      return force ? verb("app_quit", [flag("force")]) : verb("app_quit")
-    case .saveAndQuit(let force):
-      return force ? verb("app_save_and_quit", [flag("force")]) : verb("app_save_and_quit")
-    case .tabNew: return verb("tab_new")
-    case .save: return verb("app_save")
-    case .print: return verb("app_print")
-    case .documentOpen: return verb("document_open")
-    case .windowNew: return verb("window_new")
-    case .windowClose: return verb("window_close")
-    case .clipboardCopy: return verb("clipboard_copy")
-    case .clipboardCut: return verb("clipboard_cut")
-    case .clipboardPaste: return verb("clipboard_paste")
-    case .clipboardHistory(let action, let id, let offset):
-      var parts = [kv("action", action)]
-      if let id { parts.append(kv("id", id)) }
-      if let offset { parts.append(kv("offset", offset)) }
-      return verb("clipboard_history", parts)
-    case .lookUp: return verb("look_up")
-    case .trackpadGesture(let fingers, let motion):
-      return verb("gesture", ["--fingers=\(fingers)", "--motion=\(motion.rawValue)"])
-    case .showAlert(let alert): return verb("alert_show", alert.argTokens)
-    case .dismissAlert: return verb("alert_dismiss")
-    case .confirm(let request):
-      return verb("confirm", [kv("prompt", request.prompt), kv("command", request.commandText)])
-    case .showUsage(let topic):
-      if let topic, !topic.isEmpty { return verb("help_show", [kv("topic", topic)]) }
-      return verb("help_show")
-    case .showMappings:
-      return verb("mappings_show")
-    case .showPlugins: return verb("plugins")
-    case .showAbout: return verb("about")
-    case .dismissHints: return verb("hints_dismiss")
-    case .quit: return verb("quit")
-    case .openApp(let name): return verb("app_open", [kv("name", name)])
-    case .pluginCommand(let command, let subcommand, let args):
-      return verb(command, [subcommand] + args)
-    case .moveWindow(let params):
-      var parts: [String] = []
-      switch params.layout {
-      case .position(let position):
-        parts.append(kv("position", position.rawValue))
-      case .proportional(let frame):
-        parts.append(kv("x", percentage(frame.xPercent)))
-        parts.append(kv("y", percentage(frame.yPercent)))
-        parts.append(kv("width", percentage(frame.widthPercent)))
-        parts.append(kv("height", percentage(frame.heightPercent)))
-      case nil:
-        break
-      }
-      parts.append(kv("screen", params.screen))
-      return verb("window_move", parts)
-    case .windowState(let action):
-      switch action {
-      case .minimize: return verb("window_minimize")
-      case .restore: return verb("window_restore")
-      case .fullscreen(let state):
-        return state == .toggle
-          ? verb("window_fullscreen")
-          : verb("window_fullscreen", [kv("state", state.rawValue)])
-      }
-    case .focusWindow(let request):
-      return verb("window_focus", [kv("direction", request.rawValue)])
-    case .systemKey(let key):
-      return verb("system_key", [kv("key", key.rawValue)])
-    case .functionKey(let index):
-      return verb("function_key", [kv("key", "f\(index)")])
-    case .arrow(let direction, let shift):
-      let args = [kv("direction", direction.rawValue)]
-      return shift ? verb("arrow", args + [flag("shift")]) : verb("arrow", args)
-    case .sendKey(let keys, _, _):
-      return verb("send_key", [kv("keys", keys)])
-    case .sendKeys(let keys, _, _):
-      return verb("send_keys", [kv("keys", keys)])
-    case .pluginVerb(let name, let args):
-      let tokens = args.keys.sorted().map { key in kv(key, args[key] ?? "") }
-      return verb(name, tokens)
-    }
-  }
-
-  /// Space-joined `argv` for help text, logs, and the mappings list.
-  /// Never re-parsed: splitting it breaks a value that contains a space.
-  var diagnosticDescription: String {
-    argv.joined(separator: " ")
-  }
-}
-
-extension MouseCommand {
-  /// Arg tokens for `mouse_target` / `mouse_grid` in diagnostic form.
-  /// Empty for a plain left-click, `["--secondary"]` for right-click,
-  /// `["--middle"]` for middle-click, `["--double"]` / `["--triple"]` for
-  /// multi-clicks, `["--move"]` for cursor-only move, with an optional
-  /// `--modifiers=…` suffix for a preset modified click.
-  var argTokens: [String] {
-    switch self {
-    case .move:
-      return ["--move"]
-    case .gesture(let gesture):
-      return ["--gesture=\(gesture.rawValue)"]
-    case .drag(let modifiers):
-      var tokens = ["--drag"]
-      if !modifiers.isEmpty {
-        tokens.append("--modifiers=\(modifiers.argumentValue)")
-      }
-      return tokens
-    case .select(let modifiers):
-      var tokens = ["--select"]
-      if !modifiers.isEmpty {
-        tokens.append("--modifiers=\(modifiers.argumentValue)")
-      }
-      return tokens
-    case .multi(let action, let modifiers), .adjust(let action, let modifiers),
-      .search(let action, let modifiers), .path(let action, let modifiers),
-      .sticky(let action, let modifiers):
-      let session: String
-      switch self {
-      case .multi: session = "--multi"
-      case .adjust: session = "--adjust"
-      case .path: session = "--path"
-      case .sticky: session = "--sticky"
-      default: session = "--search"
-      }
-      var tokens = [session]
-      switch action {
-      case .leftClick: break
-      case .rightClick: tokens.append("--secondary")
-      case .middleClick: tokens.append("--middle")
-      case .doubleClick: tokens.append("--double")
-      case .tripleClick: tokens.append("--triple")
-      }
-      if !modifiers.isEmpty {
-        tokens.append("--modifiers=\(modifiers.argumentValue)")
-      }
-      return tokens
-    case .click(let action, let modifiers):
-      var tokens: [String]
-      switch action {
-      case .leftClick: tokens = []
-      case .rightClick: tokens = ["--secondary"]
-      case .middleClick: tokens = ["--middle"]
-      case .doubleClick: tokens = ["--double"]
-      case .tripleClick: tokens = ["--triple"]
-      }
-      if !modifiers.isEmpty {
-        tokens.append("--modifiers=\(modifiers.argumentValue)")
-      }
-      return tokens
-    }
-  }
-}
-
-extension Config {
-  static let helpTopic = HelpTopic(
-    name: "config",
-    title: "Configuration",
-    summary: "flash.toml sections, defaults, and live reload.",
-    body: """
-      # Configuration
-
-      Open your file from the menu-bar bolt's **Open Configuration** entry.
-      Flash loads bundled defaults, then your selected file, then supported
-      environment overrides. `FLASH_CONFIG` selects the file; otherwise it
-      uses `$XDG_CONFIG_HOME/flash/flash.toml`, or `~/.config/flash/flash.toml`
-      when XDG is unset. The file reloads when saved. On first launch Flash
-      creates a commented starter if needed, then leaves your edits yours.
-
-      [Runtime](/state) shows the selected path and configuration diagnostics.
-      `flash config_check` validates independently of the resident;
-      `flash config_check --file=/path/to/flash.toml` checks another file.
-      Invalid values are diagnosed and retain the previous valid value
-      according to that field's validation contract.
-
-      ## Find the setting
-
-      | Section | Controls |
-      | --- | --- |
-      | `[app]` | Autostart, menu-bar icon and the input source that reads keypresses |
-      | `[keyboard]` | Logical layout for hints, the grid, bisect and HYPER arrows |
-      | `[hints]` | Label alphabet, grid geometry and pointer behavior |
-      | `[overlay]`, `[overlay.dark]` | Appearance and click feedback |
-      | `[mode]`, `[mode.normal]` | Sequences, leader and scrolling |
-      | `[mode.<scope>.mappings]` | Keys in all, normal, insert, command or terminal scope |
-      | `[flashlight]` | Search, aliases and source precedence |
-      | `[statusbar]`, `[statusbar.click]` | Bar format and clickable actions |
-      | `[statusbar.sources.<name>]` | Commands providing reusable status values |
-      | `[widgets.<name>]` | Passive desktop status panels |
-      | `[popup]`, `[popup.<name>]` | Shared popup style and named terminal/text popups |
-      | `[plugins]`, `[plugin.<id>]` | Enabled plugins and their settings |
-      | `[debug]` | Logging and the local inspector |
-
-      ## Bind commands
-
-      Mapping values are argv arrays or a table with `command` and optional
-      `repeat`; `false` removes a default. Flash arguments use `--flag` and
-      `--name=value`:
-
-      ```toml
-      [mode.normal.mappings]
-      "gs" = ["flash", "mouse_target", "--scope=screen"]
-      "[a" = { command = ["flash", "app_previous"], repeat = true }
-      "t" = false
-      ```
-
-      A Flash executable as the head dispatches in process; another executable
-      launches as argv. Only executable and working-directory fields resolve
-      relative to the defining file. Other arguments stay opaque during
-      loading. Use an explicit shell for shell syntax and `working_directory`
-      (sources) or `cwd` (popups) for relative data paths.
-
-      See [live mappings](/mappings), [mapping syntax](/docs/mappings),
-      [status formats](/docs/status-format) and the
-      [canonical configuration reference](\(HelpDocs.repositoryRoot)/config.default.toml).
-      The [configuration guide](\(HelpDocs.repositoryRoot)/docs/configuration.md)
-      covers environment overrides, keyboard layouts and validation details.
-      """,
-    aliases: ["configuration"])
 }

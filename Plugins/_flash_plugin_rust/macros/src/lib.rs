@@ -4,14 +4,18 @@
 //! matching trait method.
 //!
 //! `manifest.json` is the single source of truth. The macro inspects the
-//! declared surfaces to decide which handler methods are *required*: warm
-//! sources require `on_start`, `live: true` sources require `on_search`, a
-//! `query` evaluator requires the synchronous `evaluate` hook, `hints`
-//! requires `on_hints`, and the perform surfaces map one handler per kind —
-//! `commands`/`bangs`/`verbs` require `on_command`, `actions`
-//! requires `on_action`, `navigation` requires `on_navigate`. `on_resolve`
-//! stays optional: a plugin whose rows carry only host-executed effects never
-//! needs it.
+//! declared surfaces to decide which handler methods are *required*:
+//! pushed `sources` require `on_start`, live ones (`sources[].live`) require
+//! `on_search`, a `query` evaluator requires the synchronous `evaluate` hook,
+//! `hints` requires `on_hints` (`on_text_grid` stays optional with an empty
+//! default), and the perform surfaces map one
+//! handler per kind — `commands`/`bangs` require `on_command`, which also
+//! receives the core commands a manifest declares under one of Flash's
+//! topics, and `navigation` requires `on_navigate`.
+//! `on_resolve` stays optional: a plugin whose rows carry only host-executed
+//! effects never needs it. A manifest `lifecycle` of `publish_then_exit`
+//! makes `on_start` the whole run: the generated adapter tells the runtime
+//! to exit 0 once it returns.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
@@ -25,23 +29,47 @@ use std::path::PathBuf;
 pub fn plugin(input: TokenStream) -> TokenStream {
     let ty = parse_type(input.into());
     let manifest = load_manifest();
+    let type_errors = source_type_errors(&manifest);
+    assert!(
+        type_errors.is_empty(),
+        "flash_plugin::plugin!: manifest.json {}",
+        type_errors.join("; ")
+    );
+    let live_errors = source_live_errors(&manifest);
+    assert!(
+        live_errors.is_empty(),
+        "flash_plugin::plugin!: manifest.json {}",
+        live_errors.join("; ")
+    );
+    let lifecycle_errors = lifecycle_errors(&manifest);
+    assert!(
+        lifecycle_errors.is_empty(),
+        "flash_plugin::plugin!: manifest.json {}",
+        lifecycle_errors.join("; ")
+    );
+    let args_errors = command_args_errors(&manifest);
+    assert!(
+        args_errors.is_empty(),
+        "flash_plugin::plugin!: manifest.json {}",
+        args_errors.join("; ")
+    );
+    let exits_after_start = manifest_exits_after_start(&manifest);
 
     let on_start_decl = on_start_decl(manifest_has_warm_sources(&manifest));
     let evaluate_decl = evaluate_decl(manifest_has_query_evaluator(&manifest));
-    let on_search_decl = on_search_decl(manifest_has_live_sources(&manifest));
     let on_hints_decl = on_hints_decl(manifest_has_hints(&manifest));
+    let on_search_decl = on_search_decl(manifest_has_live_sources(&manifest));
     let on_command_decl = on_command_decl(manifest_has_command_surface(&manifest));
-    let on_action_decl = on_action_decl(manifest_has_actions(&manifest));
     let on_navigate_decl = on_navigate_decl(manifest_has_navigation(&manifest));
     let expanded = quote! {
         /// The plugin contract for this crate, specialized to its
-        /// `manifest.json`. Implement the required methods (warm sources make
-        /// `on_start` required; live sources make `on_search` required;
+        /// `manifest.json`. Implement the required methods (pushed
+        /// `sources` make `on_start` required and live ones `on_search`;
         /// `query` makes the synchronous `evaluate` hook required; `hints`
-        /// makes `on_hints` required; `commands`/`bangs`/RPC verbs make
-        /// `on_command` required; `actions` makes `on_action` required;
-        /// `navigation` makes `on_navigate` required); override any remaining
-        /// defaulted handler the plugin serves.
+        /// makes `on_hints` required;
+        /// `commands`/`bangs` make `on_command` required; `navigation`
+        /// makes `on_navigate` required); override any remaining defaulted
+        /// handler the plugin serves.
         pub trait FlashPlugin: ::core::marker::Send + ::core::marker::Sync + 'static {
             #on_start_decl
 
@@ -57,13 +85,25 @@ pub fn plugin(input: TokenStream) -> TokenStream {
 
             #evaluate_decl
 
-            #on_search_decl
-
             #on_hints_decl
 
-            #on_command_decl
+            /// The focused app's visible text as a cell grid (`text_grid`),
+            /// for a letter search in an app that publishes no
+            /// Accessibility text. Optional: the empty default means no
+            /// grid. Always live.
+            fn on_text_grid(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::TextGridRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::TextGridResponse> + ::core::marker::Send
+            {
+                let _ = (ctx, request);
+                async { ::flash_plugin::TextGridResponse::default() }
+            }
 
-            #on_action_decl
+            #on_search_decl
+
+            #on_command_decl
 
             #on_navigate_decl
 
@@ -114,15 +154,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 <Self as FlashPlugin>::evaluate(self, request)
             }
 
-            fn on_search(
-                &self,
-                ctx: ::flash_plugin::Context,
-                request: ::flash_plugin::SearchRequest,
-            ) -> impl ::core::future::Future<Output = ::flash_plugin::SearchResponse> + ::core::marker::Send
-            {
-                <Self as FlashPlugin>::on_search(self, ctx, request)
-            }
-
             fn on_hints(
                 &self,
                 ctx: ::flash_plugin::Context,
@@ -130,6 +161,24 @@ pub fn plugin(input: TokenStream) -> TokenStream {
             ) -> impl ::core::future::Future<Output = ::flash_plugin::HintsResponse> + ::core::marker::Send
             {
                 <Self as FlashPlugin>::on_hints(self, ctx, request)
+            }
+
+            fn on_text_grid(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::TextGridRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::TextGridResponse> + ::core::marker::Send
+            {
+                <Self as FlashPlugin>::on_text_grid(self, ctx, request)
+            }
+
+            fn on_search(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::SearchRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::SearchResponse> + ::core::marker::Send
+            {
+                <Self as FlashPlugin>::on_search(self, ctx, request)
             }
 
             fn perform(
@@ -146,9 +195,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                         ::flash_plugin::Perform::Command(command) => {
                             <Self as FlashPlugin>::on_command(self, ctx, command).await
                         }
-                        ::flash_plugin::Perform::Action(action) => {
-                            <Self as FlashPlugin>::on_action(self, ctx, action).await
-                        }
                         ::flash_plugin::Perform::Navigate(request) => {
                             <Self as FlashPlugin>::on_navigate(self, ctx, request).await
                         }
@@ -161,6 +207,10 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 ctx: ::flash_plugin::Context,
             ) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
                 <Self as FlashPlugin>::on_shutdown(self, ctx)
+            }
+
+            fn exits_after_start(&self) -> bool {
+                #exits_after_start
             }
         }
 
@@ -215,20 +265,360 @@ fn sources(manifest: &Value) -> &[Value] {
         .unwrap_or(&[])
 }
 
-fn source_is_live(source: &Value) -> bool {
-    source.get("live").and_then(Value::as_bool) == Some(true)
+/// Every `sources[]` entry declares one resource type, checked against
+/// `protocol.json`'s `source_types` — the rules the host applies again at
+/// load: one lowercase word, never one Flash feeds itself, and of a shared
+/// type's fixed kind. One message per offending source.
+fn source_type_errors(manifest: &Value) -> Vec<String> {
+    let protocol: Value = serde_json::from_str(include_str!("../../protocol.json"))
+        .expect("protocol.json is valid JSON");
+    let table = &protocol["source_types"];
+    let core: Vec<&str> = table["core"]
+        .as_array()
+        .map(|core| core.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let shared = table["shared"].as_object();
+    let mut errors = Vec::new();
+    for source in sources(manifest) {
+        let name = source.get("name").and_then(Value::as_str).unwrap_or("?");
+        let kind = source
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("default");
+        let Some(ty) = source
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|ty| !ty.is_empty())
+        else {
+            errors.push(format!(
+                "source {name} has no type (one lowercase word such as tabs)"
+            ));
+            continue;
+        };
+        let mut chars = ty.chars();
+        let valid = chars.next().is_some_and(|c| c.is_ascii_lowercase())
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        if !valid {
+            errors.push(format!(
+                "source {name} type {ty} is not one lowercase word (a letter, then letters or digits)"
+            ));
+        } else if core.contains(&ty) {
+            errors.push(format!(
+                "source {name} type {ty} is fed by Flash itself; plugins cannot declare it"
+            ));
+        } else if let Some(fixed) = shared
+            .and_then(|shared| shared.get(ty))
+            .and_then(Value::as_str)
+            && fixed != kind
+        {
+            errors.push(format!(
+                "source {name} type {ty} is a {fixed} type; this source is {kind}"
+            ));
+        }
+    }
+    errors
 }
 
-/// Warm (push-published) sources make `on_start` required: the hook runs
-/// after the initialize reply and publishes the initial catalog when ready.
+/// Whether a `sources[]` entry declares `live`: the host pulls it with
+/// `search` instead of reading a published catalog.
+fn is_live(source: &Value) -> bool {
+    source.get("live").is_some()
+}
+
+/// A pushed source is a published catalog, so any makes `on_start` required:
+/// the hook runs after the initialize reply and publishes the initial catalog
+/// when ready.
 fn manifest_has_warm_sources(manifest: &Value) -> bool {
-    sources(manifest)
-        .iter()
-        .any(|source| !source_is_live(source))
+    sources(manifest).iter().any(|source| !is_live(source))
 }
 
+/// A live source is pulled with `search`, so any makes `on_search` required.
 fn manifest_has_live_sources(manifest: &Value) -> bool {
-    sources(manifest).iter().any(source_is_live)
+    sources(manifest).iter().any(is_live)
+}
+
+/// The `sources[].live` rules the host applies at load (`protocol.json`
+/// `source_live`): one of the contract's values, the same on every source of
+/// the manifest or on none, and never on a `locations` source.
+fn source_live_errors(manifest: &Value) -> Vec<String> {
+    let protocol: Value = serde_json::from_str(include_str!("../../protocol.json"))
+        .expect("protocol.json is valid JSON");
+    let values: Vec<&str> = protocol["source_live"]["values"]
+        .as_array()
+        .map(|values| values.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let mut errors = Vec::new();
+    let mut declared = Vec::new();
+    for source in sources(manifest) {
+        let name = source.get("name").and_then(Value::as_str).unwrap_or("?");
+        let Some(live) = source.get("live") else {
+            declared.push(None);
+            continue;
+        };
+        let Some(live) = live.as_str().filter(|live| values.contains(live)) else {
+            errors.push(format!(
+                "source {name} live must be {} (or absent: a pushed catalog)",
+                values
+                    .iter()
+                    .map(|value| format!("\"{value}\""))
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            ));
+            continue;
+        };
+        declared.push(Some(live));
+        if source.get("kind").and_then(Value::as_str) == Some("locations") {
+            errors.push(format!(
+                "source {name} is live and kind locations: location rows belong to the default \
+                 pool, which reads pushed catalogs"
+            ));
+        }
+    }
+    if errors.is_empty() && declared.windows(2).any(|pair| pair[0] != pair[1]) {
+        errors.push(
+            "sources all declare the same live, or none does: split pushed and live sources \
+             into two plugins"
+                .to_string(),
+        );
+    }
+    errors
+}
+
+/// The manifest `lifecycle` table of `protocol.json`.
+fn lifecycle_contract() -> Value {
+    let protocol: Value = serde_json::from_str(include_str!("../../protocol.json"))
+        .expect("protocol.json is valid JSON");
+    protocol["lifecycle"].clone()
+}
+
+/// `lifecycle: publish_then_exit` ends the run after `on_start`.
+fn manifest_exits_after_start(manifest: &Value) -> bool {
+    manifest.get("lifecycle").and_then(Value::as_str) == Some("publish_then_exit")
+}
+
+/// The `lifecycle` rules the host applies at load, checked at build time:
+/// the one spelled value, `sources` beside it, and none of the surfaces a
+/// live child serves (`protocol.json` `lifecycle.publish_then_exit.forbids`).
+fn lifecycle_errors(manifest: &Value) -> Vec<String> {
+    let Some(declared) = manifest.get("lifecycle") else {
+        return Vec::new();
+    };
+    let contract = lifecycle_contract();
+    let values: Vec<&str> = contract["values"]
+        .as_array()
+        .map(|values| values.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let Some(lifecycle) = declared.as_str().filter(|value| values.contains(value)) else {
+        return vec![format!(
+            "lifecycle must be {} (or absent: the surfaces decide)",
+            values
+                .iter()
+                .map(|value| format!("\"{value}\""))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        )];
+    };
+    if sources(manifest).is_empty() {
+        return vec![format!("lifecycle {lifecycle} needs sources")];
+    }
+    if manifest_has_live_sources(manifest) {
+        return vec![format!(
+            "lifecycle {lifecycle} publishes its catalog and exits: its sources cannot be live"
+        )];
+    }
+    let declared_surfaces: Vec<&str> = contract[lifecycle]["forbids"]
+        .as_array()
+        .map(|forbidden| {
+            forbidden
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|key| match manifest.get(key) {
+                    Some(Value::Array(items)) => !items.is_empty(),
+                    Some(Value::Object(_)) => true,
+                    Some(_) => true,
+                    None => false,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if declared_surfaces.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "lifecycle {lifecycle} allows sources alone: remove {}",
+            declared_surfaces.join(", ")
+        )]
+    }
+}
+
+/// One lowercase ASCII letter, then lowercase letters, digits and `_`: the
+/// shape of a command word and of an argument name.
+fn is_word(word: &str) -> bool {
+    let mut chars = word.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// The `commands[].args` rules the host applies at load (`protocol.json`
+/// `command_args`), checked at build time: only a named own command declares
+/// arguments, each of a known type with the keys that type takes. One
+/// message per offending command. Which first words are Flash's topics is
+/// the host's to know, so a core entry's `args` is refused at load alone.
+fn command_args_errors(manifest: &Value) -> Vec<String> {
+    let protocol: Value = serde_json::from_str(include_str!("../../protocol.json"))
+        .expect("protocol.json is valid JSON");
+    let contract = &protocol["command_args"];
+    let strings = |key: &str| -> Vec<&str> {
+        contract[key]
+            .as_array()
+            .map(|items| items.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
+    };
+    let bound = |key: &str| contract[key].as_u64().unwrap_or(0) as usize;
+    let types = strings("types");
+    let keys: Vec<&str> = strings("required")
+        .into_iter()
+        .chain(strings("optional"))
+        .collect();
+    let commands = manifest
+        .get("commands")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut errors = Vec::new();
+    for command in commands {
+        let Some(args) = command.get("args") else {
+            continue;
+        };
+        let word = |key: &str| command.get(key).and_then(Value::as_str).unwrap_or("?");
+        let name = format!("commands {} {}", word("command"), word("subcommand"));
+        if let Some(error) = command_args_error(
+            args,
+            word("subcommand") == "*",
+            &types,
+            &keys,
+            bound("max_args"),
+            bound("max_values"),
+            bound("description_bytes"),
+        ) {
+            errors.push(format!("{name} {error}"));
+        }
+    }
+    errors
+}
+
+/// Why one command's `args` is malformed, or `None`.
+fn command_args_error(
+    args: &Value,
+    wildcard: bool,
+    types: &[&str],
+    keys: &[&str],
+    max_args: usize,
+    max_values: usize,
+    description_bytes: usize,
+) -> Option<String> {
+    let Some(args) = args.as_array() else {
+        return Some("args must be an array".to_string());
+    };
+    if args.is_empty() {
+        return None;
+    }
+    if wildcard {
+        return Some("the * wildcard takes its words as typed: remove args".to_string());
+    }
+    if args.len() > max_args {
+        return Some(format!("declares more than {max_args} args"));
+    }
+    let mut names = Vec::new();
+    let mut positionals = 0;
+    for arg in args {
+        let Some(arg) = arg.as_object() else {
+            return Some("args entries must be objects".to_string());
+        };
+        let name = arg.get("name").and_then(Value::as_str).unwrap_or("");
+        let fail = |error: String| Some(format!("args {name}: {error}"));
+        if let Some(unknown) = arg.keys().find(|key| !keys.contains(&key.as_str())) {
+            return fail(format!("unknown field {unknown}"));
+        }
+        if !is_word(name) {
+            return fail("name must be a word of [a-z][a-z0-9_]*".to_string());
+        }
+        let ty = arg.get("type").and_then(Value::as_str).unwrap_or("");
+        if !types.contains(&ty) {
+            return fail(format!("type must be {}", types.join(", ")));
+        }
+        let flag = |key: &str| match arg.get(key) {
+            None => Some(false),
+            Some(value) => value.as_bool(),
+        };
+        let (Some(required), Some(positional)) = (flag("required"), flag("positional")) else {
+            return fail("required and positional are booleans".to_string());
+        };
+        if let Some(description) = arg.get("description") {
+            let valid = description.as_str().is_some_and(|text| {
+                !text.trim().is_empty()
+                    && !text.contains(['\n', '\r'])
+                    && text.len() <= description_bytes
+            });
+            if !valid {
+                return fail(format!(
+                    "description must be one non-empty line of at most {description_bytes} bytes"
+                ));
+            }
+        }
+        let bounds = [arg.get("min"), arg.get("max")];
+        if bounds.iter().flatten().any(|bound| !bound.is_i64()) {
+            return fail("min and max are integers".to_string());
+        }
+        if ty != "integer" && bounds.iter().any(Option::is_some) {
+            return fail("min and max come with an integer".to_string());
+        }
+        if let [Some(min), Some(max)] = bounds
+            && min.as_i64() > max.as_i64()
+        {
+            return fail("min is above max".to_string());
+        }
+        match (ty, arg.get("values")) {
+            ("enum", values) => {
+                let words: Option<Vec<&str>> = values
+                    .and_then(Value::as_array)
+                    .and_then(|values| values.iter().map(Value::as_str).collect());
+                let valid = words.is_some_and(|words| {
+                    !words.is_empty()
+                        && words.len() <= max_values
+                        && words.iter().all(|word| {
+                            !word.is_empty()
+                                && !word.starts_with("--")
+                                && !word.contains(char::is_whitespace)
+                        })
+                        && words
+                            .iter()
+                            .enumerate()
+                            .all(|(index, word)| !words[..index].contains(word))
+                });
+                if !valid {
+                    return fail(format!(
+                        "an enum lists 1 to {max_values} distinct values, each one word that \
+                         does not start with --"
+                    ));
+                }
+            }
+            (_, Some(_)) => return fail("values come with an enum".to_string()),
+            _ => {}
+        }
+        if ty == "flag" && required {
+            return fail("a flag is on or off: it cannot be required".to_string());
+        }
+        if positional && ty != "string" {
+            return fail("only a string can be positional".to_string());
+        }
+        if names.contains(&name) {
+            return Some("args repeat a name".to_string());
+        }
+        names.push(name);
+        positionals += usize::from(positional);
+    }
+    (positionals > 1).then(|| "takes one positional at most".to_string())
 }
 
 fn manifest_has_query_evaluator(manifest: &Value) -> bool {
@@ -240,33 +630,15 @@ fn manifest_has_hints(manifest: &Value) -> bool {
 }
 
 /// Whether the manifest declares a surface dispatched as
-/// `perform {kind: "command"}`: `:`-commands, bangs, or verbs.
+/// `perform {kind: "command"}`: `:`-commands or bangs (`bangs` is the list
+/// of entries itself).
 fn manifest_has_command_surface(manifest: &Value) -> bool {
-    let commands = manifest
-        .get("commands")
-        .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
-    let bangs = manifest
-        .get("bangs")
-        .and_then(|bangs| bangs.get("items"))
-        .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
-    let verbs = manifest
-        .get("verbs")
-        .and_then(Value::as_array)
-        .map(|verbs| !verbs.is_empty())
-        .unwrap_or(false);
-    commands || bangs || verbs
-}
-
-fn manifest_has_actions(manifest: &Value) -> bool {
-    manifest
-        .get("actions")
-        .and_then(Value::as_array)
-        .map(|actions| !actions.is_empty())
-        .unwrap_or(false)
+    ["commands", "bangs"].iter().any(|surface| {
+        manifest
+            .get(surface)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    })
 }
 
 fn manifest_has_navigation(manifest: &Value) -> bool {
@@ -325,29 +697,6 @@ fn evaluate_decl(required: bool) -> TokenStream2 {
     )
 }
 
-/// `on_search` is required when the manifest declares any `live: true`
-/// source. Unlike `evaluate` it is async — live sources exist precisely
-/// because their work can't be precomputed.
-fn on_search_decl(required: bool) -> TokenStream2 {
-    declare(
-        quote! {
-            /// Answer one explicitly scoped query against this plugin's
-            /// `live: true` sources. The host drops late replies; return
-            /// complete catalog-shaped rows.
-            fn on_search(
-                &self,
-                ctx: ::flash_plugin::Context,
-                request: ::flash_plugin::SearchRequest,
-            ) -> impl ::core::future::Future<Output = ::flash_plugin::SearchResponse> + ::core::marker::Send
-        },
-        quote! {
-            let _ = (ctx, request);
-            async { ::flash_plugin::SearchResponse::default() }
-        },
-        required,
-    )
-}
-
 fn on_hints_decl(required: bool) -> TokenStream2 {
     declare(
         quote! {
@@ -366,11 +715,34 @@ fn on_hints_decl(required: bool) -> TokenStream2 {
     )
 }
 
+fn on_search_decl(required: bool) -> TokenStream2 {
+    declare(
+        quote! {
+            /// The rows of one live source (`sources[].live`) for one
+            /// flashlight query (`search`). Always live: the host asks
+            /// while a query is scoped to the source and keeps nothing.
+            fn on_search(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::SearchRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::SearchResponse> + ::core::marker::Send
+        },
+        quote! {
+            let _ = (ctx, request);
+            async { ::flash_plugin::SearchResponse::default() }
+        },
+        required,
+    )
+}
+
 fn on_command_decl(required: bool) -> TokenStream2 {
     declare(
         quote! {
-            /// Run a `:`-command, bang, or verb the plugin registered
-            /// (`perform {kind: "command"}`).
+            /// Run a command (`perform {kind: "command"}`): a core command
+            /// the manifest declares under one of Flash's topics, with the
+            /// focused app as `context`; the plugin's own command; or a bang,
+            /// which arrives with the plugin id as the command and its token
+            /// as the subcommand.
             fn on_command(
                 &self,
                 ctx: ::flash_plugin::Context,
@@ -379,25 +751,6 @@ fn on_command_decl(required: bool) -> TokenStream2 {
         },
         quote! {
             let _ = (ctx, command);
-            async { ::flash_plugin::PerformResponse::unhandled() }
-        },
-        required,
-    )
-}
-
-fn on_action_decl(required: bool) -> TokenStream2 {
-    declare(
-        quote! {
-            /// Perform a source action (e.g. tab select/cycle)
-            /// (`perform {kind: "action"}`).
-            fn on_action(
-                &self,
-                ctx: ::flash_plugin::Context,
-                action: ::flash_plugin::ActionRequest,
-            ) -> impl ::core::future::Future<Output = ::flash_plugin::PerformResponse> + ::core::marker::Send
-        },
-        quote! {
-            let _ = (ctx, action);
             async { ::flash_plugin::PerformResponse::unhandled() }
         },
         required,
@@ -429,17 +782,91 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn warm_sources_require_the_startup_hook_and_live_sources_require_search() {
+    fn source_types_follow_the_protocol_rules() {
+        let ok = json!({ "sources": [
+            { "name": "a.tabs", "type": "tabs", "kind": "locations" },
+            { "name": "a.things", "type": "things" },
+        ] });
+        assert_eq!(source_type_errors(&ok), Vec::<String>::new());
+        let first = |manifest: Value| source_type_errors(&manifest).remove(0);
+        assert!(first(json!({ "sources": [{ "name": "a.items" }] })).contains("has no type"));
+        assert!(
+            first(json!({ "sources": [{ "name": "a.items", "type": "emojis.glyphs" }] }))
+                .contains("one lowercase word")
+        );
+        assert!(
+            first(json!({ "sources": [{ "name": "a.apps", "type": "apps" }] }))
+                .contains("fed by Flash")
+        );
+        assert!(
+            first(json!({ "sources": [{ "name": "a.tabs", "type": "tabs" }] }))
+                .contains("locations")
+        );
+    }
+
+    #[test]
+    fn sources_require_the_startup_hook() {
         let warm = json!({ "sources": [{ "name": "example.items" }] });
         assert!(manifest_has_warm_sources(&warm));
-        assert!(!manifest_has_live_sources(&warm));
-
-        let live = json!({ "sources": [{ "name": "example.results", "live": true }] });
-        assert!(!manifest_has_warm_sources(&live));
-        assert!(manifest_has_live_sources(&live));
 
         assert!(!manifest_has_warm_sources(&json!({ "sources": [] })));
         assert!(!manifest_has_warm_sources(&json!({})));
+    }
+
+    /// A live source is pulled, never published: it requires `on_search`
+    /// and leaves `on_start` optional.
+    #[test]
+    fn live_sources_require_the_search_hook_and_not_the_startup_one() {
+        let live = json!({ "sources": [
+            { "name": "example.actions", "type": "actions", "live": "per_scope" }
+        ] });
+        assert!(manifest_has_live_sources(&live));
+        assert!(!manifest_has_warm_sources(&live));
+        assert_eq!(source_live_errors(&live), Vec::<String>::new());
+
+        let pushed = json!({ "sources": [{ "name": "example.items", "type": "items" }] });
+        assert!(!manifest_has_live_sources(&pushed));
+        assert_eq!(source_live_errors(&pushed), Vec::<String>::new());
+        assert!(!manifest_has_live_sources(&json!({})));
+    }
+
+    #[test]
+    fn live_declarations_follow_the_protocol_rules() {
+        let first = |manifest: Value| source_live_errors(&manifest).remove(0);
+        for live in [json!("always"), json!(true), json!(null), json!("")] {
+            let error = first(json!({ "sources": [
+                { "name": "a.items", "type": "items", "live": live }
+            ] }));
+            assert!(
+                error.contains("live must be \"per_query\" or \"per_scope\""),
+                "{error}"
+            );
+        }
+        assert!(
+            first(json!({ "sources": [
+                { "name": "a.items", "type": "items", "live": "per_query" },
+                { "name": "a.things", "type": "things" },
+            ] }))
+            .contains("all declare the same live")
+        );
+        assert!(
+            first(json!({ "sources": [
+                { "name": "a.items", "type": "items", "live": "per_query" },
+                { "name": "a.things", "type": "things", "live": "per_scope" },
+            ] }))
+            .contains("all declare the same live")
+        );
+        assert!(
+            first(json!({ "sources": [
+                { "name": "a.tabs", "type": "tabs", "kind": "locations", "live": "per_query" }
+            ] }))
+            .contains("live and kind locations")
+        );
+        let both = json!({ "sources": [
+            { "name": "a.items", "type": "items", "live": "per_scope" },
+            { "name": "a.things", "type": "things", "live": "per_scope" },
+        ] });
+        assert_eq!(source_live_errors(&both), Vec::<String>::new());
     }
 
     #[test]
@@ -451,28 +878,204 @@ mod tests {
     }
 
     #[test]
-    fn command_surface_spans_commands_bangs_and_verbs() {
+    fn command_surface_spans_commands_and_bangs() {
         assert!(manifest_has_command_surface(&json!({
             "commands": [{ "command": "x" }]
         })));
+        // `bangs` is the list of entries itself.
         assert!(manifest_has_command_surface(&json!({
-            "bangs": { "command": "x", "items": [{ "token": "y" }] }
+            "bangs": [{ "token": "y" }]
         })));
+        assert!(!manifest_has_command_surface(&json!({ "bangs": [] })));
+        // A core command the plugin performs is a `commands[]` entry too.
         assert!(manifest_has_command_surface(&json!({
-            "verbs": [{ "name": "set_mark" }]
+            "commands": [{ "command": "tab", "subcommand": "close" }]
         })));
-        // What an app does for Flash's own actions is host-served data.
+        // What an app does for Flash's own commands is host-served data.
         assert!(!manifest_has_command_surface(&json!({
-            "action_bindings": { "app_save": { "": "cmd+s" } }
+            "bindings": { "app save": { "": "cmd+s" } }
         })));
         assert!(!manifest_has_command_surface(&json!({ "commands": [] })));
         assert!(!manifest_has_command_surface(&json!({})));
     }
 
+    /// `commands[].args` follows `protocol.json` `command_args`: the four
+    /// types with the keys each takes, on a named command alone.
+    #[test]
+    fn command_args_follow_the_protocol_rules() {
+        let declare = |subcommand: &str, args: Value| {
+            command_args_errors(&json!({ "commands": [
+                { "command": "example", "subcommand": subcommand, "args": args }
+            ] }))
+        };
+        let ok = json!([
+            { "name": "target", "type": "string", "positional": true, "required": true },
+            { "name": "pid", "type": "integer", "min": 2, "max": 99, "required": true,
+              "description": "The process to terminate" },
+            { "name": "mode", "type": "enum", "values": ["fast", "slow"] },
+            { "name": "dry_run", "type": "flag" },
+        ]);
+        assert_eq!(declare("run", ok), Vec::<String>::new());
+        assert_eq!(declare("run", json!([])), Vec::<String>::new());
+        assert_eq!(declare("*", json!([])), Vec::<String>::new());
+        assert_eq!(
+            command_args_errors(&json!({ "commands": [{ "command": "x", "subcommand": "go" }] })),
+            Vec::<String>::new()
+        );
+        let first = |subcommand: &str, args: Value| declare(subcommand, args).remove(0);
+        let cases = [
+            (
+                json!({ "name": "pid" }),
+                "type must be integer, string, enum, flag",
+            ),
+            (json!({ "name": "pid", "type": "number" }), "type must be"),
+            (
+                json!({ "name": "Pid", "type": "integer" }),
+                "name must be a word",
+            ),
+            (json!({ "type": "integer" }), "name must be a word"),
+            (
+                json!({ "name": "pid", "type": "integer", "minimum": 1 }),
+                "unknown field minimum",
+            ),
+            (
+                json!({ "name": "pid", "type": "integer", "min": 1.5 }),
+                "min and max are integers",
+            ),
+            (
+                json!({ "name": "pid", "type": "integer", "min": 9, "max": 1 }),
+                "min is above max",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "max": 9 }),
+                "come with an integer",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum" }),
+                "an enum lists 1 to 64",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": [] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": ["a", "a"] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": ["a b"] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "mode", "type": "enum", "values": ["--a"] }),
+                "an enum lists",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "values": ["a"] }),
+                "come with an enum",
+            ),
+            (
+                json!({ "name": "now", "type": "flag", "required": true }),
+                "cannot be required",
+            ),
+            (
+                json!({ "name": "now", "type": "flag", "required": "yes" }),
+                "are booleans",
+            ),
+            (
+                json!({ "name": "n", "type": "integer", "positional": true }),
+                "only a string",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "description": " " }),
+                "one non-empty line",
+            ),
+            (
+                json!({ "name": "who", "type": "string", "description": "a\nb" }),
+                "one non-empty line",
+            ),
+        ];
+        for (arg, expected) in cases {
+            let error = first("run", json!([arg]));
+            assert!(error.contains(expected), "{arg}: {error}");
+            assert!(error.starts_with("commands example run "), "{error}");
+        }
+        let who = json!({ "name": "who", "type": "string" });
+        assert!(first("run", json!([who, who])).contains("args repeat a name"));
+        let bare = |name: &str| json!({ "name": name, "type": "string", "positional": true });
+        assert!(first("run", json!([bare("a"), bare("b")])).contains("one positional at most"));
+        assert!(first("*", json!([who])).contains("the * wildcard takes its words as typed"));
+        assert!(first("run", json!({})).contains("args must be an array"));
+        assert!(first("run", json!(["pid"])).contains("args entries must be objects"));
+        let many: Vec<Value> = (0..17)
+            .map(|index| json!({ "name": format!("a{index}"), "type": "flag" }))
+            .collect();
+        assert!(first("run", json!(many)).contains("declares more than 16 args"));
+    }
+
+    /// `lifecycle: publish_then_exit` ends the run after `on_start`; it needs
+    /// `sources` and allows nothing a live child would serve. The value set
+    /// and the forbidden surfaces come from `protocol.json`.
+    #[test]
+    fn a_publish_then_exit_lifecycle_is_a_catalog_alone() {
+        let catalog = json!({
+            "exec": ["./x"], "lifecycle": "publish_then_exit",
+            "sources": [{ "name": "a.items", "type": "items" }],
+            "watch_settings": ["file"],
+            "bindings": { "app save": { "": "cmd+s" } },
+        });
+        assert_eq!(lifecycle_errors(&catalog), Vec::<String>::new());
+        assert!(manifest_exits_after_start(&catalog));
+        assert!(!manifest_exits_after_start(&json!({
+            "sources": [{ "name": "a.items", "type": "items" }]
+        })));
+        assert_eq!(
+            lifecycle_errors(&json!({
+                "sources": [{ "name": "a.items", "type": "items" }]
+            })),
+            Vec::<String>::new()
+        );
+        let first = |manifest: Value| lifecycle_errors(&manifest).remove(0);
+        assert!(
+            first(json!({ "lifecycle": "resident" })).contains("must be \"publish_then_exit\"")
+        );
+        assert!(first(json!({ "lifecycle": true })).contains("must be \"publish_then_exit\""));
+        assert!(
+            first(json!({ "exec": ["./x"], "lifecycle": "publish_then_exit" }))
+                .contains("needs sources")
+        );
+        assert!(
+            first(json!({
+                "exec": ["./x"], "lifecycle": "publish_then_exit",
+                "sources": [{ "name": "a.items", "type": "items", "live": "per_scope" }],
+            }))
+            .contains("its sources cannot be live")
+        );
+        for surface in [
+            json!({ "hints": {} }),
+            json!({ "query": {} }),
+            json!({ "status": ["state"] }),
+            json!({ "listen": ["core:config.changed"] }),
+            json!({ "commands": [{ "command": "x", "subcommand": "go" }] }),
+            json!({ "bangs": [{ "token": "x" }] }),
+            json!({ "navigation": ["x"] }),
+        ] {
+            let mut manifest = json!({
+                "exec": ["./x"], "lifecycle": "publish_then_exit",
+                "sources": [{ "name": "a.items", "type": "items" }],
+            });
+            let key = surface.as_object().unwrap().keys().next().unwrap().clone();
+            manifest[&key] = surface[&key].clone();
+            let error = first(manifest);
+            assert!(
+                error.contains("allows sources alone") && error.contains(&key),
+                "{key}: {error}"
+            );
+        }
+    }
+
     #[test]
     fn perform_kind_sections_require_their_handlers() {
-        assert!(manifest_has_actions(&json!({ "actions": ["tab_select"] })));
-        assert!(!manifest_has_actions(&json!({ "actions": [] })));
         assert!(manifest_has_navigation(&json!({ "navigation": ["tmux"] })));
         assert!(!manifest_has_navigation(&json!({})));
     }

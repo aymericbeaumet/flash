@@ -186,24 +186,29 @@ final class WidgetConfigTests: XCTestCase {
     let toml = """
       [statusbar]
       enabled = false
-      template = "#{flash.plugin.cpu.summary}"
+      template = "#{flash.plugin.sysinfo.cpu_summary}"
       [widgets.top]
-      template = "#{flash.plugin.processes.top_cpu} #{flash.plugin.processes.top_mem}"
+      template = "#{flash.plugin.sysinfo.network_label} #{flash.plugin.sysinfo.network_details}"
       [widgets.off]
       enabled = false
-      template = "#{flash.plugin.memory.details}"
+      template = "#{flash.plugin.sysinfo.memory_details}"
       """
-    let config = ConfigLoader.parse(toml)
-    XCTAssertEqual(config.observedStatusSegments(), ["processes": ["top_cpu", "top_mem"]])
-    XCTAssertEqual(config.observedStatusSegments(hiddenWidgets: ["top"]), [:])
-    let both = ConfigLoader.parse(
+    // The built-in monitors observe on their own (`MonitorTests`).
+    var config = ConfigLoader.parse(toml)
+    config.monitors = [:]
+    XCTAssertEqual(
+      config.statusSegmentsRead(), ["sysinfo": ["network_label", "network_details"]])
+    XCTAssertEqual(config.statusSegmentsRead(hiddenWidgets: ["top"]), [:])
+    var both = ConfigLoader.parse(
       toml.replacingOccurrences(
-        of: "enabled = false\ntemplate = \"#{flash.plugin.cpu",
-        with: "enabled = true\ntemplate = \"#{flash.plugin.cpu"))
+        of: "enabled = false\ntemplate = \"#{flash.plugin.sysinfo.cpu",
+        with: "enabled = true\ntemplate = \"#{flash.plugin.sysinfo.cpu"))
+    both.monitors = [:]
     XCTAssertEqual(
-      both.observedStatusSegments(), ["processes": ["top_cpu", "top_mem"], "cpu": ["summary"]])
+      both.statusSegmentsRead(),
+      ["sysinfo": ["network_label", "network_details", "cpu_summary"]])
     XCTAssertEqual(
-      both.observedStatusSegments(hiddenWidgets: ["top"]), ["cpu": ["summary"]],
+      both.statusSegmentsRead(hiddenWidgets: ["top"]), ["sysinfo": ["cpu_summary"]],
       "a covered widget stops observing; the bar still does")
   }
 
@@ -219,12 +224,16 @@ final class WidgetConfigTests: XCTestCase {
       line.hasPrefix("# ") ? String(line.dropFirst(2)) : String(line.dropFirst())
     }
     XCTAssertGreaterThan(example.count, 20)
-    let config = ConfigLoader.parse(example.joined(separator: "\n"))
+    var config = ConfigLoader.parse(example.joined(separator: "\n"))
     XCTAssertEqual(config.loadingDiagnostics.map(\.logMessage), [])
+    config.monitors = [:]
     let widget = try XCTUnwrap(config.widgets["system"])
     XCTAssertEqual(widget.anchor, .topRight)
     XCTAssertTrue(widget.template.template.contains("%% · MEM"))
-    XCTAssertEqual(config.observedStatusSegments()["processes"], ["top_cpu"])
+    XCTAssertEqual(
+      config.statusSegmentsRead(),
+      ["sysinfo": ["cpu_percent", "memory_history"], "processes": ["top_cpu"]])
+    XCTAssertTrue(widget.template.template.contains("#{flash.plugin.processes.top_cpu}"))
     XCTAssertEqual(ConfigLoader.parse(try String(contentsOf: url, encoding: .utf8)).widgets, [:])
   }
 }

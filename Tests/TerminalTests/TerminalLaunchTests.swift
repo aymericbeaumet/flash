@@ -37,7 +37,7 @@ final class TerminalLaunchTests: XCTestCase {
       last = state
       if matches(state) { reached.fulfill() }
     }
-    wait(for: [reached], timeout: 5)
+    wait(for: [reached], timeout: terminalChildTimeout)
     session.onStateChange = nil
     return last
   }
@@ -70,6 +70,71 @@ final class TerminalLaunchTests: XCTestCase {
     XCTAssertEqual(
       TerminalLaunchFailure.commandNotFound("btop").description, "btop: command not found")
     XCTAssertFalse(TerminalLaunchFailure.commandNotFound("btop").reason.contains("btop"))
+  }
+
+  func testRestartDiscardsQueuedStateAndFramesFromPreviousProcess() throws {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(command: ["/bin/cat"], columns: 8, rows: 2))
+    defer { session.shutdown() }
+    var states: [TerminalSessionState] = []
+    var frames: [TerminalFrame] = []
+    session.onStateChange = { states.append($0) }
+    session.onFrame = { frames.append($0) }
+
+    session.start()
+    _ = session.currentFrame()
+    session.resize(columns: 12, rows: 2)
+    _ = session.currentFrame()
+    session.restart()
+    let replacementFrame = try XCTUnwrap(session.currentFrame())
+    let delivered = expectation(description: "queued publications drained")
+    DispatchQueue.main.async { delivered.fulfill() }
+    wait(for: [delivered], timeout: terminalChildTimeout)
+
+    XCTAssertEqual(states.count, 1, "only the replacement process may publish state: \(states)")
+    guard case .running = states.last else { return XCTFail("replacement must be running") }
+    XCTAssertEqual(frames.count, 1, "old frames must not repaint the replacement")
+    XCTAssertTrue(frames.first == replacementFrame)
+  }
+
+  func testStopDiscardsQueuedProcessStateAndFramesBeforeItsCompletion() {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(command: ["/bin/cat"], columns: 8, rows: 2))
+    defer { session.shutdown() }
+    var states: [TerminalSessionState] = []
+    var frameCount = 0
+    session.onStateChange = { states.append($0) }
+    session.onFrame = { _ in frameCount += 1 }
+    session.start()
+    _ = session.currentFrame()
+    let stopped = expectation(description: "stopped after dropping old publications")
+    session.stop {
+      XCTAssertEqual(states, [.stopped])
+      XCTAssertEqual(frameCount, 0)
+      stopped.fulfill()
+    }
+    wait(for: [stopped], timeout: terminalChildTimeout)
+  }
+
+  func testQueuedFrameCannotReplaceANewerSynchronousSnapshot() throws {
+    let session = TerminalSession(
+      configuration: TerminalConfiguration(command: ["/bin/cat"], columns: 8, rows: 2))
+    defer { session.shutdown() }
+    var deliveredColumns: [Int] = []
+    session.onFrame = { deliveredColumns.append($0.columns) }
+    session.start()
+    _ = session.currentFrame()
+    session.setWantsFrames(false)
+    session.resize(columns: 12, rows: 2)
+    let latest = try XCTUnwrap(session.currentFrame())
+    XCTAssertEqual(latest.columns, 12)
+    let drained = expectation(description: "old frame publication drained")
+    DispatchQueue.main.async { drained.fulfill() }
+    wait(for: [drained], timeout: terminalChildTimeout)
+
+    XCTAssertEqual(session.frame?.generation, latest.generation)
+    XCTAssertEqual(session.frame?.columns, 12)
+    XCTAssertTrue(deliveredColumns.isEmpty, "a stale frame must not reach a rebound view")
   }
 
   func testAMissingCommandFailsWithoutForkingAndARestartUsesItsNewPath() throws {

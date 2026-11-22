@@ -8,18 +8,21 @@ import Foundation
 enum FlashTunables {
   /// `[mode] scroll_step` — pixels per horizontal h/l step.
   static var scrollStepPixels: Int32 = 60
-  /// `[mode] scroll_step_lines` — wheel lines per ctrl+e/y step.
+  /// `[mode] scroll_step_lines` — wheel lines per j/k scroll step.
   static var scrollStepLines: Int32 = 3
   /// `[mode] scroll_page_lines` — wheel lines per ctrl+d/u step.
   static var scrollPageLines: Int32 = 20
+  /// `[mode] move_page_lines` — arrows per ctrl+d/u half page in text and
+  /// lists; ctrl+f/b send twice as many.
+  static var movePageLines: Int = 15
   /// `[mode] scroll_smooth_ms` — spread of one vertical line scroll; 0 is
   /// instant.
   static var scrollSmoothMs: Int = 0
   /// `[mode] click_hold_ms` — synthesized mouse-down→up hold.
   static var clickHoldMs: Int = 18
-  /// `[mode] send_key_interval_ms` — spacing between send_key chords.
+  /// `[mode] send_key_interval_ms` — spacing between `key sequence` chords.
   static var sendKeyIntervalMs: Int = 35
-  /// `[overlay] alert_duration` — default `alert_show` dwell (seconds).
+  /// `[overlay] alert_duration` — default `alert show` dwell (seconds).
   static var alertDuration: TimeInterval = 3.0
   /// `[overlay] banner_duration_ms` — transient banner dwell.
   static var bannerDurationMs: Int = 700
@@ -27,10 +30,11 @@ enum FlashTunables {
   static var pluginInstallTimeoutSeconds: Int = 120
   /// `[plugins] startup_timeout` — the `initialize` reply deadline (the
   /// reply is immediate by contract; this absorbs interpreter startup).
-  static var pluginStartupTimeoutSeconds: Int = 5
-  /// `[flashlight] live_query_timeout_ms` — per-keystroke deadline for
-  /// `live: true` plugin sources (`search`). Never joins the first paint, so
-  /// raising it cannot regress the flashlight open.
+  /// Read on each plugin's queue while main (or a test) may set it.
+  @Synchronized static var pluginStartupTimeoutSeconds: Int = 5
+  /// `[flashlight] live_query_timeout_ms` — per-keystroke deadline of the
+  /// file search's Spotlight query. Never joins the first paint, so raising
+  /// it cannot regress the flashlight open.
   static var flashlightLiveQueryTimeoutMs: Int = 1000
   /// Deadline for a plugin `hints` reply during activation. Not configurable:
   /// the wait blocks the AX queue ahead of the prepared model, so it is a
@@ -46,6 +50,7 @@ enum FlashTunables {
     scrollStepPixels = Int32(config.mode.scrollStep)
     scrollStepLines = Int32(config.mode.scrollStepLines)
     scrollPageLines = Int32(config.mode.scrollPageLines)
+    movePageLines = config.mode.movePageLines
     scrollSmoothMs = config.mode.scrollSmoothMs
     clickHoldMs = config.mode.clickHoldMs
     sendKeyIntervalMs = config.mode.sendKeyIntervalMs

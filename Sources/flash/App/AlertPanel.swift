@@ -2,22 +2,24 @@ import AppKit
 import QuartzCore
 
 /// The one centred alert: a title, optionally over a monospaced value line,
-/// in a rounded box. Every alert Flash shows — `alert_show`, a volume step,
-/// a caffeinate toggle, a confirmation question — is one of these, so there
-/// is a single layout to style and a single surface to test.
+/// in a rounded box. Every alert Flash shows — `alert show`, a plugin
+/// command's alert, a confirmation question, a monitor crossing a threshold
+/// — is one of these, so there is a single layout to style and a single
+/// surface to test.
 struct StatusAlert: Equatable {
   enum Style: String, Hashable {
     case standard
+    case warning
     case error
   }
 
   /// How long the alert stays up.
   enum Duration: Equatable {
     /// The style's default: `[overlay] alert_duration` for a standard alert,
-    /// a fixed longer dwell for an error.
+    /// a fixed longer dwell for a warning or an error.
     case standard
     case seconds(TimeInterval)
-    /// Until `alert_dismiss`, a replacing alert or a transient teardown.
+    /// Until `alert dismiss`, a replacing alert or a transient teardown.
     case untilDismissed
   }
 
@@ -37,23 +39,6 @@ struct StatusAlert: Equatable {
     -> Self
   {
     Self(title: text, style: style, duration: duration)
-  }
-
-  static func volume(_ percent: Int) -> Self {
-    Self(title: "volume", value: "\(min(100, max(0, percent)))%", valueAnchor: "100%")
-  }
-
-  static func caffeinate(on: Bool) -> Self {
-    Self(title: "caffeinate", value: on ? "on" : "off", valueAnchor: "off")
-  }
-
-  /// The plugin reports `caffeinate on` or `caffeinate off`. Nil for anything else.
-  static func caffeinate(reported: String) -> Self? {
-    switch reported {
-    case "caffeinate on": return caffeinate(on: true)
-    case "caffeinate off": return caffeinate(on: false)
-    default: return nil
-    }
   }
 
   /// The question a confirmation session asks. It stays up until the session
@@ -84,6 +69,13 @@ extension OverlayPanel {
       strokeColor: .white,
       textColor: .white,
       outlivesTeardown: false)
+    /// Amber with dark text: white on orange is too faint to read at a
+    /// glance.
+    static let warning = AlertStyle(
+      fillColor: NSColor.systemOrange.withAlphaComponent(0.92),
+      strokeColor: NSColor.black.withAlphaComponent(0.6),
+      textColor: .black,
+      outlivesTeardown: true)
     static let error = AlertStyle(
       fillColor: NSColor.systemRed.withAlphaComponent(0.92),
       strokeColor: NSColor.white.withAlphaComponent(0.95),
@@ -93,6 +85,7 @@ extension OverlayPanel {
     static func from(_ style: StatusAlert.Style) -> AlertStyle {
       switch style {
       case .standard: return .standard
+      case .warning: return .warning
       case .error: return .error
       }
     }
@@ -112,7 +105,7 @@ extension OverlayPanel {
   static func alertDurationMs(_ duration: StatusAlert.Duration, style: StatusAlert.Style) -> Int? {
     switch duration {
     case .standard:
-      let seconds = style == .error ? alertErrorDuration : alertDisplayDuration
+      let seconds = style == .standard ? alertDisplayDuration : alertErrorDuration
       return Int((seconds * 1000).rounded())
     case .seconds(let seconds):
       return Int((seconds * 1000).rounded())
@@ -125,8 +118,14 @@ extension OverlayPanel {
   /// window so normal-mode capture cannot hide a separate panel behind the
   /// resident overlay. The title wraps; the value is one monospaced line.
   /// Both are centred in a box as wide as the title or the widest value, so
-  /// `on` and `6%` sit in the middle of their line.
-  func displayAlert(_ alert: StatusAlert) {
+  /// `on` and `6%` sit in the middle of their line. While a full-screen app
+  /// is frontmost the alert waits for it to leave, unless the caller shows it
+  /// regardless: a confirmation owns the keyboard for the command that asked.
+  func displayAlert(_ alert: StatusAlert, heldWhileFullScreen: Bool = true) {
+    if heldWhileFullScreen, fullScreenAppFrontmost {
+      heldAlert = alert
+      return
+    }
     let style = AlertStyle.from(alert.style)
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let frame = snapshot.unionFrame

@@ -1,0 +1,2084 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/inspector/state.schema.json",
+  "title": "inspector state",
+  "description": "The inspector snapshot: what `GET /api/state` answers and the `state` stream event carries. Every section is always present. A scoped change rebuilds only `statusbar`, `terminals` or `widgets` and the server merges them into the last snapshot; a stream `patch` carries the changed sections alone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshot_at_unix_ms",
+    "snapshot_seq",
+    "runtime",
+    "config",
+    "config_sources",
+    "commands",
+    "clipboard",
+    "clipboard_registers",
+    "clipboard_total",
+    "clipboard_next_offset",
+    "docs",
+    "mappings",
+    "focused_app",
+    "mode",
+    "hint_session",
+    "keyboard",
+    "hints",
+    "hint_command",
+    "activation_in_flight",
+    "terminals",
+    "overlay",
+    "statusbar",
+    "widgets",
+    "windows",
+    "plugins",
+    "monitors",
+    "telemetry"
+  ],
+  "properties": {
+    "snapshot_at_unix_ms": {
+      "type": "integer",
+      "description": "When Flash built this snapshot, or the sections it last rebuilt."
+    },
+    "snapshot_seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The snapshot's number, one more than the last; a stream `patch` names the one it builds on. The server adds it."
+    },
+    "runtime": {
+      "$ref": "#/definitions/runtime"
+    },
+    "config": {
+      "description": "The resolved configuration, shaped by `flash.schema.json`'s keys; a string only if the resolved JSON could not be read back.",
+      "type": [
+        "object",
+        "string"
+      ]
+    },
+    "config_sources": {
+      "$ref": "#/definitions/config_source_node"
+    },
+    "commands": {
+      "type": "array",
+      "description": "Every command line verb: Flash's own, then each plugin's.",
+      "items": {
+        "$ref": "#/definitions/command"
+      }
+    },
+    "clipboard": {
+      "type": "array",
+      "description": "The clipboard history page the resident holds.",
+      "items": {
+        "$ref": "#/definitions/clipboard_entry"
+      }
+    },
+    "clipboard_registers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/clipboard_register"
+      }
+    },
+    "clipboard_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Entries the clipboard history keeps."
+    },
+    "clipboard_next_offset": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Offset of the next clipboard page, or null when this is the whole history."
+    },
+    "docs": {
+      "type": "array",
+      "description": "The plugins' own help topics; the manual comes from `/api/docs`.",
+      "items": {
+        "$ref": "#/definitions/doc_topic"
+      }
+    },
+    "mappings": {
+      "$ref": "#/definitions/mappings"
+    },
+    "focused_app": {
+      "$ref": "#/definitions/focused_app"
+    },
+    "mode": {
+      "type": "string",
+      "description": "The current mode's label, or a layer's own name."
+    },
+    "hint_session": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "discovering",
+        "labels",
+        "grid",
+        "search",
+        "adjusting",
+        "pointer",
+        "bigram",
+        "confirming",
+        "window_switcher"
+      ]
+    },
+    "keyboard": {
+      "$ref": "#/definitions/keyboard"
+    },
+    "hints": {
+      "type": "array",
+      "description": "The hints of the session on screen.",
+      "items": {
+        "$ref": "#/definitions/hint"
+      }
+    },
+    "hint_command": {
+      "type": "string",
+      "description": "The command the hint session commits, as Swift names it."
+    },
+    "activation_in_flight": {
+      "type": "boolean",
+      "description": "A hint activation is discovering targets."
+    },
+    "terminals": {
+      "$ref": "#/definitions/terminals"
+    },
+    "overlay": {
+      "description": "What the overlay routes keys to; null before the overlay exists.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "passive",
+            "hints",
+            "normal",
+            "commandLine"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "statusbar": {
+      "description": "The status bar's diagnostics; empty before the overlay exists.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/status_bar"
+        },
+        {
+          "$ref": "#/definitions/empty"
+        }
+      ]
+    },
+    "widgets": {
+      "description": "The desktop widgets' diagnostics; empty before their controller exists.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/widgets"
+        },
+        {
+          "$ref": "#/definitions/empty"
+        }
+      ]
+    },
+    "windows": {
+      "type": "array",
+      "description": "Flash's own windows.",
+      "items": {
+        "$ref": "#/definitions/window"
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "description": "Every plugin, sorted by id, load failures included.",
+      "items": {
+        "$ref": "#/definitions/plugin"
+      }
+    },
+    "monitors": {
+      "type": "array",
+      "description": "The value monitors the status controller evaluates, then the event monitors by name.",
+      "items": {
+        "$ref": "#/definitions/monitor"
+      }
+    },
+    "telemetry": {
+      "$ref": "#/definitions/telemetry"
+    }
+  },
+  "definitions": {
+    "empty": {
+      "description": "An object with no keys: a section whose owner does not exist yet.",
+      "type": "object",
+      "maxProperties": 0
+    },
+    "rect": {
+      "type": "object",
+      "description": "A rectangle in global screen coordinates, in points.",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      }
+    },
+    "frame": {
+      "type": "array",
+      "description": "A rectangle as [x, y, width, height], in points.",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "runtime": {
+      "type": "object",
+      "description": "The resident process.",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "build",
+        "pid",
+        "started_at_unix_ms",
+        "accessibility_trusted",
+        "keyboard_capture_active",
+        "secure_input",
+        "advanced_mode",
+        "config_path",
+        "config_error"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "CFBundleShortVersionString, or `development` outside a bundle."
+        },
+        "build": {
+          "type": "string",
+          "description": "CFBundleVersion, or `unknown` outside a bundle."
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at_unix_ms": {
+          "type": "integer",
+          "description": "When the resident started; the page derives its uptime."
+        },
+        "accessibility_trusted": {
+          "type": "boolean"
+        },
+        "keyboard_capture_active": {
+          "type": "boolean",
+          "description": "The session tap is live and neither secure input nor a full-screen app holds it off."
+        },
+        "secure_input": {
+          "type": "boolean"
+        },
+        "advanced_mode": {
+          "type": "boolean"
+        },
+        "config_path": {
+          "type": "string"
+        },
+        "config_error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The configuration's loading error, when it has one."
+        }
+      }
+    },
+    "config_source": {
+      "type": "object",
+      "description": "The layer that overrode a default, and where it says so.",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "where"
+      ],
+      "properties": {
+        "layer": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      }
+    },
+    "config_source_node": {
+      "description": "One node of the tree parallel to `config`: `$` names the writer of this value, every other key is a child node.",
+      "type": "object",
+      "properties": {
+        "$": {
+          "$ref": "#/definitions/config_source"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/config_source_node"
+      }
+    },
+    "core_command": {
+      "type": "object",
+      "description": "A command line verb of Flash's own.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "syntax",
+        "aliases",
+        "description",
+        "source",
+        "source_kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "`:` and the verb's full name."
+        },
+        "syntax": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "description": "Every documented spelling, the name included.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "source": {
+          "const": "core"
+        },
+        "source_kind": {
+          "const": "core"
+        }
+      }
+    },
+    "plugin_command": {
+      "type": "object",
+      "description": "A command a plugin's manifest declares.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "syntax",
+        "command",
+        "subcommand",
+        "description",
+        "source",
+        "source_kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "`:<command> <subcommand>`."
+        },
+        "syntax": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "subcommand": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "The plugin's id."
+        },
+        "source_kind": {
+          "const": "plugin"
+        }
+      }
+    },
+    "command": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/core_command"
+        },
+        {
+          "$ref": "#/definitions/plugin_command"
+        }
+      ]
+    },
+    "clipboard_entry": {
+      "type": "object",
+      "description": "One clipboard history entry, as a preview: its text and HTML stay behind `/api/clipboard/history`.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "preview"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "32 lowercase hex characters."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "text",
+            "image",
+            "html",
+            "files"
+          ]
+        },
+        "preview": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "One-line label."
+        },
+        "mime": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present when the entry has an image to render."
+        },
+        "files": {
+          "type": "array",
+          "description": "Paths from a file copy; absent when there are none.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "pinned": {
+          "const": true,
+          "description": "Present only for a pinned entry."
+        }
+      }
+    },
+    "clipboard_register": {
+      "type": "object",
+      "description": "A populated text register.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "text",
+        "kind",
+        "truncated"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "description": "A preview when `truncated`."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "unnamed",
+            "yank",
+            "named",
+            "clipboard"
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "doc_topic": {
+      "type": "object",
+      "description": "A plugin's own help topic.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "title",
+        "summary",
+        "body"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Raw Markdown authored by the plugin."
+        }
+      }
+    },
+    "mapping_row": {
+      "type": "object",
+      "description": "One key binding.",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "key",
+        "action",
+        "origin",
+        "explanation"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "description": "`all`, `normal`, `text`, `visual`, `hold`, `hyper`, `insert`, `terminal`, `command` or `layers.<name>`."
+        },
+        "key": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string",
+          "description": "`default`, `config`, `config:<file>` or `plugin:<name>`."
+        },
+        "explanation": {
+          "type": "string"
+        }
+      }
+    },
+    "command_resolution": {
+      "type": "object",
+      "description": "How one command Flash asks of the focused app resolves there, in dispatch order.",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "binding",
+        "source",
+        "claimed_by"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The binding key: the command line with its bool flags."
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What runs when no source claims it, or null for nothing."
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Who declared the binding: a plugin id, or `flash`."
+        },
+        "claimed_by": {
+          "type": "array",
+          "description": "Who gets first try: `source:<id>`, `flash:<step>`.",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mappings": {
+      "type": "object",
+      "description": "The configured bindings and those in effect for the focused app.",
+      "additionalProperties": false,
+      "required": [
+        "normal_leader",
+        "rows",
+        "effective_rows",
+        "commands",
+        "bundle_id",
+        "localized_name"
+      ],
+      "properties": {
+        "normal_leader": {
+          "type": "string",
+          "description": "Empty when no leader is set."
+        },
+        "rows": {
+          "type": "array",
+          "description": "The configuration's bindings.",
+          "items": {
+            "$ref": "#/definitions/mapping_row"
+          }
+        },
+        "effective_rows": {
+          "type": "array",
+          "description": "The bindings in effect for the app below, plugin mappings merged.",
+          "items": {
+            "$ref": "#/definitions/mapping_row"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/command_resolution"
+          }
+        },
+        "bundle_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The app the effective rows are for: the last one that is not Flash."
+        },
+        "localized_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "focused_app": {
+      "type": "object",
+      "description": "The frontmost app.",
+      "additionalProperties": false,
+      "required": [
+        "bundle_id",
+        "localized_name",
+        "pid"
+      ],
+      "properties": {
+        "bundle_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "localized_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "keyboard_navigation": {
+      "type": "object",
+      "description": "The pointer and bisect keys of the layout.",
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "down",
+        "up",
+        "right",
+        "quadrants"
+      ],
+      "properties": {
+        "left": {
+          "type": "string"
+        },
+        "down": {
+          "type": "string"
+        },
+        "up": {
+          "type": "string"
+        },
+        "right": {
+          "type": "string"
+        },
+        "quadrants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "keyboard": {
+      "type": "object",
+      "description": "The keyboard page's model: the layout, the hint alphabet and what the keys do.",
+      "additionalProperties": false,
+      "required": [
+        "layout",
+        "rows",
+        "alphabet",
+        "key_scores",
+        "grid_keys",
+        "label_order",
+        "zone_rows",
+        "navigation",
+        "adjust_digits",
+        "held_button"
+      ],
+      "properties": {
+        "layout": {
+          "type": "string",
+          "description": "`[keyboard] layout`."
+        },
+        "rows": {
+          "type": "array",
+          "description": "The layout's physical rows; empty for an unknown layout.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alphabet": {
+          "type": "string",
+          "description": "The hint alphabet, best key first."
+        },
+        "key_scores": {
+          "type": "object",
+          "description": "A score per alphabet key.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "grid_keys": {
+          "type": "array",
+          "description": "The mouse grid's keys, one string per row.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "label_order": {
+          "type": "string",
+          "enum": [
+            "reading",
+            "center",
+            "zones"
+          ]
+        },
+        "zone_rows": {
+          "type": "array",
+          "description": "The zone keys of `label_order = \"zones\"`, one string per keyboard row.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "navigation": {
+          "$ref": "#/definitions/keyboard_navigation"
+        },
+        "adjust_digits": {
+          "type": "string",
+          "enum": [
+            "width",
+            "grid"
+          ]
+        },
+        "held_button": {
+          "description": "The mouse button Flash holds down, if any.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "primary",
+                "secondary",
+                "middle"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "hint": {
+      "type": "object",
+      "description": "One hint of the session on screen.",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "accessibility_label",
+        "role",
+        "text_input",
+        "frame"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "accessibility_label": {
+          "type": "string",
+          "description": "Empty when the target has none."
+        },
+        "role": {
+          "type": "string",
+          "description": "Empty when the target has none."
+        },
+        "text_input": {
+          "type": "boolean"
+        },
+        "frame": {
+          "$ref": "#/definitions/rect"
+        }
+      }
+    },
+    "terminal_anchor": {
+      "type": "object",
+      "description": "Where the bar draws a popup's anchor.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      }
+    },
+    "terminal_session": {
+      "type": "object",
+      "description": "One popup's PTY session.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "state"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "running",
+            "exited",
+            "failed",
+            "stopped"
+          ]
+        },
+        "pid": {
+          "type": "integer",
+          "description": "Present while `running`."
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "Present once `exited`."
+        },
+        "columns": {
+          "type": "integer",
+          "description": "Present once the session has a size."
+        },
+        "rows": {
+          "type": "integer",
+          "description": "Present once the session has a size."
+        }
+      }
+    },
+    "terminals": {
+      "type": "object",
+      "description": "The popups and their sessions.",
+      "additionalProperties": false,
+      "required": [
+        "focused",
+        "preview",
+        "standalone",
+        "visible_names",
+        "preview_frame",
+        "visible",
+        "frame",
+        "anchors",
+        "sessions"
+      ],
+      "properties": {
+        "focused": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The popup that holds the keyboard."
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The popup shown as a preview."
+        },
+        "standalone": {
+          "type": "boolean"
+        },
+        "visible_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "preview_frame": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "frame": {
+          "$ref": "#/definitions/rect"
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/terminal_anchor"
+          }
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/terminal_session"
+          }
+        }
+      }
+    },
+    "status_bar_window": {
+      "type": "object",
+      "description": "The bar's window.",
+      "additionalProperties": false,
+      "required": [
+        "visible",
+        "occlusion_visible",
+        "on_active_space",
+        "level",
+        "alpha",
+        "frame",
+        "hosted_layers"
+      ],
+      "properties": {
+        "visible": {
+          "type": "boolean"
+        },
+        "occlusion_visible": {
+          "type": "boolean"
+        },
+        "on_active_space": {
+          "type": "boolean"
+        },
+        "level": {
+          "type": "integer"
+        },
+        "alpha": {
+          "type": "number"
+        },
+        "frame": {
+          "$ref": "#/definitions/frame"
+        },
+        "hosted_layers": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "status_bar_background": {
+      "type": "object",
+      "description": "The bar's background layer.",
+      "additionalProperties": false,
+      "required": [
+        "attached",
+        "hidden",
+        "opacity",
+        "frame"
+      ],
+      "properties": {
+        "attached": {
+          "type": "boolean"
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "opacity": {
+          "type": "number"
+        },
+        "frame": {
+          "$ref": "#/definitions/frame"
+        }
+      }
+    },
+    "status_bar_render": {
+      "type": "object",
+      "description": "What the last render drew.",
+      "additionalProperties": false,
+      "required": [
+        "visible",
+        "changed"
+      ],
+      "properties": {
+        "visible": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "status_bar_run": {
+      "type": "object",
+      "description": "One drawn run and its layers.",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "container_hidden",
+        "container_attached",
+        "container_frame",
+        "container_opacity",
+        "text_hidden",
+        "text_drawn",
+        "text_string_empty",
+        "text_opacity",
+        "text_frame",
+        "text_animations"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "container_hidden": {
+          "type": "boolean"
+        },
+        "container_attached": {
+          "type": "boolean"
+        },
+        "container_frame": {
+          "$ref": "#/definitions/frame"
+        },
+        "container_opacity": {
+          "type": "number"
+        },
+        "text_hidden": {
+          "type": "boolean"
+        },
+        "text_drawn": {
+          "type": "boolean"
+        },
+        "text_string_empty": {
+          "type": "boolean"
+        },
+        "text_opacity": {
+          "type": "number"
+        },
+        "text_frame": {
+          "$ref": "#/definitions/frame"
+        },
+        "text_animations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "status_bar": {
+      "type": "object",
+      "description": "The bar's window and layers on the primary display.",
+      "additionalProperties": false,
+      "required": [
+        "bar_visible",
+        "badge_text",
+        "badge_style",
+        "hint_snapshot",
+        "yields_to_native_menu_bar",
+        "document_runs",
+        "window",
+        "background",
+        "render",
+        "runs"
+      ],
+      "properties": {
+        "bar_visible": {
+          "type": "boolean"
+        },
+        "badge_text": {
+          "type": "string"
+        },
+        "badge_style": {
+          "type": "string",
+          "enum": [
+            "insert",
+            "normal",
+            "command",
+            "hyper",
+            "hold",
+            "visual",
+            "layer"
+          ]
+        },
+        "hint_snapshot": {
+          "type": "string",
+          "enum": [
+            "live",
+            "held"
+          ]
+        },
+        "yields_to_native_menu_bar": {
+          "type": "boolean"
+        },
+        "document_runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window": {
+          "$ref": "#/definitions/status_bar_window"
+        },
+        "background": {
+          "$ref": "#/definitions/status_bar_background"
+        },
+        "render": {
+          "$ref": "#/definitions/status_bar_render"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/status_bar_run"
+          }
+        }
+      }
+    },
+    "widget_window": {
+      "type": "object",
+      "description": "One widget's window on one display.",
+      "additionalProperties": false,
+      "required": [
+        "widget",
+        "display",
+        "frame",
+        "ordered_in",
+        "level",
+        "hidden_from_capture",
+        "occlusion_visible",
+        "occlusion_trusted",
+        "refreshing",
+        "lines",
+        "runs"
+      ],
+      "properties": {
+        "widget": {
+          "type": "string"
+        },
+        "display": {
+          "type": "integer"
+        },
+        "frame": {
+          "$ref": "#/definitions/frame"
+        },
+        "ordered_in": {
+          "type": "boolean"
+        },
+        "level": {
+          "type": "integer"
+        },
+        "hidden_from_capture": {
+          "type": "boolean"
+        },
+        "occlusion_visible": {
+          "type": "boolean"
+        },
+        "occlusion_trusted": {
+          "type": "boolean"
+        },
+        "refreshing": {
+          "type": "boolean",
+          "description": "False while the window is covered: the widget stops refreshing."
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "widgets": {
+      "type": "object",
+      "description": "The enabled desktop widgets and their windows.",
+      "additionalProperties": false,
+      "required": [
+        "widgets",
+        "windows"
+      ],
+      "properties": {
+        "widgets": {
+          "type": "array",
+          "description": "The enabled widgets' names, sorted.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/widget_window"
+          }
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "description": "One of Flash's own windows.",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "frame",
+        "visible",
+        "level",
+        "number"
+      ],
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "frame": {
+          "$ref": "#/definitions/frame"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "level": {
+          "type": "integer"
+        },
+        "number": {
+          "type": "integer"
+        }
+      }
+    },
+    "plugin": {
+      "type": "object",
+      "description": "One plugin. Its commands are the top-level `commands` whose `source` is its id.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "version",
+        "description",
+        "origin",
+        "root",
+        "state",
+        "activation",
+        "pid",
+        "started_at_unix_ms",
+        "source_count",
+        "command_count",
+        "restart_count",
+        "last_error",
+        "last_log",
+        "cpu_time_ms",
+        "memory_bytes",
+        "only_bundle_ids",
+        "priority",
+        "status_segments"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string",
+          "description": "`official`, or the `file:` or `github:` reference it came from."
+        },
+        "root": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "stopped",
+            "installing",
+            "launching",
+            "running",
+            "published",
+            "failed",
+            "manifest_only"
+          ]
+        },
+        "activation": {
+          "type": "string",
+          "enum": [
+            "resident",
+            "on_demand",
+            "publish_then_exit",
+            "manifest_only",
+            ""
+          ],
+          "description": "Empty for a plugin whose manifest did not load."
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "started_at_unix_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "When the running process started; the page derives its uptime."
+        },
+        "source_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "command_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "restart_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_log": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cpu_time_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Cumulative CPU time, sampled with the snapshot."
+        },
+        "memory_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Resident memory, sampled with the snapshot."
+        },
+        "only_bundle_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "status_segments": {
+          "type": "object",
+          "description": "Each segment's value as a preview of at most 256 characters and an ellipsis.",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 257
+          }
+        }
+      }
+    },
+    "monitor_run": {
+      "type": "object",
+      "description": "One run of a monitor's steps.",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "started_ms",
+        "ended_ms",
+        "duration_ms",
+        "steps",
+        "failed_step",
+        "failed_command",
+        "reason",
+        "output"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "succeeded",
+            "failed"
+          ]
+        },
+        "started_ms": {
+          "type": "integer"
+        },
+        "ended_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed_step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The step that failed, counted from 1."
+        },
+        "failed_command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output": {
+          "type": "string",
+          "description": "The tail of the failing step's output, or of the last step's."
+        }
+      }
+    },
+    "value_monitor": {
+      "type": "object",
+      "description": "A watched value and its thresholds, as the resident last evaluated it.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "origin",
+        "kind",
+        "enabled",
+        "value",
+        "display",
+        "state",
+        "direction",
+        "warning",
+        "error",
+        "interval_s",
+        "message",
+        "detail",
+        "since_ms",
+        "last_alert_ms",
+        "expression",
+        "run",
+        "timeout_s",
+        "cooldown_s",
+        "runs",
+        "last_run_ms",
+        "last_run"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "default",
+            "config"
+          ]
+        },
+        "kind": {
+          "const": "value"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "The last sample, or null before the first or when it could not be read."
+        },
+        "display": {
+          "type": "string",
+          "description": "The sample as the bar would print it."
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "ok",
+            "warning",
+            "error"
+          ]
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ]
+        },
+        "warning": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "interval_s": {
+          "type": "number"
+        },
+        "message": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "since_ms": {
+          "type": "integer",
+          "description": "When the monitor entered its current state."
+        },
+        "last_alert_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expression": {
+          "type": "string",
+          "description": "The status format that yields the value."
+        },
+        "run": {
+          "description": "What runs when the monitor fires, in order: one argv per step, or null.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "minItems": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The whole run's bound, in seconds."
+        },
+        "cooldown_s": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The wait between two runs, in seconds."
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How often it ran since launch."
+        },
+        "last_run_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "When its last run started, kept across restarts."
+        },
+        "last_run": {
+          "description": "How the last run since launch went.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/monitor_run"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "usb_filter": {
+      "type": "object",
+      "description": "The device a USB event monitor is narrowed to.",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "vendor_id": {
+          "type": "integer"
+        },
+        "product_id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "event_monitor": {
+      "type": "object",
+      "description": "A monitor that watches host events.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "origin",
+        "kind",
+        "enabled",
+        "event",
+        "app",
+        "usb",
+        "message",
+        "state",
+        "run",
+        "timeout_s",
+        "cooldown_s",
+        "runs",
+        "last_run_ms",
+        "last_run"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "default",
+            "config"
+          ]
+        },
+        "kind": {
+          "const": "event"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "event": {
+          "type": "array",
+          "description": "The host event names and globs it watches.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "app": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The bundle identifier app events are narrowed to."
+        },
+        "usb": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/usb_filter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "state": {
+          "const": "ok"
+        },
+        "run": {
+          "description": "What runs when the monitor fires, in order: one argv per step, or null.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "minItems": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeout_s": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The whole run's bound, in seconds."
+        },
+        "cooldown_s": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The wait between two runs, in seconds."
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How often it ran since launch."
+        },
+        "last_run_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "When its last run started, kept across restarts."
+        },
+        "last_run": {
+          "description": "How the last run since launch went.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/monitor_run"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "monitor": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/value_monitor"
+        },
+        {
+          "$ref": "#/definitions/event_monitor"
+        }
+      ]
+    },
+    "signal_counts": {
+      "type": "object",
+      "description": "A count per OTLP signal.",
+      "additionalProperties": false,
+      "required": [
+        "metrics",
+        "logs",
+        "traces"
+      ],
+      "properties": {
+        "metrics": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "logs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "traces": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "telemetry_limits": {
+      "type": "object",
+      "description": "What the receiver's store keeps at most.",
+      "additionalProperties": false,
+      "required": [
+        "max_series",
+        "max_points",
+        "max_logs",
+        "max_spans"
+      ],
+      "properties": {
+        "max_series": {
+          "type": "integer"
+        },
+        "max_points": {
+          "type": "integer"
+        },
+        "max_logs": {
+          "type": "integer"
+        },
+        "max_spans": {
+          "type": "integer"
+        }
+      }
+    },
+    "telemetry_receiver": {
+      "type": "object",
+      "description": "`[telemetry.receiver]`: the loopback OTLP/HTTP listener and what it took in.",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "port",
+        "listening",
+        "error",
+        "refused",
+        "last_refusal",
+        "requests",
+        "accepted",
+        "rejected",
+        "evicted_series",
+        "last_received_ms",
+        "series",
+        "logs",
+        "spans",
+        "revision",
+        "limits",
+        "requires_token"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer"
+        },
+        "listening": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the listener could not bind, when it could not."
+        },
+        "refused": {
+          "type": "object",
+          "description": "Requests answered with an error, by HTTP status.",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "last_refusal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requests": {
+          "$ref": "#/definitions/signal_counts"
+        },
+        "accepted": {
+          "$ref": "#/definitions/signal_counts"
+        },
+        "rejected": {
+          "$ref": "#/definitions/signal_counts"
+        },
+        "evicted_series": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_received_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "series": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "logs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "spans": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision": {
+          "type": "integer",
+          "description": "Bumped on every request the store took."
+        },
+        "limits": {
+          "$ref": "#/definitions/telemetry_limits"
+        },
+        "requires_token": {
+          "type": "boolean",
+          "description": "Whether a token is set, never its value."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "`http://127.0.0.1:<port>`, present while listening."
+        }
+      }
+    },
+    "telemetry_exporter": {
+      "type": "object",
+      "description": "`[telemetry.exporter]`: Flash's own telemetry, sent to the user's endpoint.",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "endpoint",
+        "blocked",
+        "protocol",
+        "compression",
+        "signals",
+        "interval_s",
+        "headers",
+        "service_name",
+        "sent",
+        "dropped",
+        "failures",
+        "retrying",
+        "last_error",
+        "last_success_ms"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "blocked": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the configured exporter stays off, when it does."
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "http/protobuf",
+            "http/json"
+          ]
+        },
+        "compression": {
+          "type": "string",
+          "enum": [
+            "gzip",
+            "none"
+          ]
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "metrics",
+              "logs",
+              "traces"
+            ]
+          }
+        },
+        "interval_s": {
+          "type": "number"
+        },
+        "headers": {
+          "type": "array",
+          "description": "Header names only, never their values.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "service_name": {
+          "type": "string"
+        },
+        "sent": {
+          "$ref": "#/definitions/signal_counts"
+        },
+        "dropped": {
+          "$ref": "#/definitions/signal_counts"
+        },
+        "failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retrying": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "metrics",
+              "logs",
+              "traces"
+            ]
+          }
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_success_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "description": "The OTLP receiver and exporter; `/api/telemetry` carries what was received.",
+      "additionalProperties": false,
+      "required": [
+        "receiver",
+        "exporter"
+      ],
+      "properties": {
+        "receiver": {
+          "$ref": "#/definitions/telemetry_receiver"
+        },
+        "exporter": {
+          "$ref": "#/definitions/telemetry_exporter"
+        }
+      }
+    }
+  }
+}

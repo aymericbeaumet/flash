@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/log.schema.json",
+  "title": "log",
+  "description": "Plugin to host: one content-free diagnostic line.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "method",
+    "params"
+  ],
+  "properties": {
+    "method": {
+      "const": "log"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "message",
+        "fields"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error",
+            "fatal"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "object",
+          "$comment": "Open by design: the keys are the plugin's own.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "trace": {
+          "$ref": "definitions.schema.json#/definitions/trace"
+        }
+      }
+    }
+  }
+}

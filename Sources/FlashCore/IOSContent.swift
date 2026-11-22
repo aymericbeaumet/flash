@@ -2,8 +2,8 @@ import ApplicationServices
 
 /// UIKit content inside a Mac window: Mac Catalyst and iPad apps (Messages,
 /// WhatsApp) host it under one window group with this subrole. Its
-/// Accessibility tree differs from AppKit's in two ways the walker and the
-/// INSERT rule account for.
+/// Accessibility tree differs from AppKit's in two ways the walker accounts
+/// for.
 public enum IOSContent {
   public static let groupSubrole = "iOSContentGroup"
 

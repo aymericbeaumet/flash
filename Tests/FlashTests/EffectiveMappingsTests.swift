@@ -78,6 +78,41 @@ final class EffectiveMappingsTests: XCTestCase {
   }
   /// A `Config.Mode` carrying only the supplied scope arrays — the default
   /// normal mappings are cleared so each case asserts on exactly what it sets.
+  /// The cache resolves a selector's tables once, skips a focus change that
+  /// lands on the selector already applied, and reports whether the tables
+  /// handed to the coordinator changed.
+  func testTheCacheResolvesOnceAndAppliesOnlyChangedTables() {
+    var cache = EffectiveMappingCache()
+    var resolved = 0
+    let plain = mode()
+    let mapped = mode(normal: [ModeMapping(key: "u", action: .flashCommand(.undo))])
+    let resolve: (Config.Mode) -> () -> Config.Mode = { mode in
+      {
+        resolved += 1
+        return mode
+      }
+    }
+    XCTAssertEqual(cache.mode(for: "a", resolve: resolve(plain)), plain)
+    XCTAssertEqual(cache.mode(for: "a", resolve: resolve(mapped)), plain, "resolved once per key")
+    XCTAssertEqual(resolved, 1)
+
+    XCTAssertTrue(cache.select("a"))
+    XCTAssertTrue(cache.select("a"), "nothing was applied yet: the refresh still runs")
+    XCTAssertTrue(cache.apply(plain))
+    XCTAssertFalse(cache.select("a"), "the applied selector has nothing to refresh")
+    XCTAssertTrue(cache.select("b"))
+    XCTAssertFalse(cache.apply(plain), "same tables: the coordinator keeps its registrations")
+    XCTAssertTrue(cache.select("c"))
+    XCTAssertTrue(cache.apply(mapped))
+    XCTAssertEqual(cache.applied, mapped)
+
+    cache.invalidate()
+    XCTAssertNil(cache.applied)
+    XCTAssertEqual(cache.mode(for: "a", resolve: resolve(mapped)), mapped)
+    XCTAssertTrue(cache.select("c"))
+    XCTAssertTrue(cache.apply(mapped), "an invalidation re-applies even unchanged tables")
+  }
+
   private func mode(
     all: [ModeMapping] = [],
     normal: [ModeMapping] = [],

@@ -5,7 +5,7 @@ import XCTest
 @testable import FlashTerminal
 
 /// Throughput instrumentation for the terminal pipeline: VT parsing, frame
-/// snapshots and drawing. Every test prints `[terminal-bench]` lines and only
+/// snapshots and drawing. Every test prints `[bench] terminal` lines and only
 /// asserts that the work happened, so it stays green on loaded machines.
 /// `FLASH_TERMINAL_BENCH_MB` scales the parsed workload (default 2 MiB).
 final class TerminalBenchmarkTests: XCTestCase {
@@ -18,7 +18,7 @@ final class TerminalBenchmarkTests: XCTestCase {
   }
 
   private static func report(_ name: String, _ value: Double, _ unit: String) {
-    print("[terminal-bench] \(name): \(String(format: "%.3f", value)) \(unit)")
+    print("[bench] terminal \(name): \(String(format: "%.3f", value)) \(unit)")
   }
 
   private static func seconds(_ body: () -> Void) -> Double {

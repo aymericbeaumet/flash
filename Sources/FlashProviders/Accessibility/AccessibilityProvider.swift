@@ -1,5 +1,5 @@
 import AppKit
-import ApplicationServices
+@preconcurrency import ApplicationServices
 import FlashCore
 
 /// LIFO worklist whose append operation preserves recursive depth-first visit
@@ -54,9 +54,11 @@ struct AXTraversalWorklist<Element> {
 ///     worker's stack. The two bounded concurrency fan-outs remain recursive.
 ///   - Per-IPC messaging timeout is bounded, not the 6 s system default:
 ///     the walk root is built via `AXApp.make` (guardrail-enforced), which
-///     applies `AXApp.defaultMessagingTimeout` (1.5 s) to the app element
-///     and every element reached through it, so a wedged app can't beachball
-///     the main run loop for the full 6 s. The single-attribute children
+///     applies `AXApp.defaultMessagingTimeout` (1.5 s) to the app element,
+///     and every element reached through it waits the process-wide timeout
+///     the resident sets to the same 1.5 s at launch
+///     (`AXApp.configureProcessMessagingTimeout`), so a wedged app can't
+///     hold a walk for the full 6 s per read. The single-attribute children
 ///     fallback (below) recovers the batched-IPC drops this cap can cause on
 ///     Firefox's lazily-built `AXWebArea` subtree.
 ///   - Top-level subtrees always fan out across concurrent workers via
@@ -68,12 +70,12 @@ struct AXTraversalWorklist<Element> {
 ///     `pendingTargets` during the walk and resolved in parallel after
 ///     it completes, so the IPC pipeline isn't serialised on inline
 ///     follow-up reads.
-public final class AccessibilityProvider: FlashSource {
+public final class AccessibilityProvider: FlashSource, Sendable {
   public let identifier: String = "accessibility"
   public let displayName: String = "accessibility"
   public let priority: Int = 10
   public let readinessPolicy: FlashSourceReadinessPolicy = .continuous
-  public let capabilities: FlashSourceCapabilities = [.jumpTargets, .documentURL, .tabSelection]
+  public let capabilities: FlashSourceCapabilities = [.jumpTargets, .documentURL]
 
   /// Roles we recognise in native (non-web) AX trees. Broader than the
   /// web allowlist because native apps surface things the web doesn't —
@@ -175,22 +177,27 @@ public final class AccessibilityProvider: FlashSource {
 
   public func supports(_ context: AppContext) -> Bool { true }
 
-  public func performAction(
-    _ action: SourceAction,
+  /// The one core command the generic AX walker performs: `tab select`,
+  /// pressing the Nth tab of the focused window's tab strip.
+  public var commands: Set<CommandName> { [Self.tabSelect] }
+
+  private static let tabSelect = CommandName("tab", "select")
+
+  public func perform(
+    _ command: SourceCommand,
     in context: AppContext,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
-    // Generic AX walker only handles `tab_select` today: it walks the focused
+    // Generic AX walker only handles `tab select` today: it walks the focused
     // window for tablist children and presses the Nth tab. Everything else
-    // falls through so the next source (or the host keystroke fallback)
+    // falls through so the next source (or the host's binding fallback)
     // can run.
-    guard case .tabSelect(let index) = action else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
-    }
-    guard index > 0 else {
-      DispatchQueue.main.async { completion(.unhandled) }
+    let completion = MainQueueCompletion(completion)
+    guard command.name == Self.tabSelect,
+      let index = command.argument("index").flatMap(Int.init), index > 0
+    else {
+      completion.deliver { .unhandled }
       return
     }
     let pid = context.processID
@@ -217,12 +224,12 @@ public final class AccessibilityProvider: FlashSource {
           || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
             == .success
       }
-      DispatchQueue.main.async {
+      completion.deliver {
         if selected, let runningApp = NSRunningApplication(processIdentifier: pid) {
           RunningApplicationActivation.activate(
             runningApp, options: [.activateAllWindows], restoringMinimizedWindows: false)
         }
-        completion(selected ? .performed(pid: pid) : .unhandled)
+        return selected ? .performed(pid: pid) : .unhandled
       }
     }
   }
@@ -519,10 +526,11 @@ public final class AccessibilityProvider: FlashSource {
     application: AXUIElement, element: AXUIElement, at point: CGPoint, screenH: CGFloat,
     allowsInteractiveDescendants: Bool
   ) -> HintHitTestOutcome {
+    let axPoint = ScreenPoint<NSSpace>(point).toAX(primaryHeight: screenH)
     var hit: AXUIElement?
     guard
       AXUIElementCopyElementAtPosition(
-        application, Float(point.x), Float(screenH - point.y), &hit) == .success
+        application, Float(axPoint.x), Float(axPoint.y), &hit) == .success
     else { return .unavailable }
     for _ in 0..<32 {
       guard let current = hit else { return .unavailable }
@@ -568,8 +576,7 @@ public final class AccessibilityProvider: FlashSource {
       guard AXValueGetValue(rawFrame as! AXValue, .cgRect, &axFrame),
         axFrame.width >= 3, axFrame.height >= 3
       else { return nil }
-      frame = CGRect(
-        x: axFrame.minX, y: screenH - axFrame.maxY, width: axFrame.width, height: axFrame.height)
+      frame = ScreenRect<AXSpace>(axFrame).toNS(primaryHeight: screenH).cgRect
     }
     return hintSnapshot(values, frame: frame)
   }
@@ -597,13 +604,14 @@ public final class AccessibilityProvider: FlashSource {
             allowsInteractiveDescendants: allowsInteractiveDescendants)
         }
       },
-      entersInsertMode: JumpTarget.isTextInput(role: snapshot.role, subrole: snapshot.subrole),
+      isTextInput: JumpTarget.isTextInput(role: snapshot.role, subrole: snapshot.subrole),
       providerID: providerID)
   }
 
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
-  // Indices are hot-path constants — keep them in sync with `walk`.
-  private static let batchAttrs: CFArray =
+  // Indices are hot-path constants — keep them in sync with `walk`. The
+  // array is never mutated, so every walker thread reads it.
+  nonisolated(unsafe) private static let batchAttrs: CFArray =
     [
       kAXRoleAttribute,  // 0
       kAXPositionAttribute,  // 1
@@ -636,7 +644,8 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   /// Tentative target awaiting one IPC. The candidate is fully formed; the
-  /// check decides whether it is kept, and whether it still enters INSERT.
+  /// check decides whether it is kept, and whether it is still a typing
+  /// surface.
   private struct PendingTarget {
     let candidate: JumpTarget
     let element: AXUIElement
@@ -646,7 +655,7 @@ public final class AccessibilityProvider: FlashSource {
   private enum PendingCheck {
     /// Kept only when the element exposes `AXPress`.
     case pressAction
-    /// Always kept; a UIKit text-input role enters INSERT only when the
+    /// Always kept; a UIKit text-input role is a typing surface only when the
     /// element can take keyboard focus (`IOSContent.canTakeKeyboardFocus`).
     case keyboardFocus
   }
@@ -790,26 +799,7 @@ public final class AccessibilityProvider: FlashSource {
     // thread service multiple action-name reads concurrently.
     let survivors = resolvePendingActionChecks(state.pendingTargets)
     state.confirmedTargets.append(contentsOf: survivors)
-    return Self.settlingInsertIntent(
-      state.confirmedTargets, bundleIdentifier: context.bundleIdentifier)
-  }
-
-  /// A terminal emulator's window is one typing surface: a primary click on
-  /// its targets hands the keyboard to the terminal, so they enter INSERT.
-  /// A link is navigation and stays in NORMAL. Which apps are terminals is
-  /// plugin data (manifest `terminal_emulators`); every other app keeps the
-  /// per-role judgement the walk made.
-  static func settlingInsertIntent(
-    _ targets: [JumpTarget], bundleIdentifier: String,
-    isTerminalEmulator: (String) -> Bool = TerminalEmulators.contains
-  ) -> [JumpTarget] {
-    guard isTerminalEmulator(bundleIdentifier) else { return targets }
-    return targets.map { target in
-      if target.role == JumpTarget.terminalLinkRole || target.role == "AXLink" {
-        return target.entersInsertMode ? target.enteringInsertMode(false) : target
-      }
-      return target.entersInsertMode ? target : target.enteringInsertMode(true)
-    }
+    return state.confirmedTargets
   }
 
   /// The window a walk of `pid` covers — its focused, main or first top-level
@@ -859,7 +849,10 @@ public final class AccessibilityProvider: FlashSource {
         size.width > 0, size.height > 0
       else { return nil }
       // Accessibility is top-left; Flash's frames are NSScreen bottom-left.
-      return (menu, ScreenSpace.flip(CGRect(origin: origin, size: size), height: screenH))
+      return (
+        menu,
+        ScreenRect<AXSpace>(CGRect(origin: origin, size: size)).toNS(primaryHeight: screenH).cgRect
+      )
     }
   }
 
@@ -1179,7 +1172,7 @@ public final class AccessibilityProvider: FlashSource {
         url: url,
         pid: pid,
         resolveClickPoint: resolveClickPoint,
-        entersInsertMode: isTextInput,
+        isTextInput: isTextInput,
         priority: isTabAnchor ? .urgent : .normal,
         providerID: identifier
       )
@@ -1289,6 +1282,7 @@ public final class AccessibilityProvider: FlashSource {
       // child slots; the merge below still runs in child order.
       let width = min(childrenSnapshot.count, Self.maxFanoutWidth)
       workerStates.withUnsafeMutableBufferPointer { buf in
+        nonisolated(unsafe) let slots = buf
         DispatchQueue.concurrentPerform(iterations: width) { worker in
           for i in stride(from: worker, to: childrenSnapshot.count, by: width) {
             var workerState = WalkState()
@@ -1308,7 +1302,7 @@ public final class AccessibilityProvider: FlashSource {
               fanoutBudget: captureNewBudget,
               state: &workerState
             )
-            buf[i] = workerState
+            slots[i] = workerState
           }
         }
       }
@@ -1380,13 +1374,14 @@ public final class AccessibilityProvider: FlashSource {
     // type, never mutated during the parallel pass.)
     var outcomes = [PendingOutcome](repeating: .drop, count: pending.count)
     outcomes.withUnsafeMutableBufferPointer { buf in
+      nonisolated(unsafe) let slots = buf
       DispatchQueue.concurrentPerform(iterations: pending.count) { i in
         switch pending[i].check {
         case .pressAction:
-          buf[i] = AXClick.hasPressAction(pending[i].element) ? .keep : .drop
+          slots[i] = AXClick.hasPressAction(pending[i].element) ? .keep : .drop
         case .keyboardFocus:
-          buf[i] =
-            IOSContent.canTakeKeyboardFocus(pending[i].element) ? .keep : .keepWithoutInsert
+          slots[i] =
+            IOSContent.canTakeKeyboardFocus(pending[i].element) ? .keep : .keepAsText
         }
       }
     }
@@ -1396,7 +1391,7 @@ public final class AccessibilityProvider: FlashSource {
       switch outcome {
       case .drop: continue
       case .keep: out.append(pending[i].candidate)
-      case .keepWithoutInsert: out.append(pending[i].candidate.enteringInsertMode(false))
+      case .keepAsText: out.append(pending[i].candidate.withTextInput(false))
       }
     }
     return out
@@ -1405,7 +1400,9 @@ public final class AccessibilityProvider: FlashSource {
   private enum PendingOutcome: UInt8 {
     case drop
     case keep
-    case keepWithoutInsert
+    /// Kept as read-only text: a UIKit typing role that takes no keyboard
+    /// focus (a message bubble) is no typing surface.
+    case keepAsText
   }
 
   /// Whether `value` is an extension document URL. A scheme prefix test on
@@ -1500,6 +1497,6 @@ public final class AccessibilityProvider: FlashSource {
     // 3x3 is the conservative threshold that drops them without
     // touching real icon-only buttons (16x16+).
     if sz.width < 3 || sz.height < 3 { return nil }
-    return ScreenSpace.flip(CGRect(origin: origin, size: sz), height: screenH)
+    return ScreenRect<AXSpace>(CGRect(origin: origin, size: sz)).toNS(primaryHeight: screenH).cgRect
   }
 }

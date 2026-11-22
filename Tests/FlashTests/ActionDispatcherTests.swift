@@ -50,10 +50,10 @@ final class ActionDispatcherTests: XCTestCase {
   }
 
   func testTerminalLinkClickPrimesHoverWithShiftBeforeButtonEvents() throws {
-    let point = CGPoint(x: 240, y: 360)
+    let point = ScreenPoint<AXSpace>(x: 240, y: 360)
     let events = try XCTUnwrap(
       ActionDispatcher.clickEvents(
-        at: point, from: CGPoint(x: 100, y: 200), action: .leftClick,
+        at: point, from: ScreenPoint<AXSpace>(x: 100, y: 200), action: .leftClick,
         modifiers: ActionDispatcher.hintClickModifiers(
           for: target(role: JumpTarget.terminalLinkRole), requested: []),
         source: CGEventSource(stateID: .privateState)))
@@ -61,7 +61,7 @@ final class ActionDispatcherTests: XCTestCase {
     XCTAssertEqual(events.map(\.type), [.mouseMoved, .leftMouseDown, .leftMouseUp])
     for event in events {
       XCTAssertEqual(event.flags, .maskShift)
-      XCTAssertEqual(event.location, point)
+      XCTAssertEqual(event.location, point.cgPoint)
       XCTAssertEqual(
         event.getIntegerValueField(.eventSourceUserData), ActionDispatcher.syntheticMouseEventTag)
     }
@@ -70,7 +70,7 @@ final class ActionDispatcherTests: XCTestCase {
   }
 
   func testStationaryClickStillPrimesHoverBeforeButtonEvents() throws {
-    let point = CGPoint(x: 240, y: 360)
+    let point = ScreenPoint<AXSpace>(x: 240, y: 360)
     let events = try XCTUnwrap(
       ActionDispatcher.clickEvents(
         at: point, from: point, action: .leftClick, modifiers: .shift,
@@ -85,7 +85,7 @@ final class ActionDispatcherTests: XCTestCase {
   func testNewContextDoubleClickUsesOneModifiedHoverAndTaggedMousePairs() throws {
     let events = try XCTUnwrap(
       ActionDispatcher.clickEvents(
-        at: CGPoint(x: 240, y: 360), from: .zero, action: .doubleClick,
+        at: ScreenPoint<AXSpace>(x: 240, y: 360), from: .zero, action: .doubleClick,
         modifiers: ActionDispatcher.hintClickModifiers(
           for: target(role: "AXLink"), requested: [.command, .shift]),
         source: CGEventSource(stateID: .privateState)))
@@ -110,33 +110,33 @@ final class ActionDispatcherTests: XCTestCase {
       ActionDispatcher.PointerRestore.afterCommit(restorePointer: false, gridOrigin: nil), .stay)
     XCTAssertEqual(
       ActionDispatcher.PointerRestore.afterCommit(
-        restorePointer: false, gridOrigin: CGPoint(x: 5, y: 6)),
+        restorePointer: false, gridOrigin: ScreenPoint<NSSpace>(x: 5, y: 6)),
       .stay)
     XCTAssertEqual(
       ActionDispatcher.PointerRestore.afterCommit(restorePointer: true, gridOrigin: nil),
       .gestureStart)
     XCTAssertEqual(
       ActionDispatcher.PointerRestore.afterCommit(
-        restorePointer: true, gridOrigin: CGPoint(x: 5, y: 6)),
-      .point(CGPoint(x: 5, y: 6)))
+        restorePointer: true, gridOrigin: ScreenPoint<NSSpace>(x: 5, y: 6)),
+      .point(ScreenPoint<NSSpace>(x: 5, y: 6)))
   }
 
   func testRestoreDestinationIsInEventSpace() {
-    let start = CGPoint(x: 120, y: 80)
+    let start = ScreenPoint<AXSpace>(x: 120, y: 80)
     XCTAssertNil(ActionDispatcher.restoreDestination(.stay, gestureStart: start, screenH: 900))
     XCTAssertEqual(
       ActionDispatcher.restoreDestination(.gestureStart, gestureStart: start, screenH: 900), start)
     // A grid origin is an NSScreen point (bottom-left origin).
     XCTAssertEqual(
       ActionDispatcher.restoreDestination(
-        .point(CGPoint(x: 300, y: 700)), gestureStart: start, screenH: 900),
-      CGPoint(x: 300, y: 200))
+        .point(ScreenPoint<NSSpace>(x: 300, y: 700)), gestureStart: start, screenH: 900),
+      ScreenPoint<AXSpace>(x: 300, y: 200))
   }
 
   func testRestoringThePointerPostsATaggedMoveSoHoverFollows() throws {
     let event = try XCTUnwrap(
       ActionDispatcher.pointerMoveEvent(
-        to: CGPoint(x: 100, y: 200), from: CGPoint(x: 240, y: 360),
+        to: ScreenPoint<AXSpace>(x: 100, y: 200), from: ScreenPoint<AXSpace>(x: 240, y: 360),
         source: CGEventSource(stateID: .privateState)))
     XCTAssertEqual(event.type, .mouseMoved)
     XCTAssertEqual(event.location, CGPoint(x: 100, y: 200))
@@ -160,7 +160,7 @@ final class ActionDispatcherTests: XCTestCase {
 
     let press = try XCTUnwrap(
       ActionDispatcher.heldButtonEvent(
-        button: .primary, pressed: true, at: CGPoint(x: 100, y: 200),
+        button: .primary, pressed: true, at: ScreenPoint<AXSpace>(x: 100, y: 200),
         source: CGEventSource(stateID: .combinedSessionState)))
     XCTAssertEqual(press.type, .leftMouseDown)
     XCTAssertEqual(press.flags, [])
@@ -169,14 +169,14 @@ final class ActionDispatcherTests: XCTestCase {
 
     let release = try XCTUnwrap(
       ActionDispatcher.heldButtonEvent(
-        button: .primary, pressed: false, at: CGPoint(x: 100, y: 200),
+        button: .primary, pressed: false, at: ScreenPoint<AXSpace>(x: 100, y: 200),
         source: CGEventSource(stateID: .combinedSessionState)))
     XCTAssertEqual(release.type, .leftMouseUp)
     XCTAssertEqual(release.flags, [])
 
     let drag = try XCTUnwrap(
       ActionDispatcher.pointerMoveEvent(
-        to: CGPoint(x: 120, y: 200), from: CGPoint(x: 100, y: 200),
+        to: ScreenPoint<AXSpace>(x: 120, y: 200), from: ScreenPoint<AXSpace>(x: 100, y: 200),
         holding: .primary, source: CGEventSource(stateID: .combinedSessionState)))
     XCTAssertEqual(drag.type, .leftMouseDragged)
     XCTAssertEqual(drag.flags, [])

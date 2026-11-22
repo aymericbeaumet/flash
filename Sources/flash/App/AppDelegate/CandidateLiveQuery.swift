@@ -13,7 +13,7 @@ struct CandidateLiveQuery<Row> {
 
   private var generation: UInt64 = 0
   private(set) var revision: UInt64 = 0
-  private var query: Query?
+  private(set) var query: Query?
   private var snapshots: [String: [Row]] = [:]
 
   var rows: [Row] { snapshots.keys.sorted().flatMap { snapshots[$0] ?? [] } }
@@ -24,6 +24,15 @@ struct CandidateLiveQuery<Row> {
     revision &+= 1
     snapshots.removeAll()
     query = next
+    return Token(generation: generation)
+  }
+
+  /// A new token for the same query, for pulling its sources again: replies
+  /// to earlier tokens are dropped, and the rows already received stay until
+  /// a newer reply replaces them.
+  mutating func renew() -> Token? {
+    guard query != nil else { return nil }
+    generation &+= 1
     return Token(generation: generation)
   }
 

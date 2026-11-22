@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.process_signal.schema.json",
+  "title": "host.process_signal",
+  "description": "Plugin to host: send one signal to one process. Honoured only inside a perform the user confirmed, and never for the host's own process, launchd (pid 1) or a process group.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.process_signal"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "signal"
+      ],
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 2147483647
+        },
+        "signal": {
+          "enum": [
+            "term"
+          ]
+        }
+      }
+    }
+  }
+}

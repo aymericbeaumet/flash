@@ -22,17 +22,20 @@ extension AppDelegate {
 
   func openCandidateFinderSession(scope: CandidateScope) {
     let startedNs = DispatchTime.now().uptimeNanoseconds
+    finder.openProbe = LatencyProbe.arm(.flashlightOpen)
+    finder.openPromptAt = nil
+    finder.openAskedAt = nil
     // Advisory: the flashlight opened. Eager plugins may refresh their
     // catalogs; nothing is required and first paint never waits for them.
-    if pluginManager.hasListener(for: "core:session.opened") {
-      pluginManager.emit(
-        PluginEvent(name: "core:session.opened", payload: [:], bundleID: nil))
+    if pluginManager.hasListener(for: .sessionOpened) {
+      pluginManager.emit(PluginEvent(.sessionOpened))
     }
     finder.precedenceTable = buildCandidateFinderPrecedenceTable()
     finder.selectorContext = pluginSelectorContext()
     finder.scope = scope
     finder.sessionGeneration &+= 1
     finder.liveQuery.cancel()
+    cancelWaitingLiveSourceChange()
     invalidateCandidateQueryEvaluation()
     let generation = finder.sessionGeneration
     finder.fetchedNonLocationSourceIDs.removeAll()
@@ -60,7 +63,7 @@ extension AppDelegate {
 
     let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
     FlashLog.trace(
-      "[candidate_finder] snapshot_begin generation=\(generation) scope=\(scope) "
+      "[flashlight] snapshot_begin generation=\(generation) scope=\(scope) "
         + "sources=\(sources.count) seed_ms=\(elapsedMs)")
 
     // Let `enterCommandLineMode` render/focus the native text field first.
@@ -102,6 +105,7 @@ extension AppDelegate {
       deadline: .now() + .milliseconds(remainingMs),
       execute: deadline)
 
+    finder.openAskedAt = LatencyProbe.now
     guard !sources.isEmpty else {
       finalizeInitialCandidateSnapshot(
         generation: generation, reason: .allSourcesSettled)
@@ -131,7 +135,7 @@ extension AppDelegate {
     let latencyMs = Int((nowNs &- snapshotStartedNs) / 1_000_000)
     guard generation == finder.sessionGeneration else {
       FlashLog.trace(
-        "[candidate_finder] snapshot_reply_ignored source=\(sourceID) "
+        "[flashlight] snapshot_reply_ignored source=\(sourceID) "
           + "generation=\(generation) reason=stale_session ms=\(latencyMs)")
       return
     }
@@ -140,7 +144,7 @@ extension AppDelegate {
     else {
       if finder.initialSnapshotReady {
         FlashLog.warn(
-          "[candidate_finder] snapshot_reply_late source=\(sourceID) "
+          "[flashlight] snapshot_reply_late source=\(sourceID) "
             + "generation=\(generation) ms=\(latencyMs) count=\(candidates.count) ignored=true")
       }
       return
@@ -154,12 +158,12 @@ extension AppDelegate {
     switch result {
     case .accepted:
       FlashLog.trace(
-        "[candidate_finder] snapshot_reply source=\(sourceID) generation=\(generation) "
+        "[flashlight] snapshot_reply source=\(sourceID) generation=\(generation) "
           + "ms=\(latencyMs) count=\(candidates.count) "
           + "settled=\(barrier.settledSourceCount)/\(barrier.expectedSourceCount)")
       if latencyMs >= Self.candidateFinderSlowReplyWarningMs {
         FlashLog.warn(
-          "[candidate_finder] snapshot_reply_slow source=\(sourceID) "
+          "[flashlight] snapshot_reply_slow source=\(sourceID) "
             + "generation=\(generation) ms=\(latencyMs) "
             + "budget_ms=\(Self.candidateFinderFirstPaintBudgetMs)")
       }
@@ -169,15 +173,15 @@ extension AppDelegate {
       }
     case .duplicate:
       FlashLog.warn(
-        "[candidate_finder] snapshot_reply_ignored source=\(sourceID) "
+        "[flashlight] snapshot_reply_ignored source=\(sourceID) "
           + "generation=\(generation) reason=duplicate")
     case .unknownSource:
       FlashLog.warn(
-        "[candidate_finder] snapshot_reply_ignored source=\(sourceID) "
+        "[flashlight] snapshot_reply_ignored source=\(sourceID) "
           + "generation=\(generation) reason=unknown_source")
     case .finalized:
       FlashLog.warn(
-        "[candidate_finder] snapshot_reply_late source=\(sourceID) "
+        "[flashlight] snapshot_reply_late source=\(sourceID) "
           + "generation=\(generation) ms=\(latencyMs) count=\(candidates.count) ignored=true")
     }
   }
@@ -200,7 +204,7 @@ extension AppDelegate {
     finder.updateInitialBarrier(barrier)
     if !snapshot.missingSourceIDs.isEmpty {
       FlashLog.warn(
-        "[candidate_finder] snapshot_budget_missed generation=\(generation) "
+        "[flashlight] snapshot_budget_missed generation=\(generation) "
           + "budget_ms=\(Self.candidateFinderFirstPaintBudgetMs) "
           + "missing=\(snapshot.missingSourceIDs.joined(separator: ","))")
     }
@@ -209,11 +213,13 @@ extension AppDelegate {
     let expectedSourceCount = barrier.expectedSourceCount
     let settledSourceCount = snapshot.replies.count
     let latencies = snapshot.sourceLatencies.isEmpty ? "none" : snapshot.sourceLatencies
+    let settledAt = LatencyProbe.now
     finder.preparationQueue.async { [weak self] in
       var frozen: [Candidate] = []
       for reply in snapshot.replies {
         frozen.append(contentsOf: CandidateFinder.prepare(reply.candidates))
       }
+      let preparedAt = LatencyProbe.now
       DispatchQueue.main.async { [weak self] in
         guard let self,
           generation == self.finder.sessionGeneration,
@@ -227,24 +233,52 @@ extension AppDelegate {
 
         let elapsedMs = Int(
           (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
-        FlashLog.info(
-          "[candidate_finder] snapshot_ready generation=\(generation) reason=\(reason.rawValue) "
+        FlashLog.debug(
+          "[flashlight] snapshot_ready generation=\(generation) reason=\(reason.rawValue) "
             + "count=\(self.finder.candidates.count) "
             + "settled=\(settledSourceCount)/\(expectedSourceCount) "
             + "ms=\(elapsedMs) source_ms=\(latencies)")
+        guard let probe = self.finder.openProbe else {
+          return self.rerenderActiveCandidateFinderSurface()
+        }
+        // The open ends when its first candidates are committed for display.
+        self.finder.openProbe = nil
+        var fields = [
+          ("reason", reason.rawValue), ("count", "\(self.finder.candidates.count)"),
+          ("settled", "\(settledSourceCount)/\(expectedSourceCount)"),
+        ]
+        // Each stage is when it ended, counted like `ms` from the open.
+        let stages: [(String, TimeInterval?)] = [
+          ("prompt_ms", self.finder.openPromptAt), ("asked_ms", self.finder.openAskedAt),
+          ("settled_ms", settledAt), ("prepared_ms", preparedAt),
+          ("published_ms", LatencyProbe.now),
+        ]
+        for (name, endedAt) in stages {
+          guard let endedAt else { continue }
+          fields.append((name, LatencyProbe.format(probe.elapsedMs(at: endedAt))))
+        }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock {
+          probe.finish(fields: fields, attributes: ["reason": reason.rawValue])
+        }
         self.rerenderActiveCandidateFinderSurface()
+        CATransaction.commit()
       }
     }
   }
 
   /// Lazily pull non-location candidate stores when the user opts into them.
-  /// A confirmed `@source` fetches only providers that declare a matching
-  /// source label; bang completion still asks for all providers because some
-  /// bang rows (the DuckDuckGo registry) are catalog-driven. Providers are
+  /// A confirmed `@type` fetches only providers that declare a source of
+  /// that type; bang completion fetches only the plugins that answer
+  /// every bang (`!*`), whose catalogs hold the bang rows. Providers are
   /// tracked individually so switching explicit sources later in the same
   /// session still works without repeating prior snapshots.
-  func fetchNonLocationSourcesIfNeeded(matching sourceFilter: String? = nil) {
-    let sources = registry.nonLocationCandidateSources(matching: sourceFilter)
+  func fetchNonLocationSourcesIfNeeded(
+    matching scope: SourceScope? = nil, bangCatalogsOnly: Bool = false
+  ) {
+    let sources = registry.nonLocationCandidateSources(matching: scope).filter {
+      !bangCatalogsOnly || ($0 as? PluginFlashSource)?.answersEveryBang == true
+    }
     let pending = sources.filter { source in
       finder.fetchedNonLocationSourceIDs.insert(source.identifier).inserted
     }
@@ -256,20 +290,20 @@ extension AppDelegate {
 
   /// Start only the warm non-location snapshots implied by the current query.
   /// This can run while the initial location barrier is still preparing, which
-  /// overlaps plugin decoding with first-paint work. Partial `@source`
+  /// overlaps plugin decoding with first-paint work. Partial `@type`
   /// completion remains manifest-only and performs no catalog request.
   func prefetchNonLocationSources(forCandidateQuery query: String) {
     let sourceCompletion = CandidateFinder.sourceCompletionState(query: query)
     let bangCompletion = CandidateFinder.bangCompletionState(query: query)
     let parsed =
       sourceCompletion == nil
-      ? NormalModeDispatcher.candidateFinderSourceFilter(query)
-      : NormalModeDispatcher.CandidateFinderQuery(sourceFilter: nil, text: query)
+      ? NormalModeDispatcher.candidateFinderQuery(query)
+      : NormalModeDispatcher.CandidateFinderQuery(scope: nil, text: query)
     let parsedBang = CandidateFinder.parseBang(parsed.text)
-    if let sourceFilter = parsed.sourceFilter {
-      fetchNonLocationSourcesIfNeeded(matching: sourceFilter)
+    if let scope = parsed.scope {
+      fetchNonLocationSourcesIfNeeded(matching: scope)
     } else if bangCompletion != nil || parsedBang != nil {
-      fetchNonLocationSourcesIfNeeded()
+      fetchNonLocationSourcesIfNeeded(bangCatalogsOnly: true)
     }
   }
 
@@ -295,7 +329,7 @@ extension AppDelegate {
     }
     guard !surfaced.isEmpty else { return }
     FlashLog.trace(
-      "[candidate_finder] catalogs_changed_repull sources=\(surfaced.count)")
+      "[flashlight] catalogs_changed_repull sources=\(surfaced.count)")
     fanOutCandidateSnapshots(
       Array(surfaced.values), generation: finder.sessionGeneration)
   }
@@ -307,32 +341,111 @@ extension AppDelegate {
       finder.liveQuery.cancel()
       return
     }
-    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
-    let filter: String
+    let parsed = NormalModeDispatcher.candidateFinderQuery(query)
+    let scope: SourceScope
     let text: String
-    if let sourceFilter = parsed.sourceFilter {
-      filter = sourceFilter
+    if let bound = boundBangScope(query) {
+      scope = bound.scope
+      text = bound.remainder
+    } else if let typed = parsed.scope {
+      scope = typed
       text = parsed.text.trimmed
-    } else if let bang = CandidateFinder.parseBangState(parsed.text.trimmed),
-      bang.confirmed,
-      let candidateSource = pluginManager.shebangCandidateSource(
-        token: bang.token, in: sessionSelectorContext())
-    {
-      filter = candidateSource
-      text = bang.remainder
     } else {
       finder.liveQuery.cancel()
       return
     }
-    let sources = registry.liveCandidateSources(matching: filter)
+    let sources = registry.liveCandidateSources(matching: scope)
     guard !sources.isEmpty else {
       finder.liveQuery.cancel()
       return
     }
     guard
       let token = finder.liveQuery.begin(
-        .init(filter: filter, text: text, sourceIDs: sources.map(\.identifier).sorted()))
+        .init(
+          filter: scope.signature, text: Self.liveQueryText(text, sources: sources),
+          sourceIDs: sources.map(\.identifier).sorted()))
     else { return }
+    pullLiveSources(sources, text: text, token: token)
+  }
+
+  /// The text a live query is keyed by: empty when none of its sources reads
+  /// it, so typing re-pulls nothing and their rows stay on screen.
+  static func liveQueryText(_ text: String, sources: [FlashSource]) -> String {
+    sources.contains(where: \.liveCandidatesDependOnText) ? text : ""
+  }
+
+  private func boundBangScope(_ query: String) -> (scope: SourceScope, remainder: String)? {
+    CandidateFinder.boundBangScope(query) { bangCandidateScope(token: $0) }
+  }
+
+  /// A live source's rows changed while a query shows them (a catalog relist
+  /// landed): pull the query's sources again under a renewed token, keeping
+  /// the rows on screen until the new ones replace them.
+  func refreshLiveCandidates(sourceID: String) {
+    guard let current = shownLiveQuery, current.sourceIDs.contains(sourceID) else {
+      return
+    }
+    let sources = current.sourceIDs.compactMap { registry.source(identifier: $0) }
+    guard let token = finder.liveQuery.renew() else { return }
+    pullLiveSources(sources, text: current.text, token: token)
+  }
+
+  /// The live query an open flashlight shows; nil with the command line
+  /// closed or no query scoped to a live source.
+  private var shownLiveQuery: CandidateLiveQuery<Candidate>.Query? {
+    switch overlay.inputMode {
+    case .commandLine: return finder.liveQuery.query
+    default: return nil
+    }
+  }
+
+  /// Whether the open flashlight's query is scoped to `change`'s source.
+  private func liveQueryShows(_ change: LiveSourceChange) -> Bool {
+    guard let query = shownLiveQuery, let source = registry.source(identifier: change.sourceID)
+    else { return false }
+    return change.isShown(by: query, descriptors: source.candidateSourceDescriptors)
+  }
+
+  static func liveChangeClockMs() -> Int {
+    Int(DispatchTime.now().uptimeNanoseconds / 1_000_000)
+  }
+
+  /// A running plugin said the rows of one of its live sources changed
+  /// (`changed`). With a flashlight query scoped to that source, its sources
+  /// are pulled again and the new rows replace the ones on screen, the
+  /// query and the selection staying as they are; with none, nothing
+  /// happens and nothing is kept for later. `LiveSourceChangeGate` bounds
+  /// the pulls: a burst is one now and one at the end of its interval.
+  func pluginLiveSourceChanged(pluginID: String, source: String) {
+    let change = LiveSourceChange(sourceID: "plugin:\(pluginID)", source: source)
+    guard liveQueryShows(change) else { return }
+    switch finder.liveChangeGate.admit(change, nowMs: Self.liveChangeClockMs()) {
+    case .pull:
+      FlashLog.trace("[flashlight] live_changed_repull source=\(change.sourceID)")
+      refreshLiveCandidates(sourceID: change.sourceID)
+    case .coalesced:
+      break
+    case .wait(let ms):
+      // Armed only while a query shows the source, for the rest of the
+      // interval; a closed session cancels it, and one that moved to
+      // another scope finds nothing to pull when it fires.
+      liveSourceChangeDeadline.arm(afterMs: ms) { [weak self] in
+        guard let self else { return }
+        let waiting = self.finder.liveChangeGate.takeWaiting()
+        guard
+          let shown = waiting.sorted(by: { $0.sourceID < $1.sourceID })
+            .first(where: self.liveQueryShows)
+        else { return }
+        self.finder.liveChangeGate.pulled(nowMs: Self.liveChangeClockMs())
+        FlashLog.trace("[flashlight] live_changed_repull source=\(shown.sourceID) trailing=true")
+        self.refreshLiveCandidates(sourceID: shown.sourceID)
+      }
+    }
+  }
+
+  private func pullLiveSources(
+    _ sources: [FlashSource], text: String, token: CandidateLiveQuery<Candidate>.Token
+  ) {
     let env = registry.snapshotEnvironment
     for source in sources {
       let sourceID = source.identifier
@@ -356,7 +469,7 @@ extension AppDelegate {
 
   /// Fan user-requested non-location snapshots out in parallel. Initial location
   /// sources use the one-publish barrier above; this merge path is only reached
-  /// after an explicit `@source` / `!` opt-in.
+  /// after an explicit `@type` / `!` opt-in.
   private func fanOutCandidateSnapshots(
     _ sources: [FlashSource],
     generation: UInt64
@@ -401,7 +514,7 @@ extension AppDelegate {
   ) {
     guard generation == finder.sessionGeneration else { return }
     guard finder.snapshotOrdering.accept(sourceID, stamp: stamp) else {
-      FlashLog.trace("[candidate_finder] merge_superseded source=\(sourceID) stamp=\(stamp)")
+      FlashLog.trace("[flashlight] merge_superseded source=\(sourceID) stamp=\(stamp)")
       return
     }
     switch overlay.inputMode {
@@ -411,7 +524,7 @@ extension AppDelegate {
     if finder.initialBarrier != nil {
       finder.deferredNonLocationSnapshots[sourceID] = candidates
       FlashLog.trace(
-        "[candidate_finder] merge_deferred source=\(sourceID) count=\(candidates.count)")
+        "[flashlight] merge_deferred source=\(sourceID) count=\(candidates.count)")
       return
     }
     publishPreparedCandidateSnapshot(candidates, sourceID: sourceID)
@@ -426,7 +539,7 @@ extension AppDelegate {
     pool.append(contentsOf: candidates)
     finder.candidates = pool
     FlashLog.trace(
-      "[candidate_finder] merge source=\(sourceID) count=\(candidates.count) "
+      "[flashlight] merge source=\(sourceID) count=\(candidates.count) "
         + "pool=\(finder.candidates.count)")
   }
 
@@ -506,6 +619,15 @@ extension AppDelegate {
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
       clearCommandLineCompletionState()
+      // A pick lists its own rows only: `@`, `!` and `=` are filter text.
+      if finder.menu != nil {
+        applyMenuMatches(query: query)
+        overlay.displayCommandLine(
+          command, suggestions: candidateFinderDisplayItems(),
+          emptyText: "no line matches; Return answers with what you typed",
+          cursorIndex: overlay.commandLineCursorIndex, prompt: finder.menu?.prompt)
+        return
+      }
       if finder.candidates.isEmpty,
         finder.initialBarrier == nil,
         !finder.initialSnapshotReady
@@ -539,7 +661,20 @@ extension AppDelegate {
       // bang range to the panel so it can underline `!g` and visually
       // acknowledge the lock-in. Backspacing past the space (no
       // confirmed bang anymore) unlocks and the bang list returns.
+      // A bang bound to a candidate source (`!f report`) instead lists
+      // that source's rows for the remainder, still underlined.
       let bang = CandidateFinder.parseBangState(query)
+      if let bang, bang.confirmed, bangCandidateScope(token: bang.token) != nil {
+        updateCandidateMatches(query: query)
+        overlay.displayCommandLine(
+          command,
+          suggestions: candidateFinderDisplayItems(),
+          emptyText: "",
+          cursorIndex: overlay.commandLineCursorIndex,
+          underlineRange: bangRangeInCommand(
+            command: command, query: query, bangRange: bang.bangRange))
+        return
+      }
       if let bang, bang.confirmed {
         // The locked-in query now belongs to the bang's dispatch, so keep
         // `finder.currentQuery` current — submit re-parses it for the
@@ -571,7 +706,7 @@ extension AppDelegate {
     }
     if let context = commandLineCompletionContext(for: command) {
       clearCandidateFinderState()
-      updateCommandLineCompletions(context: context)
+      finder.completions.update(context: context, boost: commandFrecencyBoost(label:))
       overlay.displayCommandLine(
         command,
         suggestions: commandLineCompletionDisplayItems(),
@@ -587,115 +722,17 @@ extension AppDelegate {
   private func commandLineCompletionContext(for command: String)
     -> NormalModeDispatcher.CommandLineCompletionContext?
   {
-    let inventory: NormalModeDispatcher.CommandLineCompletionInventory
-    if let cached = commandLineCompletionInventory {
-      inventory = cached
-    } else {
-      inventory = makeCommandLineCompletionInventory()
-      commandLineCompletionInventory = inventory
-    }
-    return NormalModeDispatcher.commandLineCompletions(
-      command,
-      pluginCommands: inventory.pluginCommands,
-      pluginSubcommands: inventory.pluginSubcommands,
-      helpTopics: inventory.helpTopics)
+    NormalModeDispatcher.commandLineCompletions(command, inventory: commandLineInventory())
   }
 
-  private func makeCommandLineCompletionInventory()
-    -> NormalModeDispatcher.CommandLineCompletionInventory
-  {
-    let registrations = pluginManager.commandRegistrations(
-      in: pluginSelectorContext())
-    var subcommands: [String: [String]] = [:]
-    var commandsOrdered: [String] = []
-    for registration in registrations {
-      let key = registration.command.lowercased()
-      if subcommands[key] == nil {
-        subcommands[key] = []
-        commandsOrdered.append(key)
-      }
-      // `"*"` marks a wildcard command (whole remainder is args, e.g.
-      // `:calc 2 + 2`); the verb is still completable, but there is no
-      // concrete subcommand to suggest.
-      if registration.subcommand.isEmpty || registration.subcommand == "*" { continue }
-      if !subcommands[key]!.contains(where: {
-        $0.localizedCaseInsensitiveCompare(registration.subcommand) == .orderedSame
-      }) {
-        subcommands[key]?.append(registration.subcommand)
-      }
-    }
-    if subcommands["clipboard"] == nil {
-      commandsOrdered.append("clipboard")
-    }
-    subcommands["clipboard"] = ["show", "delete"]
-    let topics = HelpDocs.allTopics(
-      config: config,
-      showModes: true,
-      pluginTopics: pluginManager.pluginHelpTopics()
-    )
-    .flatMap { [$0.name] + $0.aliases }
-    return NormalModeDispatcher.CommandLineCompletionInventory(
-      pluginCommands: commandsOrdered,
-      pluginSubcommands: subcommands,
-      helpTopics: topics)
-  }
-
-  private func updateCommandLineCompletions(
-    context: NormalModeDispatcher.CommandLineCompletionContext
-  ) {
-    let previousLabel: String? =
-      commandLineCompletionMatches.indices.contains(
-        commandLineCompletionSelectedIndex)
-      ? commandLineCompletionMatches[commandLineCompletionSelectedIndex].completion.label : nil
-    commandLineCompletionPrefix = context.prefix
-    commandLineCompletionQuery = context.query
-    let trimmedQuery = context.query.trimmed
-    let scored: [CommandLineCompletionMatch] = context.items.compactMap { item in
-      // Frecency boost surfaces the user's most-typed commands at the
-      // top of the empty `:` prompt without distorting the order once
-      // they start typing — fuzzy score dominates from the first
-      // character because it's an order of magnitude larger than the
-      // capped boost.
-      let boost = commandFrecencyBoost(label: item.label)
-      if trimmedQuery.isEmpty {
-        return CommandLineCompletionMatch(completion: item, score: boost)
-      }
-      guard
-        let score = NormalModeDispatcher.fuzzyScore(
-          query: trimmedQuery, candidate: item.label)
-      else { return nil }
-      return CommandLineCompletionMatch(completion: item, score: score + boost)
-    }
-    let sorted = scored.sorted { lhs, rhs in
-      // Vim abbreviation precedence: a candidate the query can actually
-      // invoke (`:q` → `quit`) ranks above one it can't yet (`qall` needs
-      // `:qa`), regardless of fuzzy score or frecency. Without this, the
-      // equal-scoring `qall` / `quit` pair falls to the alphabetical
-      // tiebreaker and `qall` wins — surfacing the wrong command for `:q`.
-      if !trimmedQuery.isEmpty {
-        let lhsInvokable = NormalModeDispatcher.isInvokableAbbreviation(
-          query: trimmedQuery, label: lhs.completion.label)
-        let rhsInvokable = NormalModeDispatcher.isInvokableAbbreviation(
-          query: trimmedQuery, label: rhs.completion.label)
-        if lhsInvokable != rhsInvokable { return lhsInvokable }
-      }
-      if lhs.score != rhs.score { return lhs.score > rhs.score }
-      return lhs.completion.label.localizedCaseInsensitiveCompare(rhs.completion.label)
-        == .orderedAscending
-    }
-    commandLineCompletionMatches = sorted
-    if sorted.isEmpty {
-      commandLineCompletionSelectedIndex = 0
-      return
-    }
-    if let previousLabel,
-      let restored = sorted.firstIndex(where: { $0.completion.label == previousLabel })
-    {
-      commandLineCompletionSelectedIndex = restored
-    } else {
-      commandLineCompletionSelectedIndex = min(
-        max(commandLineCompletionSelectedIndex, 0), sorted.count - 1)
-    }
+  /// The words this command session resolves against, built once: plugin
+  /// registrations and help topics do not change while one command field
+  /// is open, so rebuilding them on every character only adds input latency.
+  func commandLineInventory() -> NormalModeDispatcher.CommandLineInventory {
+    if let cached = finder.commandLineInventory { return cached }
+    let inventory = makeCommandLineInventory()
+    finder.commandLineInventory = inventory
+    return inventory
   }
 
   /// Frecency boost for a command-line completion label. Falls back to
@@ -724,32 +761,11 @@ extension AppDelegate {
   }
 
   func commandLineCompletionDisplayItems() -> [CandidateDisplayItem] {
-    guard !commandLineCompletionMatches.isEmpty else { return [] }
-    // Same windowed slice as the flashlight finder. This list used to show
-    // every match at once ("reveal the whole catalogue"), but the plugin
-    // command set has outgrown the band between the centered prompt and the
-    // screen bottom — an unwindowed list drew up across the prompt itself.
-    // Arrow keys scroll the window over the full match set.
-    let window = CandidateFinder.displayWindow(
-      count: commandLineCompletionMatches.count,
-      selectedIndex: commandLineCompletionSelectedIndex,
-      windowSize: commandBarSuggestionCount)
-    return commandLineCompletionMatches[window].enumerated().map { offset, match in
-      CandidateDisplayItem(
-        title: match.completion.label,
-        highlightedRanges: commandLineCompletionQuery.isEmpty
-          ? []
-          : NormalModeDispatcher.fuzzyHighlightRanges(
-            query: commandLineCompletionQuery, candidate: match.completion.label),
-        isSelected: window.lowerBound + offset == commandLineCompletionSelectedIndex)
-    }
+    finder.completions.displayItems(windowSize: commandBarSuggestionCount)
   }
 
   private func clearCommandLineCompletionState() {
-    commandLineCompletionPrefix = ""
-    commandLineCompletionMatches = []
-    commandLineCompletionSelectedIndex = 0
-    commandLineCompletionQuery = ""
+    finder.completions = CommandLineCompletionList()
   }
 
   static func commandLineBuffer(from raw: String) -> String {
@@ -757,44 +773,59 @@ extension AppDelegate {
   }
 
   private func updateCandidateMatches(query: String) {
-    let t0 = CFAbsoluteTimeGetCurrent()
-    // `@<source>` narrows the pool to a single source; the residual text after
-    // the `@source ` token is the actual fuzzy query.
+    if finder.menu != nil { return applyMenuMatches(query: query) }
+    let probe = LatencyProbe.arm(.flashlightKey)
+    let t0 = LatencyProbe.now
+    // `@<type>` narrows the pool to one resource type; the residual text after
+    // the `@type ` token is the actual fuzzy query.
     let sourceCompletion = CandidateFinder.sourceCompletionState(query: query)
     let bangCompletion = CandidateFinder.bangCompletionState(query: query)
     let parsed =
       sourceCompletion == nil
-      ? NormalModeDispatcher.candidateFinderSourceFilter(query)
-      : NormalModeDispatcher.CandidateFinderQuery(sourceFilter: nil, text: query)
+      ? NormalModeDispatcher.candidateFinderQuery(query)
+      : NormalModeDispatcher.CandidateFinderQuery(scope: nil, text: query)
+    // A confirmed bang that lists candidates (`!clip `, `!f report`) scopes
+    // the rest of the query exactly as `@<type>` does: one cached pool,
+    // ranked by the incremental scorer.
+    let boundBang = sourceCompletion == nil ? boundBangScope(query) : nil
+    let scope = boundBang?.scope ?? parsed.scope
     let trimmed = parsed.text
     finder.currentQuery = sourceCompletion?.token ?? trimmed
     beginLiveSourceQueriesIfNeeded(forCandidateQuery: query)
-    let calculatorOnly = trimmed.first == "="
+    let calculatorOnly = boundBang == nil && trimmed.first == "="
     if calculatorOnly {
       finder.incrementalCache = nil
       beginCandidateQueryEvaluationIfNeeded(text: trimmed)
       // A leading `=` is an exclusive evaluator marker. Do not score or show
       // the ordinary catalog while its owning calculator answers settle.
       applyCandidateMatches([])
+      finishFlashlightKey(probe, path: "evaluator", pool: 0, matches: 0, startedAt: t0)
       return
     }
-    let parsedBang = CandidateFinder.parseBang(trimmed)
+    let parsedBang = boundBang == nil ? CandidateFinder.parseBang(trimmed) : nil
     let usesTransientCompletionPool =
       sourceCompletion != nil
       || bangCompletion != nil
       || parsedBang != nil
 
     // Non-location sources (emojis, bangs, notes, …) aren't pulled on open; the
-    // moment the user confirms an `@source` or types a `!`bang, fetch the warm
+    // moment the user confirms a `@type` or types a `!`bang, fetch the warm
     // stores needed for that intent. Source-completion rows come from manifest
     // declarations, so partial `@em...` input performs no catalog snapshots.
     prefetchNonLocationSources(forCandidateQuery: query)
 
-    let (pool, scoringText) = buildCandidateFinderPool(
-      trimmed: trimmed,
-      rawQuery: query,
-      sourceFilter: parsed.sourceFilter)
-    let tFiltered = CFAbsoluteTimeGetCurrent()
+    if boundBang == nil, let token = bangListToken(trimmed: trimmed, rawQuery: query) {
+      invalidateCandidateQueryEvaluation()
+      finder.incrementalCache = nil
+      finder.indexGenerationCounter &+= 1
+      showBangList(token: token, probe: probe, startedAt: t0)
+      return
+    }
+
+    let (pool, scoringText) =
+      boundBang.map { (filteredCandidatePool(scope: $0.scope), $0.remainder) }
+      ?? buildCandidateFinderPool(trimmed: trimmed, rawQuery: query, scope: scope)
+    let tFiltered = LatencyProbe.now
 
     // Bump the generation so any scoring job that completes AFTER
     // this keystroke is dropped silently when its callback fires.
@@ -816,6 +847,9 @@ extension AppDelegate {
       // not survive into the next plain-query keystroke.
       finder.incrementalCache = nil
       applyCandidateMatches(sorted)
+      finishFlashlightKey(
+        probe, path: "completion", pool: pool.count, matches: sorted.count, startedAt: t0,
+        filteredAt: tFiltered)
       return
     }
 
@@ -834,15 +868,18 @@ extension AppDelegate {
       // full pool.
       finder.incrementalCache = nil
       applyCandidateMatches(sorted)
+      finishFlashlightKey(
+        probe, path: "empty", pool: pool.count, matches: sorted.count, startedAt: t0,
+        filteredAt: tFiltered)
       return
     }
 
     // Bare input is additive: every registered evaluator gets the same exact
-    // text. A confirmed `@source` remains catalog-only, but still uses the
+    // text. A confirmed `@type` remains catalog-only, but still uses the
     // large-pool ranker below (parallel scoring, incremental narrowing, and a
     // bounded display sort). Evaluator rows live in a fixed answer lane and
     // never enter this fuzzy scorer or its incremental cache.
-    if parsed.sourceFilter == nil {
+    if scope == nil {
       beginCandidateQueryEvaluationIfNeeded(text: scoringText.trimmed)
     } else {
       invalidateCandidateQueryEvaluation()
@@ -859,15 +896,15 @@ extension AppDelegate {
     // perceptible delay even when the work itself was sub-millisecond.
     // The heaviest pools (full installed-app + plugin candidate
     // counts) stay below ~5k so the synchronous path stays cheap.
-    let tScoringStart = CFAbsoluteTimeGetCurrent()
-    // Rewrite standalone emoticons (`:)`, `:-(`, `;)`, …) to the emoji
-    // shortcodes the `reference` plugin indexes before normalization strips
-    // their punctuation — otherwise `@emojis.glyphs :)` collapses to an
-    // empty query and lists every glyph unranked.
+    let tScoringStart = LatencyProbe.now
+    // Rewrite the tokens plugins declare aliases for (`query_aliases`: an
+    // emoticon and its emoji's shortcode) before normalization strips their
+    // punctuation — otherwise `@emojis :)` collapses to an empty query and
+    // lists every glyph unranked.
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(
-      NormalModeDispatcher.expandEmoticons(scoringText))
+      QueryAliases.declared.table.expand(scoringText))
     let fuzzy = NormalModeDispatcher.fuzzyScorer(normalizedQuery: normalizedQuery)
-    let signature = parsed.sourceFilter ?? ""
+    let signature = scope?.signature ?? ""
     // Incremental narrowing: if the new query extends the previous one
     // and neither the pool nor the attribute filters have changed since
     // the previous keystroke, no candidate that failed the shorter
@@ -894,7 +931,7 @@ extension AppDelegate {
       normalizedQuery: normalizedQuery,
       fuzzyScore: fuzzy,
       allowParallel: true)
-    let tScored = CFAbsoluteTimeGetCurrent()
+    let tScored = LatencyProbe.now
     // Apply frecency boost before the sort so the comparator sees the
     // final score. Skip the loop entirely when the store has no
     // entries — the boost is always 0 in that case and
@@ -925,7 +962,7 @@ extension AppDelegate {
     let ranked = CandidateFinder.displayAndIncrementalMatches(
       scored, precedence: precedenceTable(), limit: sortLimit)
     let sorted = ranked.display
-    let tSorted = CFAbsoluteTimeGetCurrent()
+    let tSorted = LatencyProbe.now
     // Re-check the generation — a re-entrant call (e.g. caches landing
     // mid-update) could have already superseded us.
     guard generation == self.finder.indexGenerationCounter else { return }
@@ -936,29 +973,62 @@ extension AppDelegate {
       signature: signature
     )
     applyCandidateMatches(sorted)
-    if !trimmed.isEmpty {
-      let tRendered = CFAbsoluteTimeGetCurrent()
-      let dFilter = Int((tFiltered - t0) * 1000)
-      let dScore = Int((tScored - tScoringStart) * 1000)
-      let dSort = Int((tSorted - tScored) * 1000)
-      let dRender = Int((tRendered - tSorted) * 1000)
-      let dTotal = Int((tRendered - t0) * 1000)
-      FlashLog.trace(
-        "[candidate_finder] pool=\(pool.count) scored=\(scoringPool.count) inc=\(isIncremental) "
-          + "matches=\(sorted.count) "
-          + "total_ms=\(dTotal) filter_ms=\(dFilter) score_ms=\(dScore) "
-          + "sort_ms=\(dSort) render_ms=\(dRender)")
-    }
+    let tRendered = LatencyProbe.now
+    var stages = LatencyStages()
+    stages.add("score", since: tScoringStart, until: tScored)
+    stages.add("sort", since: tScored, until: tSorted)
+    stages.add("render", since: tSorted, until: tRendered)
+    finishFlashlightKey(
+      probe, path: "ranked", pool: pool.count, matches: sorted.count, startedAt: t0,
+      filteredAt: tFiltered, endedAt: tRendered,
+      fields: [("scored", "\(scoringPool.count)"), ("inc", "\(isIncremental)")] + stages.fields)
+  }
+
+  /// One evaluation of the candidate list, as `[latency] flashlight_key` at
+  /// `trace`. `ms` runs from the key when the evaluation ran in its turn
+  /// (`origin` says so), else it is `eval_ms`: this evaluation alone, which a
+  /// landing snapshot or a re-render also runs. `path` is the list it built:
+  /// `ranked` (the fuzzy ranker), `completion` (a `@` source or bang
+  /// completion pool), `bangs` (the bang index), `empty` (no query yet) or
+  /// `evaluator` (a leading `=`, answered off this path). `filter_ms` is the
+  /// pool's construction. A `menu choose` list is not the flashlight's and
+  /// is not measured.
+  private func finishFlashlightKey(
+    _ probe: LatencyProbe, path: String, pool: Int, matches: Int, startedAt: TimeInterval,
+    filteredAt: TimeInterval? = nil, endedAt: TimeInterval = LatencyProbe.now,
+    fields: [(String, String)] = []
+  ) {
+    var stages = LatencyStages()
+    stages.add("eval", since: startedAt, until: endedAt)
+    if let filteredAt { stages.add("filter", since: startedAt, until: filteredAt) }
+    probe.finish(
+      endedAt: endedAt,
+      fields: [("path", path), ("pool", "\(pool)"), ("matches", "\(matches)")] + stages.fields
+        + fields,
+      attributes: ["path": path])
   }
 
   /// Build a `PrecedenceTable` from the live source descriptors and config
   /// overrides. Frozen once with the candidate snapshot so query-time sorting
   /// uses a prepared table.
   func buildCandidateFinderPrecedenceTable() -> CandidateFinder.PrecedenceTable {
-    CandidateFinder.PrecedenceTable(
-      sources: registry.registeredCandidateSourceDescriptors(),
-      overrides: config.flashlight.precedence,
+    let sources = registry.registeredCandidateSourceDescriptors()
+    return CandidateFinder.PrecedenceTable(
+      sources: sources,
+      overrides: Self.sourceWeights(typeWeights: config.flashlight.precedence, sources: sources),
       aliveBonus: config.flashlight.precedenceAliveBonus)
+  }
+
+  /// `[flashlight.precedence]` weighs resource types; the table weighs
+  /// sources: each type's weight goes to every source of it.
+  static func sourceWeights(
+    typeWeights: [String: Int], sources: [CandidateSourceDescriptor]
+  ) -> [String: Int] {
+    var weights: [String: Int] = [:]
+    for source in sources {
+      if let weight = typeWeights[source.type] { weights[source.name] = weight }
+    }
+    return weights
   }
 
   private func precedenceTable() -> CandidateFinder.PrecedenceTable {
@@ -969,17 +1039,30 @@ extension AppDelegate {
   /// Centralised so the SearchService completion and the disabled-
   /// mode fallback can't drift on the selection-bounds rules.
   private func applyCandidateMatches(_ matches: [CandidateMatch]) {
-    let answerKeys = Set(
-      finder.queryAnswers.map {
-        "\($0.sourceID)\u{0}\($0.title)"
-      })
-    let catalogMatches = matches.filter {
-      !answerKeys.contains("\($0.candidate.sourceID)\u{0}\($0.candidate.title)")
+    let catalogMatches: [CandidateMatch]
+    if finder.queryAnswers.isEmpty {
+      catalogMatches = matches
+    } else {
+      let answerKeys = Set(
+        finder.queryAnswers.map {
+          "\($0.sourceID)\u{0}\($0.title)"
+        })
+      catalogMatches = matches.filter {
+        !answerKeys.contains("\($0.candidate.sourceID)\u{0}\($0.candidate.title)")
+      }
     }
     let answers = finder.queryAnswers.enumerated().map { index, candidate in
       CandidateMatch(candidate: candidate, score: Int.max - index)
     }
     finder.matches = answers + catalogMatches
+    if let followed = finder.followedRow,
+      let index = finder.matches.firstIndex(where: {
+        $0.candidate.sourcePayload == followed.payload && $0.candidate.source == followed.source
+      })
+    {
+      finder.followedRow = nil
+      finder.selectedIndex = index
+    }
     if finder.matches.isEmpty {
       finder.selectedIndex = 0
     } else {
@@ -1008,7 +1091,6 @@ extension AppDelegate {
     registry.evaluateQuery(
       QueryEvaluationRequest(
         surface: .flashlight,
-        scope: finder.scope,
         text: exactText,
         exclusivePrefix: exactText.first == "=" ? "=" : nil)
     ) { [weak self] candidates in
@@ -1047,19 +1129,30 @@ extension AppDelegate {
   }
 
   /// The bang-list pool: static manifest-declared bangs plus the dynamic
-  /// bang-kind rows from published catalogs (e.g. the reference plugin's DDG bangs),
+  /// bang-kind rows from published catalogs (e.g. the searchproviders bangs),
   /// which land in the session pool once the non-location sources are read on
-  /// the first `@source`/`!` keystroke.
+  /// the first `@type`/`!` keystroke.
   private func bangListCandidates() -> [Candidate] {
-    pluginManager.shebangCandidates(in: sessionSelectorContext())
+    CoreBangs.candidates
+      + pluginManager.bangCandidates(in: sessionSelectorContext())
+      + UserBangs.candidates(config.flashlight.bangs)
       + finder.candidates.filter { $0.kind == CandidateFinder.bangKind }
+  }
+
+  /// The scope a confirmed `!token` swaps the pool to: a core bang's first
+  /// (`!f` → `@files`), else the one source a plugin bang registration binds
+  /// (`!fh` → `firefox.history`).
+  private func bangCandidateScope(token: String) -> SourceScope? {
+    CoreBangs.bang(token: token)?.scope
+      ?? pluginManager.bangCandidateSource(token: token, in: sessionSelectorContext())
+      .map(SourceScope.source)
   }
 
   /// Dispatch a named `#[range=user|<name>]` status-bar click through the
   /// `[statusbar.click]` action map — tmux's status-line mouse model: the
   /// span names the action, the binding lives in config. URLs open
   /// activating; action arrays run through the mapping-command dispatcher
-  /// (same power as a keybinding, e.g. ["flash", "media", "volumedown"]).
+  /// (same power as a keybinding, e.g. ["flash", "screen", "lock"]).
   func performStatusBarClickAction(named name: String) {
     guard let action = config.statusBar.clickActions[name] else {
       FlashLog.warn(
@@ -1070,7 +1163,7 @@ extension AppDelegate {
     FlashLog.debug("[statusbar] click_action name=\(name)")
     switch action {
     case .url(let raw):
-      guard let url = URL(string: raw) else { return }
+      guard let url = URLParsing.url(raw) else { return }
       let configuration = NSWorkspace.OpenConfiguration()
       configuration.activates = true
       NSWorkspace.shared.open(url, configuration: configuration, completionHandler: nil)
@@ -1079,53 +1172,143 @@ extension AppDelegate {
     }
   }
 
-  /// True when a confirmed `!token` is actually routable: an exact shebang
+  /// True when a confirmed `!token` is actually routable: an exact bang
   /// registration, or a bang its wildcard owner has published to the pool
-  /// (the reference plugin's curated bang rows). A wildcard registration alone
+  /// (the searchproviders bang rows: its best-ranked 10,000, so a rarer trigger
+  /// it still resolves underlines as unknown). A wildcard registration alone
   /// doesn't count — the owner would just reject the token at dispatch.
   /// Drives the lock-in underline color: purple for routable, red for a
   /// token nothing will answer.
   private func confirmedBangIsKnown(_ token: String) -> Bool {
     let lc = token.lowercased()
+    if let index = finder.bangIndex, index.epoch == finder.candidatesEpoch,
+      index.session == finder.sessionGeneration
+    {
+      return index.index.tokens.contains(lc)
+    }
     return bangListCandidates().contains {
       $0.sourcePayload?.lowercased() == lc
     }
   }
 
+  /// The token a `!` query lists bangs for: `!<token>` being typed, or a
+  /// confirmed one no candidate source owns (`!g rust` keeps listing `g`).
+  /// Nil when the query is no bang, or a confirmed bang that swaps the pool
+  /// to its source (`!f report`).
+  private func bangListToken(trimmed: String, rawQuery: String) -> String? {
+    if let bang = CandidateFinder.parseBangState(trimmed), bang.confirmed,
+      bangCandidateScope(token: bang.token) != nil
+    {
+      return nil
+    }
+    if let bang = CandidateFinder.parseBang(trimmed) { return bang.token }
+    // The raw query: a trailing space after a bare sigil dismisses the list
+    // (`!` shows the bangs, `! ` does not).
+    return CandidateFinder.bangCompletionState(query: rawQuery)?.token
+  }
+
+  /// The bang list for `token` without scoring every bang on the main
+  /// thread: the index's prefix tier at once, completed by the full scorer
+  /// off the main thread when that tier does not fill the display.
+  private func showBangList(token: String, probe: LatencyProbe, startedAt t0: TimeInterval) {
+    let epoch = finder.candidatesEpoch
+    let finish = { [self] (pool: Int, matches: Int, final: Bool) in
+      finishFlashlightKey(
+        probe, path: "bangs", pool: pool, matches: matches, startedAt: t0,
+        fields: [("final", "\(final)")])
+    }
+    guard let index = bangCompletionIndex(epoch: epoch) else {
+      applyCandidateMatches([])
+      return finish(0, 0, true)
+    }
+    let normalized = NormalModeDispatcher.normalizedSearchText(token)
+    let limit = max(commandBarSuggestionCount * 3, 30)
+    if let complete = finder.bangCompletion, complete.epoch == epoch,
+      complete.token == normalized
+    {
+      applyCandidateMatches(complete.matches)
+      return finish(index.rows.count, complete.matches.count, true)
+    }
+    let listed = index.matches(
+      normalizedToken: normalized, precedence: precedenceTable(), limit: limit)
+    applyCandidateMatches(listed.matches)
+    finish(index.rows.count, listed.matches.count, listed.final)
+    guard !listed.final else { return }
+    let generation = finder.indexGenerationCounter
+    let precedence = precedenceTable()
+    let ticket = finder.bangScoringTicket
+    ticket.issue(generation)
+    finder.bangScoringQueue.async { [weak self] in
+      guard ticket.isLatest(generation) else { return }
+      let scored = CandidateFinder.scoreMatches(
+        pool: index.rows, normalizedQuery: normalized,
+        fuzzyScore: NormalModeDispatcher.fuzzyScorer(normalizedQuery: normalized),
+        allowParallel: true)
+      let sorted = CandidateFinder.sortedMatches(scored, precedence: precedence, limit: limit)
+      DispatchQueue.main.async {
+        guard let self, ticket.isLatest(generation), self.finder.candidatesEpoch == epoch else {
+          return
+        }
+        self.finder.bangCompletion = (epoch, normalized, sorted)
+        self.scheduleCoalescedCandidateFinderRerender()
+      }
+    }
+  }
+
+  /// The bang index for the current candidates, or nil while it builds: the
+  /// build reads the whole pool, so it runs off the main thread once per
+  /// epoch and re-renders when it lands.
+  private func bangCompletionIndex(epoch: UInt64) -> BangCompletionIndex? {
+    if let built = finder.bangIndex, built.epoch == epoch,
+      built.session == finder.sessionGeneration
+    {
+      return built.index
+    }
+    guard finder.bangIndexBuilding != epoch else { return finder.bangIndex?.index }
+    finder.bangIndexBuilding = epoch
+    let candidates = finder.candidates
+    let declared =
+      CoreBangs.candidates
+      + pluginManager.bangCandidates(in: sessionSelectorContext())
+      + UserBangs.candidates(config.flashlight.bangs)
+    let precedence = precedenceTable()
+    let limit = max(commandBarSuggestionCount * 3, 30)
+    let generation = finder.sessionGeneration
+    finder.preparationQueue.async { [weak self] in
+      let index = BangCompletionIndex(
+        candidates: declared + candidates.filter { $0.kind == CandidateFinder.bangKind },
+        precedence: precedence, limit: limit)
+      DispatchQueue.main.async {
+        guard let self, self.finder.bangIndexBuilding == epoch else { return }
+        self.finder.bangIndexBuilding = nil
+        // The declared bangs follow the session's focused app.
+        guard self.finder.sessionGeneration == generation else { return }
+        self.finder.bangIndex = (epoch, generation, index)
+        self.scheduleCoalescedCandidateFinderRerender()
+      }
+    }
+    // A previous epoch's index lists the bangs it knew while this one builds.
+    return finder.bangIndex?.index
+  }
+
   /// Pick the candidate pool and the text we score against. Three cases:
   ///
-  ///   * Bang mode (query starts with `!`) — the pool is the bang registry, or
-  ///     the candidate source declared by the bang once it's confirmed (e.g.
-  ///     `!kill ` shows the processes plugin's process list).
-  ///   * `@<source>` mode — the pool is narrowed to that one source. With an
+  ///   * Bang mode (query starts with `!`) — the pool is the bang registry. A
+  ///     confirmed bang that lists a candidate source (`!fh `, `!clip `)
+  ///     never comes here: the caller scopes the rest of the query to that
+  ///     source with `filteredCandidatePool`, as `@<type>` does.
+  ///   * `@<type>` mode — the pool is narrowed to that one resource type. With an
   ///     empty residual the user sees every candidate from that source (e.g.
-  ///     `@emojis.glyphs ` lists every emoji).
+  ///     `@emojis ` lists every emoji).
   ///   * Default — the regular pool scored on the full query, restricted to
   ///     location entities. Synthetic
   ///     bang / source-completion rows are always excluded; all other sources
-  ///     are excluded unless the user opts in via `@<source>`.
+  ///     are excluded unless the user opts in via `@<type>`.
   private func buildCandidateFinderPool(
     trimmed: String,
     rawQuery: String,
-    sourceFilter: String?
+    scope: SourceScope?
   ) -> (pool: [Candidate], scoringText: String) {
-    // Joined only by the branches that read it: the cache hit below, the
-    // common keystroke, copies nothing.
-    func availableCandidates() -> [Candidate] { finder.candidates + finder.liveQuery.rows }
-    if let bang = CandidateFinder.parseBangState(trimmed),
-      bang.confirmed,
-      let candidateSource = pluginManager.shebangCandidateSource(
-        token: bang.token,
-        in: sessionSelectorContext())
-    {
-      // Confirmed bang bound to a candidate source: swap the pool to that
-      // source's live candidates. Selection routes back through the bang.
-      let scoped = availableCandidates().filter { candidate in
-        guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
-        return CandidateFinder.candidateMatchesSourceFilter(candidate, filter: candidateSource)
-      }
-      return (scoped, bang.remainder)
-    }
     if let bang = CandidateFinder.parseBang(trimmed) {
       let bangs = CandidateFinder.prepare(bangListCandidates())
       return (bangs, bang.token)
@@ -1144,14 +1327,25 @@ extension AppDelegate {
     if let completion = CandidateFinder.sourceCompletionState(query: rawQuery) {
       let pool = CandidateFinder.prepare(
         knownSourceCompletionCandidates())
-      return (pool, completion.token)
+      // A dotted source name from before resource types completes to the
+      // type it most likely meant (`@emojis` offers `@emojis`).
+      return (pool, ResourceTypes.suggestion(for: completion.token) ?? completion.token)
     }
+    return (filteredCandidatePool(scope: scope), trimmed)
+  }
+
+  /// The session pool narrowed to `scope`'s rows, or to the default
+  /// (location) rows without one.
+  private func filteredCandidatePool(scope: SourceScope?) -> [Candidate] {
+    // Joined only on a cache miss: the cache hit below, the common
+    // keystroke, copies nothing.
+    func availableCandidates() -> [Candidate] { finder.candidates + finder.liveQuery.rows }
     // Cache the kind+source-narrow pass — while the user types into
     // flashlight the signature is stable, so the same ~2k-entry filter
     // ran ~2k times on every keystroke. Keyed by the base-pool epoch +
     // filter signature; one-slot cache because consecutive keystrokes
     // always share the same key.
-    let signature = sourceFilter ?? ""
+    let signature = scope?.signature ?? ""
     let basePool: [Candidate]
     if let cached = finder.filteredPoolCache,
       cached.epoch == finder.candidatesEpoch,
@@ -1159,10 +1353,11 @@ extension AppDelegate {
     {
       basePool = cached.pool
     } else {
-      // `@<source>` opts in to whatever source the user names. Without an
-      // explicit source filter, keep the default flashlight focused on locations.
-      let userOptedIntoSource = sourceFilter != nil
+      // `@<type>` opts in to whatever type the user names. Without one, keep
+      // the default flashlight focused on locations.
+      let userOptedIntoSource = scope != nil
       let precedence = precedenceTable()
+      let types = scope == nil ? [:] : registry.resourceTypesBySource()
       let pool = availableCandidates().filter { candidate in
         guard candidate.kind != CandidateFinder.bangKind,
           candidate.kind != CandidateFinder.sourceKind
@@ -1173,9 +1368,7 @@ extension AppDelegate {
         {
           return false
         }
-        if let sourceFilter,
-          !CandidateFinder.candidateMatchesSourceFilter(candidate, filter: sourceFilter)
-        {
+        if let scope, !scope.matches(candidate, types: types) {
           return false
         }
         return true
@@ -1187,19 +1380,20 @@ extension AppDelegate {
       )
       basePool = pool
     }
-    return (basePool, trimmed)
+    return basePool
   }
 
   static func candidateCanRenderInCommandBar(_ candidate: Candidate) -> Bool {
     CandidateEmojiSupport.candidateCanRenderInCommandBar(candidate)
   }
 
-  /// Build one `@<source>` completion row per registered candidate source.
-  /// This uses the source declarations, not the currently visible candidate
-  /// pool, so `@firefox.tabs` can be offered before the browsers plugin has
-  /// produced a tab snapshot for this flashlight session.
+  /// One `@<type>` completion row per registered resource type. It reads the
+  /// source declarations, not the visible pool, so `@tabs` is offered before
+  /// the browsers plugin produced a tab snapshot this session.
   private func knownSourceCompletionCandidates() -> [Candidate] {
-    registry.registeredCandidateSourceLabels().map(CandidateFinder.sourceCompletionCandidate)
+    registry.registeredResourceTypeProviders().map {
+      CandidateFinder.sourceCompletionCandidate(type: $0.type, providers: $0.providers)
+    }
   }
 
   func candidateFinderDisplayItems(windowSize: Int? = nil) -> [CandidateDisplayItem] {
@@ -1208,19 +1402,31 @@ extension AppDelegate {
       count: finder.matches.count,
       selectedIndex: finder.selectedIndex,
       windowSize: windowSize ?? commandBarSuggestionCount)
+    let labels = ResourceTypeLabels(types: registry?.resourceTypesBySource() ?? [:])
     return finder.matches[window].enumerated().map { offset, match in
-      let title =
-        match.candidate.displayTitle.isEmpty
-        ? candidateFinderDisplayTitle(match.candidate) : match.candidate.displayTitle
+      let (title, detail) = labels.label(
+        match.candidate,
+        displayTitle: match.candidate.displayTitle.isEmpty
+          ? candidateFinderDisplayTitle(match.candidate) : match.candidate.displayTitle)
       return CandidateDisplayItem(
         title: title,
-        highlightedRanges: finder.currentQuery.isEmpty || match.candidate.effect != nil
+        detail: detail,
+        highlightedRanges: finder.currentQuery.isEmpty
+          || match.candidate.kind == CandidateFinder.answerKind
           ? []
           : NormalModeDispatcher.fuzzyHighlightRanges(
             query: finder.currentQuery,
             candidate: title),
         isSelected: window.lowerBound + offset == finder.selectedIndex)
     }
+  }
+
+  /// The pick's rows for `query`, as the list shows them.
+  private func applyMenuMatches(query: String) {
+    guard let menu = finder.menu else { return }
+    finder.currentQuery = query.trimmingCharacters(in: .whitespaces)
+    finder.matches = MenuChoice.matches(menu.candidates, query: query)
+    finder.selectedIndex = 0
   }
 
   private func candidateFinderDisplayTitle(_ candidate: Candidate) -> String {
@@ -1236,25 +1442,18 @@ extension AppDelegate {
   /// submission, success or not. Resets the recall cursor so the next up/down
   /// starts from the newest entry.
   func recordCommandLineHistory(_ rawInput: String) {
-    let entry = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
-    commandLineHistoryCursor = nil
-    commandLineHistoryStash = ""
-    guard !entry.isEmpty else { return }
-    if commandLineHistory.last != entry {
-      commandLineHistory.append(entry)
-      let cap = 200
-      if commandLineHistory.count > cap {
-        commandLineHistory.removeFirst(commandLineHistory.count - cap)
-      }
-      // Persist so recall survives the next restart/reinstall.
-      commandHistoryStore?.save(commandLineHistory)
+    // Persist so recall survives the next restart/reinstall.
+    if commandLineHistory.record(rawInput) {
+      commandHistoryStore?.save(commandLineHistory.entries)
     }
   }
 
-  func submitCommandLine(_ rawInput: String) {
+  /// `variant` is a modified Return (Shift- or Option-Return); only the
+  /// flashlight's clipboard rows read it.
+  func submitCommandLine(_ rawInput: String, variant: CommandLineSubmitVariant? = nil) {
     // `#` output-capture modifier (`:#aws whoami`): strip it up front so all
     // downstream parsing sees a clean command line, and remember to route the
-    // command's stdout onto the clipboard rather than just a toast.
+    // command's output onto the clipboard rather than just a toast.
     let (raw, captureOutput) =
       NormalModeDispatcher.commandLineClipboardModifier(rawInput)
     // Record the verb against the frecency store so the empty-`:`
@@ -1265,161 +1464,59 @@ extension AppDelegate {
     // by the same decay all other frecency entries pay.
     recordCommandLineFrecency(rawInput: raw)
     recordCommandLineHistory(rawInput)
-    // `:open <args>` is a dumb forward to `/usr/bin/open` — no app-finding
-    // smarts (that lives in `:flashlight`). Caught first so it never falls
-    // into the candidate-finder or command-spec paths.
-    if let argv = NormalModeDispatcher.commandLineOpenForward(raw) {
-      finishCommandLineInteraction(reason: "open_forward")
-      NormalModeDispatcher.runOpen(argv)
-      return
-    }
     if NormalModeDispatcher.commandLineCandidateQuery(raw) != nil {
-      submitSelectedCommandLineApp()
+      actOnSelectedCandidateFinderCandidate(submit: false, allowFinisher: true, variant: variant)
       return
     }
-    // Selected sub-command completions (`:help con` → `:help config`)
-    // take precedence over the raw text. Without this, the raw form
-    // gets parsed as `:help con` and the user sees "con not found"
-    // even though `config` was visibly highlighted. `applySelected…`
-    // clears the completion state before recursing, so the recursive
-    // call falls through to the normal command / help parser without
-    // looping.
-    if !commandLineCompletionMatches.isEmpty,
-      commandLineCompletionMatchesAreSubCommand,
-      applySelectedCommandLineCompletion()
-    {
+    // A row the user moved to is what Enter runs, whatever the text
+    // resolves to. `applySelected…` clears the completion state before
+    // recursing, so the recursive call resolves the inserted words.
+    if finder.completions.selection.isChosen, applySelectedCommandLineCompletion() {
       return
     }
-    if let helpTopic = NormalModeDispatcher.commandLineHelpTopic(raw) {
-      finishCommandLineInteraction(reason: "help_submit")
-      showHelp(topic: helpTopic)
-      return
-    }
-    if let command = NormalModeDispatcher.commandLinePopupCommand(raw) {
-      finishCommandLineInteraction(reason: "terminal_submit")
-      handleURLCommand(command)
-      return
-    }
-    if let command = NormalModeDispatcher.commandLineCommand(raw) {
-      finishCommandLineInteraction(reason: "command_submit")
-      performCommandLineCommand(command)
-      return
-    }
-    // `:clipboard show` opens the dashboard's Clipboard tab. Core provides
-    // history directly to the web UI; `:clipboard show <arg>` falls through.
-    if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
-      plugin.command.lowercased() == "clipboard", plugin.subcommand.lowercased() == "show",
-      plugin.args.isEmpty
-    {
-      finishCommandLineInteraction(reason: "clipboard_submit")
-      openClipboardDashboard()
-      return
-    }
-    if let clipboard = NormalModeDispatcher.pluginCommandLineInvocation(raw),
-      clipboard.command.lowercased() == "clipboard"
-    {
-      finishCommandLineInteraction(reason: "clipboard_submit")
-      if !performClipboardHistoryCommand(
-        subcommand: clipboard.subcommand, args: clipboard.args,
-        completion: { [weak self] ok, output in
-          guard let self else { return }
-          if ok {
-            if clipboard.subcommand.lowercased() == "delete" {
-              self.refreshClipboardDashboardCache()
-            }
-            if let output, !output.isEmpty {
-              if captureOutput { NormalModeDispatcher.copy(output) }
-              self.overlay.displayBanner(output)
-            }
-          } else {
-            self.warnCommandFailure(raw)
-          }
-        })
-      {
-        warnUnsupportedCommand(raw)
+    // Otherwise the words resolve as the completion list showed them, and as
+    // `flash` resolves the same words in a terminal: an exact command, an ex
+    // command, or each word by its unique prefix. The list's highlighted
+    // row, when there is one, is that same resolution.
+    let words = NormalModeDispatcher.commandLineWords(raw)
+    var invocation = CommandInvocation(
+      words: words, workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path)
+    invocation.capturesOutput = captureOutput
+    let inventory = commandLineInventory()
+    let resolution = NormalModeDispatcher.resolveCommandWords(words, inventory: inventory)
+    switch resolution {
+    case .empty:
+      finishCommandLineInteraction(reason: "command_empty")
+    case .incomplete, .ambiguous, .unknown:
+      // Nothing runs. A highlighted row — the unique word an incomplete
+      // line names (`:ta` inserts `tab `) — is applied; otherwise the list,
+      // when there is one, stays up as the feedback: the candidates of an
+      // ambiguous word, or the words the typed text resembles.
+      let topLevelEmpty = finder.completions.isTopLevelEmpty
+      if !topLevelEmpty, applySelectedCommandLineCompletion() {
+        return
       }
-      return
-    }
-    if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
-      pluginManager.invoke(
-        command: plugin.command,
-        subcommand: plugin.subcommand,
-        args: plugin.args,
-        raw: plugin.raw,
-        in: pluginSelectorContext(),
-        onResult: { [weak self] ok, pid, stdout, navigationURL in
-          guard ok else {
-            self?.warnCommandFailure(raw)
-            return
-          }
-          self?.noteClipboardDelete(
-            command: plugin.command, subcommand: plugin.subcommand, ok: true)
-          self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-          guard let stdout, !stdout.isEmpty else { return }
-          if captureOutput {
-            NormalModeDispatcher.copy(stdout)
-            self?.overlay.displayBanner("Copied: \(stdout)")
-          } else {
-            self?.overlay.displayBanner(stdout)
-          }
-        })
-    {
-      finishCommandLineInteraction(reason: "plugin_submit")
-      return
-    }
-    let topLevelEmpty =
-      commandLineCompletionPrefix == ":" && commandLineCompletionQuery.isEmpty
-    if !commandLineCompletionMatches.isEmpty,
-      !topLevelEmpty,
-      applySelectedCommandLineCompletion()
-    {
-      return
-    }
-    finishCommandLineInteraction(reason: "command_unknown")
-    if !NormalModeDispatcher.commandLineBodyIsEmpty(raw) { warnUnsupportedCommand(raw) }
-  }
-
-  /// True when the active completion list is for a **sub-command**
-  /// (`:help <topic>`, `:plugins <sub>`, `:<plugin> <action>`) rather
-  /// than the top-level command list. Top-level completions are
-  /// suggestions for the bare verb (`:q<cr>` shouldn't expand to
-  /// `:quit` just because `quit` happens to be selected); sub-command
-  /// completions are what the user is actively narrowing.
-  private var commandLineCompletionMatchesAreSubCommand: Bool {
-    let prefix = commandLineCompletionPrefix
-    return prefix.count > 1 && prefix.hasSuffix(" ")
-  }
-
-  private func performCommandLineCommand(_ command: NormalModeDispatcher.CommandLineCommand) {
-    switch command {
-    case .quit, .save, .saveAndQuit, .print, .open, .newWindow, .newTab, .close, .closeWindow,
-      .find, .undo, .redo, .copy, .cut, .paste:
-      if let verb = NormalModeDispatcher.verb(for: command) { performMappedCommand(verb) }
-    case .plugins(let sub):
-      runPluginsSubcommand(sub)
-    case .mappings:
-      showMappings()
-    case .help(let topic):
-      showHelp(topic: topic)
-    case .logs:
-      openDebugDashboard(.logs)
-    case .commands:
-      openDebugDashboard(.commands)
-    case .about:
-      handleURLCommand(.showAbout)
-    case .doctor:
-      runDoctorCommand()
+      if !finder.completions.isEmpty, !topLevelEmpty {
+        FlashLog.debug("[command] nothing to run for \(raw); the list shows the candidates")
+        return
+      }
+      finishCommandLineInteraction(reason: "command_unknown")
+      if !NormalModeDispatcher.commandLineBodyIsEmpty(raw) { warnUnsupportedCommand(raw) }
+    case .commands, .plugin, .query, .open, .flashlight, .shell, .normalKeys:
+      finishCommandLineInteraction(reason: "command_submit")
+      // What `@:` runs again, and what a recording keeps for the `:`.
+      macros.noteCommandLine(rawInput)
+      performResolution(
+        resolution, invocation: invocation, inventory: inventory, surface: .commandLine
+      ) { [weak self] result in
+        self?.presentCommandLineResult(result, invocation: invocation)
+      }
     }
   }
 
   private func applySelectedCommandLineCompletion() -> Bool {
-    guard !commandLineCompletionMatches.isEmpty else { return false }
-    let index = min(
-      commandLineCompletionSelectedIndex, commandLineCompletionMatches.count - 1)
-    let match = commandLineCompletionMatches[index]
-    let completion = match.completion
-    let prefix = commandLineCompletionPrefix
-    let newBuffer = prefix + completion.insertion
+    guard let completion = finder.completions.selected else { return false }
+    let newBuffer = finder.completions.buffer(inserting: completion)
     switch completion.kind {
     case .acceptsArgs:
       refreshCommandLine(text: newBuffer, cursorIndex: newBuffer.count)
@@ -1434,21 +1531,19 @@ extension AppDelegate {
   /// Insert the selected completion's **value** (`insertion`) into the
   /// command line without submitting — the `<tab>` half of the
   /// candidate contract. The visible `label` is purely cosmetic; what
-  /// lands in the buffer is always the value. Returns false when no
-  /// completion list is active so the caller can fall back to selection
-  /// movement (the candidate finder keeps its documented tab-to-cycle).
+  /// lands in the buffer is always the value. With no row highlighted (an
+  /// ambiguous word), Tab takes the first, as vim's completion cycles from
+  /// the top. Returns false when no completion list is active so the caller
+  /// can fall back to selection movement (the candidate finder keeps its
+  /// documented tab-to-cycle).
   func applySelectedCommandLineCompletionInPlace() -> Bool {
-    guard !commandLineCompletionMatches.isEmpty else { return false }
-    let index = min(
-      commandLineCompletionSelectedIndex, commandLineCompletionMatches.count - 1)
-    let completion = commandLineCompletionMatches[index].completion
-    let newBuffer = commandLineCompletionPrefix + completion.insertion
+    guard !finder.completions.isEmpty else { return false }
+    finder.completions.selection = finder.completions.selection.tabbed(
+      count: finder.completions.matches.count)
+    guard let completion = finder.completions.selected else { return false }
+    let newBuffer = finder.completions.buffer(inserting: completion)
     refreshCommandLine(text: newBuffer, cursorIndex: newBuffer.count)
     return true
-  }
-
-  private func submitSelectedCommandLineApp() {
-    actOnSelectedCandidateFinderCandidate(submit: false, allowFinisher: true)
   }
 
   /// Single act-on-selection entry point for the flashlight surface.
@@ -1459,11 +1554,13 @@ extension AppDelegate {
   /// explicit Command-Return while partial/source rows still rewrite the
   /// buffer. `<cmd+cr>` calls with `submit=true`, the explicit force-submit
   /// path for real candidates.
-  /// Synthetic source-filter rows are always insert-only.
+  /// Synthetic source-filter rows are always insert-only. `variant` rides
+  /// along to a clipboard row (Shift-Return: plain text, Option-Return: copy).
   func actOnSelectedCandidateFinderCandidate(
     submit: Bool,
     allowFinisher: Bool = true,
-    submitFinalDestinations: Bool = false
+    submitFinalDestinations: Bool = false,
+    variant: CommandLineSubmitVariant? = nil
   ) {
     let initialSnapshotPending = finder.initialBarrier != nil
     let evaluationInFlight = finder.queryEvaluationInFlightGeneration
@@ -1472,13 +1569,26 @@ extension AppDelegate {
         CandidateSubmissionDeferral.Action(
           submit: submit,
           allowFinisher: allowFinisher,
-          submitFinalDestinations: submitFinalDestinations),
+          submitFinalDestinations: submitFinalDestinations,
+          variant: variant),
         sessionGeneration: finder.sessionGeneration,
         query: activeCandidateFinderInputText(),
         evaluationGeneration: initialSnapshotPending ? nil : evaluationInFlight)
       FlashLog.trace(
-        "[candidate_finder] action_deferred session=\(finder.sessionGeneration) "
+        "[flashlight] action_deferred session=\(finder.sessionGeneration) "
           + "query_generation=\(evaluationInFlight.map(String.init) ?? "initial")")
+      return
+    }
+    if let menu = finder.menu {
+      // Answer first: the close that follows then finds no pick to cancel.
+      guard
+        let picked = MenuChoice.pick(
+          matches: finder.matches, selectedIndex: finder.selectedIndex,
+          query: finder.currentQuery)
+      else { return }
+      finder.menu = nil
+      finishCommandLineInteraction(reason: "menu_pick")
+      menu.complete(.success(picked))
       return
     }
     let typedBang = CandidateFinder.parseBang(finder.currentQuery)
@@ -1518,7 +1628,7 @@ extension AppDelegate {
       let source = candidate.sourcePayload
     {
       // Source-completion row. Rewrite the in-progress `@<partial>`
-      // token in the buffer with the canonical `@<source> ` so the
+      // token in the buffer with the canonical `@<type> ` so the
       // existing source-filter parser applies it to the next refresh,
       // and the cursor sits ready for the query. Source rows are
       // synthetic completions, not resolvable candidates, so Return,
@@ -1535,10 +1645,12 @@ extension AppDelegate {
     {
       let insertionTargetPID = finder.invocationTargetPID
       finishCommandLineInteraction(reason: "command_open")
-      openSourceItem(candidate, insertionTargetPID: insertionTargetPID)
+      openSourceItem(candidate, insertionTargetPID: insertionTargetPID, variant: variant)
       return
     }
-    replaceCommandLineCandidateQuery(with: CandidateFinder.commandInsertionText(candidate))
+    replaceCommandLineCandidateQuery(
+      with: CandidateFinder.commandInsertionText(
+        candidate, types: registry?.resourceTypesBySource() ?? [:]))
   }
 
   /// Replay a held selection only when both asynchronous first-row boundaries
@@ -1556,18 +1668,19 @@ extension AppDelegate {
       return
     case .discarded:
       FlashLog.trace(
-        "[candidate_finder] deferred_action_discarded session=\(finder.sessionGeneration)")
+        "[flashlight] deferred_action_discarded session=\(finder.sessionGeneration)")
     case .replay(let action):
       FlashLog.trace(
-        "[candidate_finder] deferred_action_replay session=\(finder.sessionGeneration)")
+        "[flashlight] deferred_action_replay session=\(finder.sessionGeneration)")
       actOnSelectedCandidateFinderCandidate(
         submit: action.submit,
         allowFinisher: action.allowFinisher,
-        submitFinalDestinations: action.submitFinalDestinations)
+        submitFinalDestinations: action.submitFinalDestinations,
+        variant: action.variant)
     }
   }
 
-  /// Exact user-visible candidate query, before `@source`/bang parsing rewrites
+  /// Exact user-visible candidate query, before `@type`/bang parsing rewrites
   /// `finder.currentQuery` for scoring. Using this for deferral identity
   /// preserves initial-barrier submission for explicit selectors and makes any
   /// intervening edit invalidate the held action.
@@ -1582,7 +1695,7 @@ extension AppDelegate {
   }
 
   /// Rewrite the trailing `@<partial>` token inside the live command
-  /// line with `@<source> ` and re-render. Called by Tab/CR/Cmd+CR on
+  /// line with `@<type> ` and re-render. Called by Tab/CR/Cmd+CR on
   /// a source-completion row so the user sees the canonical filter
   /// appear without leaving the surface.
   private func replaceInProgressAtSourceToken(with source: String) {
@@ -1620,26 +1733,47 @@ extension AppDelegate {
   }
 
   /// `<cmd+cr>` in bang mode. Dispatches whatever the user typed via
-  /// `PluginManager.invokeShebang`, which checks explicit-token
+  /// `PluginManager.invokeBang`, which checks explicit-token
   /// registrations first then falls back to the catch-all (so
-  /// `!google rust` reaches the reference plugin even though `google` isn't
+  /// `!google rust` reaches searchproviders even though `google` isn't
   /// declared in any plugin's manifest). If a candidate row is
   /// selected AND its token equals the typed token, we still go
-  /// through `invokeShebang` — its lookup is the same — so this path
+  /// through `invokeBang` — its lookup is the same — so this path
   /// is unified.
   private func submitTypedBang(typed: (token: String, remainder: String)) {
-    let dispatched = pluginManager.invokeShebang(
+    if let bang = CoreBangs.bang(token: typed.token) {
+      // A core bang only scopes the flashlight to its source: lock it in and
+      // keep the bar open for that source's rows (they may still be arriving).
+      let buffer = ":flashlight !\(bang.token) \(typed.remainder)"
+      refreshCommandLine(text: buffer, cursorIndex: buffer.count)
+      return
+    }
+    // The user's own bang, unless a plugin declares the token by name: it
+    // then keeps its owner, as the loader told a bundled plugin's would.
+    let context = pluginSelectorContext()
+    if !pluginManager.declaresBang(token: typed.token, in: context),
+      let bang = UserBangs.bang(token: typed.token, in: config.flashlight.bangs)
+    {
+      if let url = UserBangs.url(template: bang.url, query: typed.remainder) {
+        FlashLog.debug("[normal] bang_user", fields: ["bang": typed.token.lowercased()])
+        UserBangs.opener(url)
+      } else {
+        FlashLog.info("[normal] bang_user_unopenable", fields: ["bang": typed.token])
+      }
+      finishCommandLineInteraction(reason: "command_bang_submit")
+      return
+    }
+    let dispatched = pluginManager.invokeBang(
       token: typed.token,
       query: typed.remainder,
-      in: pluginSelectorContext()
-    ) { [weak self] ok, pid, stdout, navigationURL in
-      guard ok, let self else { return }
-      self.activatePluginCommandTarget(pid, navigationURL: navigationURL)
-      guard let stdout, !stdout.isEmpty else { return }
-      self.overlay.displayBanner(stdout)
+      in: context
+    ) { [weak self] result in
+      guard result.ok, let self else { return }
+      self.activateCommandTarget(result.targetPID, navigationURL: result.navigationURL)
+      self.presentPluginResult(result)
     }
     if !dispatched {
-      FlashLog.warn("[normal_mode] no plugin claimed bang !\(typed.token)")
+      FlashLog.info("[normal] bang_unclaimed", fields: ["bang": typed.token])
     }
     finishCommandLineInteraction(reason: "command_bang_submit")
   }
@@ -1657,6 +1791,11 @@ extension AppDelegate {
   }
 
   func resetCommandLineState() {
+    // Closed, or replaced by another open, without a pick.
+    if let menu = finder.menu {
+      finder.menu = nil
+      menu.complete(.failure(.cancelled))
+    }
     finder.invocationTargetPID = nil
     finder.selectorContext = nil
     overlay.commandLineText = ""
@@ -1664,7 +1803,7 @@ extension AppDelegate {
     finder.scope = .all
     clearCandidateFinderState()
     clearCommandLineCompletionState()
-    commandLineCompletionInventory = nil
+    finder.commandLineInventory = nil
   }
 
   func clearCandidateFinderState() {
@@ -1672,9 +1811,18 @@ extension AppDelegate {
     finder.candidates = []
     finder.matches = []
     finder.selectedIndex = 0
+    finder.followedRow = nil
     finder.currentQuery = ""
     finder.precedenceTable = .default
     finder.incrementalCache = nil
+  }
+
+  /// A session that opens or closes owes nothing to a change that waited
+  /// on the previous one.
+  private func cancelWaitingLiveSourceChange() {
+    guard !finder.liveChangeGate.waiting.isEmpty else { return }
+    finder.liveChangeGate.cancelWaiting()
+    liveSourceChangeDeadline.cancel()
   }
 
   func cancelCandidateFinderSessionWork() {
@@ -1682,6 +1830,7 @@ extension AppDelegate {
     // replies cannot publish into a closed or superseded session.
     finder.sessionGeneration &+= 1
     finder.liveQuery.cancel()
+    cancelWaitingLiveSourceChange()
     invalidateCandidateQueryEvaluation()
     finder.resetInitialSnapshot()
     finder.submissionDeferral.cancel()

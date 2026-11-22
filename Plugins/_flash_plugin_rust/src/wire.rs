@@ -28,6 +28,49 @@ pub(crate) fn deserialize_optional_pid<'de, D: Deserializer<'de>>(
     }
 }
 
+/// The largest `count` of a `perform` command (`perform_command.count_max`):
+/// NORMAL's largest count.
+pub(crate) const MAX_COMMAND_COUNT: u32 = 999;
+
+/// A command without a `count` runs once.
+pub(crate) fn one() -> u32 {
+    1
+}
+
+/// A `perform` command's `count`: an integer from 1 to
+/// [`MAX_COMMAND_COUNT`]. Anything else refuses the request.
+pub(crate) fn deserialize_count<'de, D: Deserializer<'de>>(input: D) -> Result<u32, D::Error> {
+    Value::deserialize(input)?
+        .as_u64()
+        .and_then(|count| u32::try_from(count).ok())
+        .filter(|count| (1..=MAX_COMMAND_COUNT).contains(count))
+        .ok_or_else(|| serde::de::Error::custom("invalid command count"))
+}
+
+/// A perform's `confirmed`: `true`, and only that. The host leaves the key
+/// out of a perform the user did not confirm.
+pub(crate) fn confirmed(value: &Value) -> bool {
+    value == &Value::Bool(true)
+}
+
+pub(crate) fn deserialize_confirmed<'de, D: Deserializer<'de>>(input: D) -> Result<bool, D::Error> {
+    if confirmed(&Value::deserialize(input)?) {
+        Ok(true)
+    } else {
+        Err(serde::de::Error::custom("invalid confirmed"))
+    }
+}
+
+/// UTF-8 bytes of a row's `confirm`, and of a manifest command's
+/// (`quotas.confirm_bytes`).
+#[cfg(test)]
+pub(crate) const MAX_CONFIRM_BYTES: usize = 256;
+
+/// Every key of a row (`protocol.json` `row`): `source` and `title` are
+/// required, the rest optional.
+#[cfg(test)]
+pub(crate) const ROW_KEYS: [&str; 6] = ["source", "title", "url", "metadata", "effect", "confirm"];
+
 fn present<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value.get(key).filter(|value| !value.is_null())
 }
@@ -100,33 +143,178 @@ pub(crate) fn valid_result(method: &str, result: &Value) -> bool {
             .and_then(Value::as_array)
             .is_some_and(|targets| targets.iter().all(valid_target));
     }
+    if method == "text_grid" {
+        return valid_text_grid(result);
+    }
     if method == "perform" {
-        return only_keys(result, &["ok", "target_pid", "navigation_url", "message"])
-            && present(result, "navigation_url")
-                .and_then(Value::as_str)
-                .is_none_or(absolute_url);
+        return only_keys(
+            result,
+            &["ok", "target_pid", "navigation_url", "message", "alert"],
+        ) && present(result, "navigation_url")
+            .and_then(Value::as_str)
+            .is_none_or(absolute_url)
+            && present(result, "alert").is_none_or(valid_alert);
     }
     true
 }
 
+/// UTF-8 bytes of a `perform` reply's alert title (`quotas.alert_title_bytes`).
+pub(crate) const MAX_ALERT_TITLE_BYTES: usize = 256;
+/// UTF-8 bytes of its `value` and of its `widest_value`
+/// (`quotas.alert_value_bytes`).
+pub(crate) const MAX_ALERT_VALUE_BYTES: usize = 64;
+/// The keys of a `perform` reply's `alert` (`protocol.json` `perform_alert`):
+/// `title` is required, the rest optional.
+pub(crate) const ALERT_KEYS: [&str; 3] = ["title", "value", "widest_value"];
+
+/// The characters that break a line, as the host reads them: an alert's
+/// `value` and `widest_value` hold none.
+const LINE_BREAKS: [char; 7] = [
+    '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
+];
+
+/// A `perform` reply's alert: a non-blank `title` within its bound, alone or
+/// over a non-blank one-line `value`; `widest_value`, a line of the same
+/// bound, comes only with a `value`.
+pub(crate) fn valid_alert(alert: &Value) -> bool {
+    let line = |key: &str| match alert.get(key) {
+        None => Some(None),
+        Some(value) => value
+            .as_str()
+            .filter(|text| {
+                !text.trim().is_empty()
+                    && text.len() <= MAX_ALERT_VALUE_BYTES
+                    && !text.contains(LINE_BREAKS)
+            })
+            .map(Some),
+    };
+    let (Some(value), Some(widest)) = (line("value"), line("widest_value")) else {
+        return false;
+    };
+    only_keys(alert, &ALERT_KEYS)
+        && alert
+            .get("title")
+            .and_then(Value::as_str)
+            .is_some_and(|title| !title.trim().is_empty() && title.len() <= MAX_ALERT_TITLE_BYTES)
+        && (widest.is_none() || value.is_some())
+}
+
+/// A reply to the host RPC `method`: the response law every result follows,
+/// plus the one key a failure may add, the integer `status` of a
+/// `host.applescript` script that ran and failed or timed out.
+pub(crate) fn valid_host_reply(method: &str, result: &Value) -> bool {
+    if method == "host.applescript"
+        && result.get("ok") == Some(&Value::Bool(false))
+        && let Some(status) = result.get("status")
+    {
+        let mut law = result.clone();
+        if let Some(object) = law.as_object_mut() {
+            object.remove("status");
+        }
+        return status.as_i64().is_some() && valid_result("host", &law);
+    }
+    valid_result("host", result)
+}
+
+/// Columns and rows of a `text_grid` reply are each at most this: tmux's own
+/// window limit, so a grid the host lays out stays bounded.
+pub(crate) const MAX_TEXT_GRID_DIMENSION: u64 = 10_000;
+
+/// The host's catalog byte quota (`quotas.catalog_bytes`): the bytes of the
+/// `rows` array as written in the publish frame, summed over the plugin's
+/// sources after a per-source merge. The SDK enforces nothing here — the
+/// host rejects an over-quota publish whole — but its publish frames are
+/// pinned to add exactly the envelope around the compact rows, so a plugin
+/// can size its catalog by the compact encoding alone.
+#[cfg(test)]
+pub(crate) const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
+
+/// Every key of a `text_grid` reply's `cell` (`protocol.json`
+/// `text_grid_cell`), all required.
+pub(crate) const TEXT_GRID_CELL_KEYS: [&str; 4] = ["width", "height", "pad_x", "pad_y"];
+
+/// A `text_grid` cell: a finite size above zero and finite padding at or
+/// above it.
+fn valid_text_grid_cell(cell: &Value) -> bool {
+    let Some(object) = cell.as_object() else {
+        return false;
+    };
+    let number = |key: &str| object.get(key).and_then(Value::as_f64);
+    object.len() == TEXT_GRID_CELL_KEYS.len()
+        && ["width", "height"]
+            .iter()
+            .all(|key| number(key).is_some_and(|value| value.is_finite() && value > 0.0))
+        && ["pad_x", "pad_y"]
+            .iter()
+            .all(|key| number(key).is_some_and(|value| value.is_finite() && value >= 0.0))
+}
+
+/// A `text_grid` success: `columns` × `rows` cells and lines inside them,
+/// each captured text `{row, column, text}` or a status format laid out over
+/// `{row, column, width, format}` cells, and the `cell` they sit on when the
+/// plugin measured one.
+fn valid_text_grid(result: &Value) -> bool {
+    let dimension = |key: &str| {
+        result
+            .get(key)
+            .and_then(Value::as_u64)
+            .filter(|value| *value <= MAX_TEXT_GRID_DIMENSION)
+    };
+    let (Some(columns), Some(rows)) = (dimension("columns"), dimension("rows")) else {
+        return false;
+    };
+    if !only_keys(result, &["ok", "columns", "rows", "lines", "cell"]) {
+        return false;
+    }
+    if result
+        .get("cell")
+        .is_some_and(|cell| !valid_text_grid_cell(cell))
+    {
+        return false;
+    }
+    let Some(lines) = result.get("lines").and_then(Value::as_array) else {
+        return false;
+    };
+    lines.iter().all(|line| {
+        let cell =
+            |key: &str, bound: u64| line.get(key).and_then(Value::as_u64).filter(|v| *v < bound);
+        let (Some(_), Some(column)) = (cell("row", rows), cell("column", columns)) else {
+            return false;
+        };
+        let Some(object) = line.as_object() else {
+            return false;
+        };
+        if object.contains_key("text") {
+            return object.len() == 3 && line["text"].is_string();
+        }
+        object.len() == 4
+            && line.get("format").is_some_and(Value::is_string)
+            && line
+                .get("width")
+                .and_then(Value::as_u64)
+                .is_some_and(|width| width >= 1 && width <= columns - column)
+    })
+}
+
+/// Every key of one hint target (`protocol.json` `hint_target`): `id` and
+/// `frame` are required, the rest optional.
+const HINT_TARGET_KEYS: &[&str] = &[
+    "id",
+    "frame",
+    "role",
+    "label",
+    "url",
+    "pid",
+    "priority",
+    "context_id",
+];
+
 fn valid_target(target: &Value) -> bool {
-    if !only_keys(
-        target,
-        &[
-            "id",
-            "frame",
-            "role",
-            "label",
-            "url",
-            "context_id",
-            "pid",
-            "enters_insert_mode",
-            "priority",
-        ],
-    ) || target
-        .get("id")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
+    if !only_keys(target, HINT_TARGET_KEYS)
+        || target
+            .get("id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
     {
         return false;
     }
@@ -163,9 +351,6 @@ fn valid_target(target: &Value) -> bool {
         .iter()
         .any(|key| present(target, key).is_some_and(|value| !value.is_string()))
     {
-        return false;
-    }
-    if present(target, "enters_insert_mode").is_some_and(|value| !value.is_boolean()) {
         return false;
     }
     if present(target, "priority").is_some_and(|value| {
@@ -231,10 +416,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spatial_requests_preserve_optional_display_scale() {
+        let value = serde_json::json!({"display_scale": 2.0});
+        assert_eq!(
+            serde_json::from_value::<crate::HintsRequest>(value.clone())
+                .unwrap()
+                .display_scale,
+            Some(2.0)
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::TextGridRequest>(value)
+                .unwrap()
+                .display_scale,
+            Some(2.0)
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::HintsRequest>(serde_json::json!({}))
+                .unwrap()
+                .display_scale,
+            None
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::TextGridRequest>(serde_json::json!({}))
+                .unwrap()
+                .display_scale,
+            None
+        );
+    }
+
+    #[test]
+    fn spatial_requests_reject_non_numeric_display_scale() {
+        let value = serde_json::json!({"display_scale": "2"});
+        assert!(serde_json::from_value::<crate::HintsRequest>(value.clone()).is_err());
+        assert!(serde_json::from_value::<crate::TextGridRequest>(value).is_err());
+    }
+
+    #[test]
     fn shared_wire_corpus_matches_the_rust_boundary() {
         let fixture: Value =
             serde_json::from_str(include_str!("../fixtures/wire-values.fixture")).unwrap();
-        for kind in ["protocol_version", "boolean", "pid", "perform", "hints"] {
+        for kind in [
+            "protocol_version",
+            "boolean",
+            "pid",
+            "perform",
+            "hints",
+            "text_grid",
+        ] {
             for case in fixture[kind].as_array().unwrap() {
                 let value = &case["value"];
                 let valid = match kind {
@@ -300,6 +528,121 @@ mod tests {
     }
 
     #[test]
+    fn perform_kinds_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["perform_kinds"],
+            serde_json::json!(crate::runtime::PERFORM_KINDS)
+        );
+        let shape = &contract["perform_command"];
+        assert_eq!(
+            shape["required"],
+            serde_json::json!(["command", "subcommand", "args"])
+        );
+        assert_eq!(
+            shape["optional"],
+            serde_json::json!(["context", "count", "confirmed"])
+        );
+        assert_eq!(shape["count_max"], MAX_COMMAND_COUNT);
+    }
+
+    /// A row has the contract's keys, its question the contract's bound,
+    /// and a confirmed perform is a resolve or a command.
+    #[test]
+    fn confirmations_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let row = &contract["row"];
+        let keys: Vec<&str> = ["required", "optional"]
+            .iter()
+            .flat_map(|group| row[*group].as_array().unwrap())
+            .map(|key| key.as_str().unwrap())
+            .collect();
+        assert_eq!(keys, ROW_KEYS);
+        let encoded = serde_json::to_value(
+            crate::Candidate::new("s", "t")
+                .url("https://example.com/")
+                .subtitle("sub")
+                .copy_text("t")
+                .confirm("Sure?"),
+        )
+        .unwrap();
+        let mut written: Vec<&str> = encoded
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        written.sort_unstable();
+        let mut expected = ROW_KEYS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(written, expected);
+        assert_eq!(
+            contract["quotas"]["confirm_bytes"],
+            MAX_CONFIRM_BYTES as u64
+        );
+        assert_eq!(
+            contract["confirmation"]["perform_kinds"],
+            serde_json::json!(["resolve", "command"])
+        );
+    }
+
+    /// The alert a `perform` reply may carry has the contract's keys and
+    /// bounds.
+    #[test]
+    fn perform_alerts_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let shape = &contract["perform_alert"];
+        assert_eq!(shape["required"], serde_json::json!(["title"]));
+        assert_eq!(
+            shape["optional"],
+            serde_json::json!(["value", "widest_value"])
+        );
+        assert_eq!(ALERT_KEYS, ["title", "value", "widest_value"]);
+        let quotas = &contract["quotas"];
+        assert_eq!(quotas["alert_title_bytes"], MAX_ALERT_TITLE_BYTES as u64);
+        assert_eq!(quotas["alert_value_bytes"], MAX_ALERT_VALUE_BYTES as u64);
+    }
+
+    /// The `search` request has its own deadline, and the two `live`
+    /// values are the ones the macro reads from the contract.
+    #[test]
+    fn live_sources_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["source_live"]["values"],
+            serde_json::json!(["per_query", "per_scope"])
+        );
+        assert_eq!(contract["deadlines_ms"]["search"], 1000);
+        assert!(contract["methods"]["host_to_plugin"]["search"].is_string());
+    }
+
+    /// The one manifest `lifecycle` value, and what a plugin declaring it
+    /// may carry, come from the contract the macro reads too.
+    #[test]
+    fn lifecycle_declarations_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let lifecycle = &contract["lifecycle"];
+        assert_eq!(
+            lifecycle["values"],
+            serde_json::json!([crate::runtime::PUBLISH_THEN_EXIT])
+        );
+        let rules = &lifecycle[crate::runtime::PUBLISH_THEN_EXIT];
+        assert_eq!(rules["requires"], serde_json::json!(["exec", "sources"]));
+        assert_eq!(
+            rules["forbids"],
+            serde_json::json!([
+                "hints",
+                "query",
+                "status",
+                "listen",
+                "commands",
+                "bangs",
+                "navigation"
+            ])
+        );
+    }
+
+    #[test]
     fn poll_bounds_match_the_shared_protocol_contract() {
         use crate::poll::{
             MAX_NAME_BYTES, MAX_REGISTRATIONS, MAX_SECONDS, MIN_EVERY, PollPriority,
@@ -312,6 +655,152 @@ mod tests {
         assert_eq!(poll["max_seconds"], MAX_SECONDS);
         assert_eq!(poll["max_registrations"], MAX_REGISTRATIONS as u64);
         assert_eq!(poll["max_name_bytes"], MAX_NAME_BYTES as u64);
+    }
+
+    /// A hint target carries exactly the contract's keys: geometry and
+    /// semantics, nothing about the mode a click leaves.
+    #[test]
+    fn hint_target_keys_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let shape = &contract["hint_target"];
+        assert_eq!(shape["required"], serde_json::json!(["id", "frame"]));
+        let mut keys: Vec<&str> = ["required", "optional"]
+            .iter()
+            .flat_map(|group| shape[*group].as_array().unwrap())
+            .map(|key| key.as_str().unwrap())
+            .collect();
+        keys.sort_unstable();
+        let mut accepted = HINT_TARGET_KEYS.to_vec();
+        accepted.sort_unstable();
+        assert_eq!(keys, accepted);
+    }
+
+    #[test]
+    fn text_grid_bounds_match_the_shared_protocol_contract() {
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["quotas"]["text_grid_dimension"],
+            MAX_TEXT_GRID_DIMENSION
+        );
+        assert_eq!(
+            contract["text_grid_cell"]["keys"],
+            serde_json::json!(TEXT_GRID_CELL_KEYS)
+        );
+        let shapes = &contract["text_grid_line"];
+        assert_eq!(shapes["text"], serde_json::json!(["row", "column", "text"]));
+        assert_eq!(
+            shapes["format"],
+            serde_json::json!(["row", "column", "width", "format"])
+        );
+    }
+
+    /// The host counts `catalog_bytes` from the `rows` array as it lies in
+    /// the publish frame, so what the SDK writes around it must be exactly
+    /// the envelope — no whitespace, no re-ordering — and the rows must be
+    /// the compact encoding. At the 4 MiB boundary: a catalog whose compact
+    /// rows are exactly the quota yields a frame of quota plus envelope, and
+    /// a per-source publish adds exactly its `source` member.
+    #[tokio::test]
+    async fn publish_frames_add_exactly_the_envelope_around_compact_rows() {
+        use crate::context::Publish;
+        use crate::emit::Emitter;
+        use crate::types::Candidate;
+        use tokio::sync::mpsc;
+
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        assert_eq!(
+            contract["quotas"]["catalog_bytes"],
+            MAX_CATALOG_BYTES as u64
+        );
+        let publish = &contract["publish"]["params"];
+        assert_eq!(publish["required"], serde_json::json!(["rows"]));
+        assert_eq!(publish["optional"], serde_json::json!(["source"]));
+
+        // `[{"source":"s","title":"<L bytes>"}]` is 27 + L bytes compact.
+        let title = "x".repeat(MAX_CATALOG_BYTES - 27);
+        let rows = vec![Candidate::new("s", title)];
+        assert_eq!(serde_json::to_vec(&rows).unwrap().len(), MAX_CATALOG_BYTES);
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let emitter = Emitter::new(tx);
+        let whole = r#"{"method":"publish","params":{"rows":"#;
+        emitter.notify_with(
+            "publish",
+            &Publish {
+                source: None,
+                rows: &rows,
+            },
+        );
+        let frame = rx.recv().await.unwrap().payload;
+        assert_eq!(frame.len(), whole.len() + MAX_CATALOG_BYTES + "}}\n".len());
+        assert!(frame.starts_with(whole.as_bytes()));
+        assert!(frame.ends_with(b"}}\n"));
+
+        let scoped = r#"{"method":"publish","params":{"source":"s","rows":"#;
+        emitter.notify_with(
+            "publish",
+            &Publish {
+                source: Some("s"),
+                rows: &rows,
+            },
+        );
+        let frame = rx.recv().await.unwrap().payload;
+        assert_eq!(frame.len(), scoped.len() + MAX_CATALOG_BYTES + "}}\n".len());
+        assert!(frame.starts_with(scoped.as_bytes()));
+    }
+
+    /// A `changed` frame carries the one key the contract lists, and the
+    /// contract states how often the host honours one.
+    #[test]
+    fn changed_frames_match_the_shared_protocol_contract() {
+        use crate::testing::Harness;
+
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let changed = &contract["changed"];
+        assert_eq!(changed["params"]["required"], serde_json::json!(["source"]));
+        assert_eq!(changed["params"]["optional"], serde_json::json!([]));
+        assert_eq!(changed["min_interval_ms"], 500);
+        assert!(contract["methods"]["plugin_to_host_notifications"]["changed"].is_string());
+
+        let mut harness = Harness::new("example");
+        harness.context().source_changed("example.live");
+        assert_eq!(
+            harness.drain(),
+            [serde_json::json!({ "method": "changed", "params": { "source": "example.live" } })]
+        );
+    }
+
+    /// The SDK pre-checks a script's size and clamps its timeout to the
+    /// contract's bounds, so they must be the host's.
+    #[test]
+    fn applescript_bounds_match_the_shared_protocol_contract() {
+        use crate::context::{
+            APPLESCRIPT_CONCURRENCY, APPLESCRIPT_DEFAULT_TIMEOUT, APPLESCRIPT_MAX_TIMEOUT,
+            APPLESCRIPT_RESULT_BYTES, APPLESCRIPT_SCRIPT_BYTES,
+        };
+        let contract: Value = serde_json::from_str(include_str!("../protocol.json")).unwrap();
+        let bounds = &contract["applescript"];
+        assert_eq!(bounds["script_bytes"], APPLESCRIPT_SCRIPT_BYTES as u64);
+        assert_eq!(bounds["result_bytes"], APPLESCRIPT_RESULT_BYTES as u64);
+        assert_eq!(
+            bounds["default_timeout_ms"],
+            APPLESCRIPT_DEFAULT_TIMEOUT.as_millis() as u64
+        );
+        assert_eq!(
+            bounds["max_timeout_ms"],
+            APPLESCRIPT_MAX_TIMEOUT.as_millis() as u64
+        );
+        assert_eq!(bounds["concurrency"], APPLESCRIPT_CONCURRENCY as u64);
+        assert_eq!(
+            contract["methods"]["plugin_to_host_rpcs"]["host.applescript"],
+            "apple_events"
+        );
+        assert!(
+            contract["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::from("apple_events"))
+        );
     }
 
     #[test]

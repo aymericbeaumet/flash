@@ -95,7 +95,7 @@ final class StatusBarTests: XCTestCase {
     // active menu bar. Applied to every display, it flipped the laptop's band
     // between its visible-frame reserve (32) and its notched bar (33), and the
     // external's between 30 and 33, so a restored window missed the slot the
-    // next `window_move` computed.
+    // next `window move` computed.
     let external = CGRect(x: 0, y: 0, width: 2048, height: 1152)
     let laptop = CGRect(x: 160, y: -1117, width: 1728, height: 1117)
     let laptopVisible = CGRect(x: 160, y: -1117, width: 1728, height: 1085)
@@ -284,13 +284,20 @@ final class StatusBarTests: XCTestCase {
       from: "#[popup=inline:%ZZ]visible#[nopopup]",
       font: font,
       popupTexts: [:])
-    let oversizedBody = String(repeating: "a", count: 16_385)
+    // The cap is the contract's (`quotas.inline_preview_bytes`), counted on
+    // the encoded body: a body of exactly that many bytes still previews.
+    let cap = PluginProtocol.maxInlinePreviewBytes
+    let largest = FlashStatusBarRenderer.popupRuns(
+      from: "#[popup=inline:\(String(repeating: "a", count: cap))]visible#[nopopup]",
+      font: font,
+      popupTexts: [:])
     let oversized = FlashStatusBarRenderer.popupRuns(
-      from: "#[popup=inline:\(oversizedBody)]visible#[nopopup]",
+      from: "#[popup=inline:\(String(repeating: "a", count: cap + 1))]visible#[nopopup]",
       font: font,
       popupTexts: [:])
 
     XCTAssertTrue(malformed.runs.isEmpty)
+    XCTAssertEqual(largest.runs.map(\.content.count), [cap])
     XCTAssertTrue(oversized.runs.isEmpty)
     XCTAssertEqual(
       FlashStatusBarRenderer.attributedStatusString(
@@ -1176,24 +1183,25 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(message.sublayers?.count, 1, "a message is one line")
     panel.hide()
     XCTAssertNil(panel.toast)
-    XCTAssertEqual(StatusAlert.volume(6).value, "6%")
-    XCTAssertEqual(StatusAlert.volume(50).value, "50%")
-    XCTAssertEqual(StatusAlert.volume(100).value, "100%")
-    XCTAssertEqual(StatusAlert.volume(6).title, "volume")
-    panel.displayAlert(StatusAlert.volume(6))
+    // A plugin's alert names the widest value it shows, so `6%` and `100%`
+    // share one box.
+    func volume(_ percent: Int) -> StatusAlert {
+      PluginAlert(title: "volume", value: "\(percent)%", widestValue: "100%").statusAlert
+    }
+    XCTAssertEqual(volume(6), StatusAlert(title: "volume", value: "6%", valueAnchor: "100%"))
+    panel.displayAlert(volume(6))
     let volumeNarrow = try XCTUnwrap(panel.toast?.layer.frame.width)
     XCTAssertEqual(panel.toast?.layer.sublayers?.count, 2, "a value is its own line")
-    panel.displayAlert(StatusAlert.volume(100))
+    panel.displayAlert(volume(100))
     let volumeWide = try XCTUnwrap(panel.toast?.layer.frame.width)
+    func caffeinate(_ state: String) -> StatusAlert {
+      PluginAlert(title: "caffeinate", value: state, widestValue: "off").statusAlert
+    }
     XCTAssertEqual(
-      StatusAlert.caffeinate(on: true),
-      StatusAlert(title: "caffeinate", value: "on", valueAnchor: "off"))
-    XCTAssertEqual(
-      StatusAlert.caffeinate(on: false),
-      StatusAlert(title: "caffeinate", value: "off", valueAnchor: "off"))
-    panel.displayAlert(StatusAlert.caffeinate(on: true))
+      caffeinate("on"), StatusAlert(title: "caffeinate", value: "on", valueAnchor: "off"))
+    panel.displayAlert(caffeinate("on"))
     let caffeinateOn = try XCTUnwrap(panel.toast?.layer.frame.width)
-    panel.displayAlert(StatusAlert.caffeinate(on: false))
+    panel.displayAlert(caffeinate("off"))
     let caffeinateOff = try XCTUnwrap(panel.toast?.layer.frame.width)
     XCTAssertEqual(volumeNarrow, volumeWide)
     XCTAssertEqual(caffeinateOn, caffeinateOff)
@@ -1203,7 +1211,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertNil(panel.toast)
   }
 
-  /// `alert_show`, a plugin result and a confirmation all draw through the
+  /// `alert show`, a plugin result and a confirmation all draw through the
   /// one alert: the verb's dwell and style map onto it, and a question stays
   /// up with no expiry until the session that asked it is torn down.
   func testEveryAlertIsTheOneConfigurableAlert() throws {
@@ -1303,7 +1311,8 @@ final class StatusBarTests: XCTestCase {
     // Routing turns `.commandLine` a moment before the first paint.
     panel.inputMode = .commandLine
     XCTAssertFalse(panel.commandTextFieldIsLaidOut)
-    panel.becomeKey()
+    // What becoming key does, without taking the user's keyboard.
+    panel.refocusCommandFieldOnBecomingKey()
     XCTAssertTrue(panel.commandTextField.isHidden, "an unplaced field would sit in the corner")
     XCTAssertNil(panel.commandTextField.currentEditor())
 
@@ -1575,7 +1584,7 @@ final class StatusBarTests: XCTestCase {
       """
       [statusbar.click]
       "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
-      "quota" = ["flash", "help_show"]
+      "quota" = ["flash", "help", "show"]
       """)
     XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
     XCTAssertEqual(

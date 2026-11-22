@@ -9,8 +9,11 @@ import Foundation
 ///     [latency] hints_visible ms=<n> origin=<key|hotkey|cli>
 ///       prepared=<hit|miss|none> targets=<n> class=<native|browser|electron|other>
 ///       surface=<surface> bundle=<id|-> outcome=<hit|miss|retried|empty|none>
+///       miss_reason=<PreparedModelMiss|-> cause=<name|-> model_age_ms=<n|->
+///       no_model_ms=<n|-> interval_ms=<n|-> pending=<Pending|->
+///       refresh_in_ms=<n|->
 ///
-/// or, when the activation ends without drawing anything, as
+/// (the fields after `miss_reason` are `PreparedModelMissContext`) or, when the activation ends without drawing anything, as
 ///
 ///     [latency] hints_empty ms=<n> bundle=<id|-> path=<path> origin=<…>
 ///       surface=<surface>
@@ -72,13 +75,25 @@ struct HintLatencyProbe: Equatable {
     max(0, uptime - triggeredAt) * 1000
   }
 
+  /// `missReason` says why the prepared model could not serve a miss, and
+  /// `missContext` what Flash was doing about that model; every one of those
+  /// fields is `-` for a hit and for surfaces that never consult it.
   func line(
     visibleAt uptime: TimeInterval, prepared: Prepared, outcome: Outcome, targets: Int,
-    appClass: AppClass, bundleIdentifier: String?, surface: String
+    appClass: AppClass, bundleIdentifier: String?, surface: String, missReason: PreparedModelMiss?,
+    missContext: PreparedModelMissContext? = nil
   ) -> String {
-    "[latency] hints_visible ms=\(Self.format(elapsedMs(at: uptime))) origin=\(origin.rawValue) "
+    func number(_ value: Int?) -> String { value.map(String.init) ?? "-" }
+    return
+      "[latency] hints_visible ms=\(Self.format(elapsedMs(at: uptime))) origin=\(origin.rawValue) "
       + "prepared=\(prepared.rawValue) targets=\(targets) class=\(appClass.rawValue) "
-      + "surface=\(surface) bundle=\(Self.field(bundleIdentifier)) outcome=\(outcome.rawValue)"
+      + "surface=\(surface) bundle=\(Self.field(bundleIdentifier)) outcome=\(outcome.rawValue) "
+      + "miss_reason=\(missReason?.rawValue ?? "-") cause=\(Self.field(missContext?.cause)) "
+      + "model_age_ms=\(number(missContext?.modelAgeMs)) "
+      + "no_model_ms=\(number(missContext?.noModelMs)) "
+      + "interval_ms=\(number(missContext?.intervalMs)) "
+      + "pending=\(missContext?.pending.rawValue ?? "-") "
+      + "refresh_in_ms=\(number(missContext?.refreshInMs))"
   }
 
   /// An activation that ended without hints: `path` names where discovery
@@ -91,14 +106,31 @@ struct HintLatencyProbe: Equatable {
       + "surface=\(surface)"
   }
 
+  /// The activation as telemetry: `flash.hints.latency` and a span from the
+  /// trigger inside its interaction. No bundle identifier: which apps the
+  /// user works in stays on this Mac.
+  func recordTelemetry(
+    endedAt uptime: TimeInterval, surface: String, outcome: String, appClass: String?,
+    targets: Int
+  ) {
+    guard FlashTelemetry.current != nil else { return }
+    var attributes = ["origin": origin.rawValue, "surface": surface, "outcome": outcome]
+    if let appClass { attributes["app_class"] = appClass }
+    FlashTelemetry.record(.hintsLatency, elapsedMs(at: uptime), attributes)
+    attributes["targets"] = String(targets)
+    FlashTelemetry.span(
+      outcome == "empty" ? "hints empty" : "hints visible", trace: trace.text,
+      startUptime: triggeredAt, endUptime: uptime, attributes: attributes, origin: origin)
+  }
+
   private static func format(_ ms: Double) -> String {
     String(format: "%.1f", ms)
   }
 
-  /// A bundle id never contains whitespace; an unknown one is `-`, so every
-  /// field still parses as `name=value`.
-  private static func field(_ bundleIdentifier: String?) -> String {
-    guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return "-" }
-    return bundleIdentifier
+  /// A bundle id or a notification name never contains whitespace; an
+  /// unknown one is `-`, so every field still parses as `name=value`.
+  private static func field(_ value: String?) -> String {
+    guard let value, !value.isEmpty else { return "-" }
+    return value
   }
 }

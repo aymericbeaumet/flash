@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.applescript.reply.schema.json",
+  "title": "host.applescript reply",
+  "description": "Host to plugin: the script's result, or why there is none. A script that ran and failed carries its exit status.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "result"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "result": {
+              "type": "string",
+              "$comment": "At most 1048576 bytes."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "error"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "error": {
+              "type": "string",
+              "pattern": "\\S",
+              "description": "A content-free reason; never blank."
+            },
+            "status": {
+              "type": "integer",
+              "description": "The exit status of a script that ran and failed, or the timeout's."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

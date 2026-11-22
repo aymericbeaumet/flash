@@ -62,6 +62,10 @@ enum MainThreadActivity {
 /// activity labels that led up to it.
 final class MainRunLoopStallObserver {
   static let stallThresholdMs = 250.0
+  /// A busy stretch a keystroke can feel (three frames) but the tap
+  /// survives: logged at info, so `bench:log-summary` shows what main
+  /// spends its hitches on.
+  static let hitchThresholdMs = 50.0
 
   private var observer: CFRunLoopObserver?
   private var busySince: UInt64?
@@ -87,10 +91,44 @@ final class MainRunLoopStallObserver {
     guard let started = busySince else { return }
     busySince = nil
     let ms = Double(now &- started) / 1_000_000
-    guard ms >= Self.stallThresholdMs else { return }
-    let activity = MainThreadActivity.recent()
-    FlashLog.warn(
-      String(format: "[watchdog] main_busy ms=%.0f", ms),
-      fields: ["last_activity_ms_ago": activity])
+    switch Self.severity(ms: ms) {
+    case nil:
+      return
+    case .hitch:
+      FlashLog.info(
+        String(format: "[watchdog] main_hitch ms=%.0f", ms),
+        fields: ["last_activity_ms_ago": MainThreadActivity.recent()])
+    case .stall:
+      FlashLog.warn(
+        String(format: "[watchdog] main_busy ms=%.0f", ms),
+        fields: ["last_activity_ms_ago": MainThreadActivity.recent()])
+    }
+  }
+
+  enum Severity: Equatable {
+    case hitch
+    case stall
+  }
+
+  /// How a busy stretch of `ms` is reported: nothing under a hitch.
+  static func severity(ms: Double) -> Severity? {
+    if ms >= stallThresholdMs { return .stall }
+    if ms >= hitchThresholdMs { return .hitch }
+    return nil
+  }
+}
+
+/// Flash answers the keyboard: a key must be handled at once, not after App
+/// Nap throttled the resident for looking idle (an agent app with no visible
+/// window is a candidate). One activity, held for the life of the process,
+/// keeps App Nap off while still letting the Mac and its displays sleep, and
+/// leaves timer coalescing alone: `.latencyCritical` would defeat the slack
+/// `PollScheduler` registrations declare.
+enum ResidentActivity {
+  static let options: ProcessInfo.ActivityOptions = [.userInitiatedAllowingIdleSystemSleep]
+
+  static func begin() -> NSObjectProtocol {
+    ProcessInfo.processInfo.beginActivity(
+      options: options, reason: "Flash answers keyboard input as it arrives")
   }
 }

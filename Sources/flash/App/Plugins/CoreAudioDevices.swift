@@ -2,7 +2,7 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 
-enum AudioDeviceDirection: String {
+enum AudioDeviceDirection: String, Hashable, CaseIterable {
   case input
   case output
 
@@ -21,19 +21,32 @@ enum AudioDeviceDirection: String {
   }
 }
 
-struct AudioDeviceRecord {
+struct AudioDeviceRecord: Equatable {
   let uid: String
   let name: String
   let isDefault: Bool
 }
 
+/// The default output's level as the volume bezel shows it.
+struct OutputVolume: Equatable {
+  /// 0 to 100.
+  let percent: Int
+  let muted: Bool
+}
+
+/// CoreAudio, behind a seam so its callers are tested without touching the
+/// Mac's real devices. Every call is a synchronous audio-server request:
+/// callers stay off the main thread.
 protocol AudioDeviceProviding {
   func list(direction: AudioDeviceDirection) throws -> [AudioDeviceRecord]
   func select(uid: String, direction: AudioDeviceDirection) throws
-  /// Move the default output one macOS volume-key tick in the sign of
-  /// `deltaPercent` and clear mute. Returns the percent the bezel would show.
-  func adjustOutputVolume(deltaPercent: Int) throws -> Int
-  func toggleOutputMute() throws
+  /// Move the default output `ticks` macOS volume-key ticks, up when
+  /// positive and down when negative, and clear mute. Returns the percent
+  /// the bezel would show.
+  func stepOutputVolume(ticks: Int) throws -> Int
+  /// Mute or unmute the default output. Returns whether it is muted.
+  func toggleOutputMute() throws -> Bool
+  func outputVolume() throws -> OutputVolume
 }
 
 enum AudioDeviceError: LocalizedError {
@@ -114,11 +127,21 @@ struct CoreAudioDevices: AudioDeviceProviding {
     Int((Double(scalar) * 100).rounded())
   }
 
+  /// `current` moved `ticks` ticks, one tick at a time: the first step from a
+  /// scalar between ticks lands on the neighbouring tick.
+  static func nativeVolume(_ current: Float32, ticks: Int) -> Float32 {
+    var scalar = current
+    for _ in 0..<min(abs(ticks), volumeTicks) {
+      scalar = nativeVolume(scalar, direction: ticks)
+    }
+    return scalar
+  }
+
   @discardableResult
-  func adjustOutputVolume(deltaPercent: Int) throws -> Int {
+  func stepOutputVolume(ticks: Int) throws -> Int {
     let id = try defaultDeviceID(direction: .output)
     let address = try outputVolumeAddress(id)
-    let next = Self.nativeVolume(try floatProperty(id, address), direction: deltaPercent)
+    let next = Self.nativeVolume(try floatProperty(id, address), ticks: ticks)
     try setFloatProperty(id, address, next)
     let mute = muteAddress
     if hasProperty(id, mute) {
@@ -127,11 +150,22 @@ struct CoreAudioDevices: AudioDeviceProviding {
     return Self.volumePercent(next)
   }
 
-  func toggleOutputMute() throws {
+  @discardableResult
+  func toggleOutputMute() throws -> Bool {
     let id = try defaultDeviceID(direction: .output)
     let mute = muteAddress
     guard hasProperty(id, mute) else { throw AudioDeviceError.unsupported("mute") }
-    try setUInt32Property(id, mute, try uint32Property(id, mute) == 0 ? 1 : 0)
+    let muted = try uint32Property(id, mute) == 0
+    try setUInt32Property(id, mute, muted ? 1 : 0)
+    return muted
+  }
+
+  func outputVolume() throws -> OutputVolume {
+    let id = try defaultDeviceID(direction: .output)
+    let scalar = try floatProperty(id, try outputVolumeAddress(id))
+    let mute = muteAddress
+    let muted = hasProperty(id, mute) ? try uint32Property(id, mute) != 0 : false
+    return OutputVolume(percent: Self.volumePercent(scalar), muted: muted)
   }
 
   private var muteAddress: AudioObjectPropertyAddress {

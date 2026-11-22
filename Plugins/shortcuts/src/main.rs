@@ -4,8 +4,8 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use flash_plugin::{
-    Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate, applescript_quote,
-    run, run_osascript,
+    AppleScriptOperation, Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate,
+    host_events, run,
 };
 
 const SOURCE_ENTRIES: &str = "shortcuts.entries";
@@ -69,32 +69,13 @@ fn refresh_due(last: Option<&Listed>, stamp: &Stamp, now: Instant) -> bool {
 /// the Shortcuts app. Tracks the focused app in `focused`.
 fn triggers(focused: &mut Option<String>, event: &Event) -> bool {
     match event.name.as_str() {
-        "core:session.opened" => true,
-        "core:focus.changed" => {
+        host_events::SESSION_OPENED => true,
+        host_events::FOCUS_CHANGED => {
             let previous = std::mem::replace(focused, event.bundle_id.clone());
             previous.as_deref() == Some(SHORTCUTS_BUNDLE_ID) && *focused != previous
         }
         _ => false,
     }
-}
-
-const LIST_SCRIPT: &str = r#"
-tell application "Shortcuts Events"
-  set output to name of every shortcut
-end tell
-set AppleScript's text item delimiters to linefeed
-return output as text
-"#;
-
-fn run_script(shortcut_name: &str) -> String {
-    format!(
-        r#"
-tell application "Shortcuts Events"
-  run shortcut named {}
-end tell
-"#,
-        applescript_quote(shortcut_name)
-    )
 }
 
 struct Shortcuts;
@@ -103,8 +84,9 @@ flash_plugin::plugin!(Shortcuts);
 
 impl FlashPlugin for Shortcuts {
     async fn on_start(&self, ctx: Context) {
-        // Shortcuts Events is faceless and may be launched by osascript, so it
-        // cannot be gated by the host's regular-application snapshot.
+        // Shortcuts Events is faceless and may be launched by the listing
+        // script, so it cannot be gated by the host's regular-application
+        // snapshot.
         if !refresh_candidates(&ctx).await {
             log_degraded_initial(&ctx);
             let retry_ctx = ctx.clone();
@@ -115,7 +97,7 @@ impl FlashPlugin for Shortcuts {
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
-        if event.name == "core:config.changed" {
+        if event.name == host_events::CONFIG_CHANGED {
             refresh_candidates(&ctx).await;
             return;
         }
@@ -161,21 +143,26 @@ async fn refresh_candidates(ctx: &Context) -> bool {
 /// the database this listing reads, recorded on success. Run under the gate.
 async fn list(ctx: &Context, stamp: Stamp) -> bool {
     let started_at = Instant::now();
-    let result = run_osascript(ctx, LIST_SCRIPT, Duration::from_secs(30)).await;
-    if !result.ok {
-        ctx.log(
-            "warn",
-            &format!("[shortcuts] list failed: {}", result.stderr.trim()),
-        );
-        log_refresh(ctx, "failed", 0, started_at);
-        return false;
-    }
+    let output = match ctx
+        .applescript(
+            &AppleScriptOperation::ShortcutsList,
+            Duration::from_secs(30),
+        )
+        .await
+    {
+        Ok(output) => output,
+        Err(_) => {
+            ctx.log("warn", "[shortcuts] list failed");
+            log_refresh(ctx, "failed", 0, started_at);
+            return false;
+        }
+    };
     *LAST_LISTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Listed {
         at: started_at,
         stamp,
     });
 
-    let names = names_from_output(&result.stdout);
+    let names = names_from_output(&output);
     if replace_if_changed(&mut last_published(), &names) {
         ctx.publish(candidates_from_names(&names));
     }
@@ -255,8 +242,15 @@ async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
     let Some(name) = row.payload_str().filter(|name| !name.is_empty()) else {
         return PerformResponse::fail("row payload carries no shortcut name");
     };
-    let result = run_osascript(ctx, &run_script(name), Duration::from_secs(30)).await;
-    if result.ok {
+    let result = ctx
+        .applescript(
+            &AppleScriptOperation::ShortcutRun {
+                name: name.to_string(),
+            },
+            Duration::from_secs(30),
+        )
+        .await;
+    if result.is_ok() {
         PerformResponse::ok()
     } else {
         PerformResponse::fail("shortcut run failed")
@@ -321,15 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn run_script_quotes_the_shortcut_name() {
-        let script = run_script("Ship \"release\" \\ archive");
-        assert!(script.contains("run shortcut named \"Ship \\\"release\\\" \\\\ archive\""));
-    }
-
-    /// Nothing polls: a trigger relists only when the Shortcuts database
-    /// changed since the last listing, or — when it cannot be read — once
-    /// the listing is `FALLBACK_TTL` old.
-    #[test]
     fn an_unchanged_database_skips_the_listing() {
         let now = Instant::now();
         let at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
@@ -377,11 +362,5 @@ mod tests {
             &mut focused,
             &event("core:focus.changed", Some("com.apple.Mail"))
         ));
-    }
-
-    #[test]
-    fn list_script_targets_the_faceless_shortcuts_events_service() {
-        assert!(LIST_SCRIPT.contains("tell application \"Shortcuts Events\""));
-        assert!(!LIST_SCRIPT.contains("tell application \"Shortcuts\""));
     }
 }

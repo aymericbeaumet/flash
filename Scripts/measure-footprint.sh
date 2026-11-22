@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read-only footprint snapshot of the running Flash resident and its children.
 #
-# Usage: Scripts/measure-footprint.sh [sample-seconds] [log-window-minutes]
+# Usage: mise run bench:footprint -- [sample-seconds] [log-window-minutes]
 #
 # Reports host/children CPU, idle wakeups, context switches, memory, file
 # descriptors, and log-derived health (main-thread stalls, tap re-enables,

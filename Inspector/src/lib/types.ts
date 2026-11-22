@@ -6,180 +6,125 @@ export interface LogRecord {
   fields?: Record<string, unknown>;
 }
 
-export interface PluginCommand {
-  command: string;
-  subcommand: string;
-  description: string;
-}
+// The snapshot's types are generated from its schema
+// (`docs/schema/inspector/state.schema.json`, `scripts/state-types.ts`):
+// change the schema, never these.
+import type { ClipboardEntry, StateSnapshot } from "./state.generated.ts";
 
-export interface PluginInfo {
-  id: string;
-  name: string;
-  version: string;
-  description?: string;
-  origin?: string;
-  root?: string;
-  /** stopped | installing | launching | running | failed | manifest_only */
-  state: string;
-  /** resident | on_demand | manifest_only */
-  activation?: string;
-  pid?: number | null;
-  /** When the running process started; the page derives its uptime. */
-  started_at_unix_ms?: number | null;
-  source_count?: number;
-  command_count?: number;
-  restart_count?: number;
-  last_error?: string | null;
-  last_log?: string | null;
-  /** Cumulative CPU time, sampled with the snapshot (`snapshot_at_unix_ms`). */
-  cpu_time_ms?: number | null;
-  /** Resident memory, sampled with the snapshot. */
-  memory_bytes?: number | null;
-  only_bundle_ids?: string[];
-  priority?: number;
-  commands?: PluginCommand[];
-  status_segments?: Record<string, string>;
-  [key: string]: unknown;
-}
+export type {
+  ClipboardEntry,
+  ClipboardRegister,
+  CommandInfo,
+  CommandResolution,
+  DocTopic,
+  EventMonitorInfo,
+  FocusedApp,
+  KeyboardState,
+  MappingRow,
+  MappingsState,
+  Monitor,
+  MonitorInfo,
+  MonitorRun,
+  PluginInfo,
+  SignalCounts,
+  StateSnapshot,
+  TelemetryExporterState,
+  TelemetryReceiverState,
+  TelemetryState,
+} from "./state.generated.ts";
 
-export interface CommandInfo {
-  name: string;
-  syntax?: string;
-  aliases?: string[];
-  description?: string;
-  source: string;
-  source_kind: "core" | "plugin";
-  command?: string;
-  subcommand?: string;
-}
+/**
+ * The snapshot as the page holds it: empty until Flash answers, then every
+ * section a snapshot or a stream patch has carried.
+ */
+export type InspectorState = Partial<StateSnapshot>;
 
-export interface FocusedApp {
-  bundle_id?: string | null;
-  localized_name?: string | null;
-  pid?: number | null;
-}
-
-export interface MappingRow {
-  scope: string;
-  key: string;
-  action: string;
-  /** What this binding does, including its flags. The row's ? shows it, and search ranks it. */
-  explanation?: string;
-  /** `default`, `config` or `config:<file>`, or `plugin:<name>`. */
-  origin?: string;
-}
-
-/** How one action resolves in the focused app, in dispatch order. */
-export interface ActionResolution {
-  action: string;
-  /** Sources (and Flash's own step) that get first try: `source:<id>`, `flash:<step>`. */
-  claimed_by: string[];
-  /** What runs otherwise: `cmd+t`, `cmd+k, cmd+w`, `menu File › New Tab`, `none`, or null for nothing. */
-  binding: string | null;
-  /** Who declared the binding: a plugin id, `flash` for Flash's own scrolling. */
-  source: string | null;
-}
-
-export interface MappingsState {
-  normal_leader: string;
-  rows: MappingRow[];
-  effective_rows?: MappingRow[];
-  actions?: ActionResolution[];
-  bundle_id?: string | null;
-  localized_name?: string | null;
-}
-
-export interface ClipboardEntry {
-  /** 32 lowercase hex characters. Image bytes load from `/api/clipboard/<id>`. */
-  id: string;
-  /** `text`, `image`, `html`, or `files`. */
-  kind: string;
-  /** One-line label. */
-  preview: string;
-  /** Plain text put back on the clipboard. Empty for an image that had none. */
-  value: string;
+/**
+ * An entry of `/api/clipboard/history`: the snapshot's entry, with what only
+ * a history page carries.
+ */
+export interface ClipboardHistoryEntry extends ClipboardEntry {
+  /** Plain text put back on the clipboard (empty for an image that had none). */
+  value?: string;
   /** Formatted copy, shown in a sandboxed frame. */
   html?: string;
-  /** Present when this entry has an image to render. */
-  mime?: string;
-  /** Paths from a file copy. */
-  files?: string[];
 }
 
-export interface DocTopic {
+export type TelemetryKind = "gauge" | "sum" | "histogram" | "exponential_histogram" | "summary";
+
+/** One stream of a received metric: its attributes and current reading. */
+export interface TelemetrySeries {
+  /** The point's own attributes. */
+  attributes: Record<string, string>;
+  resource: Record<string, string>;
+  scope: string;
+  /** A gauge's or sum's latest point; a distribution's latest mean. */
+  latest: number | null;
+  /** Per second over the latest interval; 0 once the series went quiet. */
+  rate: number | null;
+  /** A sum's running total. */
+  total: number | null;
+  /** Oldest first: gauge values, sum increments, distribution window counts. */
+  history: number[];
+  updated_ms: number;
+  time_ms: number | null;
+  /** No point for two and a half reporting intervals. */
+  quiet: boolean;
+  updates: number;
+  count?: number | null;
+  sum?: number | null;
+  mean?: number | null;
+  min?: number | null;
+  max?: number | null;
+  p50?: number | null;
+  p90?: number | null;
+  p99?: number | null;
+}
+
+export interface TelemetryMetric {
   name: string;
-  title: string;
-  summary: string;
-  /** Raw Markdown — the Docs tab renders it client-side. */
+  kind: TelemetryKind;
+  unit: string;
+  description: string;
+  temporality: "cumulative" | "delta" | "unspecified";
+  monotonic: boolean;
+  series: TelemetrySeries[];
+}
+
+export interface TelemetryLog {
+  time_ms: number;
+  severity: string;
+  severity_number: number;
   body: string;
-  aliases?: string[];
-  /** The section Flash files the guide under; topics arrive in reading order. */
-  group?: string;
-  /** The published manual page with the long-form reference, if any. */
-  manual?: string | null;
+  attributes: Record<string, string>;
+  service: string;
+  scope: string;
+  trace_id: string;
+  span_id: string;
+  event: string;
 }
 
-export interface ClipboardRegister {
+export interface TelemetrySpan {
+  trace_id: string;
+  span_id: string;
+  parent_span_id: string;
   name: string;
-  text: string;
-  kind: "unnamed" | "yank" | "named" | "clipboard";
-  /** Snapshot contains a preview; the resident keeps the full value for paste. */
-  truncated?: boolean;
+  kind: string;
+  start_ms: number;
+  duration_ms: number;
+  status: "ok" | "error" | "unset";
+  status_message: string;
+  attributes: Record<string, string>;
+  events: number;
+  service: string;
+  scope: string;
 }
 
-/** The keyboard page's model: the layout, the hint alphabet and what the keys do. */
-export interface KeyboardState {
-  /** `qwerty`, `colemak`, `dvorak` or `bepo`. */
-  layout: string;
-  /** Four rows of ten keys: number, top, home, bottom. */
-  rows: string[];
-  /** The hint alphabet, best key first. */
-  alphabet: string;
-  key_scores: Record<string, number>;
-  /** The mouse grid's keys, one string per row. */
-  grid_keys: string[];
-  label_order: string;
-  /** The zone keys of `label_order = "zones"`, one string per keyboard row. */
-  zone_rows: string[];
-  navigation: { left: string; down: string; up: string; right: string; quadrants: string[] };
-  adjust_digits: string;
-  held_button?: string | null;
-}
-
-export interface InspectorState {
-  /** When Flash took this snapshot: it pushes one on each change. */
-  snapshot_at_unix_ms?: number;
-  runtime?: {
-    version?: string;
-    build?: string;
-    pid?: number;
-    /** When the resident started; the page derives its uptime. */
-    started_at_unix_ms?: number;
-    accessibility_trusted?: boolean;
-    keyboard_capture_active?: boolean;
-    secure_input?: boolean;
-    advanced_mode?: boolean;
-    config_path?: string;
-    config_error?: string | null;
-  };
-  mode?: string;
-  /** `idle`, `discovering`, `labels`, `grid`, `search`, `adjusting`, `pointer`, `bigram` or `confirming`. */
-  hint_session?: string;
-  keyboard?: KeyboardState;
-  overlay?: string | null;
-  focused_app?: FocusedApp;
-  config?: Record<string, unknown>;
-  /** Sparse tree parallel to `config`. A node's `$` is `{ layer, where }` when a later layer overrode the default. */
-  config_sources?: { $?: { layer?: string; where?: string }; [key: string]: unknown };
-  plugins?: PluginInfo[];
-  commands?: CommandInfo[];
-  docs?: DocTopic[];
-  clipboard?: ClipboardEntry[];
-  /** Populated Vim-style text registers from the resident process. */
-  clipboard_registers?: ClipboardRegister[];
-  /** Offset of the next clipboard page, or null when this is the full history. */
-  clipboard_next_offset?: number | null;
-  /** Number of entries retained by core clipboard history. */
-  clipboard_total?: number;
-  mappings?: MappingsState;
+/** `GET /api/telemetry`: everything the receiver holds, oldest first. */
+export interface TelemetryData {
+  revision: number;
+  metrics: TelemetryMetric[];
+  logs: TelemetryLog[];
+  spans: TelemetrySpan[];
+  limits: { max_series: number; max_points: number; max_logs: number; max_spans: number };
 }

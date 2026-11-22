@@ -1,0 +1,714 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/definitions.schema.json",
+  "title": "definitions",
+  "description": "Shapes the frames of the plugin protocol share. Byte quotas are written as maxLength: a string within the quota always passes, and the receiver counts UTF-8 bytes, so a multi-byte string may still be refused.",
+  "definitions": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "A request id: positive, monotonic per sender. The host's and the plugin's counters are independent."
+    },
+    "deadline_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The milliseconds the host still waits for the reply as it writes the request."
+    },
+    "trace": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{1,16}$",
+      "description": "The id of the user interaction that caused a request."
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647,
+      "description": "A native process id."
+    },
+    "priority": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "important",
+        "urgent"
+      ]
+    },
+    "ok": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "description": "A success that carries nothing else."
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "A content-free reason; never blank."
+        }
+      },
+      "description": "The response law's failure: a content-free reason and nothing else."
+    },
+    "window_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      },
+      "description": "The focused window in global AppKit points; all zero when the app has none."
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundle_id",
+        "pid",
+        "front_window_frame"
+      ],
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "pid": {
+          "$ref": "#/definitions/pid"
+        },
+        "front_window_frame": {
+          "$ref": "#/definitions/window_frame"
+        }
+      },
+      "description": "The focused app a core command runs against."
+    },
+    "spatial_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundle_id",
+        "pid",
+        "front_window_frame"
+      ],
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "pid": {
+          "$ref": "#/definitions/pid"
+        },
+        "front_window_frame": {
+          "$ref": "#/definitions/window_frame"
+        },
+        "display_scale": {
+          "type": "number",
+          "description": "Physical pixels per AppKit point of the window's display, when known."
+        }
+      },
+      "description": "The focused app a hints or text_grid request describes."
+    },
+    "text_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "copy_text",
+            "insert_text"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      }
+    },
+    "open_url_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "open"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 65536,
+          "pattern": "^(?![Ff][Ii][Ll][Ee]:)[A-Za-z][A-Za-z0-9+.-]*:",
+          "description": "An absolute URL of any scheme but file."
+        }
+      }
+    },
+    "open_app_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "bundle_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "open"
+        },
+        "bundle_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      }
+    },
+    "effect": {
+      "description": "What committing a catalog row does.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/text_effect"
+        },
+        {
+          "$ref": "#/definitions/open_url_effect"
+        },
+        {
+          "$ref": "#/definitions/open_app_effect"
+        }
+      ]
+    },
+    "alert_line": {
+      "description": "One non-blank line of an alert, without a line break, at most quotas.alert_value_bytes.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[^\\n\\u000b\\u000c\\r\\u0085\\u2028\\u2029]*\\S[^\\n\\u000b\\u000c\\r\\u0085\\u2028\\u2029]*$"
+    },
+    "perform_alert": {
+      "description": "The centred alert a perform reply asks the host to show: a one-line message, or a title over a one-line value. widest_value is the widest value the alert shows, so its box keeps one size while the value changes.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "\\S",
+              "description": "Non-blank, at most quotas.alert_title_bytes."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "value"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "\\S",
+              "description": "Non-blank, at most quotas.alert_title_bytes."
+            },
+            "value": {
+              "$ref": "#/definitions/alert_line"
+            },
+            "widest_value": {
+              "$ref": "#/definitions/alert_line"
+            }
+          }
+        }
+      ]
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "title"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "A manifest sources[].name of the plugin: a pushed one in a publish, the live one asked for in a search reply."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 16384,
+          "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+          "description": "An absolute URL."
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "$comment": "Open by design: the keys are the plugin's own, apart from the host-read ones docs/plugin-protocol.md lists.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 256
+          },
+          "properties": {
+            "priority": {
+              "$ref": "#/definitions/priority"
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 65536
+          }
+        },
+        "effect": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/effect"
+            }
+          ]
+        },
+        "confirm": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "\\S",
+          "maxLength": 256,
+          "description": "The question the host asks before it acts on the row; never blank, at most 256 bytes."
+        }
+      },
+      "description": "One row: as a plugin publishes it or answers a search with it, and as the host hands it back in perform {kind: resolve}."
+    },
+    "answer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "effect"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "subtitle": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 16384
+        },
+        "effect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "copy_text",
+                "insert_text"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            }
+          },
+          "$comment": "Never open: an evaluator cannot manufacture navigation."
+        }
+      },
+      "description": "One evaluate answer."
+    },
+    "target_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "description": "A hint target's rectangle in global AppKit points."
+    },
+    "hint_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "frame"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "frame": {
+          "$ref": "#/definitions/target_frame"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/pid"
+            }
+          ]
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/priority"
+            }
+          ]
+        },
+        "context_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "description": "One hint target: geometry and semantics, nothing about the mode."
+    },
+    "text_grid_cell": {
+      "description": "Where a text grid's cells are inside the window, in AppKit points: one cell's size, and the padding between the window's left and top edges and the grid.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "pad_x",
+        "pad_y"
+      ],
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pad_x": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pad_y": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "text_grid_line": {
+      "description": "One line of a text grid: captured text, or a status format laid out over width cells.",
+      "$comment": "row < rows, column < columns and width <= columns - column; the receiver checks them against the reply's dimensions.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "row",
+            "column",
+            "text"
+          ],
+          "properties": {
+            "row": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "row",
+            "column",
+            "width",
+            "format"
+          ],
+          "properties": {
+            "row": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "format": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "app_items_params": {
+      "description": "The params of host.notes, host.reminders and host.contacts: one operation with exactly its own fields.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "access"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "request_access"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "list"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "id"
+          ],
+          "properties": {
+            "operation": {
+              "const": "show"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$",
+              "description": "An identifier a list returned."
+            }
+          }
+        }
+      ]
+    },
+    "app_items_result": {
+      "description": "The result of host.notes, host.reminders and host.contacts: the access alone (for access, request_access, and a list without the grant), the items of a granted list in the app's order, a show that happened, or why the host could not answer.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "access"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "access": {
+              "enum": [
+                "granted",
+                "denied",
+                "undetermined"
+              ],
+              "description": "What macOS answers about Flash's grant, without asking."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "access",
+            "items"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "access": {
+              "const": "granted"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 10000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "title"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Selects the item in its app again."
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "A note's name, a reminder's title, the name Contacts shows a card by."
+                  },
+                  "list": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "The title of a reminder's list."
+                  },
+                  "list_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The position of a reminder's list among Reminders' lists."
+                  },
+                  "created": {
+                    "type": "number",
+                    "description": "When a reminder was created, in Unix seconds."
+                  }
+                }
+              }
+            },
+            "truncated": {
+              "const": true,
+              "description": "Later items were left out: the reply holds at most 10000 items and 2097152 bytes of them."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            }
+          },
+          "description": "A show: the app was brought forward on the item."
+        },
+        {
+          "$ref": "#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

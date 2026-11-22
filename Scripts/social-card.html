@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      html, body { width: 1280px; height: 640px; }
+      body {
+        background: radial-gradient(1100px 620px at 78% 40%, #12283a 0%, #0b1017 58%, #080b10 100%);
+        color: #e8eef5;
+        font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
+        display: flex; align-items: center; padding: 0 84px; gap: 64px; overflow: hidden;
+      }
+      .copy { flex: 1 1 auto; }
+      .name { display: flex; align-items: center; gap: 22px; margin-bottom: 30px; }
+      .name img { width: 92px; height: 92px; }
+      .name span { font-size: 68px; font-weight: 700; letter-spacing: -1.5px; }
+      h1 { font-size: 58px; line-height: 1.08; font-weight: 700; letter-spacing: -1.6px; }
+      h1 em { font-style: normal; color: #5fd0ff; }
+      p { margin-top: 26px; font-size: 28px; line-height: 1.4; color: #9fb1c4; max-width: 640px; }
+      .keys { margin-top: 38px; display: flex; gap: 12px; align-items: center; font-size: 24px; color: #9fb1c4; }
+      kbd {
+        font: 600 24px/1 -apple-system, "SF Pro Text", sans-serif; color: #e8eef5;
+        padding: 12px 16px; border-radius: 10px; background: #18222e;
+        border: 1px solid #2a3b4e; box-shadow: 0 2px 0 #05080c;
+      }
+      .window {
+        flex: 0 0 420px; height: 432px; border-radius: 16px; background: #111922;
+        border: 1px solid #253445; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55); position: relative;
+      }
+      .bar { height: 44px; border-bottom: 1px solid #253445; display: flex; align-items: center; gap: 8px; padding: 0 16px; }
+      .dot { width: 12px; height: 12px; border-radius: 50%; background: #2c3d50; }
+      .row { margin: 22px 24px 0; display: flex; gap: 14px; align-items: center; }
+      .ctl { height: 40px; border-radius: 9px; background: #1a2633; border: 1px solid #2a3b4e; position: relative; flex: 1; }
+      .ctl.s { flex: 0 0 96px; }
+      .ctl.t { flex: 0 0 40px; border-radius: 50%; }
+      .line { height: 12px; border-radius: 6px; background: #1a2633; flex: 1; }
+      .hint {
+        position: absolute; left: -9px; top: -11px; font: 700 17px/1 "SF Mono", Menlo, monospace;
+        color: #06131c; background: #5fd0ff; padding: 5px 7px; border-radius: 6px;
+        box-shadow: 0 3px 10px rgba(95, 208, 255, 0.45);
+      }
+      .hint.hit { background: #ffd866; box-shadow: 0 3px 14px rgba(255, 216, 102, 0.6); }
+    </style>
+  </head>
+  <body>
+    <div class="copy">
+      <div class="name"><img src="icon.png" alt="" /><span>Flash</span></div>
+      <h1>Your keyboard,<br /><em>all of macOS.</em></h1>
+      <p>Click any button, drive any app in Vim mode, tile your windows. Free and open source.</p>
+      <div class="keys"><kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd><span>then type a label</span></div>
+    </div>
+    <div class="window">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <div class="row"><div class="ctl s"><span class="hint">A</span></div><div class="ctl s"><span class="hint">S</span></div><div class="ctl"><span class="hint">D</span></div></div>
+      <div class="row"><div class="ctl t"><span class="hint">F</span></div><div class="line"></div></div>
+      <div class="row"><div class="ctl t"><span class="hint hit">J</span></div><div class="line"></div></div>
+      <div class="row"><div class="ctl t"><span class="hint">K</span></div><div class="line"></div></div>
+      <div class="row"><div class="ctl"><span class="hint">L</span></div><div class="ctl s"><span class="hint">G</span></div></div>
+      <div class="row"><div class="ctl s"><span class="hint">H</span></div><div class="ctl"><span class="hint">W</span></div><div class="ctl s"><span class="hint">E</span></div></div>
+    </div>
+  </body>
+</html>

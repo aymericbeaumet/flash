@@ -39,6 +39,11 @@ final class HintSessionShapesTests: XCTestCase {
     else { return XCTFail("multi exists on the grid") }
     XCTAssertEqual(fromMulti.mouse, .multi(.leftClick, modifiers: []))
 
+    XCTAssertNil(
+      HintSurfaceSwitching.request(from: .target(.copyURL, nil), kind: .grid),
+      "the grid has no URL to copy")
+    XCTAssertNil(HintSurfaceSwitching.request(from: .target(.copyURL, nil), kind: .scope))
+
     guard
       case .screen(let widened)? = HintSurfaceSwitching.request(
         from: .target(click, nil), kind: .scope)
@@ -80,11 +85,12 @@ final class HintSessionShapesTests: XCTestCase {
 
   func testMouseTargetParsesThePathStickyAndWordsShapes() {
     func parse(_ args: [String]) -> URLCommand? {
-      parseMappingCommand(argv: ["flash", "mouse_target"] + args)?.command
+      parseMappingCommand(argv: ["flash", "mouse", "target"] + args)?.command
     }
     XCTAssertEqual(parse(["--path"]), .mouseTarget(.path(.leftClick, modifiers: [])))
     XCTAssertEqual(
-      parse(["--sticky", "--secondary"]), .mouseTarget(.sticky(.rightClick, modifiers: [])))
+      parse(["--sticky", "--double"]), .mouseTarget(.sticky(.doubleClick, modifiers: [])))
+    XCTAssertNil(parse(["--sticky", "--secondary"]), "a secondary click's menu takes the keyboard")
     XCTAssertEqual(parse(["--words"]), .mouseTargetWords(.click(.leftClick, modifiers: [])))
     XCTAssertEqual(parse(["--words", "--select"]), .mouseTargetWords(.select(modifiers: [])))
     XCTAssertEqual(parse(["--words", "--move"]), .mouseTargetWords(.move))
@@ -92,44 +98,44 @@ final class HintSessionShapesTests: XCTestCase {
     XCTAssertNil(parse(["--words", "--scope=screen"]))
     XCTAssertNil(parse(["--path", "--sticky"]), "one shape per session")
     XCTAssertNil(parse(["--scope=screen", "--sticky"]), "screen scope is click-only")
-    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--path"]))
-    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--sticky"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse", "grid", "--path"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse", "grid", "--sticky"]))
     XCTAssertEqual(
       URLCommand.mouseTarget(.path(.doubleClick, modifiers: [.command])).argv,
-      ["flash", "mouse_target", "--path", "--double", "--modifiers=cmd"])
+      ["flash", "mouse", "target", "--path", "--double", "--modifiers=cmd"])
     XCTAssertEqual(
       URLCommand.mouseTargetWords(.select(modifiers: [])).argv,
-      ["flash", "mouse_target", "--words", "--select"])
+      ["flash", "mouse", "target", "--words", "--select"])
   }
 
   func testScreenWarpAndPositionVerbsParseAndRender() {
     func parse(_ argv: [String]) -> URLCommand? { parseMappingCommand(argv: argv)?.command }
-    XCTAssertEqual(parse(["flash", "mouse_screens"]), .mouseScreens)
-    XCTAssertNil(parse(["flash", "mouse_screens", "--move"]))
-    XCTAssertEqual(parse(["flash", "mouse_warp"]), .mouseWarp(.init()))
+    XCTAssertEqual(parse(["flash", "mouse", "screens"]), .mouseScreens(.init()))
+    XCTAssertNil(parse(["flash", "mouse", "screens", "--move"]))
+    XCTAssertEqual(parse(["flash", "mouse", "warp"]), .mouseWarp(.init()))
     XCTAssertEqual(
-      parse(["flash", "mouse_warp", "--area=screen", "--edge=top"]),
+      parse(["flash", "mouse", "warp", "--area=screen", "--edge=top"]),
       .mouseWarp(.init(area: .screen, edge: .top)))
-    XCTAssertNil(parse(["flash", "mouse_warp", "--edge=middle"]))
-    XCTAssertEqual(parse(["flash", "mouse_position", "--action=save"]), .mousePosition(.save))
-    XCTAssertEqual(parse(["flash", "mouse_position", "--action=next"]), .mousePosition(.next))
+    XCTAssertNil(parse(["flash", "mouse", "warp", "--edge=middle"]))
+    XCTAssertEqual(parse(["flash", "mouse", "position", "--action=save"]), .mousePosition(.save))
+    XCTAssertEqual(parse(["flash", "mouse", "position", "--action=next"]), .mousePosition(.next))
     XCTAssertEqual(
-      parse(["flash", "mouse_position", "--action=hints", "--move"]),
+      parse(["flash", "mouse", "position", "--action=hints", "--move"]),
       .mousePosition(.hints(.move)))
     XCTAssertEqual(
-      parse(["flash", "mouse_position", "--action=hints", "--secondary"]),
+      parse(["flash", "mouse", "position", "--action=hints", "--secondary"]),
       .mousePosition(.hints(.click(.rightClick, modifiers: []))))
-    XCTAssertNil(parse(["flash", "mouse_position"]))
-    XCTAssertNil(parse(["flash", "mouse_position", "--action=save", "--move"]))
-    XCTAssertNil(parse(["flash", "mouse_position", "--action=hints", "--drag"]))
+    XCTAssertNil(parse(["flash", "mouse", "position"]))
+    XCTAssertNil(parse(["flash", "mouse", "position", "--action=save", "--move"]))
+    XCTAssertNil(parse(["flash", "mouse", "position", "--action=hints", "--drag"]))
     XCTAssertEqual(
       URLCommand.mousePosition(.hints(.move)).argv,
-      ["flash", "mouse_position", "--action=hints", "--move"])
+      ["flash", "mouse", "position", "--action=hints", "--move"])
     XCTAssertEqual(
       URLCommand.mouseWarp(.init(area: .screen, edge: .left)).argv,
-      ["flash", "mouse_warp", "--area=screen", "--edge=left"])
+      ["flash", "mouse", "warp", "--area=screen", "--edge=left"])
     for command in [
-      URLCommand.mouseScreens, .mouseWarp(.init()), .mousePosition(.clear),
+      URLCommand.mouseScreens(.init()), .mouseWarp(.init()), .mousePosition(.clear),
       .mouseTarget(.sticky(.leftClick, modifiers: [])), .mouseTargetWords(.move),
       .focusWindow(.cycle(.next)),
     ] {
@@ -172,21 +178,6 @@ final class HintSessionShapesTests: XCTestCase {
     XCTAssertNil(AppDelegate.warpScreenFrame(layouts: [], window: nil, pointer: .zero))
   }
 
-  func testScreenTargetsSitOnEachDisplaysCentre() {
-    let targets = AppDelegate.screenTargets([
-      CGRect(x: 0, y: 0, width: 1000, height: 800),
-      CGRect(x: 1000, y: 0, width: 500, height: 400),
-      .null,
-    ])
-    XCTAssertEqual(targets.map(\.id), ["screen_0", "screen_1"])
-    XCTAssertEqual(targets[0].frame.midX, 500)
-    XCTAssertEqual(targets[0].frame.midY, 400)
-    XCTAssertEqual(targets[1].frame.midX, 1250)
-    XCTAssertEqual(targets[1].accessibilityLabel, "Display 2")
-    XCTAssertEqual(targets[0].priority, .important)
-    XCTAssertNil(targets[0].resolveClickPoint, "a display is a coordinate, never revalidated")
-  }
-
   func testPositionTargetsKeepTheOrderPositionsWereSaved() {
     let targets = AppDelegate.positionTargets(
       [CGPoint(x: 10, y: 20), CGPoint(x: 30, y: 40)], pid: 7)
@@ -194,7 +185,7 @@ final class HintSessionShapesTests: XCTestCase {
     XCTAssertEqual(targets[1].frame.midX, 30)
     XCTAssertEqual(targets[1].frame.midY, 40)
     XCTAssertEqual(targets[0].pid, 7)
-    XCTAssertFalse(targets[0].entersInsertMode)
+    XCTAssertFalse(targets[0].isTextInput)
   }
 
   func testShiftArrowsSnapTheGridPointerToAnEdge() {

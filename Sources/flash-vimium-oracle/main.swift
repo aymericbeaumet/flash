@@ -146,7 +146,7 @@ private func parseArgs() -> Args {
                                 resident's hint activations on the first
                                 selected fixture, shown in a visible Firefox.
           --bench-trigger=key|cli
-                                f in NORMAL (default) or flash mouse_target.
+                                f in NORMAL (default) or flash mouse target.
         """)
       exit(0)
     default:

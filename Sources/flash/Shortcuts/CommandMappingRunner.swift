@@ -24,9 +24,12 @@ enum CommandMappingRunner {
       arguments: expanded)
   }
 
+  /// `extraEnvironment` joins Flash's own: what a monitor's `run` reads
+  /// about why it ran.
   @discardableResult
-  static func run(_ argv: [String]) -> Bool {
-    let environment = FlashProcessEnvironment.shared.environment
+  static func run(_ argv: [String], extraEnvironment: [String: String] = [:]) -> Bool {
+    let environment = FlashProcessEnvironment.shared.environment.merging(
+      extraEnvironment, uniquingKeysWith: { _, extra in extra })
     guard let plan = launchPlan(for: argv, environment: environment) else {
       FlashLog.warn("[mappings] shell command has no executable")
       return false

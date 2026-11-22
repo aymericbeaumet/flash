@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.audio_devices.schema.json",
+  "title": "host.audio_devices",
+  "description": "Plugin to host: list the audio devices of a direction, select a default, step the output volume, toggle its mute or read it. Each operation takes exactly its own fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.audio_devices"
+    },
+    "params": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "direction"
+          ],
+          "properties": {
+            "operation": {
+              "const": "list"
+            },
+            "direction": {
+              "enum": [
+                "input",
+                "output"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "direction",
+            "uid"
+          ],
+          "properties": {
+            "operation": {
+              "const": "select"
+            },
+            "direction": {
+              "enum": [
+                "input",
+                "output"
+              ]
+            },
+            "uid": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The UID of the device to make the default."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "ticks"
+          ],
+          "properties": {
+            "operation": {
+              "const": "step_volume"
+            },
+            "ticks": {
+              "type": "integer",
+              "anyOf": [
+                {
+                  "minimum": -16,
+                  "maximum": -1
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 16
+                }
+              ],
+              "description": "macOS volume-key ticks, a sixteenth each: up when positive, down when negative, never zero."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "toggle_mute"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation"
+          ],
+          "properties": {
+            "operation": {
+              "const": "volume"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -186,6 +186,60 @@ final class StatusBarHoverTests: XCTestCase {
     XCTAssertTrue(panel.statusPopupController.presentation.isStandalone)
   }
 
+  /// A standalone showing is measured once: `cold` to the first frame its
+  /// program draws when the showing started it, `warm` when the process was
+  /// already running. Showing the popup it already shows measures nothing.
+  func testAStandaloneShowingLogsItsLatencyOnce() {
+    var lines: [String] = []
+    let shown = expectation(description: "popup_show logged")
+    shown.assertForOverFulfill = false
+    let sink = FlashLog.addSink { record in
+      guard record.message.hasPrefix("[latency] popup_show ") else { return }
+      DispatchQueue.main.async {
+        lines.append(record.message)
+        shown.fulfill()
+      }
+    }
+    defer { FlashLog.removeSink(sink) }
+    let panel = OverlayPanel()
+    panel.statusPopupController = StatusPopupController(
+      terminals: panel.statusTerminals, windowActionsEnabled: false)
+    panel.statusTerminals.apply(
+      style: .init(),
+      terminals: [
+        "shell": Config.Terminal(
+          command: ["/bin/sh", "-c", "printf ready; exec cat"],
+          size: Config.PopupSize(columns: .cells(40), rows: .cells(10)), lifecycle: .persistent)
+      ])
+    defer {
+      panel.statusPopupController.dismiss()
+      panel.statusTerminals.shutdown()
+    }
+    let show = {
+      panel.statusPopupController.show(
+        name: "shell", visibleFrame: CGRect(x: 0, y: 0, width: 900, height: 800),
+        style: .init(), font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+    }
+    show()
+    wait(for: [shown], timeout: 10)
+    show()
+    let settled = expectation(description: "main queue drained")
+    DispatchQueue.main.async { settled.fulfill() }
+    wait(for: [settled], timeout: 2)
+    XCTAssertEqual(lines.count, 1, "\(lines)")
+    let line = lines.first ?? ""
+    XCTAssertTrue(line.contains(" state=cold kind=terminal popup_id="), line)
+
+    // A new showing of the now-running session is measured again.
+    panel.statusPopupController.dismiss()
+    show()
+    let again = expectation(description: "second showing logged")
+    DispatchQueue.main.async { again.fulfill() }
+    wait(for: [again], timeout: 2)
+    XCTAssertEqual(lines.count, 2, "\(lines)")
+    XCTAssertTrue(lines.last?.contains(" state=warm ") ?? false, "\(lines)")
+  }
+
   func testExplicitDismissalWaitsForLeavingTheAnchorBeforeHoverReopens() {
     let gate = StatusBarHoverGate.dismissed("system")
     XCTAssertFalse(gate.hovering("system").permits("system"))

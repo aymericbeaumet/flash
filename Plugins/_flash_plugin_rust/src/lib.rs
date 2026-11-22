@@ -3,21 +3,32 @@
 //! This crate speaks the NDJSON wire protocol over stdin/stdout — UTF-8, one
 //! JSON object per newline-terminated line — plus request/response
 //! correlation, the immediate-initialize lifecycle, the unified `perform`
-//! dispatch, the push-based `publish`/`status`/`log` notifications, and the
-//! typed host RPC client. Everything a plugin touches is a typed value.
+//! dispatch, the live `search` pull, the push-based `publish`/`status`/`log`
+//! notifications, and the typed host RPC client. Everything a plugin touches is a typed value.
 
+mod applescript;
+mod audio;
+mod calendar;
+mod catalog;
+#[cfg(test)]
+mod conformance;
 mod context;
 mod deadline;
 mod emit;
 mod events;
 mod framing;
+mod grant;
+mod items;
 mod observed;
 mod poll;
 pub mod process;
+mod process_table;
 mod runtime;
 mod settle;
+mod signal;
 pub mod status;
 pub mod sys;
+mod system;
 pub mod testing;
 mod trace;
 mod types;
@@ -30,20 +41,33 @@ pub use flash_plugin_macros::plugin;
 
 pub use context::{
     AppWatch, CommandOutput, Context, NormalModeTarget, RefreshGate, applescript_quote,
-    run_command, run_command_with_slow_threshold, run_osascript, shorten, spawn_managed,
+    run_command, run_command_with_slow_threshold, shorten,
 };
 pub use observed::ObservedCadences;
 pub use poll::{Deadline, PollHandle, PollPriority};
-pub use process::{ManagedChild, ManagedChildError};
+pub use process_table::{MAX_PROCESS_PIDS, ProcessEntry, ProcessList, ProcessTree, TreeProcess};
 pub use runtime::{Plugin, run};
 pub use settle::Settle;
+pub use signal::ProcessSignal;
 pub use status::{
     Align, Color, Column, History, MAX_INLINE_PREVIEW_ENCODED_BYTES, Markup, Preview,
     PreviewTooLarge, Published, StatusCarousel, StatusSegment, StatusValue, Style, Table,
 };
 pub use types::{
-    ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest, EvaluateRequest,
-    EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest,
-    Perform, PerformResponse, Priority, QueryAnswer, RunningApplication, SearchRequest,
-    SearchResponse, TERMINAL_LINK_ROLE, ax_notifications, candidate_metadata, host_events,
+    Candidate, CandidateEffect, CommandContext, CommandRequest, EvaluateRequest, EvaluateResponse,
+    Event, Frame, HintsRequest, HintsResponse, JumpTarget, NavigateRequest, Perform, PerformAlert,
+    PerformResponse, Priority, QueryAnswer, RunningApplication, SearchRequest, SearchResponse,
+    TERMINAL_LINK_ROLE, TextGridCell, TextGridLine, TextGridRequest, TextGridResponse,
+    ax_notifications, ax_snapshot_roots, candidate_metadata, host_events,
 };
+
+pub use applescript::AppleScriptOperation;
+pub use audio::{AudioDevice, AudioDirection, MAX_VOLUME_TICKS, OutputVolume};
+pub use calendar::{CalendarEvent, CalendarListing, MAX_CALENDAR_WINDOW_SECONDS, MAX_CALENDARS};
+pub use catalog::{
+    CatalogOutcome, CatalogRequest, CatalogRow, CatalogSchedule, CatalogStep, ItemCatalog,
+    ItemCatalogSpec,
+};
+pub use grant::{GrantAccess, USER_REQUEST_REQUIRED_ERROR};
+pub use items::{AppItem, AppItemListing, AppItems, MAX_APP_ITEM_ID_BYTES};
+pub use system::{CONFIRMATION_REQUIRED_ERROR, SystemAction, SystemActionOutcome};

@@ -3,8 +3,8 @@ import XCTest
 
 @testable import flash
 
-/// TERMINAL is entered with `enter_terminal_mode` (or by focusing a popup)
-/// and left with `leave_mode`, which closes the popup whatever its kind.
+/// TERMINAL is entered with `mode terminal` (or by focusing a popup)
+/// and left with `mode leave`, which closes the popup whatever its kind.
 final class TerminalModeEntryTests: XCTestCase {
   override func setUp() {
     super.setUp()

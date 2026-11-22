@@ -1,3 +1,4 @@
+import FlashCore
 import Foundation
 
 /// What to do when macOS secure input stays on after the password field is
@@ -23,13 +24,19 @@ enum SecureInputRelease {
     var focused: Focus
     var runningBundleIDs: [String]
     var ownPID: pid_t
+    /// The browsers plugin manifests declare (`browser_engines`). A holder
+    /// outside it is released like any other app, by activation.
+    var browsers = BrowserEngineTable()
   }
 
   enum Kind: Equatable, CustomStringConvertible {
-    /// Blur the focused element in each window. No activation. If the flag
-    /// stays on, the driver then uses `addressBar`.
+    /// A Chromium browser, whose AppleScript dictionary can blur the focused
+    /// DOM node: blur the focused element in each window. No activation. If
+    /// the flag stays on, the driver then uses `addressBar`.
     case chromium
-    /// The browser's Open Location shortcut, after that browser is frontmost.
+    /// A WebKit or Gecko browser, which releases a stuck hold when its
+    /// address bar takes focus: the Open Location shortcut, after that
+    /// browser is frontmost.
     case addressBar
     /// Bring the app forward, then return to where the user was, so a
     /// background password manager drops a hold it took while inactive.
@@ -61,33 +68,6 @@ enum SecureInputRelease {
     case legitimate
     case release([Request])
   }
-
-  /// Chromium-family browsers whose AppleScript dictionary can blur the
-  /// focused DOM node without activating the app.
-  static let chromiumBundleIDs: Set<String> = [
-    "com.google.Chrome",
-    "com.google.Chrome.beta",
-    "com.google.Chrome.canary",
-    "com.google.Chrome.dev",
-    "com.brave.Browser",
-    "com.brave.Browser.beta",
-    "com.microsoft.edgemac",
-    "com.microsoft.edgemac.Beta",
-    "company.thebrowser.Browser",
-    "com.vivaldi.Vivaldi",
-    "com.operasoftware.Opera",
-    "com.operasoftware.OperaGX",
-    "org.chromium.Chromium",
-  ]
-
-  /// Browsers that release a stuck hold when the address bar takes focus.
-  static let addressBarBundleIDs: Set<String> = [
-    "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition",
-    "org.mozilla.nightly",
-    "com.apple.Safari",
-    "com.apple.SafariTechnologyPreview",
-  ]
 
   /// Never activated. `com.apple.finder` is the app a frontmost holder is
   /// resigned through, so it cannot also be a release target.
@@ -136,7 +116,9 @@ enum SecureInputRelease {
       holders.filter { $0.pid != snapshot.frontmostPID }
       + holders.filter { $0.pid == snapshot.frontmostPID }
     for holder in ordered {
-      guard let bundleID = holder.bundleID, let kind = kind(of: bundleID) else { continue }
+      guard let bundleID = holder.bundleID,
+        let kind = kind(of: bundleID, browsers: snapshot.browsers)
+      else { continue }
       append(bundleID, kind: kind)
     }
     // The registry sometimes names loginwindow, or names nobody, while a
@@ -144,16 +126,18 @@ enum SecureInputRelease {
     // activate it. Activating some other running app would, so that stays
     // limited to a holder the registry actually named.
     if requests.isEmpty {
-      for bundleID in snapshot.runningBundleIDs where chromiumBundleIDs.contains(bundleID) {
+      for bundleID in snapshot.runningBundleIDs
+      where kind(of: bundleID, browsers: snapshot.browsers) == .chromium {
         append(bundleID, kind: .chromium)
       }
     }
     return .release(requests)
   }
 
-  /// Nil when `bundleID` must not be interpolated into AppleScript.
-  static func chromiumBlurScript(bundleID: String) -> String? {
-    guard chromiumBundleIDs.contains(bundleID), isBundleID(bundleID) else { return nil }
+  /// Nil when `bundleID` is not a declared Chromium browser, or must not be
+  /// interpolated into AppleScript.
+  static func chromiumBlurScript(bundleID: String, browsers: BrowserEngineTable) -> String? {
+    guard browsers.engine(of: bundleID) == .chromium, isBundleID(bundleID) else { return nil }
     let blur = "if (document.activeElement) document.activeElement.blur()"
     return """
       tell application id "\(bundleID)"
@@ -179,11 +163,13 @@ enum SecureInputRelease {
     }
   }
 
-  private static func kind(of bundleID: String) -> Kind? {
+  private static func kind(of bundleID: String, browsers: BrowserEngineTable) -> Kind? {
     if refusedBundleIDs.contains(bundleID) || !isBundleID(bundleID) { return nil }
-    if chromiumBundleIDs.contains(bundleID) { return .chromium }
-    if addressBarBundleIDs.contains(bundleID) { return .addressBar }
-    return .activate
+    switch browsers.engine(of: bundleID) {
+    case .chromium: return .chromium
+    case .webkit, .gecko: return .addressBar
+    case nil: return .activate
+    }
   }
 
   private static func isSecureField(_ focus: Focus) -> Bool {
@@ -204,7 +190,7 @@ enum SecureInputRelease {
   private static func hasBackgroundHolder(_ snapshot: Snapshot) -> Bool {
     snapshot.holders.contains { holder in
       holder.pid > 0 && holder.pid != snapshot.ownPID && holder.pid != snapshot.frontmostPID
-        && holder.bundleID.flatMap(kind(of:)) != nil
+        && holder.bundleID.flatMap { kind(of: $0, browsers: snapshot.browsers) } != nil
     }
   }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// What an app is, read once from its bundle — the URL schemes it handles and
 /// the UI runtime it embeds — never from its name. The core decides by these
@@ -52,17 +53,12 @@ public struct AppTraits: Equatable, Sendable {
   /// The first read of an app touches its Info.plist and bundle layout.
   public static func of(bundleIdentifier: String?, pid: pid_t? = nil) -> AppTraits {
     guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return AppTraits() }
-    cacheLock.lock()
-    let cached = cache[bundleIdentifier]
-    cacheLock.unlock()
-    if let cached { return cached }
+    if let cached = cache.withLock({ $0[bundleIdentifier] }) { return cached }
     let bundleURL =
       pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleURL }
       ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
     let traits = bundleURL.map(Self.read(bundleURL:)) ?? AppTraits()
-    cacheLock.lock()
-    cache[bundleIdentifier] = traits
-    cacheLock.unlock()
+    cache.withLock { $0[bundleIdentifier] = traits }
     return traits
   }
 
@@ -70,9 +66,7 @@ public struct AppTraits: Equatable, Sendable {
   /// bundle; nil when nothing has read them yet.
   public static func cached(bundleIdentifier: String?) -> AppTraits? {
     guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return nil }
-    cacheLock.lock()
-    defer { cacheLock.unlock() }
-    return cache[bundleIdentifier]
+    return cache.withLock { $0[bundleIdentifier] }
   }
 
   public static func read(bundleURL: URL) -> AppTraits {
@@ -138,6 +132,5 @@ public struct AppTraits: Equatable, Sendable {
     name.hasSuffix(" Helper (Renderer).app")
   }
 
-  private static let cacheLock = NSLock()
-  private static var cache: [String: AppTraits] = [:]
+  private static let cache = OSAllocatedUnfairLock<[String: AppTraits]>(initialState: [:])
 }

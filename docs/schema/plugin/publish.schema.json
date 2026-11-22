@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/publish.schema.json",
+  "title": "publish",
+  "description": "Plugin to host: the plugin's catalog, or the rows of the one source it names. One malformed or over-quota row rejects the whole publish, and the host keeps the previous catalog.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "method",
+    "params"
+  ],
+  "properties": {
+    "method": {
+      "const": "publish"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rows"
+      ],
+      "properties": {
+        "rows": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "definitions.schema.json#/definitions/row"
+          },
+          "$comment": "At most 4194304 bytes as written in the frame, summed over the plugin's sources after a per-source merge."
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A manifest sources[].name that every row carries: the publish replaces that source's rows alone."
+        }
+      }
+    }
+  }
+}

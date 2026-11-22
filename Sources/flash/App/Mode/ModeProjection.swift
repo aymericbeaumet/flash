@@ -14,6 +14,10 @@ enum ModeLabel: Equatable {
   case terminal
   case hyper
   case hold
+  /// `mode.labels.visual` or, linewise, `mode.labels.visual_line`.
+  case visual(VisualKind)
+  /// The layer's `label`, or its name in capitals.
+  case layer(String)
 }
 
 extension Mode {
@@ -25,7 +29,7 @@ extension Mode {
   var flashMode: FlashMode {
     switch self {
     case .disabled, .insert, .terminal: return .insert
-    case .normal, .command, .hyper, .hold: return .normal
+    case .normal, .command, .hyper, .hold, .layer, .visual: return .normal
     }
   }
 
@@ -46,7 +50,7 @@ extension Mode {
     switch self {
     case .disabled, .insert, .terminal:
       return false
-    case .normal, .hyper, .hold:
+    case .normal, .hyper, .hold, .layer, .visual:
       return !hasHints && !activationInFlight
     case .command:
       return true
@@ -67,7 +71,7 @@ extension Mode {
     // only governs cursor visibility / routing for when capture later resumes.
     if nativeSurfaceSuspended {
       switch self {
-      case .normal, .hyper, .hold: return .normal
+      case .normal, .hyper, .hold, .layer, .visual: return .normal
       default: break
       }
     }
@@ -76,7 +80,7 @@ extension Mode {
       return hasHints || activationInFlight ? .hints : .passive
     case .terminal:
       return .normal
-    case .normal, .hyper, .hold:
+    case .normal, .hyper, .hold, .layer, .visual:
       return ownsKeyboard(hasHints: hasHints, activationInFlight: activationInFlight)
         ? .normal : .hints
     case .command:
@@ -91,8 +95,10 @@ extension Mode {
     case .disabled, .insert: return .insert
     case .normal, .hyper: return .normal
     case .hold: return .hold
+    case .visual: return .visual
     case .command: return .command
     case .terminal: return .terminal
+    case .layer(let layer): return .layer(layer.name)
     }
   }
 
@@ -105,6 +111,8 @@ extension Mode {
     case .terminal: return .terminal
     case .hyper: return .hyper
     case .hold: return .hold
+    case .visual(let kind): return .visual(kind)
+    case .layer(let layer): return .layer(layer.name)
     }
   }
 
@@ -119,6 +127,8 @@ extension Mode {
     case .terminal: return .command
     case .hyper: return .hyper
     case .hold: return .hold
+    case .visual: return .visual
+    case .layer: return .layer
     }
   }
 }

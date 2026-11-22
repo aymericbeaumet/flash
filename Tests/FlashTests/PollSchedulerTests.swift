@@ -106,6 +106,61 @@ final class PollSchedulerTests: XCTestCase {
     wait(for: [empty], timeout: 5)
   }
 
+  /// Priority is only the wake-up's slack; the thread that runs a handler
+  /// is the registering queue's. A handler runs at that queue's QoS, and a
+  /// queue with none inherits the clock's own user-initiated class — never
+  /// a utility one that the kernel starves under load.
+  func testHandlersRunAtTheirRegisteringQueuesQoS() {
+    let scheduler = PollScheduler()
+    let queues: [(String, DispatchQueue, PollScheduler.Priority, qos_class_t)] = [
+      (
+        "core:qos-user", DispatchQueue(label: "poll.qos.user", qos: .userInitiated), .system,
+        QOS_CLASS_USER_INITIATED
+      ),
+      (
+        "core:qos-utility", DispatchQueue(label: "poll.qos.utility", qos: .utility), .low,
+        QOS_CLASS_UTILITY
+      ),
+      (
+        "core:qos-inherited", DispatchQueue(label: "poll.qos.inherited"), .system,
+        QOS_CLASS_USER_INITIATED
+      ),
+    ]
+    for (id, queue, priority, expected) in queues {
+      let ran = expectation(description: "\(id) ran")
+      scheduler.scheduleOnce(id, afterMs: 0, priority: priority, on: queue) {
+        XCTAssertEqual(qos_class_self(), expected, id)
+        ran.fulfill()
+      }
+      wait(for: [ran], timeout: 5)
+    }
+  }
+
+  /// The pairing every registration is held to: a wake-up the user waits on
+  /// never rides a queue the kernel starves first. The queue's own class is
+  /// what counts, so one without a class is served by the clock's.
+  func testASystemOrHighRegistrationIsStarvedByAUtilityQueue() {
+    typealias Priority = PollScheduler.Priority
+    for priority in Priority.allCases {
+      let waitedOn = priority == .system || priority == .high
+      XCTAssertEqual(PollScheduler.starves(priority, on: .utility), waitedOn, "\(priority)")
+      XCTAssertEqual(PollScheduler.starves(priority, on: .background), waitedOn, "\(priority)")
+      for served: DispatchQoS.QoSClass in [
+        .userInteractive, .userInitiated, .default, .unspecified,
+      ] {
+        XCTAssertFalse(PollScheduler.starves(priority, on: served), "\(priority) \(served)")
+      }
+    }
+    XCTAssertTrue(
+      PollScheduler.starves(.high, on: DispatchQueue(label: "poll.starved", qos: .utility)))
+    XCTAssertFalse(PollScheduler.starves(.system, on: DispatchQueue(label: "poll.inherits")))
+    // The main queue declares no class: the one it reports is how the process
+    // was launched (a CI runner starts it at utility), which no registration
+    // chose, so none on it is judged.
+    XCTAssertFalse(PollScheduler.starves(.system, on: DispatchQueue.main))
+    XCTAssertFalse(PollScheduler.starves(.high, on: DispatchQueue.main))
+  }
+
   func testADeadlineRegistrationRunsOnceAndIsDropped() {
     // A client whose wake-ups are irregular — the status bar's next deadline
     // is the earliest of its job intervals, cycle rotations and pending
@@ -257,9 +312,18 @@ final class PollSchedulerTests: XCTestCase {
     queue.sync { deadline.cancel() }
     XCTAssertEqual(registeredIDs(scheduler), [])
 
-    queue.sync { deadline.arm(afterMs: 0) { dropped.fulfill() } }
-    // Cancel from the handler queue while the zero-delay fire is in flight.
-    queue.async { deadline.cancel() }
+    // Cancel from the handler queue while the zero-delay fire is in flight:
+    // holding the queue, arm, wait until the scheduler fired (dropping the
+    // one-shot registration and handing the fire to this very queue, where
+    // it waits behind this block), then cancel. Ordering the race this way
+    // is what made it deterministic; a cancel sent afterwards could lose it.
+    queue.sync {
+      deadline.arm(afterMs: 0) { dropped.fulfill() }
+      let fired = Date().addingTimeInterval(5)
+      while !registeredIDs(scheduler).isEmpty, Date() < fired { usleep(1_000) }
+      XCTAssertEqual(registeredIDs(scheduler), [], "the fire is in flight")
+      deadline.cancel()
+    }
     wait(for: [dropped], timeout: 0.3)
   }
 
@@ -349,9 +413,8 @@ final class PollSchedulerTests: XCTestCase {
   // MARK: - The plugin-facing registration
 
   func testPluginPollRegistrationsDecodeKindPeriodAndPriority() {
-    typealias Process = PluginProcess
     XCTAssertEqual(
-      Process.decodePollRegistrations([
+      PluginWireCodec.pollRegistrations(from: [
         "registrations": [
           "sample": ["every": 1, "priority": "high"],
           "discover": ["every": 30.5, "priority": "low"],
@@ -364,15 +427,15 @@ final class PollSchedulerTests: XCTestCase {
         "settle": .init(kind: .after, ms: 300, priority: .normal),
       ])
     // An empty set is how a plugin stops polling entirely.
-    XCTAssertEqual(Process.decodePollRegistrations(["registrations": [String: Any]()]), [:])
+    XCTAssertEqual(PluginWireCodec.pollRegistrations(from: ["registrations": [String: Any]()]), [:])
     // The core-only priority never reaches a plugin registration.
     XCTAssertNil(
-      Process.decodePollRegistrations([
+      PluginWireCodec.pollRegistrations(from: [
         "registrations": ["probe": ["every": 0.08, "priority": "system"]]
       ]))
     // A huge period is rejected, never trapped converting to milliseconds.
     XCTAssertNil(
-      Process.decodePollRegistrations([
+      PluginWireCodec.pollRegistrations(from: [
         "registrations": ["d0": ["after": 1e300, "priority": "low"]]
       ]))
   }

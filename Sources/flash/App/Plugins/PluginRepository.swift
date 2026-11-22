@@ -81,35 +81,17 @@ struct PluginRepository {
 
   /// Run a `git` subcommand using an explicit argv (no shell). Returns true on
   /// exit status 0. 60s timeout protects config reload from a network-stalled
-  /// `git fetch` — without it a stuck child would hang the whole reload.
+  /// `git fetch` — without it a stuck child would hang the whole reload; the
+  /// timeout ends git's helpers too (`BoundedCommand`).
   private func runGit(
     _ arguments: [String],
     in root: URL,
     timeoutSeconds: TimeInterval = 60
   ) -> Bool {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["git"] + arguments
-    process.currentDirectoryURL = root
-    FlashProcessEnvironment.shared.apply(to: process)
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    do {
-      try process.run()
-    } catch {
-      return false
-    }
-    let timeout = DispatchTime.now() + .nanoseconds(Int(timeoutSeconds * 1_000_000_000))
-    let killer = DispatchQueue.global(qos: .utility)
-    let workItem = DispatchWorkItem {
-      if process.isRunning {
-        process.terminate()
-      }
-    }
-    killer.asyncAfter(deadline: timeout, execute: workItem)
-    process.waitUntilExit()
-    workItem.cancel()
-    return process.terminationStatus == 0
+    BoundedCommand.run(
+      ["/usr/bin/env", "git"] + arguments, environment: FlashProcessEnvironment.shared.environment,
+      directory: root.path, timeout: timeoutSeconds, capture: .none
+    ).succeeded
   }
 
   /// Run a `git` subcommand and return its stdout on success. Used to read
@@ -119,32 +101,10 @@ struct PluginRepository {
     in root: URL,
     timeoutSeconds: TimeInterval = 30
   ) -> String? {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["git"] + arguments
-    process.currentDirectoryURL = root
-    FlashProcessEnvironment.shared.apply(to: process)
-    let out = Pipe()
-    process.standardOutput = out
-    process.standardError = FileHandle.nullDevice
-    do {
-      try process.run()
-    } catch {
-      return nil
-    }
-    let timeout = DispatchTime.now() + .nanoseconds(Int(timeoutSeconds * 1_000_000_000))
-    let killer = DispatchQueue.global(qos: .utility)
-    let workItem = DispatchWorkItem {
-      if process.isRunning {
-        process.terminate()
-      }
-    }
-    killer.asyncAfter(deadline: timeout, execute: workItem)
-    process.waitUntilExit()
-    workItem.cancel()
-    guard process.terminationStatus == 0 else { return nil }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    return String(data: data, encoding: .utf8)
+    let result = BoundedCommand.run(
+      ["/usr/bin/env", "git"] + arguments, environment: FlashProcessEnvironment.shared.environment,
+      directory: root.path, timeout: timeoutSeconds, capture: .stdout)
+    return result.succeeded ? result.text : nil
   }
 
   static func manifestRoots(in candidates: [URL], fileManager fm: FileManager = .default) -> [URL] {
@@ -173,60 +133,99 @@ struct PluginRepository {
     return roots
   }
 
-  /// `(command, subcommand)` pairs from bundled manifests. `subcommand` is
-  /// `*` for a wildcard. Config and the CLI accept `flash <command> <subcommand>`
-  /// for these, the same shape as `:command subcommand`.
-  static let declaredCommandPairs: Set<PluginCommandPair> = {
-    var pairs = Set<PluginCommandPair>()
-    let sourceTree = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Plugins")
-    for root in manifestRoots(in: officialPluginRoots() + [sourceTree]) {
+  /// The bundled plugins' own commands by `(command, subcommand)`, with the
+  /// arguments each declares; `subcommand` is `*` for a wildcard. Config and
+  /// the CLI accept `flash <command> <subcommand>` for these, the same shape
+  /// as `:command subcommand`, and hold their arguments to the declaration.
+  static let declaredCommands: [PluginCommandPair: PluginCommandRegistration] = {
+    struct Commands: Decodable {
+      var commands: [PluginCommandRegistration]?
+    }
+    var declared: [PluginCommandPair: PluginCommandRegistration] = [:]
+    for root in manifestRoots(in: officialPluginRoots() + [sourceTreePluginsDirectory]) {
+      let url = root.appendingPathComponent("manifest.json")
+      guard let data = try? Data(contentsOf: url),
+        let manifest = try? JSONDecoder().decode(Commands.self, from: data)
+      else { continue }
+      for var command in manifest.commands ?? [] {
+        command.command = command.command.trimmed.lowercased()
+        command.subcommand = command.subcommand.trimmed.lowercased()
+        // An entry under one of Flash's topics is a core command the plugin
+        // performs, never a plugin command the CLI could name.
+        guard !command.command.isEmpty, !command.isCoreCommand else { continue }
+        let pair = PluginCommandPair(command: command.command, subcommand: command.subcommand)
+        if declared[pair] == nil { declared[pair] = command }
+      }
+    }
+    return declared
+  }()
+
+  /// The bundled registration `flash <command> <subcommand>` names: that
+  /// pair, else the `*` wildcard of the same command.
+  static func declaredCommand(_ command: String, subcommand: String)
+    -> PluginCommandRegistration?
+  {
+    let command = command.lowercased()
+    return declaredCommands[
+      PluginCommandPair(command: command, subcommand: subcommand.lowercased())]
+      ?? declaredCommands[PluginCommandPair(command: command, subcommand: "*")]
+  }
+
+  /// Lowercased bang token → the bundled plugin whose manifest declares it,
+  /// the `*` catch-all left out. `[flashlight.bangs]` may not take one.
+  static let declaredBangOwners: [String: String] = {
+    var owners: [String: String] = [:]
+    for root in manifestRoots(in: officialPluginRoots() + [sourceTreePluginsDirectory]) {
       let url = root.appendingPathComponent("manifest.json")
       guard let data = try? Data(contentsOf: url),
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let commands = json["commands"] as? [[String: Any]]
+        let id = json["id"] as? String, let bangs = json["bangs"] as? [[String: Any]]
       else { continue }
-      for command in commands {
-        guard let name = command["command"] as? String else { continue }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { continue }
-        let sub =
-          (command["subcommand"] as? String)?
-          .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        pairs.insert(PluginCommandPair(command: trimmed, subcommand: sub))
+      for bang in bangs {
+        guard let token = bang["token"] as? String else { continue }
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty, trimmed != "*", owners[trimmed] == nil else { continue }
+        owners[trimmed] = id
       }
     }
-    return pairs
+    return owners
   }()
 
-  /// True when some manifest registers `command`. With a subcommand, true
-  /// only for that pair or a `*` wildcard on the same command.
-  static func declaresCommand(_ command: String, subcommand: String? = nil) -> Bool {
-    let command = command.lowercased()
-    guard declaredCommandPairs.contains(where: { $0.command == command }) else { return false }
-    guard let subcommand else { return true }
-    let normalized = subcommand.lowercased()
-    return declaredCommandPairs.contains(
-      PluginCommandPair(command: command, subcommand: normalized))
-      || declaredCommandPairs.contains(PluginCommandPair(command: command, subcommand: "*"))
-  }
+  /// `Plugins/` of the checkout this binary was built from, where a
+  /// development run finds the bundled manifests.
+  private static let sourceTreePluginsDirectory = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .appendingPathComponent("Plugins")
 
-  static func officialPluginRoots() -> [URL] {
+  static func officialPluginRoots(
+    bundleURL: URL = Bundle.main.bundleURL,
+    resourceURL: URL? = Bundle.main.resourceURL,
+    workingDirectory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+  ) -> [URL] {
+    // An installed resident trusts its signed bundle only. Its launch
+    // directory may be a downloaded repository containing arbitrary Plugins.
+    if bundleURL.pathExtension.lowercased() == "app" {
+      return manifestRoots(in: resourceURL.map { [$0.appendingPathComponent("Plugins")] } ?? [])
+    }
     let candidates = [
-      Bundle.main.resourceURL?.appendingPathComponent("Plugins"),
-      URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(
-        "Plugins"),
+      resourceURL?.appendingPathComponent("Plugins"),
+      workingDirectory.appendingPathComponent("Plugins"),
     ].compactMap { $0 }
     return manifestRoots(in: candidates)
   }
 
   static func defaultDataDir() -> URL {
-    FileManager.default.homeDirectoryForCurrentUser
+    // The test runner gets a directory of its own: a test that boots the
+    // resident's manager never writes into the user's plugin data.
+    guard NSClassFromString("XCTestCase") == nil else { return testDataDir }
+    return FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/Flash/Plugins")
   }
+
+  private static let testDataDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("flash-plugin-data-\(ProcessInfo.processInfo.processIdentifier)")
 }

@@ -267,7 +267,7 @@ final class StatusRunRenderer {
           stats.cycles += 1
           Self.runCycleTransition(
             layers, outgoing: outgoingString, textRect: textRect, travel: rect.height,
-            startedAt: cycleStartedAt, host: host)
+            backward: segment.cycleBackward, startedAt: cycleStartedAt, host: host)
         } else if allowsTransition, !segment.cycle, samePlace, let previousText,
           previousText != segment.text, !Self.onlyCutMoved(previousText, segment.text)
         {
@@ -371,12 +371,14 @@ final class StatusRunRenderer {
   /// so the strip visibly enters and leaves through the run's edges. Title
   /// and domain are one run, so both travel on that same vertical push.
   /// Both share one duration and the standard ease-in-out curve
-  /// (cubic-bezier 0.4, 0, 0.2, 1). `startedAt` is in `host`'s time.
+  /// (cubic-bezier 0.4, 0, 0.2, 1). A line stepped back to (`backward`)
+  /// plays the same push mirrored, down from above. `startedAt` is in
+  /// `host`'s time.
   private static func runCycleTransition(
-    _ layers: RunLayer, outgoing: Any?, textRect: CGRect, travel: CGFloat,
+    _ layers: RunLayer, outgoing: Any?, textRect: CGRect, travel: CGFloat, backward: Bool,
     startedAt: CFTimeInterval, host: CALayer
   ) {
-    let distance = max(travel, textRect.height)
+    let distance = max(travel, textRect.height) * (backward ? -1 : 1)
     let beginTime = layers.text.convertTime(startedAt, from: host)
     let curve = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
     let incoming = CAAnimationGroup()

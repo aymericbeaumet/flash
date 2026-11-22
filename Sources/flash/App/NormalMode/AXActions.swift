@@ -172,57 +172,73 @@ extension NormalModeDispatcher {
     pb.setString(value, forType: .string)
   }
 
-  /// The text currently selected in the focused element of `pid`, read
-  /// straight off the AX tree so a yank doesn't have to round-trip through the
-  /// clipboard. Returns nil when nothing is selected or the app doesn't expose
-  /// `AXSelectedText` (web content, terminals) — the caller then falls back to
-  /// synthesizing ⌘C.
-  static func selectedText(pid: pid_t) -> String? {
-    let app = AXApp.make(pid: pid)
-    guard let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
-      let text = stringAttribute(focused, kAXSelectedTextAttribute as String),
-      !text.isEmpty
-    else { return nil }
-    return text
+  struct TextSelectionSnapshot {
+    let element: AXUIElement?
+    let identity: TextSelectionIdentity
   }
 
-  /// Collapse a selection at its trailing edge. Some apps expose the text but
-  /// do not permit setting its AX range; the caller can then use a navigation
-  /// key after the copy is complete.
-  static func collapseSelectedText(pid: pid_t) -> Bool {
+  enum SelectionCollapseResult { case collapsed, unsupported, changed }
+
+  /// Capture both the bytes and the AX identity: later steps must not follow a
+  /// newly focused field or collapse a selection the user changed meanwhile.
+  static func captureTextSelection(pid: pid_t) -> TextSelectionSnapshot {
     let app = AXApp.make(pid: pid)
-    guard let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
-      return false
+    let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String)
+    let text = focused.flatMap { stringAttribute($0, kAXSelectedTextAttribute as String) }
+    return TextSelectionSnapshot(
+      element: focused,
+      identity: TextSelectionIdentity(
+        text: text.flatMap { $0.isEmpty ? nil : $0 },
+        range: focused.flatMap(selectedTextRange)))
+  }
+
+  static func textSelectionState(
+    _ captured: TextSelectionSnapshot, pid: pid_t
+  ) -> TextSelectionIdentity.State {
+    let current = captureTextSelection(pid: pid)
+    switch (captured.element, current.element) {
+    case (nil, nil): break
+    case (let original?, let focused?) where CFEqual(original, focused): break
+    default: return .changed
     }
+    return captured.identity.state(comparedTo: current.identity)
+  }
+
+  /// Mutate only the element and range captured by the yank, never a fresh
+  /// lookup's replacement. A copy action may have already collapsed it.
+  static func collapseSelectedText(
+    _ captured: TextSelectionSnapshot, pid: pid_t, shouldContinue: () -> Bool = { true }
+  ) -> SelectionCollapseResult {
+    switch textSelectionState(captured, pid: pid) {
+    case .changed: return .changed
+    case .collapsed: return .collapsed
+    case .unchanged: break
+    }
+    guard let focused = captured.element, let range = captured.identity.range else {
+      return .unsupported
+    }
+    if range.length == 0 { return .collapsed }
+    var collapsed = CFRange(location: range.location + range.length, length: 0)
+    guard let value = AXValueCreate(.cfRange, &collapsed) else { return .unsupported }
+    guard shouldContinue() else { return .changed }
+    return AXUIElementSetAttributeValue(
+      focused, kAXSelectedTextRangeAttribute as CFString, value) == .success
+      ? .collapsed : .unsupported
+  }
+
+  private static func selectedTextRange(_ element: AXUIElement) -> NSRange? {
     var raw: CFTypeRef?
     guard
       AXUIElementCopyAttributeValue(
-        focused, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
+        element, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
       let raw, CFGetTypeID(raw) == AXValueGetTypeID()
-    else { return false }
+    else { return nil }
     let value = raw as! AXValue
-    guard AXValueGetType(value) == .cfRange else { return false }
     var range = CFRange(location: 0, length: 0)
-    guard AXValueGetValue(value, .cfRange, &range), range.location >= 0, range.length >= 0,
-      range.location <= Int.max - range.length
-    else { return false }
-    if range.length == 0 { return true }
-    var collapsed = CFRange(location: range.location + range.length, length: 0)
-    guard let collapsedValue = AXValueCreate(.cfRange, &collapsed) else { return false }
-    return AXUIElementSetAttributeValue(
-      focused, kAXSelectedTextRangeAttribute as CFString, collapsedValue) == .success
-  }
-
-  /// Forward argv to `/usr/bin/open` verbatim. Deliberately dumb: whatever
-  /// the user typed after `:open` is handed straight to the system opener
-  /// (URLs, files, `-a App`, …). All app-finding smartness lives in
-  /// `:flashlight`.
-  static func runOpen(_ args: [String]) {
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    proc.arguments = args
-    FlashProcessEnvironment.shared.apply(to: proc)
-    try? proc.run()
+    guard AXValueGetType(value) == .cfRange, AXValueGetValue(value, .cfRange, &range),
+      range.location >= 0, range.length >= 0, range.location <= Int.max - range.length
+    else { return nil }
+    return NSRange(location: range.location, length: range.length)
   }
 
   static func documentURL(pid: pid_t) -> String? {
@@ -255,7 +271,7 @@ extension NormalModeDispatcher {
 
   /// Close the focused window of `pid` by pressing its standard close button
   /// (the red traffic-light control). This shuts the OS window itself —
-  /// distinct from `tab_close`/⌘W, which close a tab in tabbed apps. Returns
+  /// distinct from `tab close`/⌘W, which close a tab in tabbed apps. Returns
   /// false when the window exposes no AX close button (borderless/custom
   /// windows) so the caller can fall back to a keystroke.
   static func closeFocusedWindow(pid: pid_t) -> Bool {
@@ -270,6 +286,21 @@ extension NormalModeDispatcher {
       return false
     }
     return AXUIElementPerformAction(closeButton, kAXPressAction as CFString) == .success
+  }
+
+  /// How many standard windows `pid` has (`AXStandardWindow`: documents,
+  /// conversations, browser windows; not dialogs, sheets or floating
+  /// panels), on every Space and minimized ones included; nil when its
+  /// windows cannot be read. `app close` quits an app at its last one.
+  static func standardWindowCount(pid: pid_t) -> Int? {
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(AXApp.make(pid: pid), kAXWindowsAttribute as CFString, &raw)
+        == .success, let windows = raw as? [AXUIElement]
+    else { return nil }
+    return windows.filter {
+      stringAttribute($0, kAXSubroleAttribute as String) == kAXStandardWindowSubrole as String
+    }.count
   }
 
   static func strongEditableFocusCandidates(
@@ -364,7 +395,7 @@ extension NormalModeDispatcher {
     "AXTextField", "AXTextArea",
   ]
 
-  /// `focus_input`: focus the `index`-th (1-based) editable
+  /// `input focus`: focus the `index`-th (1-based) editable
   /// text input of the focused window, in reading order (top-to-bottom, then
   /// left-to-right — AX frames are top-left-origin, so ascending y is
   /// downwards). Returns false when no input exists in the walk budget.

@@ -4,7 +4,7 @@ import XCTest
 
 @testable import flash
 
-/// `mouse_target --scope=screen` also walks Picture in Picture players and
+/// `mouse target --scope=screen` also walks Picture in Picture players and
 /// the Stage Manager strip. Pure over one window-list snapshot (NSScreen
 /// coordinates, front-most first).
 final class ScreenScopeSurfacesTests: XCTestCase {
@@ -131,8 +131,7 @@ final class ScreenScopeSurfacesTests: XCTestCase {
   func testRetargetedIdsAreUniqueAndAgentsCarryNoPid() {
     let target = JumpTarget(
       id: "ax-20-r-3", frame: CGRect(x: 1110, y: 50, width: 30, height: 30), role: "AXButton",
-      accessibilityLabel: "Play", pid: pipAgent, entersInsertMode: false,
-      providerID: "accessibility")
+      accessibilityLabel: "Play", pid: pipAgent, providerID: "accessibility")
     let agent = ScreenScopeSurfaces.retarget(
       target,
       surface: .init(

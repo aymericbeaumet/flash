@@ -6,6 +6,9 @@ import Foundation
 struct PluginLifecycle {
   enum State: Equatable {
     case initial, idle, installing, launching, running, backoff, stopped, failed
+    /// A `publish_then_exit` child ran to its clean exit: its catalog is
+    /// held by the host and no child exists. Only a reload leaves it.
+    case published
   }
 
   enum Event {
@@ -18,6 +21,9 @@ struct PluginLifecycle {
     case reload(resident: Bool)
     case installed(UInt64)
     case initialized(UInt64)
+    /// The running child exited 0 and its manifest says that is the end of
+    /// its run (`publish_then_exit`): not a failure, nothing to retry.
+    case completed(UInt64)
     case interrupted(UInt64)
     case retry(UInt64)
     case reject(UInt64)
@@ -29,6 +35,8 @@ struct PluginLifecycle {
     case start(UInt64)
     case retry(UInt64, Int)
     case park
+    /// Keep the catalog and re-arm the watchers that run the plugin again.
+    case rest
   }
 
   /// Where one `perform` goes, from the state alone.
@@ -52,7 +60,8 @@ struct PluginLifecycle {
   static func performRoute(state: State, onDemand: Bool) -> PerformRoute {
     switch state {
     case .running: return .dispatch
-    case .failed, .stopped: return .unhandled
+    // A published plugin's rows carry host effects: nothing to ask it.
+    case .failed, .stopped, .published: return .unhandled
     case .initial, .installing, .launching, .backoff: return .wait
     case .idle: return onDemand ? .waitAndActivate : .wait
     }
@@ -64,6 +73,7 @@ struct PluginLifecycle {
     case .installing: return .installing
     case .launching: return .launching
     case .running: return .running
+    case .published: return .published
     case .failed: return .failed
     }
   }
@@ -99,6 +109,11 @@ struct PluginLifecycle {
       // A handshake is not evidence of sustained health. Failures expire
       // from the rolling window when the next failure is observed.
       return []
+    case .completed(let token):
+      guard token == generation, state == .running else { return [] }
+      generation &+= 1
+      state = .published
+      return [.teardown, .rest]
     case .interrupted(let token):
       guard token == generation,
         state == .installing || state == .launching || state == .running

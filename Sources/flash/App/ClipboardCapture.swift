@@ -268,8 +268,7 @@ enum ClipboardImageStore {
       try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
       try setOwnerOnly(dataDir, isDirectory: true)
       try setOwnerOnly(images, isDirectory: true)
-      try bytes.write(to: url, options: .atomic)
-      try setOwnerOnly(url, isDirectory: false)
+      try PrivateFile.write(bytes, to: url)
       return true
     } catch {
       return false

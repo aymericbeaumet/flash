@@ -13,28 +13,28 @@ position_history_scope = "app"
 
 [mode.all.mappings]
 # Activate and deactivate.
-"alt+e" = ["flash", "enter_normal_mode"]
-"alt+q" = ["flash", "enter_insert_mode"]
+"alt+e" = ["flash", "mode", "normal"]
+"alt+q" = ["flash", "mode", "insert"]
 
 [mode.normal.mappings]
 # Pointer mode: the arrows or the layout's hjkl move; m , . click; v drags.
-"i" = ["flash", "mouse_pointer"]
+"i" = ["flash", "mouse", "pointer"]
 # Grid: halves on hjkl, quarters on y u b n; Shift-arrows snap to an edge.
-"g" = ["flash", "mouse_grid", "--bisect"]
+"g" = ["flash", "mouse", "grid", "--bisect"]
 # Hints on the controls, and on every visible word.
-"f" = ["flash", "mouse_target"]
-"<leader>f" = ["flash", "mouse_target", "--words"]
+"f" = ["flash", "mouse", "target"]
+"<leader>f" = ["flash", "mouse", "target", "--words"]
 # One big label per display.
-"c" = ["flash", "mouse_screens"]
+"c" = ["flash", "mouse", "screens"]
 # Window edges and centre.
-"<leader>c" = ["flash", "mouse_warp", "--area=window", "--edge=center"]
-"<leader>i" = ["flash", "mouse_warp", "--area=window", "--edge=top"]
-"<leader>k" = ["flash", "mouse_warp", "--area=window", "--edge=bottom"]
-"<leader>j" = ["flash", "mouse_warp", "--area=window", "--edge=left"]
-"<leader>l" = ["flash", "mouse_warp", "--area=window", "--edge=right"]
+"<leader>c" = ["flash", "mouse", "warp", "--area=window", "--edge=center"]
+"<leader>i" = ["flash", "mouse", "warp", "--area=window", "--edge=top"]
+"<leader>k" = ["flash", "mouse", "warp", "--area=window", "--edge=bottom"]
+"<leader>j" = ["flash", "mouse", "warp", "--area=window", "--edge=left"]
+"<leader>l" = ["flash", "mouse", "warp", "--area=window", "--edge=right"]
 # Saved positions: label them, save, cycle, forget.
-"p" = ["flash", "mouse_position", "--action=hints"]
-"P" = ["flash", "mouse_position", "--action=save"]
-"<leader>n" = ["flash", "mouse_position", "--action=next"]
-"<leader>N" = ["flash", "mouse_position", "--action=previous"]
-"<leader>x" = ["flash", "mouse_position", "--action=clear"]
+"p" = ["flash", "mouse", "position", "--action=hints"]
+"P" = ["flash", "mouse", "position", "--action=save"]
+"<leader>n" = ["flash", "mouse", "position", "--action=next"]
+"<leader>N" = ["flash", "mouse", "position", "--action=previous"]
+"<leader>x" = ["flash", "mouse", "position", "--action=clear"]

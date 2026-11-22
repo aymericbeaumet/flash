@@ -2,10 +2,37 @@ import AppKit
 import Carbon.HIToolbox
 import FlashCore
 
-/// Hot-reload pipeline for `flash.toml`. The file watcher fires
-/// `reloadConfig()`, which (re)parses, validates, applies the new
-/// config to every subsystem, and shows an alert if parsing failed.
+/// What asked for a configuration load: the resident's launch, a change to
+/// the watched file, or `config reload`.
+enum ConfigReloadReason: String {
+  case launch, watch, command
+}
+
+/// Load and hot-reload pipeline for `flash.toml`. Launch reads and parses
+/// the file once (`loadLaunchConfig`) and applies that value once its
+/// subsystems exist (`applyLaunchConfig`). Afterwards the file watcher fires
+/// `reloadConfig`, which parses, validates, applies the new config to every
+/// subsystem, and shows an alert if parsing failed.
 extension AppDelegate {
+  // MARK: Launch
+
+  /// Launch's one read and parse. The subsystems built next read `config`;
+  /// `applyLaunchConfig` hands it to them without parsing the file again.
+  func loadLaunchConfig(environment: [String: String]) {
+    let file = ConfigLoader.userFile(environment: environment)
+    config = ConfigLoader.load(file, environment: environment)
+    loadedConfigFile = file
+  }
+
+  /// Apply the configuration launch loaded. Logged as `[latency]
+  /// config_reload reason=launch`, which has no parse stage: launch's is
+  /// `launch_ready config_ms`.
+  func applyLaunchConfig() {
+    MainThreadActivity.note("config_reload")
+    applyConfig(
+      config, reason: .launch, probe: LatencyProbe.arm(.configReload), stages: LatencyStages())
+  }
+
   // MARK: Config hot reload
 
   /// `DispatchSource` watches a specific file descriptor → a specific
@@ -39,10 +66,11 @@ extension AppDelegate {
   ///
   /// Missing files have their parent directory watched instead, so
   /// creation triggers a re-watch + reload.
-  func watchConfigFile() {
-    teardownConfigWatchers()
-    let candidates = ConfigLoader.candidatePaths(
-      environment: ProcessInfo.processInfo.environment)
+  func watchConfigFile(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) {
+    stopWatchingConfigFile()
+    let candidates = ConfigLoader.candidatePaths(environment: environment)
     var watchedDirs = Set<String>()
     for url in candidates {
       attachWatcher(forPath: url.path)
@@ -52,21 +80,18 @@ extension AppDelegate {
       }
     }
     // Re-arming the watchers above is always needed (the inode may have been
-    // replaced); re-applying the config is not when its bytes are unchanged.
-    let contents = try? Data(
-      contentsOf: ConfigLoader.resolvePath(environment: ProcessInfo.processInfo.environment))
-    if let lastAppliedConfigFileContents, contents == lastAppliedConfigFileContents {
+    // replaced); re-applying the config is not when the file is unchanged,
+    // as it is when launch arms them on the file it just loaded. A file that
+    // was missing and still is has not changed either.
+    let file = ConfigLoader.userFile(environment: environment)
+    guard file != loadedConfigFile else {
       FlashLog.trace("[config] reload_skipped reason=unchanged")
       return
     }
-    let launching = lastAppliedConfigFileContents == nil
-    lastAppliedConfigFileContents = contents
-    // Launch already started the one environment refresh it needs; a reload
-    // the user caused re-reads the rc files they may just have edited.
-    reloadConfig(refreshesEnvironment: !launching)
+    reloadConfig(file, reason: .watch, environment: environment)
   }
 
-  private func teardownConfigWatchers() {
+  func stopWatchingConfigFile() {
     for s in configSources { s.cancel() }
     configSources.removeAll()
   }
@@ -93,6 +118,14 @@ extension AppDelegate {
   /// event re-arms one deadline on the shared clock. `.normal`: the user just
   /// saved and will look for the change, but a tenth of a second is
   /// invisible beside the 150 ms settle.
+  /// `config reload`: the file read now, whatever its bytes; the watchers
+  /// are left as they are.
+  func forceConfigReload() {
+    let environment = ProcessInfo.processInfo.environment
+    reloadConfig(
+      ConfigLoader.userFile(environment: environment), reason: .command, environment: environment)
+  }
+
   private func scheduleConfigReload() {
     configReload.arm(afterMs: 150) { [weak self] in self?.watchConfigFile() }
   }
@@ -113,21 +146,39 @@ extension AppDelegate {
     return source
   }
 
-  /// Re-read the config from disk, layer env + CLI overrides on top,
-  /// then publish to overlay + monitor under their internal locks. Every
-  /// future activation snapshots the new config at the start of its walk.
-  private func reloadConfig(refreshesEnvironment: Bool) {
+  /// Parse `file` as just read, layer the env overrides on top, and apply
+  /// the result. Logged as `[latency] config_reload`: the parse and the
+  /// apply, both on main. A watched save's 150 ms settle comes before it and
+  /// is not counted.
+  private func reloadConfig(
+    _ file: ConfigLoader.UserFile, reason: ConfigReloadReason, environment: [String: String]
+  ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     MainThreadActivity.note("config_reload")
+    let probe = LatencyProbe.arm(.configReload)
+    var stages = LatencyStages()
     // Re-resolve the login-shell environment off the main thread so a user who
     // changed their shell rc files (new PATH entry, mise plugin, …) and then
     // touched the config picks the change up without restarting Flash.
-    // Popups whose command could not start retry once it lands.
-    if refreshesEnvironment {
-      FlashProcessEnvironment.shared.refresh { [weak self] _ in
-        DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
-      }
+    // Popups whose command could not start retry once it lands. Launch
+    // started the one refresh it needs and does not come through here.
+    FlashProcessEnvironment.shared.refresh { [weak self] _ in
+      DispatchQueue.main.async { self?.overlay.statusTerminals.retryFailedLaunches() }
     }
-    let cfg = ConfigLoader.load()
+    let cfg = stages.measure("parse") { ConfigLoader.load(file, environment: environment) }
+    loadedConfigFile = file
+    applyConfig(cfg, reason: reason, probe: probe, stages: stages)
+  }
+
+  /// Publish `cfg` to every subsystem, overlay and monitor under their
+  /// internal locks. Every future activation snapshots the new config at the
+  /// start of its walk.
+  private func applyConfig(
+    _ cfg: Config, reason: ConfigReloadReason, probe: LatencyProbe, stages: LatencyStages
+  ) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    var stages = stages
+    let applyStartedAt = LatencyProbe.now
     if hintSession.isActive || activationInFlight { cancelOverlay() }
     let previousAutostart = config.app.autostart
     // Rebuild the frecency store only when its tuning actually changed —
@@ -146,7 +197,7 @@ extension AppDelegate {
           maxBoost: cfg.flashlight.frecencyMaxBoost))
     }
     // Apply log settings immediately — they need to be live for
-    // any warning the rest of `reloadConfig` might emit (e.g.
+    // any warning the rest of `applyConfig` might emit (e.g.
     // unparsable native mappings logged by `mappings.apply`).
     // `configureProviders` re-applies this on every activation walk
     // so a hot-reload of the config also propagates without needing
@@ -171,12 +222,15 @@ extension AppDelegate {
       AutoLaunch.reconcile(enabled: cfg.app.autostart)
     }
     overlay.overlayConfig = cfg.overlay
+    applyCaptureSharing(hidden: cfg.app.hideFromCapture)
     overlay.debugConfig = cfg.debug
     overlay.popupStyle = cfg.popupStyle
+    overlay.statusLinkOpener.schemes = Set(cfg.statusBar.linkSchemes)
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.effectiveMagicModifiers)
     overlay.keyboardNavigation = Alphabet.navigation(layoutName: cfg.positionLayoutName)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
+    applyTextScopePolicy(cfg.mode)
     // Rebuilt on every load: the setting may have changed, and so may the
     // installed layouts an explicit input-source ID names.
     keyboardLayoutMonitor.apply(setting: KeyboardLayout.Setting(cfg.app.keyboardLayout) ?? .auto)
@@ -188,14 +242,16 @@ extension AppDelegate {
       refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     statusBarController?.setBar(enabled: cfg.statusBar.enabled)
     statusBarController?.updateWidgets(cfg.enabledWidgets.mapValues(\.spec))
+    statusBarController?.updateMonitors(cfg.monitorSpecs)
     registry.updateFlashlightConfig(cfg.flashlight)
     pluginManager.updateConfig(cfg)
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:config.changed",
-        payload: [:],
-        bundleID: nil))
+    eventMonitors = cfg.eventMonitorSpecs
+    // A run whose monitor is gone or changed stops with its children.
+    monitorRunner.reconcile(cfg.enabledMonitors.mapValues(\.run))
+    reconcileHostEventSources()
+    emitHostEvent(PluginEvent(.configChanged))
     configureDebugServer(for: cfg)
+    telemetry.configure(cfg.telemetry)
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
     registry.scheduleRunningApplicationsRefresh()
@@ -206,21 +262,29 @@ extension AppDelegate {
     statusBarVisible = cfg.statusBar.enabled
     overlay.statusBarMonitor = cfg.statusBar.monitor
     NativeMenuBarAutoHide.reconcile(hidden: statusBarVisible)
+    updates.reconcile(cfg.app.updates)
     windowLayoutManager.setDeclaredLayouts(cfg.mode.declaredWindowLayouts)
     windowLayoutManager.screenParametersDidChange(
       statusBarReservesSpace: statusBarVisible,
       statusBarMonitor: cfg.statusBar.monitor,
       forceRecovery: false)
     windowLayoutManager.setPlacementRules(cfg.windowRules)
-    // The status controller runs for the bar and for desktop widgets alike.
-    if statusBarVisible || !cfg.enabledWidgets.isEmpty {
+    windowLayoutManager.configureTiling(
+      cfg.tiling, statusBarReservesSpace: statusBarVisible,
+      statusBarMonitor: cfg.statusBar.monitor)
+    // The status controller runs for the bar, desktop widgets and monitors
+    // alike.
+    if statusBarVisible || !cfg.enabledWidgets.isEmpty || !cfg.enabledMonitors.isEmpty {
       statusBarController?.start()
     } else {
       statusBarController?.stop()
     }
     widgetController?.apply(
       widgets: cfg.enabledWidgets, statusBarReservesSpace: statusBarVisible,
-      statusBarMonitor: cfg.statusBar.monitor, screenCapture: cfg.overlay.screenCapture)
+      statusBarMonitor: cfg.statusBar.monitor, hideFromCapture: cfg.app.hideFromCapture)
+    // The active layer takes its new `sticky`, or ends if the file no longer
+    // declares it; the re-render below paints a changed label.
+    dispatchMode(.layersChanged(cfg.mode.layers.mapValues(\.sticky)))
     // Advanced mode is on iff an all-mode exit or normal-entry binding exists. Turning it
     // off disables capture; the reducer re-renders either way.
     dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))
@@ -233,6 +297,10 @@ extension AppDelegate {
     refreshEffectiveMappings(
       for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
     reloadTerminalPopupConfiguration()
+    stages.add("apply", since: applyStartedAt)
+    probe.finish(
+      fields: [("reason", reason.rawValue)] + stages.fields,
+      attributes: ["reason": reason.rawValue])
   }
 
   /// Plugins emit a state notification on every log line, lifecycle

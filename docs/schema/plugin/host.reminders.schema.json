@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.reminders.schema.json",
+  "title": "host.reminders",
+  "description": "Plugin to host: read the access macOS grants Flash to Reminders, ask for it, list every open reminder as its identifier, title, list and creation time, or show one in Reminders. Each operation takes exactly its own fields. Only request_access shows macOS's prompt, and only while the user is using the plugin.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "host.reminders"
+    },
+    "params": {
+      "$ref": "definitions.schema.json#/definitions/app_items_params"
+    }
+  }
+}

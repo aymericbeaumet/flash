@@ -88,8 +88,6 @@ pub struct JumpTarget {
     pub context_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enters_insert_mode: Option<bool>,
     /// Source-declared salience. `Important` and `Urgent` render with the
     /// host's accent hint style.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,7 +104,6 @@ impl JumpTarget {
             url: None,
             context_id: None,
             pid: None,
-            enters_insert_mode: None,
             priority: None,
         }
     }
@@ -136,11 +133,6 @@ impl JumpTarget {
         self
     }
 
-    pub fn enters_insert_mode(mut self, enters: bool) -> Self {
-        self.enters_insert_mode = Some(enters);
-        self
-    }
-
     pub fn priority(mut self, priority: Priority) -> Self {
         if priority == Priority::Normal {
             self.priority = None;
@@ -151,9 +143,9 @@ impl JumpTarget {
     }
 }
 
-/// A catalog row. Outbound (via [`Context::publish`](crate::Context::publish)
-/// or a `search` reply) `source` must name one of this plugin's manifest
-/// `sources[].name` entries and `title` is the searchable string. Inbound (on
+/// A catalog row. Outbound (via [`Context::publish`](crate::Context::publish))
+/// `source` must name one of this plugin's manifest `sources[].name` entries
+/// and `title` is the searchable string. Inbound (on
 /// `perform {kind: "resolve"}`) the host echoes the row back with the same
 /// shape — read structured payload via [`payload_str`](Candidate::payload_str)
 /// / [`payload_as`](Candidate::payload_as).
@@ -181,6 +173,10 @@ pub struct Candidate {
     /// row is selected. Evaluation/rendering never executes it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub effect: Option<CandidateEffect>,
+    /// The question the host asks before it acts on this row: its resolve
+    /// is sent, or its effect runs, only once the user answered `y`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confirm: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -261,6 +257,19 @@ pub mod candidate_metadata {
     pub const PRIORITY: &str = "priority";
 }
 
+/// The trees `host.ax_snapshot` walks, as its `root` param names them
+/// (`protocol.json` `ax_snapshot.roots`).
+pub mod ax_snapshot_roots {
+    /// The windows of the app the snapshot's `pid` names: the default.
+    pub const WINDOWS: &str = "windows";
+    /// The menu bar of the app that owns it. The host names the app, so the
+    /// snapshot takes no `pid` and its reply carries one.
+    pub const MENU_BAR: &str = "menu_bar";
+
+    /// In `protocol.json` order.
+    pub const ALL: [&str; 2] = [WINDOWS, MENU_BAR];
+}
+
 /// Every AX notification `core:ax.changed` reports in
 /// [`Event::notification`] (`protocol.json` `host_events.ax_notifications`):
 /// the host forwards each of these, for every app it observes.
@@ -324,7 +333,6 @@ pub mod ax_notifications {
 /// `NETWORK_CHANGED` and `VOLUMES_CHANGED` are payload-free, coalesced
 /// signals: re-read the state you show when one arrives instead of polling.
 pub mod host_events {
-    pub const FLASH_STARTED: &str = "core:flash.started";
     pub const APPS_CHANGED: &str = "core:apps.changed";
     pub const APPS_LAUNCHED: &str = "core:apps.launched";
     pub const APPS_TERMINATED: &str = "core:apps.terminated";
@@ -337,13 +345,50 @@ pub mod host_events {
     pub const NETWORK_CHANGED: &str = "core:network.changed";
     /// A volume mounted, unmounted or was renamed.
     pub const VOLUMES_CHANGED: &str = "core:volumes.changed";
-    pub const SPACE_CHANGED: &str = "core:space.changed";
+    /// The calendar database changed, or the user answered macOS's Calendars
+    /// prompt. Only a plugin holding `calendar_events` hears it.
+    pub const CALENDAR_CHANGED: &str = "core:calendar.changed";
     pub const STATUS_OBSERVED: &str = "core:status.observed";
     pub const SESSION_OPENED: &str = "core:session.opened";
+    /// The Mac is going to sleep, and woke.
+    pub const SYSTEM_SLEPT: &str = "core:system.slept";
+    pub const SYSTEM_WOKE: &str = "core:system.woke";
+    /// The displays slept, and woke.
+    pub const DISPLAYS_SLEPT: &str = "core:displays.slept";
+    pub const DISPLAYS_WOKE: &str = "core:displays.woke";
+    /// The lock screen came up, and went away.
+    pub const SCREEN_LOCKED: &str = "core:screen.locked";
+    pub const SCREEN_UNLOCKED: &str = "core:screen.unlocked";
+    /// A display was connected or removed (`added`, `removed`, `displays`).
+    pub const DISPLAYS_CHANGED: &str = "core:displays.changed";
+    /// The active Space changed.
+    pub const SPACE_CHANGED: &str = "core:space.changed";
+    /// Nobody touched the keyboard, mouse or trackpad for `seconds`.
+    pub const USER_IDLE: &str = "core:user.idle";
+    /// Input came back after an idle episode of `idle_seconds`.
+    pub const USER_ACTIVE: &str = "core:user.active";
+    /// A USB device was connected (`vendor_id`, `product_id`, `name`).
+    pub const USB_ATTACHED: &str = "core:usb.attached";
+    /// A USB device was removed.
+    pub const USB_DETACHED: &str = "core:usb.detached";
+    /// A wall-clock minute began (`time`, `weekday`, `date`, `late_seconds`).
+    pub const CLOCK_MINUTE: &str = "core:clock.minute";
+    /// The focused tiling workspace changed (`workspace`, `previous`,
+    /// `workspaces`).
+    pub const WORKSPACE_CHANGED: &str = "core:workspace.changed";
+    /// Flash's mode changed (`mode`, `previous`, `layer`).
+    pub const MODE_CHANGED: &str = "core:mode.changed";
+    /// A hint session drew its first labels (`surface`, `targets`).
+    pub const HINTS_SHOWN: &str = "core:hints.shown";
+    /// A hint session committed a target (`surface`).
+    pub const HINTS_COMMITTED: &str = "core:hints.committed";
+    /// A hint session ended without committing (`surface`).
+    pub const HINTS_CANCELLED: &str = "core:hints.cancelled";
+    /// A value monitor rose into warning or error (`monitor`, `level`).
+    pub const MONITOR_TRIGGERED: &str = "core:monitor.triggered";
 
     /// In `protocol.json` order.
-    pub const ALL: [&str; 14] = [
-        FLASH_STARTED,
+    pub const ALL: [&str; 32] = [
         APPS_CHANGED,
         APPS_LAUNCHED,
         APPS_TERMINATED,
@@ -354,9 +399,28 @@ pub mod host_events {
         POWER_CHANGED,
         NETWORK_CHANGED,
         VOLUMES_CHANGED,
-        SPACE_CHANGED,
+        CALENDAR_CHANGED,
         STATUS_OBSERVED,
         SESSION_OPENED,
+        SYSTEM_SLEPT,
+        SYSTEM_WOKE,
+        DISPLAYS_SLEPT,
+        DISPLAYS_WOKE,
+        SCREEN_LOCKED,
+        SCREEN_UNLOCKED,
+        DISPLAYS_CHANGED,
+        SPACE_CHANGED,
+        USER_IDLE,
+        USER_ACTIVE,
+        USB_ATTACHED,
+        USB_DETACHED,
+        CLOCK_MINUTE,
+        WORKSPACE_CHANGED,
+        MODE_CHANGED,
+        HINTS_SHOWN,
+        HINTS_COMMITTED,
+        HINTS_CANCELLED,
+        MONITOR_TRIGGERED,
     ];
 }
 
@@ -368,7 +432,19 @@ impl Candidate {
             url: None,
             metadata: HashMap::new(),
             effect: None,
+            confirm: None,
         }
+    }
+
+    /// Ask `prompt` before the host acts on this row, for a row whose
+    /// selection cannot be undone (`Restart this Mac?`). The host shows it
+    /// as its confirmation alert, sends the resolve only on `y`, and marks
+    /// that perform as confirmed; a plugin never asks itself. A non-blank
+    /// question of at most 256 bytes (`quotas.confirm_bytes`): the host
+    /// rejects the whole publish or search reply otherwise.
+    pub fn confirm(mut self, prompt: impl Into<String>) -> Self {
+        self.confirm = Some(prompt.into());
+        self
     }
 
     fn set(mut self, key: &str, value: impl Into<String>) -> Self {
@@ -605,8 +681,6 @@ pub struct Event {
     pub name: String,
     pub bundle_id: Option<String>,
     pub pid: Option<i64>,
-    pub front_window_frame: Option<Frame>,
-    pub text: Option<String>,
     /// `core:ax.changed`: the AX notification the app posted, one of
     /// [`ax_notifications::ALL`] (`AXTitleChanged`, `AXValueChanged`, …).
     /// Always present on that event, with [`pid`](Event::pid). Match on it
@@ -635,10 +709,34 @@ impl Event {
     }
 }
 
-/// A `perform {kind: "command"}` request: the matched `:`-command or verb, its
-/// subcommand, the trailing args, and the raw input. Bang dispatch arrives
-/// with the bang token as `subcommand`.
+/// The focused-app context a core command carries: the app the host asks
+/// the plugin to perform it in.
 #[derive(Clone, Debug, Default, Deserialize)]
+pub struct CommandContext {
+    #[serde(default)]
+    pub bundle_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
+    pub pid: Option<i64>,
+    #[serde(default)]
+    pub front_window_frame: Option<Frame>,
+}
+
+/// A `perform {kind: "command"}` request: the command's two words and its
+/// argument words. Three things arrive this way: a core command the
+/// manifest's `commands[]` declares under one of Flash's topics (`tab
+/// close`), with `context` naming the focused app and `args` holding the
+/// argument words a mapping wrote (`--index=3`, `--force`); the plugin's own
+/// command (`tmux session main`), without `context`, whose `args` are the
+/// ones its `commands[]` entry declares; and a bang, with the plugin id as
+/// `command`, the typed token as `subcommand` and the query words as `args`.
+///
+/// The host holds an own command to its declaration before it sends the
+/// perform, and a core command to Flash's own table, so a handler reads the
+/// arguments by name and type ([`integer`](Self::integer),
+/// [`value`](Self::value), [`flag`](Self::flag),
+/// [`positional`](Self::positional)) instead of parsing words. What only the
+/// plugin can know (a pid that does not exist) stays its own check.
+#[derive(Clone, Debug, Deserialize)]
 pub struct CommandRequest {
     #[serde(default)]
     pub command: String,
@@ -647,13 +745,74 @@ pub struct CommandRequest {
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
-    pub raw: String,
+    pub context: Option<CommandContext>,
+    /// The NORMAL count typed before the key of the plugin's own command:
+    /// `5` then the key arrives once, with 5. It is 1 without a count, from
+    /// the CLI and the command line, and for a core command or a bang.
+    #[serde(
+        default = "crate::wire::one",
+        deserialize_with = "crate::wire::deserialize_count"
+    )]
+    pub count: u32,
+    /// Whether the user answered `y` to a question before this command: the
+    /// `confirm` its manifest entry declares, or an `alert confirm` wrapping
+    /// it. The host honours a host action that needs the user's consent only
+    /// while such a perform is in flight.
+    #[serde(default, deserialize_with = "crate::wire::deserialize_confirmed")]
+    pub confirmed: bool,
+}
+
+impl Default for CommandRequest {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            subcommand: String::new(),
+            args: Vec::new(),
+            context: None,
+            count: 1,
+            confirmed: false,
+        }
+    }
 }
 
 impl CommandRequest {
-    /// The args joined by a single space, trimmed.
+    /// The two words as one command line: `"tab close"`.
+    pub fn name(&self) -> String {
+        format!("{} {}", self.command, self.subcommand)
+    }
+
+    /// The args joined by a single space, trimmed: a bang's query.
     pub fn query(&self) -> String {
         self.args.join(" ").trim().to_string()
+    }
+
+    /// The value of the argument `name` (`--name=value`), when given: a
+    /// declared `string` or `enum`. A `_` in the name is written `-`.
+    pub fn value(&self, name: &str) -> Option<&str> {
+        let prefix = format!("--{}=", name.replace('_', "-"));
+        self.args
+            .iter()
+            .find_map(|arg| arg.strip_prefix(prefix.as_str()))
+    }
+
+    /// The argument `name` as a whole number (`--pid=4242`), when given: a
+    /// declared `integer`.
+    pub fn integer(&self, name: &str) -> Option<i64> {
+        self.value(name).and_then(|raw| raw.parse().ok())
+    }
+
+    /// Whether the flag `name` is on (`--force`): a declared `flag`.
+    pub fn flag(&self, name: &str) -> bool {
+        self.args.contains(&format!("--{}", name.replace('_', "-")))
+    }
+
+    /// The command's one bare word (`main` in `tmux session main`), when
+    /// given: its declared positional.
+    pub fn positional(&self) -> Option<&str> {
+        self.args
+            .iter()
+            .map(String::as_str)
+            .find(|arg| !arg.starts_with("--"))
     }
 }
 
@@ -667,48 +826,24 @@ pub struct HintsRequest {
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
+    /// Physical pixels per AppKit point on the captured window display, when known.
+    #[serde(default)]
+    pub display_scale: Option<f64>,
 }
 
-/// The focused-app context attached to a [`ActionRequest`].
+/// A `text_grid` request: the same focused-app context as [`HintsRequest`].
+/// Always live.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct ActionContext {
+pub struct TextGridRequest {
     #[serde(default)]
     pub bundle_id: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::deserialize_optional_pid")]
     pub pid: Option<i64>,
     #[serde(default)]
     pub front_window_frame: Option<Frame>,
-}
-
-/// A `perform {kind: "action"}` request (e.g. `tab_select`). Extra arguments
-/// arrive in `args` (`index` for the numbered-tab actions).
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ActionRequest {
+    /// Physical pixels per AppKit point on the captured window display, when known.
     #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub context: ActionContext,
-    #[serde(default)]
-    pub args: serde_json::Map<String, Value>,
-}
-
-impl ActionRequest {
-    /// The `args.index` payload for numbered actions, when well-formed.
-    pub fn index(&self) -> Option<i64> {
-        self.arg_i64("index")
-    }
-
-    pub fn arg_i64(&self, key: &str) -> Option<i64> {
-        match self.args.get(key)? {
-            Value::Number(number) => number.as_i64(),
-            Value::String(raw) => raw.parse().ok(),
-            _ => None,
-        }
-    }
-
-    pub fn arg_str(&self, key: &str) -> Option<&str> {
-        self.args.get(key).and_then(Value::as_str)
-    }
+    pub display_scale: Option<f64>,
 }
 
 /// A `perform {kind: "navigate"}` request. `url` is the durable route the host
@@ -724,34 +859,30 @@ pub struct NavigateRequest {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct EvaluateRequest {
     #[serde(default)]
-    pub surface: String,
-    #[serde(default)]
-    pub scope: String,
-    #[serde(default)]
     pub query: String,
 }
 
-/// One explicitly scoped query against a `live: true` source (`search`).
-/// Unlike `evaluate`, the handler may do real work (subprocess, disk); the
-/// host enforces its own drop-late deadline and simply ignores replies that
-/// miss it.
-#[derive(Clone, Debug, Default, Deserialize)]
+/// A `search` request: the live pull of one source the manifest declares
+/// with `live`, sent while a flashlight query is scoped to it. `query` is the
+/// text typed after the scope; a `per_scope` source always gets it empty.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct SearchRequest {
-    #[serde(default)]
-    pub scope: String,
-    #[serde(default)]
+    /// The manifest `sources[].name` asked for.
+    pub source: String,
     pub query: String,
 }
 
 /// A decoded `perform` request, one variant per wire `kind`.
 #[derive(Clone, Debug)]
 pub enum Perform {
-    /// `kind: "resolve"` — the host echoes back a row this plugin published.
+    /// `kind: "resolve"` — the host echoes back a row this plugin published
+    /// or answered a search with. A row that carries `confirm` arrives only
+    /// once the user answered its question.
     Resolve(Candidate),
-    /// `kind: "command"` — `:`-commands, verbs, and bang dispatch.
+    /// `kind: "command"` — the core commands the plugin performs in its
+    /// context (with `context`), its own commands and bangs (without; a bang
+    /// carries the plugin id as its command).
     Command(CommandRequest),
-    /// `kind: "action"` — source-owned normal-mode actions.
-    Action(ActionRequest),
     /// `kind: "navigate"` — movement-history route restoration.
     Navigate(NavigateRequest),
 }
@@ -760,11 +891,51 @@ pub enum Perform {
 // Outbound responses
 // ---------------------------------------------------------------------------
 
+/// The centred alert a command's reply asks the host to show: one message
+/// line, or a title over a one-line value (`volume` over `38%`). The host
+/// draws it wherever the command ran; a plugin never draws its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PerformAlert {
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    widest_value: Option<String>,
+}
+
+impl PerformAlert {
+    /// A one-line message.
+    pub fn message(text: impl Into<String>) -> Self {
+        Self {
+            title: text.into(),
+            value: None,
+            widest_value: None,
+        }
+    }
+
+    /// A title over the value it reports.
+    pub fn value(title: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            value: Some(value.into()),
+            widest_value: None,
+        }
+    }
+
+    /// The widest value this alert shows (`100%`), so its box keeps one size
+    /// while the value changes. Only a title over a value takes one.
+    pub fn widest_value(mut self, widest: impl Into<String>) -> Self {
+        self.widest_value = Some(widest.into());
+        self
+    }
+}
+
 /// The uniform `perform` reply — the universal trichotomy. `ok` = performed
 /// (`target_pid` raises that app and records the jump in movement history;
-/// `message` shows as a toast). `unhandled` = "not my context"; the host MAY
-/// fall back. `fail` = "mine, but it broke"; the host MUST NOT fall back
-/// (double-fire protection).
+/// `message` is the command's output, a toast when nothing else presents it;
+/// `alert` shows the host's centred alert). `unhandled` = "not my context";
+/// the host MAY fall back. `fail` = "mine, but it broke"; the host MUST NOT
+/// fall back (double-fire protection).
 #[derive(Clone, Debug, Serialize)]
 pub struct PerformResponse {
     ok: bool,
@@ -778,6 +949,8 @@ pub struct PerformResponse {
     navigation_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alert: Option<PerformAlert>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -794,6 +967,7 @@ impl PerformResponse {
             target_pid: None,
             navigation_url: None,
             message: None,
+            alert: None,
         }
     }
 
@@ -807,11 +981,13 @@ impl PerformResponse {
             target_pid: None,
             navigation_url: None,
             message: None,
+            alert: None,
         }
     }
 
-    /// "Mine, but it broke" — the host must not fall back. The message is
-    /// logged host-side; keep it content-free.
+    /// "Mine, but it broke" — the host must not fall back. The host logs the
+    /// message and, for the plugin's own command, shows it and hands it to
+    /// the caller: say why in a line, without the user's data.
     pub fn fail(message: impl Into<String>) -> Self {
         let message = message.into();
         Self {
@@ -826,6 +1002,7 @@ impl PerformResponse {
             target_pid: None,
             navigation_url: None,
             message: None,
+            alert: None,
         }
     }
 
@@ -842,9 +1019,16 @@ impl PerformResponse {
         self
     }
 
-    /// Text for Flash to surface as a toast.
+    /// The command's output: the CLI prints it and the command line shows
+    /// it; a key shows it as a toast, unless the reply carries an `alert`.
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
+        self
+    }
+
+    /// The centred alert Flash shows wherever the command ran.
+    pub fn alert(mut self, alert: PerformAlert) -> Self {
+        self.alert = Some(alert);
         self
     }
 
@@ -890,6 +1074,11 @@ impl PerformResponse {
         {
             return serde_json::json!({ "ok": false, "error": "invalid perform navigation_url" });
         }
+        if let Some(alert) = &self.alert
+            && !serde_json::to_value(alert).is_ok_and(|alert| crate::wire::valid_alert(&alert))
+        {
+            return serde_json::json!({ "ok": false, "error": "invalid perform alert" });
+        }
         serde_json::to_value(self).unwrap_or_else(|_| {
             serde_json::json!({ "ok": false, "error": "perform response could not be encoded" })
         })
@@ -909,9 +1098,10 @@ impl EvaluateResponse {
     }
 }
 
-/// Catalog-shaped rows answering one `search` request against this plugin's
-/// `live: true` sources.
-#[derive(Clone, Debug, Default)]
+/// The rows answering one `search` request. Every row carries the source
+/// that was asked for; the host serves a reply holding any other row, a
+/// malformed one or more than the catalog quotas as no rows.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SearchResponse {
     pub rows: Vec<Candidate>,
 }
@@ -940,6 +1130,99 @@ impl HintsResponse {
     pub fn context_pid(mut self, pid: i64) -> Self {
         self.context_pid = Some(pid);
         self
+    }
+}
+
+/// One line of a [`TextGridResponse`]. Rows and columns are cells of the
+/// grid, row 0 at the top.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum TextGridLine {
+    /// Captured cell text: one UTF-16 unit per cell from `column` on, the way
+    /// a terminal capture addresses it.
+    Text { row: u32, column: u32, text: String },
+    /// An expanded tmux-style status format (`#[…]` styles and alignment)
+    /// the host lays out across `width` cells from `column`, as its status
+    /// line does.
+    Format {
+        row: u32,
+        column: u32,
+        width: u32,
+        format: String,
+    },
+}
+
+impl TextGridLine {
+    pub fn text(row: u32, column: u32, text: impl Into<String>) -> Self {
+        Self::Text {
+            row,
+            column,
+            text: text.into(),
+        }
+    }
+
+    pub fn format(row: u32, column: u32, width: u32, format: impl Into<String>) -> Self {
+        Self::Format {
+            row,
+            column,
+            width,
+            format: format.into(),
+        }
+    }
+}
+
+/// Where a text grid's cells are inside the window, in AppKit points: one
+/// cell's size, and the padding between the window's left and top edges and
+/// the grid. A terminal that centres or pads its grid reports it; without
+/// one the host divides the window evenly by columns and rows.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct TextGridCell {
+    pub width: f64,
+    pub height: f64,
+    pub pad_x: f64,
+    pub pad_y: f64,
+}
+
+/// The focused app's visible text as a `columns` × `rows` cell grid,
+/// answering one `text_grid` request. The host searches it for a letter when
+/// the app publishes no Accessibility text. No lines means no grid.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextGridResponse {
+    pub columns: u32,
+    pub rows: u32,
+    pub lines: Vec<TextGridLine>,
+    pub cell: Option<TextGridCell>,
+}
+
+impl TextGridResponse {
+    pub fn new(columns: u32, rows: u32, lines: Vec<TextGridLine>) -> Self {
+        Self {
+            columns,
+            rows,
+            lines,
+            cell: None,
+        }
+    }
+
+    /// Say where the cells are, for a grid that does not fill its window
+    /// evenly.
+    pub fn cell(mut self, cell: TextGridCell) -> Self {
+        self.cell = Some(cell);
+        self
+    }
+
+    /// The reply's `result`, as written on the wire.
+    pub(crate) fn to_value(&self) -> serde_json::Value {
+        let mut result = serde_json::json!({
+            "ok": true,
+            "columns": self.columns,
+            "rows": self.rows,
+            "lines": serde_json::to_value(&self.lines).unwrap_or_else(|_| serde_json::json!([])),
+        });
+        if let Some(cell) = self.cell {
+            result["cell"] = serde_json::to_value(cell).unwrap_or(serde_json::Value::Null);
+        }
+        result
     }
 }
 
@@ -986,6 +1269,83 @@ mod tests {
     }
 
     #[test]
+    fn text_grid_lines_serialize_as_their_exact_wire_shapes() {
+        let lines = vec![
+            TextGridLine::text(1, 2, "ab"),
+            TextGridLine::format(0, 0, 9, "#[align=left]s"),
+        ];
+        assert_eq!(
+            serde_json::to_value(&lines).unwrap(),
+            json!([
+                { "row": 1, "column": 2, "text": "ab" },
+                { "row": 0, "column": 0, "width": 9, "format": "#[align=left]s" },
+            ])
+        );
+        let result = json!({ "ok": true, "columns": 9, "rows": 2, "lines": lines });
+        assert!(crate::wire::valid_result("text_grid", &result));
+    }
+
+    #[test]
+    fn a_text_grid_reply_carries_its_cell_only_when_the_plugin_measured_one() {
+        let grid = TextGridResponse::new(9, 2, vec![TextGridLine::text(1, 2, "ab")]);
+        assert_eq!(
+            grid.to_value(),
+            json!({ "ok": true, "columns": 9, "rows": 2, "lines": [
+                { "row": 1, "column": 2, "text": "ab" },
+            ] })
+        );
+        let measured = grid.cell(TextGridCell {
+            width: 8.0,
+            height: 16.5,
+            pad_x: 0.0,
+            pad_y: 1.5,
+        });
+        assert_eq!(
+            measured.to_value()["cell"],
+            json!({ "width": 8.0, "height": 16.5, "pad_x": 0.0, "pad_y": 1.5 })
+        );
+        assert!(crate::wire::valid_result("text_grid", &measured.to_value()));
+        for cell in [
+            TextGridCell {
+                width: 0.0,
+                height: 16.0,
+                pad_x: 0.0,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: 8.0,
+                height: -1.0,
+                pad_x: 0.0,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: 8.0,
+                height: 16.0,
+                pad_x: -0.5,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: f64::NAN,
+                height: 16.0,
+                pad_x: 0.0,
+                pad_y: 0.0,
+            },
+            TextGridCell {
+                width: 8.0,
+                height: 16.0,
+                pad_x: 0.0,
+                pad_y: f64::INFINITY,
+            },
+        ] {
+            let refused = TextGridResponse::new(9, 2, vec![]).cell(cell).to_value();
+            assert!(
+                !crate::wire::valid_result("text_grid", &refused),
+                "{cell:?}"
+            );
+        }
+    }
+
+    #[test]
     fn failure_builders_cannot_emit_success_fields() {
         assert_eq!(
             PerformResponse::fail("broken")
@@ -997,10 +1357,41 @@ mod tests {
     }
 
     #[test]
+    fn an_alert_is_a_message_or_a_title_over_a_value() {
+        assert_eq!(
+            PerformResponse::ok()
+                .alert(PerformAlert::message("caffeinate on"))
+                .to_value(),
+            json!({ "ok": true, "alert": { "title": "caffeinate on" } })
+        );
+        let volume = PerformResponse::ok()
+            .message("volume 38%")
+            .alert(PerformAlert::value("volume", "38%").widest_value("100%"));
+        assert_eq!(
+            volume.to_value(),
+            json!({ "ok": true, "message": "volume 38%", "alert": {
+                "title": "volume", "value": "38%", "widest_value": "100%"
+            } })
+        );
+        assert!(crate::wire::valid_result("perform", &volume.to_value()));
+    }
+
+    #[test]
     fn perform_builders_always_emit_valid_wire_outcomes() {
         for response in [
             PerformResponse::fail(" \t\n"),
             PerformResponse::ok().navigation_url("relative/path"),
+            PerformResponse::ok().alert(PerformAlert::message(" ")),
+            PerformResponse::ok().alert(PerformAlert::value("volume", "")),
+            PerformResponse::ok().alert(PerformAlert::value("volume", "3\n8%")),
+            PerformResponse::ok().alert(PerformAlert::message("volume").widest_value("100%")),
+            PerformResponse::ok().alert(PerformAlert::message(
+                "x".repeat(crate::wire::MAX_ALERT_TITLE_BYTES + 1),
+            )),
+            PerformResponse::ok().alert(PerformAlert::value(
+                "volume",
+                "9".repeat(crate::wire::MAX_ALERT_VALUE_BYTES + 1),
+            )),
         ] {
             assert!(crate::wire::valid_result("perform", &response.to_value()));
             assert_eq!(response.to_value()["ok"], false);
@@ -1017,13 +1408,33 @@ mod tests {
                 None
             );
             assert_eq!(
-                serde_json::from_value::<ActionContext>(value).unwrap().pid,
+                serde_json::from_value::<CommandContext>(value).unwrap().pid,
                 None
             );
         }
         for pid in [json!(true), json!(0), json!(1.0), json!(2147483648_u64)] {
             assert!(serde_json::from_value::<HintsRequest>(json!({"pid": pid})).is_err());
+            assert!(
+                serde_json::from_value::<CommandRequest>(
+                    json!({"command": "tab", "subcommand": "close", "context": {"pid": pid}})
+                )
+                .is_err()
+            );
         }
+        // An own command or a bang carries no context at all.
+        let own: CommandRequest =
+            serde_json::from_value(json!({"command": "tmux", "subcommand": "session"})).unwrap();
+        assert!(own.context.is_none());
+        let core: CommandRequest = serde_json::from_value(json!({
+            "command": "tab", "subcommand": "close", "args": [],
+            "context": {"bundle_id": "com.example", "pid": 7}
+        }))
+        .unwrap();
+        let context = core.context.expect("a core command carries its context");
+        assert_eq!(
+            (context.bundle_id.as_deref(), context.pid),
+            (Some("com.example"), Some(7))
+        );
     }
 
     #[test]
@@ -1043,6 +1454,45 @@ mod tests {
         assert_eq!(encoded["source"], "example.items");
         assert_eq!(encoded["metadata"]["subtitle"], "sub");
         assert_eq!(encoded["effect"]["type"], "copy_text");
+    }
+
+    /// A row's question is first-class on the wire and absent without one.
+    #[test]
+    fn a_row_carries_the_question_the_host_asks_first() {
+        let row = Candidate::new("example.items", "Restart").confirm("Restart this Mac?");
+        assert_eq!(
+            serde_json::to_value(&row).unwrap(),
+            json!({ "source": "example.items", "title": "Restart", "confirm": "Restart this Mac?" })
+        );
+        let back: Candidate = serde_json::from_value(serde_json::to_value(&row).unwrap()).unwrap();
+        assert_eq!(back, row);
+        assert_eq!(back.confirm.as_deref(), Some("Restart this Mac?"));
+        let plain: Candidate =
+            serde_json::from_value(json!({ "source": "s", "title": "t", "confirm": null }))
+                .unwrap();
+        assert_eq!(plain.confirm, None);
+    }
+
+    /// `confirmed` is `true` or absent: a command without it was not asked.
+    #[test]
+    fn a_command_says_whether_the_user_confirmed_it() {
+        let command = |extra: serde_json::Value| {
+            let mut params = json!({ "command": "system", "subcommand": "restart", "args": [] });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<CommandRequest>(params)
+        };
+        assert!(!command(json!({})).unwrap().confirmed);
+        assert!(command(json!({ "confirmed": true })).unwrap().confirmed);
+        assert!(!CommandRequest::default().confirmed);
+        for confirmed in [json!(false), json!(null), json!(1), json!("true")] {
+            assert!(
+                command(json!({ "confirmed": confirmed })).is_err(),
+                "{confirmed}"
+            );
+        }
     }
 
     #[test]
@@ -1079,21 +1529,82 @@ mod tests {
     }
 
     #[test]
-    fn action_args_read_numbers_and_numeric_strings() {
-        let request: ActionRequest = serde_json::from_value(json!({
-            "name": "tab_select",
-            "context": { "pid": 7 },
-            "args": { "index": "3" },
-        }))
-        .unwrap();
-        assert_eq!(request.index(), Some(3));
+    fn a_command_carries_its_count_and_runs_once_without_one() {
+        let command = |extra: serde_json::Value| {
+            let mut params = json!({ "command": "volume", "subcommand": "up", "args": [] });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<CommandRequest>(params)
+        };
+        assert_eq!(command(json!({})).unwrap().count, 1);
+        assert_eq!(command(json!({ "count": 1 })).unwrap().count, 1);
+        assert_eq!(command(json!({ "count": 5 })).unwrap().count, 5);
+        assert_eq!(command(json!({ "count": 999 })).unwrap().count, 999);
+        assert_eq!(CommandRequest::default().count, 1);
+        for count in [
+            json!(0),
+            json!(-1),
+            json!(1000),
+            json!(2.5),
+            json!("5"),
+            json!(null),
+            json!(true),
+        ] {
+            assert!(command(json!({ "count": count })).is_err(), "{count}");
+        }
+    }
 
-        let request: ActionRequest = serde_json::from_value(json!({
-            "name": "tab_select",
-            "args": { "index": 4 },
+    #[test]
+    fn command_arguments_read_by_name_and_type() {
+        let select: CommandRequest = serde_json::from_value(json!({
+            "command": "tab",
+            "subcommand": "select",
+            "args": ["--index=3"],
+            "context": { "pid": 7 },
         }))
         .unwrap();
-        assert_eq!(request.index(), Some(4));
-        assert_eq!(request.arg_str("index"), None);
+        assert_eq!(select.name(), "tab select");
+        assert_eq!(select.integer("index"), Some(3));
+        assert_eq!(select.value("index"), Some("3"));
+        assert!(!select.flag("index"), "a value argument is not a flag");
+        assert!(!select.flag("force"));
+        assert_eq!(select.positional(), None);
+
+        let forced: CommandRequest = serde_json::from_value(json!({
+            "command": "app",
+            "subcommand": "reload",
+            "args": ["--force"],
+        }))
+        .unwrap();
+        assert!(forced.flag("force"));
+        assert_eq!(forced.value("force"), None, "a flag has no value");
+        assert_eq!(forced.integer("index"), None);
+
+        // An own command's arguments as the host spells them: the positional
+        // first, a name's `_` written `-`.
+        let own: CommandRequest = serde_json::from_value(json!({
+            "command": "example",
+            "subcommand": "run",
+            "args": ["Daft Punk", "--pid=4242", "--device=Studio Speakers", "--dry-run"],
+        }))
+        .unwrap();
+        assert_eq!(own.positional(), Some("Daft Punk"));
+        assert_eq!(own.integer("pid"), Some(4242));
+        assert_eq!(own.value("device"), Some("Studio Speakers"));
+        assert!(own.flag("dry_run"));
+        assert!(!own.flag("pid"));
+        assert_eq!(own.integer("device"), None, "not a number");
+        assert_eq!(own.value("missing"), None);
+
+        // A bang's words are its query.
+        let bang: CommandRequest = serde_json::from_value(json!({
+            "command": "example",
+            "subcommand": "g",
+            "args": ["rust", "book"],
+        }))
+        .unwrap();
+        assert_eq!(bang.query(), "rust book");
     }
 }

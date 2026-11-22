@@ -13,17 +13,53 @@ An earlier focus, configuration, or user-action request replaces a throttled
 wake with a new ticket. Later noisy events cannot demote that request. Each
 callback must consume its own ticket, so a cancelled or replaced callback
 cannot clear or execute newly scheduled work for the same PID.
+In-flight walks also hold generation tickets. Removing an app or stopping the
+monitor revokes them before teardown; a revoked completion cannot publish,
+consume a replacement walk's waiter or re-arm a refresh, even for the same PID.
 
-AX and queued refreshes debounce for 80 ms and observe a 2.5-second minimum
-interval between automatic walks. Maintenance has a separate identity and
-bypasses that minimum interval: it wakes 250 ms before the model's freshness
-ceiling, then uses the same 80-ms debounce. Each model carries its own
-ceiling: it starts at 1.5 s and doubles (up to 30 s) every time a maintenance
-walk reproduces the previous model unchanged — same dirty token,
-configuration revision, and target geometry/role digest — and resets to 1.5 s
-on any other outcome. A maintenance wake is skipped outright after 60 s
-without keyboard or pointer input; the model then expires and the next
-activation walks on demand.
+AX and queued refreshes debounce for 80 ms and observe a minimum spacing
+between automatic walks: 2.5 seconds, or ten times what the app's last
+complete walk cost when that is longer, 30 s at most
+(`AppMonitor.eventRefreshSpacingMs`). The spacing is cost only: a walk
+repeated at it stays under a tenth of a core. It is not the maintenance
+interval below, which also grows when a static app reproduces its model: that
+growth says the model stays valid for long, not that the walk after a real
+change may wait. A degenerate walk, fast because there was nothing to read,
+never lowers the cost.
+
+Value and title changes (`AXValueChanged`, `AXTitleChanged`) are *churn*: one
+per keystroke or per tick, rarely moving a target. They discard the model like
+any event, since a value can resize what holds it, and arm one `ax_quiet`
+refresh for when the app has been quiet for 400 ms
+(`AppMonitor.modelChurnQuietMs`): every further change pushes it back, so
+typing is walked once it pauses, never between two keys, and the same spacing
+holds it back. Churn has the lowest priority: it never postpones or demotes a
+refresh something else asked for, and a layout change replaces a pending
+quiet wake with its own 80-ms debounce. An app that ticks faster than the
+window never goes quiet and is walked on demand, as before.
+
+Maintenance has a separate identity and bypasses that spacing: it wakes 250 ms before the model's freshness ceiling, then uses the
+same 80-ms debounce. The ceiling is the app's *maintenance interval*
+(`AppMonitor.modelIntervalMs`), one per app, carried by each model it builds
+as `freshnessMs`. It starts at 1.5 s and doubles (up to 30 s) every time a
+maintenance walk reproduces the previous model unchanged — same dirty token,
+configuration revision, and target geometry/role digest — and every time a
+walk is *slow*: one that took at least a tenth of the current interval (never
+under 50 ms), so repeating it every interval would cost over a tenth of a
+core. The threshold is 150 ms at the 1.5 s floor and 3 s at the 30 s ceiling.
+It is a fraction of the freshness window, never an absolute figure, because
+the apps hints matter for — Electron, Gecko, Catalyst — walk in 50–100 ms,
+and a flat 50 ms budget switched the prepared model off for every one of
+them. Any other walk lets the interval shrink back toward 1.5 s, halving as
+long as the walk stays cheap for the halved interval, so it settles where the
+walk's duty cycle is under a tenth; a degenerate walk (see below) is fast
+because there was nothing to read, so it never shrinks it. The interval
+outlives the models — an AX event discards a model, not the evidence that
+the app walks slowly — and is forgotten when the app quits or the
+configuration changes. Every change is logged at `debug` as
+`[ax] model_interval` with its cause (`slow`, `unchanged`, `cheap`). A
+maintenance wake is skipped outright after 60 s without keyboard or pointer
+input; the model then expires and the next activation walks on demand.
 
 Maintenance is the one self-renewing wake — each stored model arms the next —
 so it is a deadline registration on the shared `PollScheduler`
@@ -44,18 +80,33 @@ configuration revision are unchanged.
 
 AX observer sources are hosted on a dedicated `AXObserverThread`; callbacks
 enqueue and the main thread drains each burst in one hop, bumping every dirty
-token in arrival order. Observer registration, its retry ladder, focused-window
+token in arrival order. Each queued event retains its observer context;
+teardown revokes that context before removing the source, so already-enqueued
+events and in-flight registration results cannot affect a replacement observer.
+Observer registration, its retry ladder, focused-window
 re-observation and teardown run on a serial queue of their own, so a walk, a
 readiness probe or a commit on the AX queue never waits behind an app slow to
 answer a registration; a multi-app screen-scope walk steps one app per turn
-and asks main between apps whether its activation still stands. AX storms and automatic walks taking at least 50 ms
-suppress AX, queued, and maintenance warming. Focus and configuration requests can reassess those apps;
-explicit activation remains available and complete. A degenerate walk (see
-below) is fast because there was nothing to read, so it never lifts the
-slow-walk suppression. Suppression, invalidation,
-termination, and shutdown revoke the applicable tickets. No timer is a second
-source of model validity: maintenance also rechecks focus, dirty token, and
-configuration before requesting a refresh.
+and asks main between apps whether its activation still stands. AX storms
+suppress AX, churn, queued, and maintenance warming until a quiet window. A slow
+walk suppresses nothing: it lengthens the app's maintenance interval and the
+spacing of its event-driven walks, and maintenance keeps re-arming at that
+interval instead of letting the model expire. Focus and
+configuration requests can reassess a storming app; explicit activation
+remains available and complete. Suppression, invalidation, termination, and
+shutdown revoke the applicable tickets. No timer is a second source of model
+validity: maintenance also rechecks focus, dirty token, and configuration
+before requesting a refresh. An activation the model could not serve logs
+why (`miss_reason` in `[latency] hints_visible`; see
+[performance](performance.md#what-is-measured)): the store remembers what
+discarded a model — a focus change, an AX event or a Flash action, a
+configuration change, an occluded walk — since when and by which
+notification or action, and a lookup tells a model that expired from one
+whose identities moved. The same line says what was armed to rebuild the
+model at that moment (`pending`, `refresh_in_ms`, `interval_ms`): the
+scheduler reports its soonest wake for the app, whether a refresh was
+debounced or held back by the interval, and whether idle maintenance had
+been dropped.
 
 ## Windows that are covered
 
@@ -66,8 +117,8 @@ walk is *occluded* and reads nothing. An occluded walk is never cached:
 whether the window is covered is window-list state that no AX event reports,
 so nothing would invalidate an empty model once the covering window left. It
 evicts the current model instead (that model no longer describes the screen)
-and arms no maintenance; nor does it count toward the slow-walk backoff, the
-empty-walk gate or a readiness rewalk. An activation that finds no model
+and arms no maintenance; nor does it count toward the app's maintenance
+interval, the empty-walk gate or a readiness rewalk. An activation that finds no model
 recomputes the visible region and walks on demand, so the same window list
 always gives the same hints, and a window still fully covered at activation
 stays silent. A partly covered window is the same window-list state: every
@@ -109,8 +160,8 @@ background ladder); nothing sleeps on the main thread or the AX queue.
   read the tree the ladder waits for.
 - **Background.** A degenerate automatic walk of an app with a healthy count
   arms a ladder ending in a `readiness` refresh. That reason is owed, not
-  speculative, so event storms and the slow-walk backoff do not suppress it,
-  and it is bounded to two ladders per focus. An app whose tree is built on
+  speculative, so event storms do not suppress it and the app's maintenance
+  interval does not space it, and it is bounded to two ladders per focus. An app whose tree is built on
   demand skips the probes and is simply walked again.
 - **Activation.** Activation never waits on a background ladder: its walk
   cancels it. A degenerate activation walk is repaired by one extra walk,

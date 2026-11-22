@@ -191,7 +191,12 @@ final class PollScheduler {
     var owner: UInt64? = nil
   }
 
-  private let queue = DispatchQueue(label: "flash.poll", qos: .utility)
+  /// The clock only plans and dispatches; handlers run where they were
+  /// registered, at that queue's QoS. `.userInitiated` so a `system` or
+  /// `high` wake-up is not planned on a utility thread the kernel starves
+  /// under load (the reveal probe fired at 150–1,800 ms gaps when it was),
+  /// and so a handler queue without a QoS of its own inherits this one.
+  private let queue = DispatchQueue(label: "flash.poll", qos: .userInitiated)
   private var clients: [String: Client] = [:]
   private var timer: DispatchSourceTimer?
   private var armedForMs: Int?
@@ -224,6 +229,32 @@ final class PollScheduler {
     }
   }
 
+  /// A `system` or `high` wake-up is one the user waits on, and under CPU load
+  /// the kernel starves utility-class threads first: planned onto such a
+  /// queue it fires late however tight its slack. A queue with no class of
+  /// its own inherits the clock's.
+  static func starves(_ priority: Priority, on qos: DispatchQoS.QoSClass) -> Bool {
+    priority <= .high && (qos == .utility || qos == .background)
+  }
+
+  /// The pairing for a queue. The main queue is never judged: it declares no
+  /// class, and the one it reports is how the process was launched (a CI
+  /// runner or `taskpolicy -c utility` starts it at utility), which no
+  /// registration chose and no other queue could stand in for.
+  static func starves(_ priority: Priority, on queue: DispatchQueue) -> Bool {
+    queue !== DispatchQueue.main && starves(priority, on: queue.qos.qosClass)
+  }
+
+  /// Every registration passes here, so the pairing holds for a queue
+  /// declared in another file and for a priority chosen at run time. A debug
+  /// build stops at the registration; a release build says so and carries on.
+  private static func requireServed(_ id: String, _ priority: Priority, on queue: DispatchQueue) {
+    guard starves(priority, on: queue) else { return }
+    let qos = queue.qos.qosClass
+    FlashLog.error("[poll] starved_registration id=\(id) priority=\(priority) qos=\(qos)")
+    assertionFailure("\(id): a \(priority) registration on a \(qos) queue (\(queue.label))")
+  }
+
   /// Register (or re-register) `id` at `everyMs`. The handler runs on `queue`
   /// and must call nothing back into the scheduler synchronously. There is no
   /// default priority: every registration states how visible its lateness is.
@@ -231,6 +262,7 @@ final class PollScheduler {
     _ id: String, everyMs: Int, priority: Priority, on handlerQueue: DispatchQueue,
     handler: @escaping () -> Void
   ) {
+    Self.requireServed(id, priority, on: handlerQueue)
     let interval = max(Self.minimumIntervalMs, everyMs)
     queue.async { [weak self] in
       guard let self else { return }
@@ -261,6 +293,7 @@ final class PollScheduler {
     _ id: String, afterMs: Int, priority: Priority, on handlerQueue: DispatchQueue,
     owner: UInt64? = nil, handler: @escaping () -> Void
   ) {
+    Self.requireServed(id, priority, on: handlerQueue)
     queue.async { [weak self] in
       guard let self else { return }
       let now = self.clock()
@@ -287,6 +320,14 @@ final class PollScheduler {
   /// Every registered id, for diagnostics.
   func registeredIDs(completion: @escaping ([String]) -> Void) {
     queue.async { [weak self] in completion((self?.clients.keys).map { $0.sorted() } ?? []) }
+  }
+
+  /// Every registered id with the clock reading it is next due at, for
+  /// diagnostics.
+  func deadlines(completion: @escaping ([String: Int]) -> Void) {
+    queue.async { [weak self] in
+      completion((self?.clients ?? [:]).mapValues(\.state.nextAtMs))
+    }
   }
 
   private func finish(_ id: String) {

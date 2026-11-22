@@ -67,11 +67,11 @@ final class PluginDiagnosticsTests: XCTestCase {
       PluginManager.runningApplicationsSignature(Array(a.prefix(1))))
   }
 
-  func testAFailedSourceActionKeepsItsReasonAndSource() {
-    let result = SourceActionResult.failed(reason: "tmux action failed").attributed(
+  func testAFailedSourceCommandKeepsItsReasonAndSource() {
+    let result = SourceCommandResult.failed(reason: "tmux command failed").attributed(
       to: "plugin:tmux")
     XCTAssertEqual(result.disposition, .failed)
-    XCTAssertEqual(result.failureReason, "tmux action failed")
+    XCTAssertEqual(result.failureReason, "tmux command failed")
     XCTAssertEqual(result.source, "plugin:tmux")
   }
 }

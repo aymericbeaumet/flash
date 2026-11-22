@@ -3,95 +3,80 @@ import XCTest
 @testable import flash
 
 final class HelpDocsTests: XCTestCase {
-  func testRepositoryReferencesFollowTheInstalledSourceRevision() {
-    let revision = String(repeating: "a", count: 40)
+  /// `routes.json` names every page path and alias the bundled manual
+  /// routes; the manual's home has no name of its own beyond its aliases.
+  func testManualNamesComeFromTheBundledRoutes() throws {
+    let routes = Data(
+      #"{"pages":[{"path":"","aliases":["overview"]},{"path":"configuration","aliases":["config"]},{"path":"alternatives/neru","aliases":[]}]}"#
+        .utf8)
     XCTAssertEqual(
-      HelpDocs.repositoryRoot(revision: revision),
-      "https://github.com/aymericbeaumet/flash/blob/" + revision)
-    for revision in [nil, "unknown", "main", "../invalid"] {
-      XCTAssertEqual(
-        HelpDocs.repositoryRoot(revision: revision),
-        "https://github.com/aymericbeaumet/flash/blob/HEAD")
-    }
+      HelpDocs.manualNames(routes: routes),
+      ["overview", "configuration", "config", "alternatives/neru"])
+    XCTAssertEqual(HelpDocs.manualNames(routes: Data("{}".utf8)), [])
+    XCTAssertEqual(HelpDocs.manualNames(root: nil), [])
+
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-routes-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try routes.write(to: root.appendingPathComponent("routes.json"))
+    XCTAssertEqual(HelpDocs.manualNames(root: root).count, 4)
   }
 
-  func testCoreWorkflowsHaveResolvableTopics() {
-    let topics = HelpDocs.allTopics(config: .default, showModes: true)
-    let expected: Set<String> = [
-      "overview", "getting-started", "hints", "mouse-grid", "mappings", "normal-mode",
-      "flashlight", "verbs", "config", "statusbar", "status-format", "widgets", "popups",
-      "plugins", "privacy", "troubleshooting", "development",
-    ]
-    XCTAssertTrue(expected.isSubset(of: Set(topics.map(\.name))))
-
-    let names = topics.flatMap { [$0.name] + $0.aliases }.map { $0.lowercased() }
-    XCTAssertEqual(names.count, Set(names).count, "Every name must identify exactly one topic")
-    for topic in topics {
-      for name in [topic.name] + topic.aliases {
-        XCTAssertEqual(
-          HelpDocs.render(topic: " \(name.uppercased()) ", config: .default, showModes: true),
-          topic.body.trimmingCharacters(in: .whitespacesAndNewlines))
-      }
-    }
-  }
-
-  /// The sidebar, index and previous/next links follow `HelpDocs.groups`;
-  /// a built-in topic outside it would fall to the end unnoticed.
-  func testEveryBuiltInTopicHasAGroupInReadingOrder() {
-    let topics = HelpDocs.allTopics(config: .default, showModes: true)
-    let ordered = HelpDocs.groups.flatMap(\.names)
-    XCTAssertEqual(topics.map(\.name), ordered, "built-in topics follow the group table")
-    for topic in topics {
-      XCTAssertNotEqual(topic.group, HelpDocs.pluginGroup, "\(topic.name) needs a built-in group")
-      XCTAssertNotNil(topic.manual, "\(topic.name) names its manual page")
-    }
-    let plugin = HelpTopic(name: "zzz", title: "Z", summary: "", body: "# Z")
-    let withPlugin = HelpDocs.allTopics(config: .default, showModes: true, pluginTopics: [plugin])
-    XCTAssertEqual(withPlugin.last?.name, "zzz")
-    XCTAssertEqual(withPlugin.last?.group, HelpDocs.pluginGroup)
-  }
-
-  /// Guides link to browser help pages by path; fragments are reserved for
-  /// headings on the same page.
-  func testTopicLinksResolveWithinTheInstalledBuiltInInventory() throws {
-    let topics = HelpDocs.allTopics(config: .default, showModes: true)
-    let names = Set(topics.flatMap { [$0.name] + $0.aliases })
-    let expression = try NSRegularExpression(pattern: #"\]\(([^)\s]+)\)"#)
-    var guideLinks = 0
-    for topic in topics {
-      let body = topic.body as NSString
-      for match in expression.matches(
-        in: topic.body, range: NSRange(location: 0, length: body.length))
-      {
-        let destination = body.substring(with: match.range(at: 1))
-        if destination.hasPrefix("https://") { continue }
-        XCTAssertTrue(
-          destination.hasPrefix("/"), "\(topic.name) links to \(destination) instead of a page")
-        let path = String(destination.prefix { $0 != "#" && $0 != "?" })
-        let page = DebugServer.Page(path: path)
-        XCTAssertNotNil(page, "\(topic.name) links to unknown page \(destination)")
-        if case .docs(let name?) = page {
-          guideLinks += 1
-          XCTAssertTrue(names.contains(name), "\(topic.name) links to missing \(name)")
-        }
-      }
-    }
-    XCTAssertGreaterThan(guideLinks, 0)
-  }
-
-  func testPluginTopicsCannotClaimAnExistingNameOrAlias() {
+  /// A plugin topic cannot take a name the manual routes (a page path or one
+  /// of its aliases), and the first plugin to claim a name keeps it.
+  func testPluginTopicsCannotClaimAManualNameOrAnotherTopic() {
     let first = HelpTopic(
-      name: "sample", title: "Sample", summary: "Example plugin", body: "# Sample",
-      aliases: ["sample-alias"])
+      name: "sample", title: "Sample", summary: "Example plugin", body: "# Sample")
     let conflicting = [
-      HelpTopic(name: "configuration", title: "Shadow", summary: "", body: ""),
-      HelpTopic(name: "second", title: "Second", summary: "", body: "", aliases: ["SAMPLE"]),
-      HelpTopic(name: "sample-alias", title: "Third", summary: "", body: ""),
+      HelpTopic(name: "Configuration", title: "Shadow", summary: "", body: ""),
+      HelpTopic(name: "config", title: "Alias", summary: "", body: ""),
+      HelpTopic(name: " SAMPLE ", title: "Second", summary: "", body: ""),
     ]
-    let topics = HelpDocs.allTopics(
-      config: .default, showModes: true, pluginTopics: [first] + conflicting)
-    XCTAssertEqual(topics.filter { $0.name == "sample" }, [first])
-    XCTAssertFalse(
-      topics.contains { ["configuration", "second", "sample-alias"].contains($0.name) })
+    let captures = HelpTopic(name: "captures", title: "Captures", summary: "", body: "")
+    let topics = HelpDocs.pluginTopics(
+      [captures, first] + conflicting, reserved: ["configuration", "config"])
+    XCTAssertEqual(topics.map(\.name), ["captures", "sample"])
+  }
+
+  /// The bundled plugins' topics keep names the manual does not route, so
+  /// `:help screenshot` and the others still reach them; the manual itself
+  /// routes the core pages and their short names (`:help mark`).
+  func testBundledPluginTopicsDoNotCollideWithTheManual() throws {
+    let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+    let navigation = try XCTUnwrap(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: repository.appendingPathComponent("docs/nav.json")))
+        as? [String: Any])
+    var names = Set<String>()
+    func collect(_ items: [[String: Any]]) {
+      for item in items {
+        if let children = item["items"] as? [[String: Any]] { collect(children) }
+        if let page = item["page"] as? String {
+          names.insert(page.replacingOccurrences(of: ".md", with: ""))
+        }
+        names.formUnion(item["aliases"] as? [String] ?? [])
+      }
+    }
+    collect(try XCTUnwrap(navigation["nav"] as? [[String: Any]]))
+    XCTAssertTrue(names.isSuperset(of: ["config", "hints", "grid", "status-bar", "marks", "mark"]))
+    let plugins = try FileManager.default.contentsOfDirectory(
+      at: repository.appendingPathComponent("Plugins"), includingPropertiesForKeys: nil)
+    var topics = 0
+    for plugin in plugins {
+      let manifest = plugin.appendingPathComponent("manifest.json")
+      guard let data = try? Data(contentsOf: manifest),
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let help = object["help"] as? [String: Any],
+        let entries = help["topics"] as? [[String: Any]]
+      else { continue }
+      for entry in entries {
+        let topic = try XCTUnwrap(entry["name"] as? String)
+        topics += 1
+        XCTAssertFalse(names.contains(topic), "\(plugin.lastPathComponent) topic \(topic)")
+      }
+    }
+    XCTAssertGreaterThan(topics, 0)
   }
 }

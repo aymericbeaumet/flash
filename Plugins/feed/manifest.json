@@ -4,7 +4,31 @@
   "version": "0.1.0",
   "description": "Publish the latest 24 hours of RSS articles as a host-rotated status-bar carousel. summary carries links and article previews; label is the headline alone, so the template owns the name, the colour, and the hover. cycle_interval defaults to 30 seconds. Configure url to enable fetching.",
   "exec": ["./flash-plugin-feed"],
-  "capabilities": ["network"],
-  "sandbox": {},
+  "settings": {
+    "url": {
+      "type": "string",
+      "description": "The RSS or Atom feed to read: an https URL without credentials, which Flash fetches for the plugin. No request runs until it is set."
+    },
+    "refresh_interval": {
+      "type": "integer",
+      "description": "Seconds between feed requests.",
+      "default": 300,
+      "min": 1,
+      "max": 86400
+    },
+    "cycle_interval": {
+      "type": "integer",
+      "description": "Seconds each headline stays in the carousel.",
+      "default": 30,
+      "min": 1,
+      "max": 86400
+    }
+  },
+  "capabilities": ["network_fetch"],
+  "fetch_settings": ["url"],
+  "fetch_limits": {
+    "max_bytes": 4194304,
+    "timeout_ms": 15000
+  },
   "status": ["summary", "label"]
 }

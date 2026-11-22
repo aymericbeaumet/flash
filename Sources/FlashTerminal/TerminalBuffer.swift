@@ -1,5 +1,6 @@
 import AppKit
 import CFlashTerminal
+import FlashCore
 import Foundation
 
 public struct TerminalColor: Equatable, Hashable, Sendable {
@@ -201,7 +202,7 @@ public struct TerminalFrame: Equatable, Sendable {
         CharacterSet.whitespacesAndNewlines.contains($0)
           || CharacterSet.controlCharacters.contains($0)
       }),
-      let url = URL(string: text),
+      let url = URLParsing.url(text),
       ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
       let host = url.host, !host.isEmpty, url.user == nil, url.password == nil
     else { return nil }
@@ -213,6 +214,28 @@ public struct TerminalFrame: Equatable, Sendable {
       (0..<row.cells.count).map { row.text(at: $0) }.joined()
         .replacingOccurrences(of: " +$", with: "", options: .regularExpression)
     }.joined(separator: "\n")
+  }
+}
+
+extension TerminalFrame {
+  /// The background a full-screen program paints itself (btop, tokscale):
+  /// the colour of at least half the cells when it is not the terminal's
+  /// default. A surface around the grid can take it, so the program's own
+  /// background never sits inside a frame of another colour. Nil while the
+  /// default background shows, or no colour covers half the screen.
+  public var paintedBackground: TerminalColor? {
+    var counts: [TerminalColor: Int] = [:]
+    var total = 0
+    for row in grid {
+      for cell in row.cells {
+        counts[TerminalColor(cell.background), default: 0] += 1
+      }
+      total += row.cells.count
+    }
+    guard let (color, cells) = counts.max(by: { $0.value < $1.value }),
+      color != background, cells * 2 >= total, total > 0
+    else { return nil }
+    return color
   }
 }
 

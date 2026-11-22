@@ -23,11 +23,12 @@ extension NormalModeInterpreter {
   ///       - a named non-typeable key (`<tab>`, `<space>`,
   ///         `<escape>`, `<enter>`, `<delete>`, `<delete_forward>`,
   ///         `<up>`, `<down>`, `<left>`, `<right>`, `<home>`,
-  ///         `<end>`, `<pageup>`, `<pagedown>`);
+  ///         `<end>`, `<pageup>`, `<pagedown>`, `<f1>`–`<f20>`);
   ///       - `<leader>` (substituted later from `mode.normal.leader`).
   ///   - Modifier chords use `+`: `ctrl+i`, `cmd+shift+<lbracket>`,
-  ///     `cmd+<delete>`. Modifier aliases: `cmd`/`command`,
-  ///     `ctrl`/`control`, `shift`, `alt`/`opt`/`option`.
+  ///     `cmd+<delete>`; after a modifier a named key may drop its
+  ///     brackets (`cmd+space`, `cmd+f12`). Modifier aliases:
+  ///     `cmd`/`command`, `ctrl`/`control`, `shift`, `alt`/`opt`/`option`.
   ///   - Whitespace is stripped throughout so `ctrl+i <leader>c` and
   ///     `ctrl+i<leader>c` are equivalent.
   ///
@@ -181,7 +182,7 @@ extension NormalModeInterpreter {
   /// Named keys other than punctuation that the interpreter or
   /// HotkeySyntax can route. Kept narrow: only the keys we actually
   /// emit or accept.
-  private static let namedKeyAliases: Set<String> = [
+  private static let namedKeyAliases: Set<String> = Set([
     "tab", "space",
     "delete", "backspace",
     "delete_forward", "forward_delete",
@@ -190,7 +191,16 @@ extension NormalModeInterpreter {
     "up", "down", "left", "right",
     "home", "end",
     "pageup", "pagedown",
-  ]
+  ]).union(HotkeySyntax.functionKeyNames)
+
+  /// The function key a whole mapping key spells without brackets (`f12`,
+  /// `F1`), which is the keys f, 1, 2 and almost never what was meant; nil
+  /// for any other key. Spaced out (`f 1 2`) or bracketed (`<f12>`), it is
+  /// what it says.
+  static func bareFunctionKeyName(_ raw: String) -> String? {
+    let name = raw.lowercased()
+    return HotkeySyntax.functionKeyNames.contains(name) ? name : nil
+  }
 
   private static let modifierOrder = ["cmd", "ctrl", "alt", "shift"]
 

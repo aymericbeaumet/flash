@@ -33,14 +33,14 @@ enum Mode: Equatable {
   case command(restoreTo: ReturnMode)
 
   /// A popup's local terminal view owns keyboard input; global mappings are
-  /// suspended. Entered by `enter_terminal_mode` or by focusing a popup, and
-  /// left by `leave_mode`, which closes the popup. `returnPID` is the app the
+  /// suspended. Entered by `mode terminal` or by focusing a popup, and
+  /// left by `mode leave`, which closes the popup. `returnPID` is the app the
   /// popup covers, captured as the mode is entered: an explicit close
   /// activates it, and it is forgotten with the mode, so no later popup or
   /// INSERT exit can activate an app a popup once covered.
   case terminal(restoreTo: ReturnMode, returnPID: pid_t?)
 
-  /// Dragging with a mouse button held (`enter_hold_mode`, Command-Control-H
+  /// Dragging with a mouse button held (`mode hold`, Command-Control-H
   /// by default): pointer moves drag what was grabbed, Return drops it where
   /// the pointer is and Escape puts it back. `[mode.hold.mappings]` is read
   /// before NORMAL's.
@@ -51,6 +51,39 @@ enum Mode: Equatable {
   /// the key returns to `restoreTo` (NORMAL). A clean tap of the leader still
   /// arms a `<leader>` sequence.
   case hyper(restoreTo: ReturnMode)
+
+  /// A user-defined key table (`[mode.layers.<name>]`), entered by
+  /// `mode layer --name=<name>`: only its mappings and `[mode.all]`'s act,
+  /// every other key is swallowed as in NORMAL, and Escape or `mode leave`
+  /// returns to the base mode it was entered from.
+  case layer(LayerMode)
+
+  /// Vim's Visual mode in the focused text (`mode visual`, `v` and `V` in
+  /// text): NORMAL's capture, a selection the motions grow from an anchor
+  /// (`VisualSession`), and operators that copy, cut, change or replace it.
+  /// It ends in NORMAL (or INSERT for a change), and whenever the focus
+  /// moves.
+  case visual(VisualKind)
+}
+
+/// `v` selects characters, `V` whole lines.
+enum VisualKind: String, CaseIterable, Equatable {
+  case charwise
+  case linewise
+}
+
+/// A layer as it was entered: which table, whether it stays after a
+/// mapping, and the base mode it returns to.
+struct LayerMode: Equatable {
+  /// The `[mode.layers.<name>]` table the keys are read from.
+  var name: String
+  /// Stay after a mapping runs (the default, i3's binding modes); false
+  /// leaves after one mapping (`sticky = false`).
+  var sticky: Bool
+  /// Where Escape and `mode leave` return: the base mode it was entered
+  /// from. A layer entered from HYPER, HOLD or another layer returns to
+  /// that mode's own base.
+  var restoreTo: ReturnMode
 }
 
 /// What a held mouse button means, which is the mode it enters.
@@ -85,12 +118,14 @@ extension Mode {
     switch self {
     case .disabled: return .disabled
     case .insert: return .insert
-    case .normal, .hold: return .normal
+    case .normal, .hold, .visual: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(let restoreTo), .hyper(let restoreTo):
       return restoreTo
     case .terminal(let restoreTo, _):
       return restoreTo
+    case .layer(let layer):
+      return layer.restoreTo
     }
   }
 
@@ -114,9 +149,25 @@ extension Mode {
 
   var isHold: Bool { self == .hold }
 
+  /// VISUAL's kind; nil outside it.
+  var visualKind: VisualKind? {
+    if case .visual(let kind) = self { return kind }
+    return nil
+  }
+
+  var isVisual: Bool { visualKind != nil }
+
+  /// The active layer; nil outside one.
+  var layer: LayerMode? {
+    if case .layer(let layer) = self { return layer }
+    return nil
+  }
+
+  var isLayer: Bool { layer != nil }
+
   var canToggleHoldMode: Bool {
     switch self {
-    case .normal, .insert, .hold: return true
+    case .normal, .insert, .hold, .layer: return true
     default: return false
     }
   }

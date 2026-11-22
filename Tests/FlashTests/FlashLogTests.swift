@@ -122,6 +122,44 @@ final class FlashLogTests: XCTestCase {
     XCTAssertEqual(try identifiers(in: files).sorted(), Array(0..<200))
   }
 
+  /// A cleaner deleting the log's directory, or moving the log away, under a
+  /// running writer: the lines that follow recreate it at its path instead of
+  /// going to a file no path reaches.
+  func testADeletedOrMovedLogIsRecreatedAtItsPath() throws {
+    let directory = try temporaryDirectory()
+    let logs = directory.appendingPathComponent("Logs")
+    let url = logs.appendingPathComponent("flash.log")
+    let writer = FlashLogFileWriter(url: url)
+    writer.append(record(0))
+    writer.flush()
+    XCTAssertEqual(try identifiers(in: [url]), [0])
+
+    try FileManager.default.removeItem(at: logs)
+    let afterDelete = try appendUntilRecreated(writer, at: url, from: 1)
+    XCTAssertEqual(try identifiers(in: [url]).last, afterDelete)
+
+    try FileManager.default.moveItem(at: url, to: directory.appendingPathComponent("moved.log"))
+    let afterMove = try appendUntilRecreated(writer, at: url, from: 1_000)
+    XCTAssertEqual(try identifiers(in: [url]).last, afterMove)
+  }
+
+  /// Append one record per check until `url` exists again; the last one
+  /// appended.
+  private func appendUntilRecreated(
+    _ writer: FlashLogFileWriter, at url: URL, from first: Int
+  ) throws -> Int {
+    var next = first
+    let recreated = expectation(
+      for: NSPredicate { [self] _, _ in
+        writer.append(record(next))
+        writer.flush()
+        next += 1
+        return FileManager.default.fileExists(atPath: url.path)
+      }, evaluatedWith: nil)
+    wait(for: [recreated], timeout: 5)
+    return next - 1
+  }
+
   func testIndependentConcurrentWritersAppendWithoutOverwriting() throws {
     let directory = try temporaryDirectory()
     let url = directory.appendingPathComponent("flash.log")

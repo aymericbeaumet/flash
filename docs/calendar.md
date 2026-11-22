@@ -1,28 +1,198 @@
-# Calendar popup
+# Calendar
 
-The core `#{flash.calendar}` status value supplies calendar-only content for a
-text popup:
+Flash leaves your calendar to the apps and tools that keep it (Calendar,
+Fantastical, [calcurse](https://calcurse.org) or khal in a terminal
+[popup](popups.md)) and adds what they cannot: the next meeting in the
+status bar, an alert before it starts, and a key that joins it. A
+three-month calendar view is a status value too.
+
+## Next meeting
+
+The next meeting is the bundled `calendar` plugin's: its status segments,
+`calendar join` and `calendar next`.
+`#{flash.plugin.calendar.next}` reads `Standup in 12m`, then `Standup now`
+once it began. Its parts compose a template of your own:
+
+| Value | Example | What it is |
+| --- | --- | --- |
+| `#{flash.plugin.calendar.next}` | `Standup in 12m`, `Standup now` | The title and when |
+| `#{flash.plugin.calendar.next_title}` | `Standup` | The title, on one line |
+| `#{flash.plugin.calendar.next_in}` | `in 12m`, `in 1h 5m`, `now` | When it starts |
+| `#{flash.plugin.calendar.next_minutes}` | `12` | Whole minutes until it starts, rounded up; `0` once it began |
+| `#{flash.plugin.calendar.next_start}`, `#{flash.plugin.calendar.next_end}` | `09:30` | Its times, 24-hour, local |
+| `#{flash.plugin.calendar.next_ongoing}` | `1` | `1` once it began, empty before |
+| `#{flash.plugin.calendar.next_link}` | `https://meet.google.com/abc-defg-hij` | Its meeting link as the event writes it; empty without one |
+
+Every value is empty while no event is next, which a
+[monitor](monitors.md) reads as unknown. A title is text: a `#` in it never
+starts a style or a link.
+
+The next event is the one that began within the last ten minutes and has not
+ended (the latest to begin, if several did), long enough to join it late;
+otherwise the first to start within the look-ahead, 24 hours by default. At
+equal starts, one with a meeting link comes first. Cancelled events never
+count; all-day and declined ones count only when `[plugins.calendar]` says so.
+
+```toml
+[statusbar]
+enabled = true
+template = """
+#[align=left]#[pill]#{flash.mode}#[nopill]
+#[align=right]#{?flash.plugin.calendar.next,#[range=user|join]#[shrink]#{flash.plugin.calendar.next_title}#[noshrink] #{flash.plugin.calendar.next_in}#[norange] · ,}%H:%M
+"""
+
+# A click on the meeting joins it.
+[statusbar.click]
+join = ["flash", "calendar", "join"]
+```
+
+`#[shrink]` lets a long title give way first ([overflow](status-format.md#overflow-and-shrink)).
+To show a meeting only once it is two hours away, test the countdown:
+`#{?#{&&:#{flash.plugin.calendar.next},#{e|<=:#{flash.plugin.calendar.next_minutes},120}},#{flash.plugin.calendar.next} · ,}`.
+
+### An alert before it starts
+
+A monitor on the countdown raises the centred alert two minutes before each
+meeting, whether the bar is on or not:
+
+```toml
+[monitors.meeting]
+value = "#{flash.plugin.calendar.next_minutes}"
+direction = "below"
+warning = 2
+message = "#{flash.plugin.calendar.next}"
+# Join it as well, the moment the alert shows:
+# run = ["flash", "calendar", "join"]
+```
+
+The alert reads `Standup in 2m` over `2`. As with every monitor it rises
+once: back-to-back meetings that keep the countdown under the threshold
+alert for the first only.
+
+### Joining
+
+`calendar join` opens the meeting link of the event about to start (within
+ten minutes) or just started; otherwise of the meeting in progress, to
+rejoin it; otherwise of the next event, however far ahead. Links are found
+in the event's URL, then its location, then its notes: Zoom, Google Meet,
+Microsoft Teams, Webex, Around, Whereby, FaceTime, Slack huddles, Jitsi
+Meet, GoTo Meeting and Amazon Chime, and otherwise a URL field or a location
+that is one web link. A Zoom or Teams link opens straight in the app when it
+is installed (`zoommtg:`, `msteams:`), any other in its default handler.
+
+`calendar next` shows the next event in the centred alert, its title over
+`in 12m · 09:30–09:45 · Zoom`, and the CLI prints `Standup in 12m ·
+09:30–09:45 · Zoom` as well. `calendar join` answers `Joining Standup`: on
+a banner from a key, printed from the CLI. Both exit 1 and say why when no
+event is in the look-ahead, when the event has no link (`calendar join`) or
+when Flash may not read your calendars. Neither takes an argument. Bind
+either like any command:
+
+```toml
+[mode.all.mappings]
+"cmd+ctrl+j" = ["flash", "calendar", "join"]
+```
+
+### Settings
+
+```toml
+[plugins.calendar]
+calendars = ["Work"]   # titles as Calendar shows them; empty reads every calendar
+all_day = false        # count all-day events
+declined = false       # count events you declined
+lookahead_hours = 24   # how far ahead the next event may start, 1-168
+```
+
+### Access and cost
+
+The plugin holds no Calendars access and cannot reach your calendars: it
+is sandboxed, and asks Flash, which reads them through EventKit
+([privacy](privacy.md)). Flash reads only while a status surface shows one of
+these values (the enabled bar, a text popup while it is open, a visible
+desktop widget, a monitor) and when `calendar join` or `calendar next` runs.
+The first such read asks macOS for Calendars access, and macOS names Flash,
+so a value only a popup reads asks when that popup first opens; the default
+configuration reads none of these values, so it never asks. A refusal leaves
+the values empty and the commands exit 1 until you allow Flash in System
+Settings › Privacy & Security › Calendars; then run `calendar next` once to
+read them. A command run while macOS's prompt is still open says so after
+eight seconds: answer the prompt and run it again. Reminders are never read
+here.
+
+A read covers events from now to twice the look-ahead. Flash hands the
+plugin each event's title, times, all-day, declined and cancelled flags, its
+calendar's title, its URL and location, and the links found in its notes,
+never the notes themselves; the plugin keeps them in memory only. It reads
+again when the calendar database changes (half a second after the first of
+a burst of changes), once one look-ahead has passed (a day at most), and
+five minutes after a read that failed, and stops when nothing shows a
+value. The values change at instants of their own — the countdown's next
+minute, an event starting, ending or leaving its first ten minutes — and
+the plugin asks Flash's one clock for exactly the next of them. Nothing
+polls. With `calendar` in `[plugins] disabled`, the values are empty and the
+commands do nothing.
+
+### Coming from MeetingBar or Itsycal
+
+| MeetingBar, Itsycal | Flash |
+| --- | --- |
+| The next meeting and its countdown in the menu bar | `#{flash.plugin.calendar.next}` in `[statusbar] template` |
+| Join the next meeting (MeetingBar's shortcut) | `calendar join` on a key, or a `#[range]` click on the bar |
+| Notification or full-screen reminder before a meeting | A `[monitors.meeting]` on `#{flash.plugin.calendar.next_minutes}`, and its centred alert |
+| Joining as it starts | That monitor's `run = ["flash", "calendar", "join"]` |
+| Month calendar dropdown (Itsycal) | `#{flash.calendar}` in a text popup, below |
+| Agenda and event editing | Calendar, Fantastical, or calcurse or khal in a terminal popup |
+| Hide calendars, all-day and declined events | `[plugins.calendar] calendars`, `all_day`, `declined` |
+
+## Calendar popup
+
+The core `#{flash.calendar}` status value combines the local clock and calendar in one
+text popup, in three rounded frames: the clock under a heading of the date, the
+time and the zone, the three months, and the day's progress beside its facts:
 
 ```text
-Wednesday, September 30, 2026                                  Europe/Paris
-
-       August 2026              September 2026             October 2026
-Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su
-31                 1  2   36     1  2  3  4  5  6   40           1  2  3  4
-32  3  4  5  6  7  8  9   37  7  8  9 10 11 12 13   41  5  6  7  8  9 10 11
-33 10 11 12 13 14 15 16   38 14 15 16 17 18 19 20   42 12 13 14 15 16 17 18
-34 17 18 19 20 21 22 23   39 21 22 23 24 25 26 27   43 19 20 21 22 23 24 25
-35 24 25 26 27 28 29 30   40 28 29 30               44 26 27 28 29 30 31
-36 31
-
-Week 40     ████████▋                 3/7  4 days left
-September   ████████████████████    30/30  last day
-Q3          ████████████████████    92/92  last day
-2026        ███████████████       273/365  92 days left
-
-Time zone   UTC+02:00 · Central European Summer Time
-DST         Ends Sun Oct 25 · 03:00 → 02:00 · in 25 days
-Moon        Waning gibbous · 83% lit · new Oct 10 · full Oct 26
+╭─ Wednesday, September 30, 2026 ────────────────────── 10:08 · Europe/Paris ─╮
+│                                 ....12.....                                 │
+│                             11..     .     ..1.                             │
+│                           ...        .        ...                           │
+│                         ..           .           ..                         │
+│                       10.            .       ++   .2                        │
+│                       .              .     ++       .                       │
+│                      ..       ###    .   ++         ..                      │
+│                      .           ### . ++            .                      │
+│                      9              #o+              3                      │
+│                      .                               .                      │
+│                      ..                             ..                      │
+│                       .                             .                       │
+│                        8.                         .4                        │
+│                         ..                       ..                         │
+│                           ...                 ...                           │
+│                             .7..           ..5.                             │
+│                                 .....6.....                                 │
+╰─────────────────────────────────────────────────────────────────────────────╯
+╭─ Calendar ──────────────────────────────────────────────────────────────────╮
+│        August 2026              September 2026             October 2026     │
+│ Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su   Wk Mo Tu We Th Fr Sa Su │
+│ 31                 1  2   36     1  2  3  4  5  6   40           1  2  3  4 │
+│ 32  3  4  5  6  7  8  9   37  7  8  9 10 11 12 13   41  5  6  7  8  9 10 11 │
+│ 33 10 11 12 13 14 15 16   38 14 15 16 17 18 19 20   42 12 13 14 15 16 17 18 │
+│ 34 17 18 19 20 21 22 23   39 21 22 23 24 25 26 27   43 19 20 21 22 23 24 25 │
+│ 35 24 25 26 27 28 29 30   40 28 29 30               44 26 27 28 29 30 31    │
+│ 36 31                                                                       │
+╰─────────────────────────────────────────────────────────────────────────────╯
+╭─ Progress ───────────────────────────┬─ Today ──────────────────────────────╮
+│ Week 40                  4 days left │ Time zone                            │
+│ ████████▋                        3/7 │ UTC+02:00 · Central European Summer  │
+│                                      │ Time                                 │
+│ September                   last day │                                      │
+│ ████████████████████           30/30 │ DST                                  │
+│                                      │ Ends Sun Oct 25 · 03:00 → 02:00 · in │
+│ Q3                          last day │ 25 days                              │
+│ ████████████████████           92/92 │                                      │
+│                                      │ Moon                                 │
+│ 2026                    92 days left │ Waning gibbous · 83% lit · new Oct   │
+│ ███████████████              273/365 │ 10 · full Oct 26                     │
+╰──────────────────────────────────────┴──────────────────────────────────────╯
 ```
 
 ```toml
@@ -31,18 +201,27 @@ text = "#{flash.calendar}"
 ```
 
 Keep `#[popup=date]...#[nopopup]` around the date in the status template, or
-open it with `enter_terminal_mode --name=date`. Existing calendar files and
+open it with `mode terminal --name=date`. Existing calendar files and
 appointment/task data are untouched.
 
-- **Header**: today's date and the timezone identifier.
+- **Header**: set into the clock frame's top edge, today's date in bold on
+  the left and local 24-hour `HH:MM` with the timezone identifier on the right.
+- **Clock**: a centred 33-by-17 ASCII face above the three months, labelled with all
+  twelve hours. The short `#` hour hand and longer `+` minute hand move between
+  hour/minute marks; the longest `.` seconds hand advances each second. The
+  numeric header stays `HH:MM`, without seconds or milliseconds.
 - **Months**: the previous, current and next months side by side, rows
   aligned, with ISO week numbers. The current month sits in the middle with a
   bold title; today has a bold inverse highlight and its week number is bold.
   Weekends are dimmed. The rows follow the tallest of the three months.
 - **Progress**: today's place in its ISO week, month, quarter and year,
   counting today, with the days left after it. The bars are status-format
-  meters on a grey track.
-- **Time zone**: the current UTC offset and the zone's English name.
+  meters on a grey track. The footer frame's left pane, `Progress`, gives each
+  period two rows: its heading with the days left at the pane's edge, then
+  the meter with its count ending at that same edge.
+- **Time zone**: the current UTC offset and the zone's English name. This,
+  DST and Moon fill the footer frame's right pane, `Today`, with complete
+  values wrapped below their headings.
 - **DST**: the next daylight-saving transition as the wall clock sees it, or
   `Not observed` for a zone without one.
 - **Moon**: today's phase, the lit fraction at local noon, and the next new
@@ -52,23 +231,31 @@ appointment/task data are untouched.
   can land on the neighbouring day.
 
 Dates use a Monday-first Gregorian calendar with ISO week numbers,
-English labels, and the current local timezone. The view is 75 content
-columns and at most 19 rows. Text popups size to their widest line between
+English labels, and the current local timezone. Frames are dim rounded
+box-drawing lines with bold titles. The view is 79 columns, 75 of content
+inside the frames, and at most 44 rows. The footer's two 36-column panes are
+split by the frame's divider. Text popups size to their widest line between
 `[popup] min_width` and `max_width`: the default 750-point `max_width` fits it
-at the 13-point font with 10-point padding (697 points wide). A smaller
+at the 13-point font with 10-point padding (733 points wide). A smaller
 `max_width` or screen wraps it, and smaller screens scroll in the pager, which
 reserves one extra footer row. Right-click the date to pin the popup and
 select or copy text.
 
 The popup runs system `less` in an owned PTY over a private snapshot file.
-Hovered content refreshes when the calendar changes. Focused content and search
+Hovered content refreshes when the calendar changes; `less` repaints the page
+in several writes, so the view shows only the finished page, never one
+shifted by a line mid-repaint. Focused content and search
 stay stable until reopening or Command-R. Dismissal removes the pager and its
 snapshot; see [popups](popups.md).
 
 The calendar generator performs no file access, account lookup, network or
-location access. It has no appointment or todo interface. One result is cached
-for the local day and timezone, and until a daylight-saving transition inside
-that day, since the view shows the UTC offset; the existing status clock
-refreshes it after midnight, a transition or a timezone change. Calendar
+location access, and shows no events or todos: the
+[next-meeting values](#next-meeting) are what read your calendars. One result is cached
+for each second and timezone, including its current UTC offset. The existing
+status clock refreshes it every second; daylight-saving and timezone changes
+also update the clock and offset. A timezone change re-renders the bar's
+clock at once; the next meeting's start and end follow at their next change,
+within a minute while it counts down, and `calendar next` reads the new zone
+when it runs. Calendar
 generation adds no timer or plugin; the popup host owns the display process
 and snapshot file.

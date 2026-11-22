@@ -3,7 +3,7 @@ import XCTest
 
 @testable import flash
 
-/// `[overlay.dark]`, `[overlay] click_feedback` and `[overlay] screen_capture`.
+/// `[overlay.dark]` and `[overlay] click_feedback`.
 final class OverlayAppearanceTests: XCTestCase {
   func testAnEmptyDarkTableDrawsTheLightColours() {
     let overlay = Config().overlay
@@ -112,46 +112,5 @@ final class OverlayAppearanceTests: XCTestCase {
     XCTAssertEqual(
       Set((animation.animations ?? []).compactMap { ($0 as? CABasicAnimation)?.keyPath }),
       ["transform.scale", "opacity"])
-  }
-
-  func testScreenCaptureParsesAndResolves() throws {
-    XCTAssertEqual(Config().overlay.screenCapture, .show)
-    let config = ConfigLoader.parse("[overlay]\nscreen_capture = \"hide\"")
-    XCTAssertEqual(config.diagnostics, [])
-    XCTAssertEqual(config.overlay.screenCapture, .hide)
-    let json = try XCTUnwrap(
-      JSONSerialization.jsonObject(with: Data(config.resolvedConfigJSON.utf8)) as? [String: Any])
-    XCTAssertEqual((json["overlay"] as? [String: Any])?["screen_capture"] as? String, "hide")
-    for invalid in ["\"none\"", "\"Hide\"", "false"] {
-      let rejected = ConfigLoader.parse("[overlay]\nscreen_capture = \(invalid)")
-      XCTAssertEqual(rejected.overlay.screenCapture, .show, invalid)
-      XCTAssertTrue(
-        rejected.diagnostics.contains {
-          $0.message.contains("overlay.screen_capture must be \"show\" or \"hide\"")
-        }, invalid)
-    }
-  }
-
-  func testScreenCaptureSetsEveryFlashSurfacesSharingType() {
-    XCTAssertEqual(ScreenCaptureVisibility.show.sharingType, .readOnly)
-    XCTAssertEqual(ScreenCaptureVisibility.hide.sharingType, .none)
-    let overlay = OverlayPanel()
-    var config = Config.Overlay()
-    config.screenCapture = .hide
-    overlay.overlayConfig = config
-    XCTAssertEqual(overlay.sharingType, .none)
-    XCTAssertEqual(overlay.statusBarWindow.sharingType, .none)
-    XCTAssertEqual(overlay.statusPopupController.sharingType, .none)
-    // A click window created later takes the setting on creation.
-    overlay.syncStatusBarClickWindows(
-      bandRects: [CGRect(x: 0, y: 900, width: 800, height: 24)], links: [])
-    XCTAssertEqual(overlay.statusBarClickWindows.map(\.sharingType), [.none])
-    overlay.hideStatusBarClickWindows()
-    // The window server keeps a live window out of capture once asked (a
-    // later `.readOnly` reads back as `.none`), so only a window it has not
-    // created yet, like the deferred popup panel, shows the way back.
-    config.screenCapture = .show
-    overlay.overlayConfig = config
-    XCTAssertEqual(overlay.statusPopupController.sharingType, .readOnly)
   }
 }

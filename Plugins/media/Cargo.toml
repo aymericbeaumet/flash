@@ -10,7 +10,11 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_flash_plugin_rust" }
-serde_json = "1"
+# `rt` to ask every running player at once; `macros` for the async tests.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "macros"] }
+
+[dev-dependencies]
+serde_json = "1.0.154"
 
 # Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
 # (fully-unoptimized tokio is visibly slow under the plugin latency contracts),

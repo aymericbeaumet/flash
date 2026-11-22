@@ -1,0 +1,189 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/host.process_table.reply.schema.json",
+  "title": "host.process_table reply",
+  "description": "Host to plugin: the processes of a list, the processes of a tree with their detail and the root's executable path and start, or why the host could not answer. Nothing else of a process crosses the wire: no arguments, no environment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "at",
+            "processes"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "at": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The host's monotonic clock when it read, in nanoseconds: the time between two replies is the difference of theirs."
+            },
+            "processes": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "pid",
+                  "start",
+                  "cpu_ns",
+                  "resident_bytes"
+                ],
+                "properties": {
+                  "pid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "When the process started, in Mach absolute time: with the pid, the identity of one process."
+                  },
+                  "cpu_ns": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Cumulative user and system CPU time, in nanoseconds."
+                  },
+                  "resident_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Resident memory."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255,
+                    "description": "The last component of the executable's path, in a list of pids; a list of the whole table carries none."
+                  }
+                }
+              }
+            },
+            "truncated": {
+              "const": true,
+              "description": "Later processes were left out: the reply holds at most 4096 processes and 1048576 bytes of them."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "at",
+            "processes"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "at": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The host's monotonic clock when it read, in nanoseconds: the time between two replies is the difference of theirs."
+            },
+            "processes": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "pid",
+                  "start",
+                  "cpu_ns",
+                  "resident_bytes",
+                  "threads",
+                  "sockets",
+                  "disk_read_bytes",
+                  "disk_write_bytes"
+                ],
+                "properties": {
+                  "pid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "When the process started, in Mach absolute time: with the pid, the identity of one process."
+                  },
+                  "cpu_ns": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Cumulative user and system CPU time, in nanoseconds."
+                  },
+                  "resident_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Resident memory."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255,
+                    "description": "The last component of the executable's path."
+                  },
+                  "threads": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sockets": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Open socket descriptors, unix-domain ones included; no descriptor is examined."
+                  },
+                  "disk_read_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Cumulative."
+                  },
+                  "disk_write_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Cumulative."
+                  }
+                }
+              },
+              "description": "The root first, then its descendants breadth first; empty when the root is gone or not the user's to measure."
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "description": "The root's executable."
+            },
+            "started_at": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "When the root started, in Unix seconds."
+            },
+            "truncated": {
+              "const": true,
+              "description": "Later processes were left out: the reply holds at most 4096 processes and 1048576 bytes of them."
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

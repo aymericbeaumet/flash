@@ -44,7 +44,7 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
     case seeded, resolving, resolved
   }
   private var phaseValue: Phase = .seeded
-  private var resolvedWaiters: [(queue: DispatchQueue, body: () -> Void)] = []
+  private var resolvedWaiters: [(queue: DispatchQueue, body: @Sendable () -> Void)] = []
 
   public var phase: Phase {
     lock.lock()
@@ -57,7 +57,7 @@ public final class FlashProcessEnvironment: @unchecked Sendable {
   /// environment in effect when it spawns for its whole life, so every
   /// long-lived child — plugins, status jobs, persistent popups — waits here
   /// rather than start with launchd's bare `PATH`.
-  public func whenResolved(on queue: DispatchQueue, _ body: @escaping () -> Void) {
+  public func whenResolved(on queue: DispatchQueue, _ body: @escaping @Sendable () -> Void) {
     lock.lock()
     if phaseValue == .resolving {
       resolvedWaiters.append((queue, body))

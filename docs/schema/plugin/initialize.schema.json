@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/initialize.schema.json",
+  "title": "initialize",
+  "description": "Host to plugin, first and once: the protocol version the host speaks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params",
+    "deadline_ms"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "initialize"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version"
+      ],
+      "properties": {
+        "protocol_version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "deadline_ms": {
+      "$ref": "definitions.schema.json#/definitions/deadline_ms"
+    },
+    "trace": {
+      "$ref": "definitions.schema.json#/definitions/trace"
+    }
+  }
+}

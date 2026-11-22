@@ -1,6 +1,8 @@
+import AppKit
 import FlashCore
 import Foundation
 import XCTest
+import os
 
 @testable import flash
 
@@ -52,7 +54,8 @@ enum PluginFixtureKit {
     prologue: String = "",
     onInitialize: String = initializeOK,
     onPing: String = pingOK,
-    onPerform: String = performOK
+    onPerform: String = performOK,
+    onSearch: String = ":"
   ) -> String {
     """
     #!/bin/sh
@@ -71,6 +74,9 @@ enum PluginFixtureKit {
       *'"method":"perform"'*)
         \(onPerform)
         ;;
+      *'"method":"search"'*)
+        \(onSearch)
+        ;;
       esac
     done
     exit 0
@@ -78,18 +84,25 @@ enum PluginFixtureKit {
   }
 
   /// A minimal valid manifest with `exec ["./run.sh"]`; `extra` appends
-  /// surfaces (and thereby selects the activation mode).
-  static func manifest(id: String, extra: String = #""status": ["state"]"#) -> String {
-    """
-    {
-      "id": "\(id)",
-      "name": "Fixture \(id)",
-      "version": "1.0.0",
-      "description": "lifecycle fixture",
-      "exec": ["./run.sh"],
-      \(extra)
-    }
-    """
+  /// surfaces (and thereby selects the activation mode). The shell script
+  /// forks `sed` and friends, which the deny-default profile refuses, so the
+  /// fixture declares `"sandbox": false` unless `sandboxed` keeps it under
+  /// the profile.
+  static func manifest(
+    id: String, extra: String = #""status": ["state"]"#, sandboxed: Bool = false
+  ) -> String {
+    let sandbox = sandboxed ? "" : #""sandbox": false,"#
+    return """
+      {
+        "id": "\(id)",
+        "name": "Fixture \(id)",
+        "version": "1.0.0",
+        "description": "lifecycle fixture",
+        "exec": ["./run.sh"],
+        \(sandbox)
+        \(extra)
+      }
+      """
   }
 
   /// Pass `baseDataDir` when several fixtures share one manager (the manager
@@ -159,7 +172,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
     _ fixture: PluginFixtureKit.Fixture,
     store: PluginCatalogStore? = nil,
     statusObserved: Bool = true,
-    environment: FlashProcessEnvironment = .shared
+    environment: FlashProcessEnvironment = .shared,
+    scheduler: PollScheduler = .shared
   ) throws -> PluginProcess {
     let manifest = try PluginManifest.load(from: fixture.root)
     let process = PluginProcess(
@@ -169,7 +183,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
       baseDataDir: fixture.baseDataDir,
       watchFiles: false,
       statusObserved: statusObserved,
-      environment: environment)
+      environment: environment,
+      installLogDirectory: fixture.baseDataDir.appendingPathComponent("install-logs"),
+      scheduler: scheduler)
     process.catalogStore = store
     return process
   }
@@ -212,6 +228,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     windowSeconds: TimeInterval? = nil,
     idleBeforePingMs: Int? = nil,
     pingTimeoutMs: Int? = nil,
+    queryDeadlineMs: Int? = nil,
     restartDelay: ((Int) -> Int)? = nil,
     startupTimeoutSeconds: Int? = nil,
     _ body: () throws -> Void
@@ -220,6 +237,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let originalWindow = PluginProcess.restartWindowSeconds
     let originalIdle = PluginProcess.idleBeforePingMs
     let originalPing = PluginProcess.pingTimeoutMs
+    let originalQuery = PluginProcess.queryDeadlineMs
     let originalDelay = PluginProcess.restartDelaySeconds
     let originalStartup = FlashTunables.pluginStartupTimeoutSeconds
     defer {
@@ -227,6 +245,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
       PluginProcess.restartWindowSeconds = originalWindow
       PluginProcess.idleBeforePingMs = originalIdle
       PluginProcess.pingTimeoutMs = originalPing
+      PluginProcess.queryDeadlineMs = originalQuery
       PluginProcess.restartDelaySeconds = originalDelay
       FlashTunables.pluginStartupTimeoutSeconds = originalStartup
     }
@@ -234,6 +253,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     if let windowSeconds { PluginProcess.restartWindowSeconds = windowSeconds }
     if let idleBeforePingMs { PluginProcess.idleBeforePingMs = idleBeforePingMs }
     if let pingTimeoutMs { PluginProcess.pingTimeoutMs = pingTimeoutMs }
+    if let queryDeadlineMs { PluginProcess.queryDeadlineMs = queryDeadlineMs }
     if let restartDelay { PluginProcess.restartDelaySeconds = restartDelay }
     if let startupTimeoutSeconds {
       FlashTunables.pluginStartupTimeoutSeconds = startupTimeoutSeconds
@@ -279,6 +299,297 @@ final class PluginProcessLifecycleTests: XCTestCase {
       waitUntilTrue("running again") { process.runtimeStateSnapshot() == .running }
       process.stopAndWait(reason: "test")
     }
+  }
+
+  // MARK: 1b. Text grid
+
+  /// `text_grid` carries the focused-app context and settles once with the
+  /// decoded grid; a reply off its own grid settles nil, as does a stopped
+  /// plugin, at once.
+  func testTextGridRequestsCarryTheContextAndSettleOnceWithTheDecodedGrid() throws {
+    let script = #"""
+      #!/bin/sh
+      D="$FLASH_PLUGIN_DATA_DIR"
+      printf 'spawn\n' >> "$D/spawns"
+      while IFS= read -r line; do
+        id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+        case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"id":%s,"result":{"ok":true,"protocol_version":1}}\n' "$id"
+          ;;
+        *'"method":"text_grid"'*)
+          printf '%s\n' "$line" >> "$D/requests"
+          if [ -f "$D/answered" ]; then
+            printf '{"id":%s,"result":{"ok":true,"columns":4,"rows":2,"lines":[{"row":2,"column":0,"text":"a"}]}}\n' "$id"
+          else
+            : > "$D/answered"
+            printf '{"id":%s,"result":{"ok":true,"columns":20,"rows":6,"lines":[{"row":2,"column":10,"text":"xa"},{"row":0,"column":0,"width":20,"format":"za"}]}}\n' "$id"
+          fi
+          ;;
+        esac
+      done
+      exit 0
+      """#
+    let fixture = try PluginFixtureKit.make(
+      id: "textgrid", manifest: PluginFixtureKit.manifest(id: "textgrid"), script: script)
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    process.start()
+    waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+    let context = AppContext(
+      bundleIdentifier: "com.example.term", processID: 4242,
+      runningApp: NSRunningApplication.current,
+      frontWindowFrame: CGRect(x: 10, y: 20, width: 800, height: 400), allScreensFrame: .null,
+      displays: [.init(frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 2)])
+
+    func request() -> [PluginTextGrid?] {
+      let settled = expectation(description: "text_grid settles")
+      let lock = NSLock()
+      var replies: [PluginTextGrid?] = []
+      process.textGrid(context: context) { grid in
+        lock.lock()
+        replies.append(grid)
+        lock.unlock()
+        settled.fulfill()
+      }
+      wait(for: [settled], timeout: 8)
+      lock.lock()
+      defer { lock.unlock() }
+      return replies
+    }
+    XCTAssertEqual(
+      request(),
+      [
+        PluginTextGrid(
+          columns: 20, rows: 6,
+          lines: [
+            .text(row: 2, column: 10, text: "xa"),
+            .format(row: 0, column: 0, width: 20, format: "za"),
+          ])
+      ])
+    XCTAssertEqual(request(), [nil], "a line below the grid rejects the reply")
+    let requests = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("requests"), encoding: .utf8)
+    let first = try XCTUnwrap(
+      try JSONSerialization.jsonObject(
+        with: Data(try XCTUnwrap(requests.split(separator: "\n").first).utf8))
+        as? [String: Any])
+    let params = try XCTUnwrap(first["params"] as? [String: Any])
+    XCTAssertEqual(params["bundle_id"] as? String, "com.example.term")
+    XCTAssertEqual(params["pid"] as? Int, 4242)
+    XCTAssertEqual(params["display_scale"] as? Double, 2)
+    XCTAssertEqual(
+      params["front_window_frame"] as? [String: Double],
+      ["x": 10, "y": 20, "width": 800, "height": 400])
+    XCTAssertNotNil(first["deadline_ms"])
+
+    process.stopAndWait(reason: "test")
+    var stopped: [PluginTextGrid?] = []
+    process.textGrid(context: context) { stopped.append($0) }
+    XCTAssertEqual(stopped, [nil])
+  }
+
+  /// A hint pull that does not wait settles once, off the caller, with the
+  /// decoded targets; a rejected reply and a stopped plugin settle empty. The
+  /// waiting form answers the same.
+  func testAHintPullSettlesOnceWithoutTheCallerWaiting() throws {
+    let script = #"""
+      #!/bin/sh
+      D="$FLASH_PLUGIN_DATA_DIR"
+      printf 'spawn\n' >> "$D/spawns"
+      while IFS= read -r line; do
+        id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+        case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"id":%s,"result":{"ok":true,"protocol_version":1}}\n' "$id"
+          ;;
+        *'"method":"hints"'*)
+          if [ -f "$D/malformed" ]; then
+            printf '{"id":%s,"result":{"ok":true,"targets":[{"id":"pane"}]}}\n' "$id"
+          else
+            printf '{"id":%s,"result":{"ok":true,"targets":[{"id":"pane","frame":{"x":10,"y":20,"width":30,"height":40}}]}}\n' "$id"
+          fi
+          ;;
+        esac
+      done
+      exit 0
+      """#
+    let fixture = try PluginFixtureKit.make(
+      id: "hintpull", manifest: PluginFixtureKit.manifest(id: "hintpull"), script: script)
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    process.start()
+    waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+    let context = AppContext(
+      bundleIdentifier: "com.example.term", processID: 4242,
+      runningApp: NSRunningApplication.current,
+      frontWindowFrame: CGRect(x: 0, y: 0, width: 800, height: 400), allScreensFrame: .null)
+
+    func pull() -> [[String]] {
+      let settled = expectation(description: "hints settle")
+      let lock = NSLock()
+      var replies: [[String]] = []
+      process.discoverTargets(context: context, timeout: 2, resolveAtCommit: false) { targets in
+        XCTAssertFalse(Thread.isMainThread, "the reply settles on the plugin queue")
+        lock.lock()
+        replies.append(targets.map(\.id))
+        lock.unlock()
+        settled.fulfill()
+      }
+      wait(for: [settled], timeout: 8)
+      lock.lock()
+      defer { lock.unlock() }
+      return replies
+    }
+    XCTAssertEqual(pull(), [["pane"]])
+    XCTAssertEqual(
+      process.discoverTargets(context: context, timeout: 2, resolveAtCommit: false).map(\.id),
+      ["pane"], "the waiting form answers the same")
+
+    FileManager.default.createFile(
+      atPath: fixture.dataDir.appendingPathComponent("malformed").path, contents: nil)
+    XCTAssertEqual(pull(), [[]], "a target without a frame rejects the reply")
+
+    process.stopAndWait(reason: "test")
+    var stopped: [[String]] = []
+    process.discoverTargets(context: context, timeout: 2, resolveAtCommit: false) {
+      stopped.append($0.map(\.id))
+    }
+    XCTAssertEqual(stopped, [[]], "a stopped plugin settles at once")
+  }
+
+  // MARK: 1c. Wire fields
+
+  /// Records the child's environment, every event it receives and every
+  /// `evaluate` request, answering each evaluation with one answer, `2`,
+  /// only once the request is on disk.
+  private func wireRecorder(id: String) throws -> PluginFixtureKit.Fixture {
+    let script = #"""
+      #!/bin/sh
+      D="$FLASH_PLUGIN_DATA_DIR"
+      env > "$D/env"
+      while IFS= read -r line; do
+        id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+        case "$line" in
+        *'"method":"initialize"'*)
+          printf '{"id":%s,"result":{"ok":true,"protocol_version":1}}\n' "$id"
+          ;;
+        *'"method":"event"'*)
+          printf '%s\n' "$line" >> "$D/events"
+          ;;
+        *'"method":"evaluate"'*)
+          printf '%s\n' "$line" >> "$D/evaluations"
+          printf '{"id":%s,"result":{"ok":true,"answers":[{"title":"2","effect":{"type":"copy_text","text":"2"}}]}}\n' "$id"
+          ;;
+        esac
+      done
+      exit 0
+      """#
+    return try PluginFixtureKit.make(
+      id: id, manifest: PluginFixtureKit.manifest(id: id), script: script)
+  }
+
+  /// The frames the recorder appended to `name` so far: nil while the file
+  /// is missing or its last line is still being written, so a deadline poll
+  /// can call it without recording a failure.
+  private func recordedFrames(_ fixture: PluginFixtureKit.Fixture, _ name: String)
+    -> [[String: Any]]?
+  {
+    guard
+      let text = try? String(
+        contentsOf: fixture.dataDir.appendingPathComponent(name), encoding: .utf8)
+    else { return nil }
+    var frames: [[String: Any]] = []
+    for line in text.split(separator: "\n") {
+      guard let frame = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
+      else { return nil }
+      frames.append(frame)
+    }
+    return frames
+  }
+
+  /// A child learns the host is gone from stdin EOF, so its environment
+  /// names the plugin and no parent pid.
+  func testChildEnvironmentCarriesNoParentPID() throws {
+    let fixture = try wireRecorder(id: "wireenv")
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+    let variables = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("env"), encoding: .utf8
+    ).split(separator: "\n")
+    XCTAssertTrue(variables.contains("FLASH_PLUGIN_ID=wireenv"))
+    XCTAssertFalse(variables.contains { $0.hasPrefix("FLASH_PLUGIN_PARENT_PID=") })
+  }
+
+  /// The `core:apps.changed` every child gets after initialize carries the
+  /// running-applications snapshot and nothing else.
+  func testFirstAppsChangedCarriesOnlyTheRunningApplications() throws {
+    let fixture = try wireRecorder(id: "wireapps")
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    let app: [String: Any] = [
+      "bundle_id": "com.example.app", "localized_name": "Example", "pid": 4242,
+    ]
+    process.runningApplicationsProvider = { [app] }
+    process.start()
+    var appsChanged: [String: Any]?
+    waitUntilTrue("apps.changed delivered") {
+      appsChanged = self.recordedFrames(fixture, "events")?
+        .compactMap { $0["params"] as? [String: Any] }
+        .first { $0["name"] as? String == "core:apps.changed" }
+      return appsChanged != nil
+    }
+    let payload = try XCTUnwrap(appsChanged?["payload"] as? [String: Any])
+    XCTAssertEqual(Set(payload.keys), ["running_applications"])
+    let apps = try XCTUnwrap(payload["running_applications"] as? [[String: Any]])
+    XCTAssertEqual(apps.map { Set($0.keys) }, [["bundle_id", "localized_name", "pid"]])
+  }
+
+  /// `evaluate` hands the plugin the exact input and nothing else. The
+  /// per-keystroke 50 ms deadline is a seam here: a fork-per-line shell on a
+  /// busy Mac misses it, and a host queue that gets the CPU late drops the
+  /// request unsent, so at that deadline neither the reply (`[]` either
+  /// way) nor the recorded frame is an event to wait on. With the deadline
+  /// the test owns, the answer is the signal: the fixture records the
+  /// request before it answers.
+  func testEvaluateSendsOnlyTheQuery() throws {
+    let fixture = try wireRecorder(id: "wireeval")
+    defer { fixture.cleanup() }
+    try withSeams(queryDeadlineMs: 8_000) {
+      let process = try makeProcess(fixture)
+      defer { process.stopAndWait(reason: "test") }
+      process.start()
+      waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
+      let answered = expectation(description: "evaluate answered")
+      process.evaluate(QueryEvaluationRequest(surface: .flashlight, text: "1+1")) { answers in
+        XCTAssertEqual(answers.map(\.title), ["2"], "the fixture's answer, not a deadline")
+        answered.fulfill()
+      }
+      wait(for: [answered], timeout: 8)
+      let request = try XCTUnwrap(recordedFrames(fixture, "evaluations")?.first)
+      let params = try XCTUnwrap(request["params"] as? [String: Any])
+      XCTAssertEqual(Set(params.keys), ["query"])
+      XCTAssertEqual(params["query"] as? String, "1+1")
+    }
+  }
+
+  /// A window focus change names the app whose window changed; the
+  /// subscriber reads the rest itself.
+  func testWindowFocusChangedCarriesOnlyTheApp() throws {
+    let frame = try XCTUnwrap(
+      PluginProcess.encodedEventFrame(
+        .windowFocusChanged(pid: 4242, bundleID: "com.example.app")))
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+    let params = try XCTUnwrap(object["params"] as? [String: Any])
+    XCTAssertEqual(params["name"] as? String, "core:window.focus.changed")
+    let payload = try XCTUnwrap(params["payload"] as? [String: Any])
+    XCTAssertEqual(Set(payload.keys), ["pid", "bundle_id"])
+    XCTAssertEqual(payload["pid"] as? Int, 4242)
+    XCTAssertEqual(payload["bundle_id"] as? String, "com.example.app")
   }
 
   // MARK: 2. Restart parking + re-arm
@@ -333,7 +644,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
       let process = try makeProcess(fixture)
       defer { process.stopAndWait(reason: "test") }
       process.start()
-      waitUntilTrue(timeout: 2, "initialized crash loop parks") {
+      // Three spawns; each can stall for seconds on a busy Mac.
+      waitUntilTrue("initialized crash loop parks") {
         process.runtimeStateSnapshot() == .failed
       }
       XCTAssertEqual(fixture.spawnCount(), 3)
@@ -381,7 +693,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     defer { process.stopAndWait(reason: "test") }
     let repliesLock = NSLock()
     var replies: [([String: Any]) -> Void] = []
-    process.onHostRequest = { _, _, _, reply in
+    process.onHostRequest = { _, _, _, _, reply in
       repliesLock.lock()
       replies.append(reply)
       repliesLock.unlock()
@@ -410,6 +722,53 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertEqual(received.split(separator: "\n").count, 1)
   }
 
+  func testStoppingChildCancelsHostInputAlreadyQueuedOnMain() throws {
+    try assertQueuedHostInputAfterRetirement(reload: false)
+  }
+
+  func testReloadingChildDropsOldQueuedHostInputAndAcceptsReplacementInput() throws {
+    try assertQueuedHostInputAfterRetirement(reload: true)
+  }
+
+  private func assertQueuedHostInputAfterRetirement(reload: Bool) throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "stalehostinput",
+      manifest: PluginFixtureKit.manifest(id: "stalehostinput"),
+      script: PluginFixtureKit.script(
+        onInitialize: PluginFixtureKit.initializeOK + "\n"
+          + #"printf '{"id":1,"method":"host.post_keys","params":{"pid":1,"keys":[{"key_code":0,"modifiers":["command"]}]}}\n'"#
+      ))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    let rpc = PluginHostRPC()
+    var posted = 0
+    rpc.onSyntheticKeysRequested = { _, _, _ in posted += 1 }
+    let queued = DispatchSemaphore(value: 0)
+    process.onHostRequest = { method, params, pluginID, scope, reply in
+      rpc.handleHostRequest(
+        method: method, params: params, pluginID: pluginID,
+        capabilities: [.accessibility], scope: scope, reply: reply)
+      queued.signal()
+    }
+    process.start()
+    // Hold main so the real child can enqueue its input, then retire the
+    // transport before main is allowed to commit the queued host action.
+    XCTAssertEqual(queued.wait(timeout: .now() + 5), .success)
+    if reload {
+      process.reload(reason: "test_cancel_queued_input")
+      XCTAssertEqual(queued.wait(timeout: .now() + 5), .success)
+    } else {
+      process.stopAndWait(reason: "test_cancel_queued_input")
+    }
+    let drained = expectation(description: "queued host input drained")
+    DispatchQueue.main.async { drained.fulfill() }
+    wait(for: [drained], timeout: 2)
+    XCTAssertEqual(
+      posted, reload ? 1 : 0,
+      "only the current child may post queued input")
+  }
+
   func testOutstandingHostCallsAreBoundedAndExcessCallSettles() throws {
     let limit = PluginProtocol.maxHostRPCs
     var script = PluginFixtureKit.script(
@@ -434,7 +793,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
     defer { process.stopAndWait(reason: "test") }
     let callsLock = NSLock()
     var calls = 0
-    process.onHostRequest = { _, _, _, _ in
+    process.onHostRequest = { _, _, _, _, _ in
       callsLock.lock()
       calls += 1
       callsLock.unlock()
@@ -516,12 +875,12 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let fixture = try PluginFixtureKit.make(
       id: "initnak",
       manifest: PluginFixtureKit.manifest(
-        id: "initnak", extra: #""sources": [{ "name": "fix.items" }]"#),
+        id: "initnak", extra: #""sources": [{ "name": "fix.items", "type": "items" }]"#),
       script: PluginFixtureKit.script(
         prologue:
           #"printf '{"method":"publish","params":{"rows":[{"source":"fix.items","title":"Early"}]}}\n'"#,
         onInitialize: """
-          printf '{"id":1,"method":"host.ping","params":{"phase":"before_nak"}}\\n'
+          printf '{"id":1,"method":"host.ping","params":{}}\\n'
           IFS= read -r response || exit 9
           case "$response" in *'"ok":true'*) ;; *) exit 9 ;; esac
           printf '{"id":%s,"result":{"ok":false,"protocol_version":1,"error":"nope"}}\\n' "$id"
@@ -529,15 +888,15 @@ final class PluginProcessLifecycleTests: XCTestCase {
           """))
     defer { fixture.cleanup() }
     let store = PluginCatalogStore()
-    store.publish(pluginID: "initnak", rows: [Candidate(title: "Previous")], encodedBytes: 20)
+    store.publish(pluginID: "initnak", .rows([Candidate(title: "Previous")]))
     let process = try makeProcess(fixture, store: store)
     defer { process.stopAndWait(reason: "test") }
     let checkedEarlyPublish = expectation(description: "early publish rejected before NAK")
     // The host processes these frames in wire order. Acknowledge directly on
     // the process queue so main-runloop load cannot hold initialize hostage.
-    process.onHostRequest = { [weak process] method, params, _, reply in
+    process.onHostRequest = { [weak process] method, params, _, _, reply in
       XCTAssertEqual(method, "host.ping")
-      XCTAssertEqual(params["phase"] as? String, "before_nak")
+      XCTAssertTrue(params.isEmpty)
       XCTAssertEqual(process?.runtimeStateSnapshot(), .launching)
       XCTAssertEqual(store.rows(for: "initnak").map(\.title), ["Previous"])
       reply(["ok": true])
@@ -652,37 +1011,96 @@ final class PluginProcessLifecycleTests: XCTestCase {
 
   func testPublishIntakeKeepsLastGoodOnMalformedPublish() throws {
     // Two valid rows land in the store; a following malformed publish (row
-    // missing the required `source`) is rejected whole: the store keeps the
-    // previous rows and the entry generation does not change.
+    // missing the required `source`) is rejected whole and a source publish
+    // then joins its rows to the kept catalog: the generation counts only
+    // the two accepted publishes.
     let fixture = try PluginFixtureKit.make(
       id: "publisher",
       manifest: PluginFixtureKit.manifest(
         id: "publisher",
-        extra: #""sources": [{ "name": "fix.items" }], "status": ["done"]"#),
+        extra:
+          #""sources": [{ "name": "fix.items", "type": "items" }, { "name": "fix.other", "type": "other" }], "status": ["done"]"#
+      ),
       script: PluginFixtureKit.script(
         onInitialize: """
           \(PluginFixtureKit.initializeOK)
           printf '{"method":"publish","params":{"rows":[{"source":"fix.items","title":"One"},{"source":"fix.items","title":"Two"}]}}\\n'
           printf '{"method":"publish","params":{"rows":[{"title":"NoSource"}]}}\\n'
+          printf '{"method":"publish","params":{"source":"fix.other","rows":[{"source":"fix.other","title":"Three"}]}}\\n'
           printf '{"method":"status","params":{"segments":{"done":"1"}}}\\n'
           """))
     defer { fixture.cleanup() }
     let store = PluginCatalogStore()
     let process = try makeProcess(fixture, store: store)
     process.start()
-    // The status frame arrives after both publishes on the same reader
-    // queue, so once it lands the malformed publish has been processed.
     waitUntilTrue("marker segment") {
       process.statusBarInfo().statusSegments["done"] == .text("1")
     }
-    XCTAssertEqual(store.rows(for: "publisher").map(\.title), ["One", "Two"])
+    // Publishes decode on their own queue, behind no reply: the marker says
+    // nothing about them, the last publish landing does.
+    waitUntilTrue("the source publish merged") {
+      store.rows(for: "publisher").map(\.title) == ["One", "Two", "Three"]
+    }
     let entry = try XCTUnwrap(store.entry(for: "publisher"))
     XCTAssertEqual(
-      entry.generation, 1,
-      "a rejected publish never reaches the store: generation stays at the last accepted publish")
+      entry.generation, 2,
+      "a rejected publish never reaches the store: the generation counts the accepted ones")
     // The catalog survives a plain stop (only failed park / unload drop it).
     process.stopAndWait(reason: "test")
-    XCTAssertEqual(store.rows(for: "publisher").map(\.title), ["One", "Two"])
+    XCTAssertEqual(store.rows(for: "publisher").map(\.title), ["One", "Two", "Three"])
+  }
+
+  /// A reply is waited on; a catalog is not. A large publish ahead of a
+  /// reply on the wire decodes on the plugin's catalog queue, so the reply
+  /// completes while the publish is still undecoded.
+  func testAReplyBehindALargePublishIsNotDelayedByItsDecode() throws {
+    let rows = PluginPublishBenchmarkTests.syntheticRows(count: 3_000).map {
+      row -> [String: Any] in
+      var row = row
+      row["source"] = "fix.items"
+      return row
+    }
+    let fixture = try PluginFixtureKit.make(
+      id: "bigpublish",
+      manifest: PluginFixtureKit.manifest(
+        id: "bigpublish",
+        extra: #""sources": [{ "name": "fix.items", "type": "items" }], "status": ["done"]"#),
+      script: PluginFixtureKit.script(
+        prologue: #"ROOT="$(dirname "$0")""#,
+        onInitialize: """
+          \(PluginFixtureKit.initializeOK)
+          cat "$ROOT/publish.ndjson"
+          printf '{"method":"status","params":{"segments":{"done":"1"}}}\\n'
+          """))
+    defer { fixture.cleanup() }
+    try PluginPublishBenchmarkTests.publishFrame(rows: rows).write(
+      to: fixture.root.appendingPathComponent("publish.ndjson"))
+    let store = PluginCatalogStore()
+    let process = try makeProcess(fixture, store: store)
+    // Hold every catalog decode: the publish is read, but never decoded
+    // until the queue resumes.
+    process.catalogQueue.suspend()
+    var resumed = false
+    defer {
+      if !resumed { process.catalogQueue.resume() }
+      process.stopAndWait(reason: "test")
+    }
+    process.start()
+    waitUntilTrue("the frame after the publish was handled") {
+      process.statusBarInfo().statusSegments["done"] == .text("1")
+    }
+    let replied = expectation(description: "perform replied behind the held publish")
+    process.perform(kind: "command", params: ["command": "fix", "subcommand": "go"]) { outcome in
+      XCTAssertEqual(outcome, .performed(pid: nil, navigationURL: nil, message: "fixture-done"))
+      replied.fulfill()
+    }
+    wait(for: [replied], timeout: 8)
+    XCTAssertTrue(store.rows(for: "bigpublish").isEmpty, "the publish is still undecoded")
+    resumed = true
+    process.catalogQueue.resume()
+    waitUntilTrue("the publish decoded once the queue resumed") {
+      store.rows(for: "bigpublish").count == rows.count
+    }
   }
 
   // MARK: 6b. Poll registrations over the wire
@@ -760,7 +1178,8 @@ final class PluginProcessLifecycleTests: XCTestCase {
       id: "statusfix",
       manifest: PluginFixtureKit.manifest(
         id: "statusfix",
-        extra: #""sources": [{ "name": "fix.items" }], "status": ["alpha", "beta"]"#),
+        extra:
+          #""sources": [{ "name": "fix.items", "type": "items" }], "status": ["alpha", "beta"]"#),
       script: PluginFixtureKit.script(
         onInitialize: """
           \(PluginFixtureKit.initializeOK)
@@ -777,9 +1196,13 @@ final class PluginProcessLifecycleTests: XCTestCase {
     let store = PluginCatalogStore()
     let process = try makeProcess(fixture, store: store)
     process.start()
+    // Status frames apply on the process queue at once, while publishes are
+    // decoded off it first (utility QoS): the two kinds keep their own order,
+    // not each other's, so the burst is applied once both have caught up.
     waitUntilTrue("burst fully applied") {
       process.statusBarInfo().statusSegments["beta"] == .text("done")
         && process.statusBarInfo().statusSegments["alpha"] == nil
+        && store.entry(for: "statusfix")?.generation == 30
     }
     // Declared-only, "" clears, and no frame in the interleaved burst was
     // lost: the final store row and generation match the frame count.
@@ -850,30 +1273,54 @@ final class PluginProcessLifecycleTests: XCTestCase {
       manifest: PluginFixtureKit.manifest(id: "statusrearm", extra: #""status": ["alpha"]"#),
       script: PluginFixtureKit.script())
     defer { fixture.cleanup() }
+    // The grace runs on a clock of the test's own: a scheduler held
+    // suspended on a manual clock fires nothing, and reports when each
+    // deadline is due. Spawn stalls and sleeps decide nothing.
+    let now = OSAllocatedUnfairLock(initialState: 0)
+    let scheduler = PollScheduler(clock: { now.withLock { $0 } })
+    scheduler.setSuspended(true, reason: .session)
+    func graceDue() -> [Int] {
+      let listed = DispatchSemaphore(value: 0)
+      var due: [Int] = []
+      scheduler.deadlines {
+        due = $0.filter { $0.key.hasPrefix("core:plugin_status_grace:statusrearm") }.map(\.value)
+        listed.signal()
+      }
+      listed.wait()
+      return due
+    }
     let previousGrace = PluginProcess.statusReloadGraceSeconds
-    PluginProcess.statusReloadGraceSeconds = 2
+    PluginProcess.statusReloadGraceSeconds = 10
     defer { PluginProcess.statusReloadGraceSeconds = previousGrace }
-    let process = try makeProcess(fixture)
+    let process = try makeProcess(fixture, scheduler: scheduler)
     defer { process.stopAndWait() }
     process.start()
     waitUntilTrue("initial startup") { process.runtimeStateSnapshot() == .running }
     process.applyStatusSegments(["segments": ["alpha": "CPU 12%"]])
+
+    // The first reload arms the grace at 0 s.
     process.reload(reason: "plugins_reload")
     waitUntilTrue("first reload finished") {
       fixture.spawnCount() == 2 && process.runtimeStateSnapshot() == .running
     }
-    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
+    XCTAssertEqual(graceDue(), [10_000])
+
+    // The second, at 6 s, arms it again: the first deadline is replaced.
+    now.withLock { $0 = 6_000 }
     process.reload(reason: "plugins_reload")
     waitUntilTrue("second reload finished") {
       fixture.spawnCount() == 3 && process.runtimeStateSnapshot() == .running
     }
-    RunLoop.current.run(until: Date().addingTimeInterval(1.2))
-    XCTAssertEqual(
-      process.statusBarInfo().statusSegments["alpha"], .text("CPU 12%"),
-      "the first reload's deadline has passed; the second one's has not")
+    XCTAssertEqual(graceDue(), [16_000], "measured from the newest replacement")
+    XCTAssertEqual(process.statusBarInfo().statusSegments["alpha"], .text("CPU 12%"))
+
+    // Past the second deadline, released: the label expires.
+    now.withLock { $0 = 16_001 }
+    scheduler.setSuspended(false, reason: .session)
     waitUntilTrue("expires after the grace the second reload armed") {
       process.statusBarInfo().statusSegments["alpha"] == nil
     }
+    XCTAssertEqual(graceDue(), [])
   }
 
   func testRejectedReloadClearsRetainedStatusImmediately() throws {
@@ -1013,6 +1460,183 @@ final class PluginProcessLifecycleTests: XCTestCase {
     waitUntilTrue("child killed") { kill(pid_t(pid), 0) != 0 }
   }
 
+  // MARK: 8b. Publish then exit
+
+  private static let catalogManifestExtra =
+    #""sources": [{ "name": "fix.items", "type": "items" }], "lifecycle": "publish_then_exit""#
+
+  /// Answers initialize, publishes `rows` rows in one frame and exits 0 at
+  /// once, so the tail of the frame can still be in the pipe when the host
+  /// sees the exit. `epilogue` runs instead of the exit when given.
+  private static func publishThenExitScript(rows: Int = 2_000, epilogue: String = "exit 0")
+    -> String
+  {
+    let publish =
+      #"awk -v rows=\#(rows) 'BEGIN { printf "{\"method\":\"publish\",\"params\":{\"rows\":["; "#
+      + #"for (i = 1; i <= rows; i++) { if (i > 1) printf ","; "#
+      + #"printf "{\"source\":\"fix.items\",\"title\":\"Row %d\"}", i }; printf "]}}\n" }'"#
+    return """
+      #!/bin/sh
+      D="$FLASH_PLUGIN_DATA_DIR"
+      printf 'spawn\\n' >> "$D/spawns"
+      IFS= read -r line
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+      printf '{"id":%s,"result":{"ok":true,"protocol_version":1}}\\n' "$id"
+      \(publish)
+      \(epilogue)
+      """
+  }
+
+  /// A `publish_then_exit` child publishes and exits 0: the host decodes
+  /// every byte it wrote before resting the plugin in `published`, keeps
+  /// the catalog, counts no restart and no error, and answers a perform
+  /// `unhandled` without spawning it again.
+  func testPublishThenExitPluginRestsOnceItsCatalogLandedWithoutARestart() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "catalogexit",
+      manifest: PluginFixtureKit.manifest(id: "catalogexit", extra: Self.catalogManifestExtra),
+      script: Self.publishThenExitScript())
+    defer { fixture.cleanup() }
+    let store = PluginCatalogStore()
+    try withSeams(restartDelay: immediateRestartDelay) {
+      let process = try makeProcess(fixture, store: store)
+      XCTAssertEqual(process.manifest.activation, .publishThenExit)
+      process.start()
+      waitUntilTrue("published") { process.runtimeStateSnapshot() == .published }
+      XCTAssertEqual(
+        store.rows(for: "catalogexit").count, 2_000,
+        "the whole catalog landed before the plugin rested")
+      let status = process.statusSnapshot()
+      XCTAssertEqual(status.state, "published")
+      XCTAssertEqual(status.activation, "publish_then_exit")
+      XCTAssertNil(status.pid)
+      XCTAssertNil(status.lastError, "a clean exit is not an error")
+      XCTAssertEqual(status.restartCount, 0)
+      var outcome: PluginPerformOutcome?
+      process.perform(kind: "resolve", params: ["row": ["source": "fix.items", "title": "Row 1"]]) {
+        outcome = $0
+      }
+      waitUntilTrue("perform settles") { outcome != nil }
+      XCTAssertEqual(outcome, .unhandled, "rows carry host effects; nothing spawns for one")
+      // An immediate restart delay would show a misread exit within this window.
+      settleRunLoop(0.5)
+      XCTAssertEqual(fixture.spawnCount(), 1, "no restart and no backoff")
+      XCTAssertEqual(process.runtimeStateSnapshot(), .published)
+      process.stopAndWait(reason: "test")
+      XCTAssertEqual(store.rows(for: "catalogexit").count, 2_000, "a stop keeps the catalog")
+    }
+  }
+
+  /// What runs a published plugin again: a reload (the manager's answer to
+  /// `plugins reload`, a settings change and a plugin file change) and a
+  /// change to a file one of its `watch_settings` names, created later or
+  /// replaced by an editor's atomic save.
+  func testPublishThenExitRunsAgainOnReloadAndOnAWatchedFileChange() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "catalogwatch",
+      manifest: PluginFixtureKit.manifest(
+        id: "catalogwatch",
+        extra: Self.catalogManifestExtra + #", "watch_settings": ["file"]"#
+          + #", "settings": {"file": {"type": "string", "description": "The file."}}"#),
+      script: Self.publishThenExitScript(rows: 3))
+    defer { fixture.cleanup() }
+    let watched = fixture.baseDataDir.appendingPathComponent("snippets.toml")
+    let process = PluginProcess(
+      root: fixture.root,
+      manifest: try PluginManifest.load(from: fixture.root),
+      origin: .official,
+      baseDataDir: fixture.baseDataDir,
+      watchFiles: false,
+      settings: ["file": .string(watched.path)],
+      installLogDirectory: fixture.baseDataDir.appendingPathComponent("install-logs"))
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    waitUntilTrue("published") { process.runtimeStateSnapshot() == .published }
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    try "unrelated".write(
+      to: fixture.baseDataDir.appendingPathComponent("other.txt"), atomically: true, encoding: .utf8
+    )
+    settleRunLoop(0.5)
+    XCTAssertEqual(fixture.spawnCount(), 1, "an unrelated sibling change does not reload a catalog")
+
+    process.reload(reason: "test_reload")
+    waitUntilTrue("ran again on reload") { fixture.spawnCount() == 2 }
+    waitUntilTrue("published again") { process.runtimeStateSnapshot() == .published }
+
+    try "shrug = \"s\"\n".write(to: watched, atomically: false, encoding: .utf8)
+    waitUntilTrue("ran again once the watched file appeared") { fixture.spawnCount() == 3 }
+    waitUntilTrue("published after the file appeared") {
+      process.runtimeStateSnapshot() == .published
+    }
+
+    // An editor's atomic save replaces the file's vnode.
+    try "shrug = \"t\"\n".write(to: watched, atomically: true, encoding: .utf8)
+    waitUntilTrue("ran again on the replaced file") { fixture.spawnCount() == 4 }
+    waitUntilTrue("published after the replacement") {
+      process.runtimeStateSnapshot() == .published
+    }
+    settleRunLoop(0.5)
+    XCTAssertEqual(fixture.spawnCount(), 4, "each change runs the plugin once")
+  }
+
+  func testPublishThenExitRejectsAChildThatLeavesOutputOpen() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "catalogpipe",
+      manifest: PluginFixtureKit.manifest(id: "catalogpipe", extra: Self.catalogManifestExtra),
+      script: Self.publishThenExitScript(rows: 1, epilogue: "sleep 10 &\nexit 0"))
+    defer { fixture.cleanup() }
+    let store = PluginCatalogStore()
+    try withSeams(attempts: 0, windowSeconds: 60, restartDelay: immediateRestartDelay) {
+      let process = try makeProcess(fixture, store: store)
+      defer { process.stopAndWait(reason: "test") }
+      process.start()
+      waitUntilTrue("incomplete output fails") { process.runtimeStateSnapshot() == .failed }
+      XCTAssertTrue(store.rows(for: "catalogpipe").isEmpty)
+      XCTAssertNotEqual(process.runtimeStateSnapshot(), .published)
+    }
+  }
+
+  /// Only a clean exit after running completes a run. A `publish_then_exit`
+  /// child that exits with a status is a crash like any other: it backs off,
+  /// restarts and parks on the same budget.
+  func testPublishThenExitCrashStillBacksOffAndParks() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "catalogcrash",
+      manifest: PluginFixtureKit.manifest(id: "catalogcrash", extra: Self.catalogManifestExtra),
+      script: Self.publishThenExitScript(rows: 1, epilogue: "exit 7"))
+    defer { fixture.cleanup() }
+    let store = PluginCatalogStore()
+    try withSeams(attempts: 1, windowSeconds: 60, restartDelay: immediateRestartDelay) {
+      let process = try makeProcess(fixture, store: store)
+      defer { process.stopAndWait(reason: "test") }
+      process.start()
+      waitUntilTrue("parks in failed") { process.runtimeStateSnapshot() == .failed }
+      XCTAssertEqual(fixture.spawnCount(), 2, "the initial spawn and one restart")
+      XCTAssertTrue(
+        process.statusSnapshot().lastError?.contains("restart loop exhausted") == true)
+      XCTAssertTrue(store.rows(for: "catalogcrash").isEmpty, "a parked plugin's catalog is dropped")
+    }
+  }
+
+  /// The files a plugin's `watch_settings` name: string settings only, `~`
+  /// expanded against the home, a relative path under the plugin root (the
+  /// child's working directory), empty and missing settings skipped.
+  func testWatchedSettingPathsResolveTildeAndRelativePaths() {
+    let root = URL(fileURLWithPath: "/plugins/snippets")
+    let paths = PluginProcess.watchedSettingPaths(
+      names: ["file", "extra", "blank", "count", "missing"],
+      settings: [
+        "file": .string("~/snips.toml"), "extra": .string("data/more.json"),
+        "blank": .string("  "), "count": .int(3), "other": .string("/never/watched"),
+      ],
+      root: root, home: "/Users/me")
+    XCTAssertEqual(paths.map(\.path), ["/Users/me/snips.toml", "/plugins/snippets/data/more.json"])
+    XCTAssertEqual(
+      PluginProcess.watchedSettingPaths(
+        names: ["file"], settings: ["file": .string("~")], root: root, home: "/Users/me"
+      ).map(\.path), ["/Users/me"])
+  }
+
   // MARK: 9. Manifest-only
 
   func testManifestOnlyPluginNeverSpawnsAndReportsStaticState() throws {
@@ -1022,7 +1646,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
         "name": "Manifest only",
         "version": "1.0.0",
         "description": "fixture",
-        "action_bindings": { "app_save": { "": "cmd+s" } }
+        "bindings": { "app save": { "": "cmd+s" } }
       }
       """
     let fixture = try PluginFixtureKit.make(
@@ -1079,6 +1703,370 @@ final class PluginProcessLifecycleTests: XCTestCase {
     wait(for: [second], timeout: 8)
     XCTAssertEqual(fixture.spawnCount(), 1, "the second perform must not respawn")
     process.stopAndWait(reason: "test")
+  }
+
+  // MARK: 10b. Live sources
+
+  private static let liveManifestExtra =
+    #""sources": [{ "name": "live.items", "type": "liveitems", "live": "per_scope" }]"#
+
+  /// Answers every search with two rows of `live.items`, after recording
+  /// the request line.
+  private static let searchOK = """
+    printf '%s\\n' "$line" >> "$D/searches"
+    printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Lock screen","metadata":{"subtitle":"Require password"}},{"source":"live.items","title":"Sleep"}]}}\\n' "$id"
+    """
+
+  private func search(
+    _ process: PluginProcess, source: String = "live.items", query: String = ""
+  ) -> [Candidate] {
+    let answered = expectation(description: "search \(source) \(query)")
+    var rows: [Candidate] = []
+    process.search(source: source, query: query) {
+      XCTAssertTrue(Thread.isMainThread, "a search answers on main")
+      rows = $0
+      answered.fulfill()
+    }
+    wait(for: [answered], timeout: 8)
+    return rows
+  }
+
+  /// A plugin whose sources are live costs nothing until a query is scoped
+  /// to one: the first search spawns it and is answered from cold, with the
+  /// rows stamped as the plugin's and nothing published.
+  func testAFirstSearchSpawnsAColdLivePluginAndAnswersItsRows() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "livecold",
+      manifest: PluginFixtureKit.manifest(id: "livecold", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(onSearch: Self.searchOK))
+    defer { fixture.cleanup() }
+    let store = PluginCatalogStore()
+    let process = try makeProcess(fixture, store: store)
+    defer { process.stopAndWait(reason: "test") }
+    XCTAssertEqual(process.manifest.activation, .onDemand)
+    process.start()
+    settleRunLoop(0.3)
+    XCTAssertEqual(fixture.spawnCount(), 0, "live sources alone spawn nothing at start")
+
+    let rows = search(process)
+    XCTAssertEqual(rows.map(\.title), ["Lock screen", "Sleep"])
+    XCTAssertEqual(rows.map(\.source), ["live.items", "live.items"])
+    XCTAssertEqual(rows.map(\.sourceID), ["plugin:livecold", "plugin:livecold"])
+    XCTAssertEqual(rows.first?.subtitle, "Require password")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "it stays up for the next query")
+
+    XCTAssertEqual(search(process, query: "lo").count, 2)
+    XCTAssertEqual(fixture.spawnCount(), 1, "the second search reuses the process")
+    XCTAssertEqual(store.rows(for: "livecold").count, 0, "live rows never enter the catalog")
+    XCTAssertNil(store.entry(for: "livecold"))
+
+    let sent = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("searches"), encoding: .utf8
+    ).split(separator: "\n").map { line in
+      try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+    }
+    XCTAssertEqual(sent.count, 2)
+    XCTAssertEqual(sent[0]["method"] as? String, "search")
+    XCTAssertEqual(sent[0]["params"] as? [String: String], ["source": "live.items", "query": ""])
+    XCTAssertEqual(sent[1]["params"] as? [String: String], ["source": "live.items", "query": "lo"])
+    let deadline = try XCTUnwrap(sent[1]["deadline_ms"] as? Int)
+    XCTAssertTrue(
+      (1...PluginProtocol.searchDeadlineMs).contains(deadline), "its own deadline: \(deadline)")
+  }
+
+  /// A search that waits for a cold child is sent once the child runs, with
+  /// its whole deadline: a startup slower than the search deadline still
+  /// answers the query that asked.
+  func testASearchWaitsOutAStartupSlowerThanItsDeadline() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "liveslow",
+      manifest: PluginFixtureKit.manifest(id: "liveslow", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(
+        onInitialize: "sleep 0.6; " + PluginFixtureKit.initializeOK, onSearch: Self.searchOK))
+    defer { fixture.cleanup() }
+    let original = PluginProcess.searchDeadlineMs
+    defer { PluginProcess.searchDeadlineMs = original }
+    PluginProcess.searchDeadlineMs = 300
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    XCTAssertEqual(search(process).map(\.title), ["Lock screen", "Sleep"])
+  }
+
+  /// While the child starts, only the newest query of a source waits: the
+  /// one typed past answers nothing, and one request reaches the plugin.
+  func testANewerSearchReplacesTheOneStillWaitingForTheChild() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "livelatest",
+      manifest: PluginFixtureKit.manifest(
+        id: "livelatest",
+        extra: #""sources": [{ "name": "live.items", "type": "liveitems", "live": "per_query" }]"#),
+      script: PluginFixtureKit.script(
+        onInitialize: "sleep 0.4; " + PluginFixtureKit.initializeOK, onSearch: Self.searchOK))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    var answers: [String: [Candidate]] = [:]
+    for query in ["l", "lo", "loc"] {
+      process.search(source: "live.items", query: query) { answers[query] = $0 }
+    }
+    waitUntilTrue("every search settled") { answers.count == 3 }
+    XCTAssertEqual(answers["l"]?.count, 0)
+    XCTAssertEqual(answers["lo"]?.count, 0)
+    XCTAssertEqual(answers["loc"]?.count, 2)
+    let sent = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("searches"), encoding: .utf8)
+    XCTAssertEqual(sent.split(separator: "\n").count, 1)
+    XCTAssertTrue(sent.contains(#""query":"loc""#), sent)
+  }
+
+  /// A reply is served whole or not at all, like a publish; a source the
+  /// manifest does not declare live is never asked; and a live plugin's
+  /// `publish` is refused, having no pushed source to carry.
+  func testASearchReplyIsServedWholeOrNotAtAll() throws {
+    let replies = """
+      case "$line" in
+      *'"query":"foreign"'*)
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Mine"},{"source":"other.items","title":"Not mine"}]}}\\n' "$id" ;;
+      *'"query":"untitled"'*)
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Mine"},{"source":"live.items","title":""}]}}\\n' "$id" ;;
+      *'"query":"extra"'*)
+        printf '{"id":%s,"result":{"ok":true,"rows":[],"more":true}}\\n' "$id" ;;
+      *'"query":"refused"'*)
+        printf '{"id":%s,"result":{"ok":false,"error":"no"}}\\n' "$id" ;;
+      *'"query":"silent"'*) : ;;
+      *'"query":"publish"'*)
+        printf '{"method":"publish","params":{"rows":[{"source":"live.items","title":"Pushed"}]}}\\n'
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Pulled"}]}}\\n' "$id" ;;
+      *)
+        printf '{"id":%s,"result":{"ok":true,"rows":[{"source":"live.items","title":"Mine"}]}}\\n' "$id" ;;
+      esac
+      """
+    let fixture = try PluginFixtureKit.make(
+      id: "livestrict",
+      manifest: PluginFixtureKit.manifest(
+        id: "livestrict",
+        extra: #""sources": [{ "name": "live.items", "type": "liveitems", "live": "per_query" }]"#),
+      script: PluginFixtureKit.script(onSearch: replies))
+    defer { fixture.cleanup() }
+    let original = PluginProcess.searchDeadlineMs
+    defer { PluginProcess.searchDeadlineMs = original }
+    PluginProcess.searchDeadlineMs = 400
+    let store = PluginCatalogStore()
+    let process = try makeProcess(fixture, store: store)
+    defer { process.stopAndWait(reason: "test") }
+    process.start()
+    XCTAssertEqual(search(process, query: "ok").map(\.title), ["Mine"])
+    for query in ["foreign", "untitled", "extra", "refused", "silent"] {
+      XCTAssertEqual(search(process, query: query).map(\.title), [], query)
+    }
+    XCTAssertEqual(
+      search(process, source: "other.items", query: "ok").count, 0, "not a declared source")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    XCTAssertEqual(search(process, query: "publish").map(\.title), ["Pulled"])
+    process.drainLifecycleQueue()
+    settleRunLoop(0.2)
+    XCTAssertNil(store.entry(for: "livestrict"), "a live plugin publishes nothing")
+  }
+
+  // MARK: 10b'. Live source changes
+
+  /// A `changed` notification is heard on main for a live source the
+  /// manifest declares, once for a burst; a source the plugin does not
+  /// declare and a malformed notification are refused.
+  func testAChangedNotificationIsHeardOnceForItsOwnLiveSource() throws {
+    let replies = """
+      case "$line" in
+      *'"query":"burst"'*)
+        printf '{"method":"changed","params":{"source":"live.items"}}\\n'
+        printf '{"method":"changed","params":{"source":"live.items"}}\\n'
+        printf '{"method":"changed","params":{"source":"live.items"}}\\n' ;;
+      *'"query":"refused"'*)
+        printf '{"method":"changed","params":{"source":"other.items"}}\\n'
+        printf '{"method":"changed","params":{"source":"live.items","rows":[]}}\\n'
+        printf '{"method":"changed","params":{"source":""}}\\n'
+        printf '{"method":"changed","params":{}}\\n' ;;
+      esac
+      printf '{"id":%s,"result":{"ok":true,"rows":[]}}\\n' "$id"
+      """
+    let fixture = try PluginFixtureKit.make(
+      id: "livechanged",
+      manifest: PluginFixtureKit.manifest(id: "livechanged", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(onSearch: replies))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    var heard: [String] = []
+    process.onLiveSourceChanged = {
+      XCTAssertTrue(Thread.isMainThread)
+      heard.append($0)
+    }
+    process.start()
+    XCTAssertEqual(search(process).count, 0)
+    XCTAssertEqual(heard, [], "a reply alone says nothing changed")
+
+    // Main is held while the burst arrives, so it costs one hop.
+    var answered = false
+    process.search(source: "live.items", query: "burst") { _ in answered = true }
+    Thread.sleep(forTimeInterval: 0.5)
+    waitUntilTrue("the burst's search answered") { answered }
+    XCTAssertEqual(heard, ["live.items"])
+
+    XCTAssertEqual(search(process, query: "refused").count, 0)
+    settleRunLoop(0.1)
+    XCTAssertEqual(heard, ["live.items"])
+    XCTAssertEqual(fixture.spawnCount(), 1, "a refused notification restarts nothing")
+  }
+
+  /// A child that is gone by the time main hears of its `changed` is not
+  /// heard: the notification belonged to that child's rows.
+  func testAChangedNotificationFromAChildThatIsGoneIsNotHeard() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "livegone",
+      manifest: PluginFixtureKit.manifest(id: "livegone", extra: Self.liveManifestExtra),
+      script: PluginFixtureKit.script(
+        onSearch: #"""
+          printf '{"method":"changed","params":{"source":"live.items"}}\n'
+          printf 'gone\n' >> "$D/gone"
+          exit 1
+          """#))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    var heard: [String] = []
+    process.onLiveSourceChanged = { heard.append($0) }
+    process.start()
+    var answered = false
+    process.search(source: "live.items", query: "") { _ in answered = true }
+    // Main is held until the child has written its notification and died.
+    let deadline = Date().addingTimeInterval(8)
+    let gone = fixture.dataDir.appendingPathComponent("gone").path
+    while !FileManager.default.fileExists(atPath: gone)
+      || process.runtimeStateSnapshot() == .running, Date() < deadline
+    {
+      Thread.sleep(forTimeInterval: 0.02)
+    }
+    Thread.sleep(forTimeInterval: 0.2)
+    waitUntilTrue("the search settled") { answered }
+    settleRunLoop(0.1)
+    XCTAssertEqual(heard, [])
+  }
+
+  // MARK: 10c. Confirmed performs
+
+  /// The consent a confirmed perform carries: handed out once, while that
+  /// perform is in flight, and gone with it.
+  func testConfirmedPerformsHandEachConsentOutOnceWhileInFlight() {
+    var performs = ConfirmedPerforms()
+    XCTAssertFalse(performs.claim(), "nothing confirmed, nothing to claim")
+    let first = performs.begin()
+    XCTAssertTrue(performs.claim())
+    XCTAssertFalse(performs.claim(), "one confirmed perform covers one action")
+    performs.end(first)
+    XCTAssertFalse(performs.claim())
+
+    let second = performs.begin()
+    performs.end(second)
+    XCTAssertFalse(performs.claim(), "an answered perform takes its consent with it")
+
+    let third = performs.begin()
+    let fourth = performs.begin()
+    XCTAssertTrue(performs.claim())
+    performs.end(third)
+    XCTAssertTrue(performs.claim(), "the other confirmed perform is still in flight")
+    XCTAssertFalse(performs.claim())
+    performs.end(fourth)
+    performs.end(fourth)
+    XCTAssertFalse(performs.claim())
+  }
+
+  /// A host call made inside a perform the user confirmed may claim that
+  /// consent, once; one made inside an unconfirmed perform, after the
+  /// confirmed one was answered, or after it timed out, may not. Only the
+  /// confirmed perform says so on the wire.
+  func testOnlyAConfirmedPerformInFlightGrantsItsConsentToAHostCall() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "consent",
+      manifest: PluginFixtureKit.manifest(
+        id: "consent",
+        extra: #""commands": [{ "command": "consent", "subcommand": "go", "description": "x" }]"#),
+      script: PluginFixtureKit.script(
+        onPerform: """
+          printf '%s\\n' "$line" >> "$D/performs"
+          case "$line" in
+          *'"late"'*)
+            sleep 0.6
+            printf '{"id":77,"method":"host.ping","params":{}}\\n'
+            ;;
+          *)
+            printf '{"id":77,"method":"host.ping","params":{}}\\n'
+            while IFS= read -r reply; do
+              case "$reply" in *'"result"'*) break ;; esac
+            done
+            printf '{"id":%s,"result":{"ok":true}}\\n' "$id"
+            ;;
+          esac
+          """))
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    defer { process.stopAndWait(reason: "test") }
+    let lock = NSLock()
+    var claims: [[Bool]] = []
+    process.onHostRequest = { _, _, _, scope, reply in
+      let asked = [scope.claimConfirmedPerform(), scope.claimConfirmedPerform()]
+      lock.lock()
+      claims.append(asked)
+      lock.unlock()
+      reply(["ok": true])
+    }
+    func claimed() -> [[Bool]] {
+      lock.lock()
+      defer { lock.unlock() }
+      return claims
+    }
+    func perform(confirmed: Bool, args: [String] = [], timeoutMs: Int? = nil)
+      -> PluginPerformOutcome?
+    {
+      let done = expectation(description: "perform")
+      var outcome: PluginPerformOutcome?
+      process.perform(
+        kind: "command", params: ["command": "consent", "subcommand": "go", "args": args],
+        confirmed: confirmed, timeoutMs: timeoutMs
+      ) {
+        outcome = $0
+        done.fulfill()
+      }
+      wait(for: [done], timeout: 8)
+      return outcome
+    }
+    process.start()
+
+    XCTAssertEqual(
+      perform(confirmed: false), .performed(pid: nil, navigationURL: nil, message: nil))
+    XCTAssertEqual(claimed(), [[false, false]], "no question was answered")
+    XCTAssertEqual(perform(confirmed: true), .performed(pid: nil, navigationURL: nil, message: nil))
+    XCTAssertEqual(claimed().last, [true, false], "the consent covers one action")
+    XCTAssertEqual(
+      perform(confirmed: false), .performed(pid: nil, navigationURL: nil, message: nil))
+    XCTAssertEqual(claimed().last, [false, false], "the confirmed perform was answered")
+
+    // A confirmed perform the plugin never answers: its consent ends at its
+    // deadline, before the call the plugin makes afterwards.
+    XCTAssertEqual(
+      perform(confirmed: true, args: ["late"], timeoutMs: 200),
+      .failed("no reply within the perform deadline"))
+    waitUntilTrue("the late host call arrived") { claimed().count == 4 }
+    XCTAssertEqual(claimed().last, [false, false], "the perform is no longer in flight")
+
+    let sent = try String(
+      contentsOf: fixture.dataDir.appendingPathComponent("performs"), encoding: .utf8
+    ).split(separator: "\n").map(String.init)
+    XCTAssertEqual(sent.count, 4)
+    XCTAssertEqual(
+      sent.map { $0.contains(#""confirmed":true"#) }, [false, true, false, true])
+    XCTAssertFalse(sent[0].contains("confirmed"), "the key is absent, never false: \(sent[0])")
   }
 
   func testRequestsCarryWhatIsLeftOfTheirDeadline() throws {
@@ -1160,6 +2148,133 @@ final class PluginProcessLifecycleTests: XCTestCase {
     XCTAssertEqual(process.runtimeStateSnapshot(), .running, "a command started it; keep it")
     XCTAssertEqual(fixture.spawnCount(), 1)
     process.stopAndWait(reason: "test")
+  }
+
+  /// A command may leave the child holding something only that process can
+  /// hold (a power assertion): a child a surface started, once it has run a
+  /// command, stays when the surface stops showing it.
+  func testStatusBoundPluginThatRanACommandWhileObservedOutlivesItsObserver() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statusheld",
+      manifest: PluginFixtureKit.manifest(id: "statusheld"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture, statusObserved: false)
+    process.start()
+    process.setStatusObserved(true)
+    waitUntilTrue("spawned once observed") { process.runtimeStateSnapshot() == .running }
+    let settled = expectation(description: "perform settles")
+    process.perform(kind: "command", params: [:]) { _ in settled.fulfill() }
+    wait(for: [settled], timeout: 8)
+
+    process.setStatusObserved(false)
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "it ran a command; keep it")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    process.stopAndWait(reason: "test")
+  }
+
+  /// The same for a child a mapping kept warm: once it has run a command, it
+  /// stays when no mapping runs it any more.
+  func testWarmStatusBoundPluginThatRanACommandOutlivesItsMapping() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statuswarmheld",
+      manifest: PluginFixtureKit.manifest(id: "statuswarmheld"),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture, statusObserved: false)
+    process.start()
+    process.setWarm(true)
+    process.prewarm()
+    waitUntilTrue("warmed while unobserved") { process.runtimeStateSnapshot() == .running }
+    let settled = expectation(description: "perform settles")
+    process.perform(kind: "command", params: [:]) { _ in settled.fulfill() }
+    wait(for: [settled], timeout: 8)
+
+    process.setWarm(false)
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "it ran a command; keep it")
+    XCTAssertEqual(fixture.spawnCount(), 1)
+    process.stopAndWait(reason: "test")
+  }
+
+  /// A status plugin whose command a mapping runs is warmed while nothing
+  /// shows it and keeps its child when the surfaces stop showing it; once no
+  /// mapping runs it, it follows its surfaces again.
+  func testWarmStatusBoundPluginRunsUnobservedUntilNoMappingRunsIt() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "statuswarm",
+      manifest: PluginFixtureKit.manifest(
+        id: "statuswarm",
+        extra: #""status": ["state"], "#
+          + #""commands": [{ "command": "statuswarm", "subcommand": "go", "description": "x" }]"#
+      ),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture, statusObserved: false)
+    process.start()
+    process.setStatusObserved(true)
+    waitUntilTrue("spawned once observed") { process.runtimeStateSnapshot() == .running }
+    process.setStatusObserved(false)
+    waitUntilTrue("not warm: stopped once unobserved") {
+      process.runtimeStateSnapshot() == .stopped
+    }
+
+    process.setWarm(true)
+    process.prewarm()
+    waitUntilTrue("warmed while unobserved") { process.runtimeStateSnapshot() == .running }
+    XCTAssertEqual(process.statusSnapshot().activation, "on_demand")
+    process.setStatusObserved(true)
+    process.setStatusObserved(false)
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .running, "a mapping keeps it warm")
+    XCTAssertEqual(fixture.spawnCount(), 2)
+
+    process.setWarm(false)
+    waitUntilTrue("stopped once no mapping runs it") {
+      process.runtimeStateSnapshot() == .stopped
+    }
+    XCTAssertEqual(fixture.spawnCount(), 2)
+    process.stopAndWait(reason: "test")
+  }
+
+  // MARK: 10b. Prewarm
+
+  func testPrewarmSpawnsOnlyAWarmOnDemandPluginBeforeItsFirstPerform() throws {
+    let fixture = try PluginFixtureKit.make(
+      id: "prewarm",
+      manifest: PluginFixtureKit.manifest(
+        id: "prewarm",
+        extra: #""commands": [{ "command": "prewarm", "subcommand": "run", "description": "x" }]"#),
+      script: PluginFixtureKit.script())
+    defer { fixture.cleanup() }
+    let process = try makeProcess(fixture)
+    process.start()
+    process.prewarm()
+    settleRunLoop(0.3)
+    XCTAssertEqual(fixture.spawnCount(), 0, "no mapping runs it: it waits for its first perform")
+
+    process.setWarm(true)
+    process.prewarm()
+    waitUntilTrue("warmed") { process.runtimeStateSnapshot() == .running }
+    XCTAssertEqual(process.statusSnapshot().activation, "on_demand")
+
+    let performed = expectation(description: "perform")
+    process.perform(kind: "command", params: ["command": "prewarm", "subcommand": "run"]) {
+      outcome in
+      XCTAssertEqual(outcome, .performed(pid: nil, navigationURL: nil, message: "fixture-done"))
+      performed.fulfill()
+    }
+    wait(for: [performed], timeout: 8)
+    process.prewarm()
+    settleRunLoop(0.3)
+    XCTAssertEqual(fixture.spawnCount(), 1, "the perform and a second prewarm reuse the child")
+    process.stopAndWait(reason: "test")
+
+    process.prewarm()
+    settleRunLoop(0.3)
+    XCTAssertEqual(process.runtimeStateSnapshot(), .stopped, "a stopped plugin stays stopped")
+    XCTAssertEqual(fixture.spawnCount(), 1)
   }
 
   // MARK: 11. Perform against a parked plugin

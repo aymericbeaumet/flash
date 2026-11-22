@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/evaluate.schema.json",
+  "title": "evaluate",
+  "description": "Host to plugin: the query a declared evaluator answers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "method",
+    "params",
+    "deadline_ms"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "method": {
+      "const": "evaluate"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      }
+    },
+    "deadline_ms": {
+      "$ref": "definitions.schema.json#/definitions/deadline_ms"
+    },
+    "trace": {
+      "$ref": "definitions.schema.json#/definitions/trace"
+    }
+  }
+}

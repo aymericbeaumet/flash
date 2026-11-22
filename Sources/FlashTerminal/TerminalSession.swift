@@ -1,6 +1,7 @@
 import AppKit
 import CFlashTerminal
 import Darwin
+import FlashCore
 import Foundation
 
 public struct TerminalConfiguration: Equatable, Sendable {
@@ -78,12 +79,12 @@ enum TerminalChildReaping {
 
   /// A child that outlived both stop deadlines is reaped when the kernel
   /// reports its exit, not by re-checking on a timer.
-  static func reapLater(pid: pid_t, completion: @escaping () -> Void) {
+  static func reapLater(pid: pid_t, completion: @escaping @Sendable () -> Void) {
     ProcessExit.reapWhenExited(pid, completion: completion)
   }
 }
 
-public final class TerminalSession {
+public final class TerminalSession: @unchecked Sendable {
   public let configuration: TerminalConfiguration
   public private(set) var state: TerminalSessionState = .idle
   public private(set) var frame: TerminalFrame?
@@ -100,6 +101,11 @@ public final class TerminalSession {
   public var onDiagnostic: ((TerminalSessionDiagnostic) -> Void)?
   private let queue = DispatchQueue(label: "com.flash.terminal.pty", qos: .userInitiated)
   private let queueKey = DispatchSpecificKey<Bool>()
+  private let publicationLock = NSLock()
+  private var publicationGeneration: UInt64 = 0
+  /// The PTY queue's run. Invalidating from the caller also drops main-queue
+  /// publications already waiting when teardown or replacement is requested.
+  private var runGeneration: UInt64 = 0
   private let buffer: TerminalBuffer
   private var descriptor: Int32 = -1
   private var child: pid_t = 0
@@ -119,7 +125,12 @@ public final class TerminalSession {
   private var encodingInput = false
   /// Queue-confined mirror of `receivedInput`.
   private var inputWritten = false
+  /// Queue-confined: the child's process group is stopped (`pause`). A stop
+  /// continues it first so it can act on its hangup.
+  private var paused = false
   private var scheduledFrame = false
+  /// Queue-confined: a redraw's frames wait for its output (`sendRedraw`).
+  private var redrawHold: RedrawHold?
   /// Queue-confined; see `setColors`.
   private var appliedColors: TerminalColors?
 
@@ -140,27 +151,38 @@ public final class TerminalSession {
   /// Stops the process and starts it again, with `environment` when given
   /// (a refreshed login environment) and the previous one otherwise.
   public func restart(environment: [String: String]? = nil) {
+    let generation = invalidatePublications()
     queue.async { [self] in
       if let environment { launchEnvironment = environment }
-      stopOnQueue()
+      stopOnQueue(publishStopped: false)
+      runGeneration = generation
       started = false
       buffer.invalidate()
       flash_vt_reset(buffer.handle)
+      publishedGeneration = 0
       startOnQueue()
     }
   }
   public func stop(completion: (() -> Void)? = nil) {
+    let generation = invalidatePublications()
+    let completion = completion.map { body in MainQueueCompletion<Void> { body() } }
     queue.async { [self] in
+      runGeneration = generation
       stopOnQueue()
-      if let completion { DispatchQueue.main.async(execute: completion) }
+      completion?.deliver {}
     }
   }
   /// Reaping uses two 200 ms deadlines; delayed kernel exits are reaped asynchronously.
   public func shutdown() {
+    let generation = invalidatePublications()
+    let stop = {
+      self.runGeneration = generation
+      self.stopOnQueue()
+    }
     if DispatchQueue.getSpecific(key: queueKey) == true {
-      stopOnQueue()
+      stop()
     } else {
-      queue.sync { stopOnQueue() }
+      queue.sync(execute: stop)
     }
   }
   /// Stops every session at once: each child gets its hangup, termination
@@ -169,10 +191,15 @@ public final class TerminalSession {
   public static func shutdown(_ sessions: [TerminalSession]) {
     let group = DispatchGroup()
     for session in sessions {
-      if DispatchQueue.getSpecific(key: session.queueKey) == true {
+      let generation = session.invalidatePublications()
+      let stop: @Sendable () -> Void = {
+        session.runGeneration = generation
         session.stopOnQueue()
+      }
+      if DispatchQueue.getSpecific(key: session.queueKey) == true {
+        stop()
       } else {
-        session.queue.async(group: group) { session.stopOnQueue() }
+        session.queue.async(group: group, execute: stop)
       }
     }
     group.wait()
@@ -221,7 +248,37 @@ public final class TerminalSession {
       publishFrame()
     }
   }
+  /// Stop the child's process group (SIGSTOP): it runs no code and costs no
+  /// CPU until `resume`, and its screen stays as it was. Its PTY keeps its
+  /// output buffered meanwhile, and a resize is delivered when it continues.
+  public func pause() {
+    queue.async { [self] in
+      guard child > 0, !paused else { return }
+      paused = true
+      flash_pty_signal(descriptor, child, SIGSTOP, true)
+    }
+  }
+  /// Continue a paused process group (SIGCONT).
+  public func resume() {
+    queue.async { [self] in
+      guard child > 0, paused else { return }
+      paused = false
+      flash_pty_signal(descriptor, child, SIGCONT, true)
+    }
+  }
   public func send(_ data: Data) { queue.async { [self] in encodeInput { enqueue(data) } } }
+  /// Send input that redraws the whole screen, a pager's reload. `less`
+  /// paints a full repaint in several writes, scrolling each line up from the
+  /// bottom, so a frame between two of them shows the page shifted; the
+  /// output this input causes publishes once, when it settles.
+  public func sendRedraw(_ data: Data) {
+    queue.async { [self] in
+      let now = DispatchTime.now().uptimeNanoseconds
+      redrawHold = RedrawHold(startedAt: now, lastOutputAt: now)
+      encodeInput { enqueue(data) }
+      checkRedrawHold()
+    }
+  }
   public func paste(_ text: String) {
     queue.async { [self] in
       var bytes = Array(text.utf8CString)
@@ -271,9 +328,10 @@ public final class TerminalSession {
   private func startOnQueue() {
     guard !started else { return }
     started = true
+    paused = false
     if inputWritten {
       inputWritten = false
-      DispatchQueue.main.async { [weak self] in self?.receivedInput = false }
+      publishOnMain { $0.receivedInput = false }
     }
     guard let command = configuration.command.first, !command.isEmpty,
       !configuration.command.contains(where: { $0.contains("\0") }),
@@ -327,13 +385,20 @@ public final class TerminalSession {
       }
       return
     }
+    let generation = runGeneration
     let reader = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
-    reader.setEventHandler { [weak self] in self?.readAvailable() }
+    reader.setEventHandler { [weak self] in
+      guard let self, self.runGeneration == generation else { return }
+      self.readAvailable()
+    }
     self.reader = reader
     let process = DispatchSource.makeProcessSource(
       identifier: child, eventMask: .exit, queue: queue)
     let pid = child
-    process.setEventHandler { [weak self] in self?.childExited(expectedPID: pid) }
+    process.setEventHandler { [weak self] in
+      guard let self, self.runGeneration == generation else { return }
+      self.childExited(expectedPID: pid)
+    }
     self.process = process
     reader.resume()
     process.resume()
@@ -371,13 +436,13 @@ public final class TerminalSession {
     guard descriptor >= 0 else { return }
     // Bound input queued behind a child that stops reading its PTY.
     guard pending.count + data.count <= 4 * 1024 * 1024 else {
-      DispatchQueue.main.async { [weak self] in self?.onInputRejected?(data.count) }
+      publishOnMain { $0.onInputRejected?(data.count) }
       return
     }
     pending.append(data)
     if encodingInput, !inputWritten {
       inputWritten = true
-      DispatchQueue.main.async { [weak self] in self?.receivedInput = true }
+      publishOnMain { $0.receivedInput = true }
     }
     flushWrites()
   }
@@ -397,8 +462,12 @@ public final class TerminalSession {
       writer?.cancel()
       writer = nil
     } else if writer == nil {
+      let generation = runGeneration
       let source = DispatchSource.makeWriteSource(fileDescriptor: descriptor, queue: queue)
-      source.setEventHandler { [weak self] in self?.flushWrites() }
+      source.setEventHandler { [weak self] in
+        guard let self, self.runGeneration == generation else { return }
+        self.flushWrites()
+      }
       writer = source
       source.resume()
     }
@@ -422,6 +491,8 @@ public final class TerminalSession {
     publishState(.exited(code: status))
   }
   private func closeSources() {
+    scheduledFrame = false
+    redrawHold = nil
     reader?.cancel()
     reader = nil
     writer?.cancel()
@@ -434,9 +505,15 @@ public final class TerminalSession {
     }
     pending.removeAll(keepingCapacity: false)
   }
-  private func stopOnQueue() {
+  private func stopOnQueue(publishStopped: Bool = true) {
     let pid = child
     if pid > 0 {
+      // A stopped process handles no signal but SIGKILL: continue it so the
+      // hangup and termination reach it and it can exit on its own terms.
+      if paused {
+        paused = false
+        flash_pty_signal(descriptor, pid, SIGCONT, true)
+      }
       flash_pty_signal(descriptor, pid, SIGHUP, true)
       flash_pty_signal(descriptor, pid, SIGTERM, true)
       let reaped = TerminalChildReaping.wait(pid: pid, timeoutMilliseconds: 200)
@@ -446,21 +523,39 @@ public final class TerminalSession {
       // Closing the master and cancelling the process source must precede final reaping.
       closeSources()
       if !reaped && !TerminalChildReaping.wait(pid: pid, timeoutMilliseconds: 200) {
-        let diagnostic = onDiagnostic
-        DispatchQueue.main.async { diagnostic?(.reapDeferred(pid: pid)) }
+        let diagnostic = onDiagnostic.map { MainQueueCompletion($0) }
+        diagnostic?.deliver { .reapDeferred(pid: pid) }
         TerminalChildReaping.reapLater(pid: pid) {
-          DispatchQueue.main.async { diagnostic?(.reaped(pid: pid)) }
+          diagnostic?.deliver { .reaped(pid: pid) }
         }
       }
     } else {
       closeSources()
     }
-    publishState(.stopped)
+    if publishStopped { publishState(.stopped) }
   }
-  private func publishState(_ state: TerminalSessionState) {
+
+  private func invalidatePublications() -> UInt64 {
+    publicationLock.withLock {
+      publicationGeneration &+= 1
+      return publicationGeneration
+    }
+  }
+
+  private func publishOnMain(_ update: @escaping @Sendable (TerminalSession) -> Void) {
+    let generation = runGeneration
     DispatchQueue.main.async { [weak self] in
-      self?.state = state
-      self?.onStateChange?(state)
+      guard let self,
+        self.publicationLock.withLock({ self.publicationGeneration == generation })
+      else { return }
+      update(self)
+    }
+  }
+
+  private func publishState(_ state: TerminalSessionState) {
+    publishOnMain {
+      $0.state = state
+      $0.onStateChange?(state)
     }
   }
   /// The screen as it is now. A hidden session keeps parsing output without
@@ -486,7 +581,7 @@ public final class TerminalSession {
     queue.async { [weak self] in
       guard let self, self.wantsFrames != wants else { return }
       self.wantsFrames = wants
-      if wants { self.publishFrame() }
+      if wants, self.redrawHold == nil { self.publishFrame() }
     }
   }
 
@@ -497,6 +592,10 @@ public final class TerminalSession {
   private var lastFrameUptime: UInt64 = 0
   private var publishedGeneration: UInt64 = 0
   private func scheduleFrame() {
+    if redrawHold != nil {
+      redrawHold?.output(at: DispatchTime.now().uptimeNanoseconds)
+      return
+    }
     guard wantsFrames, !scheduledFrame else { return }
     let elapsed = DispatchTime.now().uptimeNanoseconds &- lastFrameUptime
     guard elapsed < Self.frameInterval else {
@@ -504,21 +603,67 @@ public final class TerminalSession {
       return
     }
     scheduledFrame = true
+    let generation = runGeneration
     queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.frameInterval - elapsed))) {
       [weak self] in
-      guard let self else { return }
+      guard let self, self.runGeneration == generation else { return }
       self.scheduledFrame = false
       self.publishFrame()
     }
   }
+  /// A redraw's output settles once it has been quiet for `settle`, or at
+  /// `cap` however busy it stays; until then no frame publishes, and then
+  /// one does. Each check re-arms at most until the cap.
+  struct RedrawHold {
+    static let settle: UInt64 = 3 * frameInterval
+    static let cap: UInt64 = 500_000_000
+    let startedAt: UInt64
+    var lastOutputAt: UInt64
+    var sawOutput = false
+    var checkScheduled = false
+
+    mutating func output(at now: UInt64) {
+      lastOutputAt = now
+      sawOutput = true
+    }
+
+    /// When to look again, or nil once the output has settled.
+    func nextCheck(at now: UInt64) -> UInt64? {
+      let deadline = startedAt &+ Self.cap
+      guard now < deadline else { return nil }
+      guard sawOutput else { return min(now &+ Self.settle, deadline) }
+      let settled = lastOutputAt &+ Self.settle
+      return now >= settled ? nil : min(settled, deadline)
+    }
+  }
+
+  private func checkRedrawHold() {
+    guard var hold = redrawHold, !hold.checkScheduled else { return }
+    let now = DispatchTime.now().uptimeNanoseconds
+    guard let next = hold.nextCheck(at: now) else {
+      redrawHold = nil
+      publishFrame()
+      return
+    }
+    hold.checkScheduled = true
+    redrawHold = hold
+    let generation = runGeneration
+    queue.asyncAfter(deadline: .now() + .nanoseconds(Int(next &- now))) { [weak self] in
+      guard let self, self.runGeneration == generation, self.redrawHold != nil else { return }
+      self.redrawHold?.checkScheduled = false
+      self.checkRedrawHold()
+    }
+  }
+
   private func publishFrame() {
     guard wantsFrames, let snapshot = buffer.snapshot() else { return }
     lastFrameUptime = DispatchTime.now().uptimeNanoseconds
     guard snapshot.generation != publishedGeneration else { return }
     publishedGeneration = snapshot.generation
-    DispatchQueue.main.async { [weak self] in
-      self?.frame = snapshot
-      self?.onFrame?(snapshot)
+    publishOnMain { session in
+      if let current = session.frame, current.generation > snapshot.generation { return }
+      session.frame = snapshot
+      session.onFrame?(snapshot)
     }
   }
 }

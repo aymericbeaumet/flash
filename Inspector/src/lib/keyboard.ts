@@ -1,13 +1,33 @@
+import table from "./topic-categories.json" with { type: "json" };
 import type { KeyboardState, MappingRow } from "./types";
 
 /** The modifier names a chord may carry, as `flash.toml` spells them. */
 const modifierNames = new Set(["cmd", "ctrl", "alt", "shift", "hyper", "fn"]);
 
+/** The function keys, `<f1>` to `<f20>`; the board draws F1–F12 beside Escape. */
+const functionKeys = Array.from({ length: 20 }, (_, index) => `f${index + 1}`);
+
 /** Named keys inside angle brackets and in chords, mapped to the key cap they sit on. */
 const namedKeys: Record<string, string> = {
-  space: "space", return: "return", enter: "return", tab: "tab", escape: "esc", esc: "esc",
-  backspace: "backspace", delete: "backspace", plus: "+", minus: "-", lt: "<", gt: ">",
-  bar: "|", bslash: "\\", left: "←", right: "→", up: "↑", down: "↓",
+  space: "space",
+  return: "return",
+  enter: "return",
+  tab: "tab",
+  escape: "esc",
+  esc: "esc",
+  backspace: "backspace",
+  delete: "backspace",
+  plus: "+",
+  minus: "-",
+  lt: "<",
+  gt: ">",
+  bar: "|",
+  bslash: "\\",
+  left: "←",
+  right: "→",
+  up: "↑",
+  down: "↓",
+  ...Object.fromEntries(functionKeys.map((name) => [name, name])),
 };
 
 export interface ParsedKey {
@@ -70,7 +90,8 @@ function tokenize(key: string): string[] {
 function capFor(token: string, leader: string): string | null {
   if (token.startsWith("<") && token.endsWith(">")) {
     const name = token.slice(1, -1).toLowerCase();
-    if (name === "leader") return leader ? capFor(leader.startsWith("<") ? leader : `<${leader}>`, "") : null;
+    if (name === "leader")
+      return leader ? capFor(leader.startsWith("<") ? leader : `<${leader}>`, "") : null;
     return namedKeys[name] ?? null;
   }
   const lower = token.toLowerCase();
@@ -91,7 +112,10 @@ export interface KeySlot {
 }
 
 /** The punctuation a layout puts beside its ten-key block on a US ANSI board. */
-const ansiExtras: Record<string, { number: [string, string]; top: [string, string, string]; home: string }> = {
+const ansiExtras: Record<
+  string,
+  { number: [string, string]; top: [string, string, string]; home: string }
+> = {
   qwerty: { number: ["-", "="], top: ["[", "]", "\\"], home: "'" },
   colemak: { number: ["-", "="], top: ["[", "]", "\\"], home: "'" },
   dvorak: { number: ["[", "]"], top: ["/", "=", "\\"], home: "-" },
@@ -104,17 +128,46 @@ export function ansiRows(keyboard: KeyboardState): KeySlot[][] {
   const extras = ansiExtras[keyboard.layout] ?? ansiExtras.qwerty;
   const key = (cap: string, units = 1): KeySlot => ({ cap, label: cap, units });
   const block = (row: number) => [...(keyboard.rows[row] ?? "")].map((cap) => key(cap));
-  const modifier = (name: KeySlot["modifier"] & string, label: string, units: number): KeySlot => ({ cap: name, label, units, modifier: name });
+  const modifier = (name: KeySlot["modifier"] & string, label: string, units: number): KeySlot => ({
+    cap: name,
+    label,
+    units,
+    modifier: name,
+  });
   return [
-    [key("esc")],
-    [key("`"), ...block(0), key(extras.number[0]), key(extras.number[1]), { cap: "backspace", label: "⌫", units: 2 }],
-    [{ cap: "tab", label: "tab", units: 1.5 }, ...block(1), key(extras.top[0]), key(extras.top[1]), key(extras.top[2], 1.5)],
-    [{ cap: "caps", label: "caps", units: 1.75, inert: true }, ...block(2), key(extras.home), { cap: "return", label: "return", units: 2.25 }],
+    [
+      key("esc"),
+      ...functionKeys.slice(0, 12).map((cap) => ({ cap, label: cap.toUpperCase(), units: 1 })),
+    ],
+    [
+      key("`"),
+      ...block(0),
+      key(extras.number[0]),
+      key(extras.number[1]),
+      { cap: "backspace", label: "⌫", units: 2 },
+    ],
+    [
+      { cap: "tab", label: "tab", units: 1.5 },
+      ...block(1),
+      key(extras.top[0]),
+      key(extras.top[1]),
+      key(extras.top[2], 1.5),
+    ],
+    [
+      { cap: "caps", label: "caps", units: 1.75, inert: true },
+      ...block(2),
+      key(extras.home),
+      { cap: "return", label: "return", units: 2.25 },
+    ],
     [modifier("shift", "⇧ shift", 2.25), ...block(3), modifier("shift", "⇧ shift", 2.75)],
     [
-      modifier("ctrl", "⌃ control", 1.5), modifier("alt", "⌥ option", 1.25), modifier("cmd", "⌘ command", 1.5),
+      modifier("ctrl", "⌃ control", 1.5),
+      modifier("alt", "⌥ option", 1.25),
+      modifier("cmd", "⌘ command", 1.5),
       { cap: "space", label: "space", units: 6.5 },
-      modifier("cmd", "⌘ command", 1.5), modifier("alt", "⌥ option", 1.25), modifier("ctrl", "⌃ control", 1.5),
+      modifier("cmd", "⌘ command", 1.5),
+      modifier("alt", "⌥ option", 1.25),
+      modifier("ctrl", "⌃ control", 1.5),
     ],
   ];
 }
@@ -126,25 +179,72 @@ export type BoardView = "bindings" | "alphabet" | "grid" | "zones";
 export const mappingModes: { id: string; label: string; summary: string }[] = [
   { id: "all", label: "All", summary: "Every mapping, in every mode." },
   { id: "normal", label: "Normal", summary: "Navigate and act; unmapped keys are swallowed." },
-  { id: "hold", label: "Hold", summary: "A held mouse button for dragging or text selection: nudge, jump, copy, cut, drop or put it back." },
+  {
+    id: "text",
+    label: "Text",
+    summary:
+      "NORMAL in a field you engaged (left INSERT there, clicked it, gi, v): Vim's motions over NORMAL's keys; Escape hands them back.",
+  },
+  {
+    id: "visual",
+    label: "Visual",
+    summary:
+      "A selection in the focused text: the motions grow it, these keys copy it or paste over it.",
+  },
+  {
+    id: "hold",
+    label: "Hold",
+    summary:
+      "A held mouse button for dragging or text selection: nudge, jump, copy, paste over, drop or put it back.",
+  },
   { id: "hyper", label: "Hyper", summary: "While the hyper key is held." },
   { id: "insert", label: "Insert", summary: "Typing in an app; only these keys are Flash's." },
   { id: "command", label: "Command", summary: "The command line is open." },
   { id: "terminal", label: "Terminal", summary: "A terminal popup has the keyboard." },
 ];
 
-/** The mapping scopes a mode reads: its own and `all`. HOLD reads
- * its own table first, then NORMAL's. */
+/** The mapping scopes a mode reads: its own and `all`. HOLD, and NORMAL in
+ * editable text (`text`), read their own table first, then NORMAL's; a layer
+ * (`layers.<name>`) its own. */
 export function scopesForMode(mode: string | undefined): string[] {
   switch (mode) {
-    case "normal": return ["normal", "all"];
-    case "hold": return ["hold", "normal", "all"];
-    case "hyper": return ["hyper"];
-    case "insert": return ["insert", "all"];
-    case "command": return ["command", "all"];
-    case "terminal": return ["terminal", "all"];
-    default: return ["all"];
+    case "normal":
+      return ["normal", "all"];
+    case "hold":
+      return ["hold", "normal", "all"];
+    case "text":
+      return ["text", "normal", "all"];
+    case "visual":
+      return ["visual", "all"];
+    case "hyper":
+      return ["hyper"];
+    case "insert":
+      return ["insert", "all"];
+    case "command":
+      return ["command", "all"];
+    case "terminal":
+      return ["terminal", "all"];
+    default:
+      return mode?.startsWith("layers.") ? [mode, "all"] : ["all"];
   }
+}
+
+/** The layers (`[mode.layers.<name>]`) among the rows, each a mode of its
+ * own after the built-in ones, by name. */
+export function layerModes(rows: MappingRow[]): { id: string; label: string; summary: string }[] {
+  const names = [
+    ...new Set(
+      rows
+        .filter((row) => row.scope.startsWith("layers."))
+        .map((row) => row.scope.slice("layers.".length)),
+    ),
+  ];
+  return names.sort().map((name) => ({
+    id: `layers.${name}`,
+    label: name,
+    summary:
+      "A layer of yours, entered by mode layer: its keys, Escape and the all-mode chords act.",
+  }));
 }
 
 export interface KeyBinding {
@@ -153,7 +253,11 @@ export interface KeyBinding {
 }
 
 /** The bindings of `scopes`, grouped by the key cap they start on. */
-export function bindingsByCap(rows: MappingRow[], scopes: string[], leader: string): Map<string, KeyBinding[]> {
+export function bindingsByCap(
+  rows: MappingRow[],
+  scopes: string[],
+  leader: string,
+): Map<string, KeyBinding[]> {
   const byCap = new Map<string, KeyBinding[]>();
   const wanted = new Set(scopes);
   for (const row of rows) {
@@ -190,7 +294,14 @@ export function keySteps(key: string, leader: string): KeyStep[] | null {
   if (!trimmed) return null;
   const chord = parseChord(trimmed);
   if (chord) {
-    return [{ cap: chord.cap, modifiers: [...chord.modifiers].sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b)) }];
+    return [
+      {
+        cap: chord.cap,
+        modifiers: [...chord.modifiers].sort(
+          (a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b),
+        ),
+      },
+    ];
   }
   const steps: KeyStep[] = [];
   for (const token of tokenize(trimmed)) {
@@ -203,22 +314,35 @@ export function keySteps(key: string, leader: string): KeyStep[] | null {
 }
 
 function sameStep(a: KeyStep, b: KeyStep): boolean {
-  return a.cap === b.cap && a.modifiers.length === b.modifiers.length && a.modifiers.every((m, i) => m === b.modifiers[i]);
+  return (
+    a.cap === b.cap &&
+    a.modifiers.length === b.modifiers.length &&
+    a.modifiers.every((m, i) => m === b.modifiers[i])
+  );
 }
 
 function startsWith(steps: KeyStep[], path: KeyStep[]): boolean {
   return steps.length >= path.length && path.every((step, index) => sameStep(step, steps[index]));
 }
 
-const bracketed: Record<string, string> = { space: "<space>", return: "<return>", tab: "<tab>", esc: "<esc>", backspace: "<backspace>" };
+const bracketed: Record<string, string> = {
+  space: "<space>",
+  return: "<return>",
+  tab: "<tab>",
+  esc: "<esc>",
+  backspace: "<backspace>",
+};
 
 /** `steps` in `flash.toml` key syntax: `G` for a shifted letter, `<space>` in a sequence. */
 export function stepsToKey(steps: KeyStep[]): string {
   return steps
     .map((step) => {
       const letter = /^[a-z]$/.test(step.cap);
-      if (letter && step.modifiers.length === 1 && step.modifiers[0] === "shift") return step.cap.toUpperCase();
+      if (letter && step.modifiers.length === 1 && step.modifiers[0] === "shift")
+        return step.cap.toUpperCase();
       if (step.modifiers.length) return [...step.modifiers, step.cap].join("+");
+      // Bare, `f12` is the keys f, 1, 2: a function key is always bracketed.
+      if (functionKeys.includes(step.cap)) return `<${step.cap}>`;
       return bracketed[step.cap] ?? step.cap;
     })
     .join("");
@@ -233,7 +357,12 @@ export interface CapBindings {
 }
 
 /** Every key that acts after the prefix `path` while `layer` is held. */
-export function capsAt(rows: MappingRow[], path: KeyStep[], layer: string[], leader: string): Map<string, CapBindings> {
+export function capsAt(
+  rows: MappingRow[],
+  path: KeyStep[],
+  layer: string[],
+  leader: string,
+): Map<string, CapBindings> {
   const wanted = [...layer].sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
   const caps = new Map<string, CapBindings>();
   for (const row of rows) {
@@ -250,7 +379,12 @@ export function capsAt(rows: MappingRow[], path: KeyStep[], layer: string[], lea
 }
 
 /** The rows under the prefix `path`, and past `picked` when a key is picked. */
-export function rowsUnder(rows: MappingRow[], path: KeyStep[], picked: KeyStep | null, leader: string): MappingRow[] {
+export function rowsUnder(
+  rows: MappingRow[],
+  path: KeyStep[],
+  picked: KeyStep | null,
+  leader: string,
+): MappingRow[] {
   const prefix = picked ? [...path, picked] : path;
   if (!prefix.length) return rows;
   return rows.filter((row) => {
@@ -262,7 +396,7 @@ export function rowsUnder(rows: MappingRow[], path: KeyStep[], picked: KeyStep |
 /** What an action is for, so bindings group by purpose. */
 export const categories: { id: string; label: string }[] = [
   { id: "pointer", label: "Click and point" },
-  { id: "scroll", label: "Scroll" },
+  { id: "scroll", label: "Move and scroll" },
   { id: "tabs", label: "Tabs, pages and apps" },
   { id: "windows", label: "Windows" },
   { id: "modes", label: "Modes and the command line" },
@@ -272,27 +406,33 @@ export const categories: { id: string; label: string }[] = [
   { id: "other", label: "Everything else" },
 ];
 
+/**
+ * Every Flash topic (`flash <topic> <action>`), with the category its
+ * commands fall in. Any other topic is a plugin command: a plugin cannot take
+ * one of these names. The table is the resident's
+ * (`URLEventHandler.topicsByCategory`), written by `mise run build:schema`.
+ */
+export const topicCategories: Record<string, string> = table;
+
 export function categoryOf(action: string): string {
   const words = action.trim().split(/\s+/);
-  if (words[0] !== "flash" || words.length < 2) return "programs";
-  const verb = words[1];
-  if (words.length >= 3 && !words[2].startsWith("--") && !verb.includes("_")) return "plugins";
-  if (/^(mouse_|hints_)/.test(verb)) return "pointer";
-  if (verb.startsWith("scroll_")) return "scroll";
-  if (/^(tab_|app_|history_|pane_|resource_|page_)/.test(verb) || ["reload", "find", "undo", "redo"].includes(verb)) return "tabs";
-  if (verb.startsWith("window_")) return "windows";
-  if (/^(enter_|leave_|popup_|terminal_|command|candidate_finder|help)/.test(verb)) return "modes";
-  if (/^(system_key|function_key|arrow|send_key|volume|brightness|media)/.test(verb)) return "system";
-  return "other";
+  if (words[0] !== "flash" || words.length < 3) return "programs";
+  return topicCategories[words[1]] ?? "plugins";
 }
 
-/** A keycap's few words: the verb, then the values of its flags. */
+/** A keycap's few words: the topic and action, then the values of its flags. */
 export function keycapLabel(action: string): string {
   const words = action.trim().split(/\s+/);
   if (words[0] !== "flash" || words.length < 2) return action;
   return words
     .slice(1)
-    .map((word) => (word.startsWith("--") ? (word.includes("=") ? word.slice(word.indexOf("=") + 1) : word.slice(2)) : word))
+    .map((word) =>
+      word.startsWith("--")
+        ? word.includes("=")
+          ? word.slice(word.indexOf("=") + 1)
+          : word.slice(2)
+        : word,
+    )
     .join(" ")
     .replace(/_/g, " ");
 }
@@ -300,7 +440,11 @@ export function keycapLabel(action: string): string {
 /** The `flash.toml` lines that rebind or remove `row`'s key, in its own table. */
 export function mappingSnippet(row: MappingRow): string {
   const key = JSON.stringify(row.key);
-  const argv = row.action.trim().split(/\s+/).map((word) => JSON.stringify(word)).join(", ");
+  const argv = row.action
+    .trim()
+    .split(/\s+/)
+    .map((word) => JSON.stringify(word))
+    .join(", ");
   return `[mode.${row.scope}.mappings]\n${key} = [${argv}]  # change the command\n# ${key} = false  # or remove the key`;
 }
 
@@ -315,7 +459,10 @@ export interface PhaseKeys {
 }
 
 /** What every key does while Flash is in `phase`. */
-export function phaseKeys(phase: string | undefined, keyboard: KeyboardState | undefined): PhaseKeys {
+export function phaseKeys(
+  phase: string | undefined,
+  keyboard: KeyboardState | undefined,
+): PhaseKeys {
   const keys = new Map<string, string>();
   const specials = new Map<string, string>();
   const heat = new Map<string, number>();
@@ -326,9 +473,13 @@ export function phaseKeys(phase: string | undefined, keyboard: KeyboardState | u
     case "bigram":
     case "search": {
       for (const [cap, value] of alphabetHeat(keyboard)) heat.set(cap, value);
-      for (const cap of keyboard.alphabet) keys.set(cap, phase === "search" ? "type to filter" : "hint label");
+      for (const cap of keyboard.alphabet)
+        keys.set(cap, phase === "search" ? "type to filter" : "hint label");
       specials.set("esc", "cancel");
-      specials.set("backspace", phase === "search" ? "erase" : "undo a key, or back to the surface before");
+      specials.set(
+        "backspace",
+        phase === "search" ? "erase" : "undo a key, or back to the surface before",
+      );
       if (phase === "labels") {
         specials.set("tab", "same click on the grid; with Shift, across the screen");
       }
@@ -339,12 +490,14 @@ export function phaseKeys(phase: string | undefined, keyboard: KeyboardState | u
       break;
     }
     case "grid": {
-      for (const row of keyboard.grid_keys) for (const cap of row) keys.set(cap, "zoom into that cell");
+      for (const row of keyboard.grid_keys)
+        for (const cap of row) keys.set(cap, "zoom into that cell");
       keys.set(nav.left, "bisect: keep the left half");
       keys.set(nav.down, "bisect: keep the bottom half");
       keys.set(nav.up, "bisect: keep the top half");
       keys.set(nav.right, "bisect: keep the right half");
-      for (const quadrant of keyboard.navigation.quadrants) for (const cap of quadrant) keys.set(cap, "bisect: keep that quarter");
+      for (const quadrant of keyboard.navigation.quadrants)
+        for (const cap of quadrant) keys.set(cap, "bisect: keep that quarter");
       keys.set("`", "toggle cursor-follow");
       specials.set("space", "zoom into the centre");
       specials.set("return", "click the centre now");
@@ -358,7 +511,8 @@ export function phaseKeys(phase: string | undefined, keyboard: KeyboardState | u
       keys.set(nav.right, "snap to the right edge");
       keys.set(nav.up, "snap to the top edge");
       keys.set(nav.down, "snap to the bottom edge");
-      for (const digit of "123456789") keys.set(digit, keyboard.adjust_digits === "grid" ? "keypad cell" : "tenths of the width");
+      for (const digit of "123456789")
+        keys.set(digit, keyboard.adjust_digits === "grid" ? "keypad cell" : "tenths of the width");
       keys.set("0", "back to the centre");
       specials.set("return", "click here");
       specials.set("space", "click here");
@@ -385,6 +539,15 @@ export function phaseKeys(phase: string | undefined, keyboard: KeyboardState | u
       specials.set("esc", "no");
       break;
     }
+    case "window_switcher": {
+      for (const [cap, value] of alphabetHeat(keyboard)) heat.set(cap, value);
+      for (const cap of keyboard.alphabet) keys.set(cap, "switch to that window");
+      specials.set("tab", "next window; with Shift, the previous one");
+      specials.set("return", "switch to the selected window");
+      specials.set("backspace", "undo a label key");
+      specials.set("esc", "close the list");
+      break;
+    }
     default:
       break;
   }
@@ -405,7 +568,10 @@ export function alphabetHeat(keyboard: KeyboardState): Map<string, number> {
 }
 
 /** The zone key of `label_order = "zones"` for a key cap, when the cap is one. */
-export function zoneOf(keyboard: KeyboardState | undefined, cap: string): { row: number; column: number; rows: number; columns: number } | null {
+export function zoneOf(
+  keyboard: KeyboardState | undefined,
+  cap: string,
+): { row: number; column: number; rows: number; columns: number } | null {
   if (!keyboard || keyboard.label_order !== "zones") return null;
   for (const [row, keys] of keyboard.zone_rows.entries()) {
     const column = [...keys].indexOf(cap);

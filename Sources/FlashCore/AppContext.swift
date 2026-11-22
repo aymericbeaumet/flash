@@ -12,7 +12,7 @@ public struct AppContext: @unchecked Sendable {
     /// The app's top-level elements that meet `frontWindowFrame`: a surface
     /// that is not the app's focused window, such as a system dialog in front
     /// of another app, a Picture in Picture player, or the Stage Manager strip
-    /// (`mouse_target --scope=screen`).
+    /// (`mouse target --scope=screen`).
     case elementsInFrame
     /// The app's open menus (a context menu and its open submenus), which
     /// are children of the application, not of any window: `f` while a
@@ -27,6 +27,47 @@ public struct AppContext: @unchecked Sendable {
     {
       openMenuPID == targetPID && tapLive ? .openMenus : .focusedWindow
     }
+  }
+
+  public struct Display: Sendable, Equatable {
+    public let frame: CGRect
+    public let scale: CGFloat
+
+    public init(frame: CGRect, scale: CGFloat) {
+      self.frame = frame
+      self.scale = scale
+    }
+  }
+
+  /// Screen geometry captured on main, safe to use during background discovery.
+  public let displays: [Display]
+
+  /// Match the window's largest display overlap; do not guess across an ambiguous boundary.
+  public var displayScale: CGFloat? {
+    guard !frontWindowFrame.isEmpty, !frontWindowFrame.isInfinite,
+      [
+        frontWindowFrame.minX, frontWindowFrame.minY, frontWindowFrame.width,
+        frontWindowFrame.height,
+      ].allSatisfy({ $0.isFinite })
+    else { return nil }
+    var largestArea: CGFloat = 0
+    var scales: Set<CGFloat> = []
+    for display in displays {
+      let intersection = frontWindowFrame.intersection(display.frame)
+      guard !intersection.isEmpty, !intersection.isInfinite else { continue }
+      let area = intersection.width * intersection.height
+      guard area.isFinite, area > 0 else { continue }
+      if area > largestArea {
+        largestArea = area
+        scales = [display.scale]
+      } else if area == largestArea {
+        scales.insert(display.scale)
+      }
+    }
+    guard scales.count == 1, let scale = scales.first, scale.isFinite, scale > 0 else {
+      return nil
+    }
+    return scale
   }
 
   public let bundleIdentifier: String
@@ -48,6 +89,7 @@ public struct AppContext: @unchecked Sendable {
     runningApp: NSRunningApplication,
     frontWindowFrame: CGRect,
     allScreensFrame: CGRect,
+    displays: [Display] = [],
     walkRoot: WalkRoot = .focusedWindow,
     walkedWindow: AXUIElement? = nil,
     menus: [AXUIElement] = []
@@ -57,6 +99,7 @@ public struct AppContext: @unchecked Sendable {
     self.runningApp = runningApp
     self.frontWindowFrame = frontWindowFrame
     self.allScreensFrame = allScreensFrame
+    self.displays = displays
     self.walkRoot = walkRoot
     self.walkedWindow = walkedWindow
     self.menus = menus

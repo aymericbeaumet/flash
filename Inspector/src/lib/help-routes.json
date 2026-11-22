@@ -1,0 +1,4 @@
+{
+  "pages": ["docs", "mappings", "commands", "plugins", "monitors", "telemetry", "state", "logs", "clipboard", "search"],
+  "detailPages": ["plugins"]
+}

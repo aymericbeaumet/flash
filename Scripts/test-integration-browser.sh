@@ -10,12 +10,12 @@ set -euo pipefail
 #   3. Build + codesign flash-vimium-oracle
 #   4. Run it, forwarding any extra args
 #
-# Usage:
-#   ./Scripts/test-integration-browser.sh
-#   ./Scripts/test-integration-browser.sh --fixture baseline-synthetic-001
-#   ./Scripts/test-integration-browser.sh --jobs 4
-#   ./Scripts/test-integration-browser.sh --update-allow-list
-#   ./Scripts/test-integration-browser.sh --setup-only
+# Usage (the test:integration:browser task):
+#   mise run test:integration:browser
+#   mise run test:integration:browser -- --fixture baseline-synthetic-001
+#   mise run test:integration:browser -- --jobs 4
+#   mise run test:integration:browser -- --update-allow-list
+#   mise run test:integration:browser -- --setup-only
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
@@ -74,7 +74,7 @@ if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null |
   grep -q "\"$SIGN_IDENTITY\""; then
   cat <<EOF >&2
 ERROR: signing identity "$SIGN_IDENTITY" not found in $KEYCHAIN_PATH.
-Run Scripts/install.sh --dev once first — it creates the stable dev
+Run mise run install:dev once first — it creates the stable dev
 code-signing identity used by every Flash binary.
 EOF
   exit 1
@@ -173,9 +173,9 @@ EOF
 
 # -- 3. build + bundle + codesign ----------------------------------------
 echo "==> Building $BIN_NAME (release)"
-swift build -c release --product "$BIN_NAME"
+swift build --force-resolved-versions -c release --product "$BIN_NAME"
 
-BIN_PATH="$(swift build -c release --show-bin-path)/$BIN_NAME"
+BIN_PATH="$(swift build --force-resolved-versions -c release --show-bin-path)/$BIN_NAME"
 if [[ ! -f "$BIN_PATH" ]]; then
   echo "ERROR: built binary not at expected path: $BIN_PATH" >&2
   exit 1
@@ -211,7 +211,7 @@ cat >"$STAGING_APP/Contents/Info.plist" <<EOF
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

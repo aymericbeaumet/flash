@@ -248,7 +248,7 @@ final class TerminalInputMappingHandler<Origin: Equatable> {
 
   static func atoms(for event: NSEvent, mappings: CompiledMappings) -> [String] {
     guard event.type == .keyDown else { return [] }
-    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let flags = event.modifierFlags.intersection(.modifierKeys)
     if !flags.intersection([.command, .control, .option]).isEmpty {
       return mappings.physicalKeyAtoms(
         virtualKey: UInt32(event.keyCode), cgFlags: CGEventFlags(rawValue: UInt64(flags.rawValue))

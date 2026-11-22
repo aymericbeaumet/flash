@@ -1,7 +1,7 @@
 import Foundation
 
 /// Recent hint activations per app, the in-memory record behind `flash
-/// status` (`hints`) and `flash doctor` (`hint_activations`). Owned by
+/// status` (`hints`) and `flash resident doctor` (`hint_activations`). Owned by
 /// `AppDelegate` on the main thread and fed from the same measurements as
 /// `[latency] hints_visible` / `hints_empty`, so it costs one array write per
 /// activation. Bounded twice over: each app keeps its last `samplesPerApp`

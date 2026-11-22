@@ -255,7 +255,7 @@ final class SourceRegistryTests: XCTestCase {
             candidatesHandler: { _ in
               [
                 Candidate(
-                  kind: CandidateFinder.browserTabKind,
+                  kind: .plugin("browser_tab"),
                   sourceID: "native.tabs",
                   source: "tabs",
                   pid: nil, title: "Native Tab", subtitle: "tab",
@@ -278,7 +278,7 @@ final class SourceRegistryTests: XCTestCase {
             candidatesHandler: { _ in
               [
                 Candidate(
-                  kind: CandidateFinder.emojiKind,
+                  kind: .plugin("emoji"),
                   sourceID: "plugin:reference",
                   source: "emoji",
                   pid: nil,
@@ -321,7 +321,12 @@ final class SourceRegistryTests: XCTestCase {
         ]
       })
 
-    XCTAssertEqual(registry.registeredCandidateSourceLabels(), ["apps", "firefox.tabs"])
+    XCTAssertEqual(
+      registry.registeredResourceTypeProviders().map {
+        "\($0.type):\($0.providers.joined(separator: ","))"
+      }, ["apps:", "tabs:firefox"])
+    XCTAssertEqual(
+      registry.resourceTypesBySource(), ["apps": "apps", "firefox.tabs": "tabs"])
   }
 
   func testRegisteredCandidateSourceDescriptorsUseDeclarations() {
@@ -332,7 +337,7 @@ final class SourceRegistryTests: XCTestCase {
             identifier: "core.apps",
             capabilities: [.candidates],
             candidateSourceDescriptors: [
-              CandidateSourceDescriptor(name: "core.apps", kind: .locations)
+              CandidateSourceDescriptor(name: "core.apps", type: "apps", kind: .locations)
             ])
         }
       ],
@@ -344,7 +349,7 @@ final class SourceRegistryTests: XCTestCase {
             identifier: "plugin:tmux",
             capabilities: [.candidates],
             candidateSourceDescriptors: [
-              CandidateSourceDescriptor(name: "tmux.windows", kind: .locations)
+              CandidateSourceDescriptor(name: "tmux.windows", type: "terminals", kind: .locations)
             ])
         ]
       })
@@ -352,8 +357,8 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(
       registry.registeredCandidateSourceDescriptors(),
       [
-        CandidateSourceDescriptor(name: "core.apps", kind: .locations),
-        CandidateSourceDescriptor(name: "tmux.windows", kind: .locations),
+        CandidateSourceDescriptor(name: "core.apps", type: "apps", kind: .locations),
+        CandidateSourceDescriptor(name: "tmux.windows", type: "terminals", kind: .locations),
       ])
   }
 
@@ -445,6 +450,151 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertFalse(collection.allowsFallback)
   }
 
+  /// An activation asks a provider that answers later without holding the
+  /// queue: other work runs while the answer is out, and the chain goes on,
+  /// on the queue, once it is in.
+  func testADeferredProviderIsAskedWithoutHoldingTheQueue() throws {
+    let context = try chainContext()
+    let queue = DispatchQueue(label: "flash.tests.hint-chain")
+    let tmux = DeferredStubSource(
+      identifier: "plugin:tmux", priority: 20, capabilities: [.jumpTargets],
+      readinessPolicy: .volatile, fallsBackOnEmptyDiscovery: true,
+      supportsHandler: { _ in true },
+      discoverHandler: { _ in
+        XCTFail("a deferred provider is never asked to block")
+        return []
+      })
+    let accessibility = StubSource(
+      identifier: "accessibility", priority: 10, capabilities: [.jumpTargets],
+      readinessPolicy: .continuous, supportsHandler: { _ in true },
+      discoverHandler: { context in
+        dispatchPrecondition(condition: .onQueue(queue))
+        return [Self.button(pid: context.processID)]
+      })
+
+    let collected = expectation(description: "the chain completes")
+    var collection: AppMonitor.FocusedTargetCollection?
+    queue.async {
+      AppMonitor.collectFocusedTargets(
+        context: context, providers: [tmux, accessibility], on: queue
+      ) { result in
+        dispatchPrecondition(condition: .onQueue(queue))
+        collection = result
+        collected.fulfill()
+      }
+    }
+    // The queue is free while the plugin's answer is out.
+    let ranMeanwhile = expectation(description: "other work runs on the queue")
+    queue.async {
+      XCTAssertTrue(tmux.isPending)
+      XCTAssertNil(collection)
+      ranMeanwhile.fulfill()
+    }
+    wait(for: [ranMeanwhile], timeout: 2)
+
+    // The answer arrives on another queue: an explicit empty falls through.
+    DispatchQueue.global().async { tmux.answer([]) }
+    wait(for: [collected], timeout: 2)
+    let result = try XCTUnwrap(queue.sync { collection })
+    XCTAssertEqual(tmux.asked, 1)
+    XCTAssertEqual(result.attemptedProviders.map(\.identifier), ["plugin:tmux", "accessibility"])
+    XCTAssertEqual(result.targets.map(\.target.id), ["button"])
+    XCTAssertEqual(result.targets.map(\.providerOrder), [1])
+    XCTAssertFalse(result.allowsFallback)
+  }
+
+  /// The deferred chain decides what the waiting one decides: the first
+  /// provider with targets owns the context, an authoritative empty ends
+  /// it, and a chain that only declined allows the fallback.
+  func testTheDeferredChainDecidesWhatTheWaitingChainDecides() throws {
+    let context = try chainContext()
+    let queue = DispatchQueue(label: "flash.tests.hint-chain")
+    func deferred(fallsBack: Bool) -> DeferredStubSource {
+      DeferredStubSource(
+        identifier: "plugin:tmux", priority: 20, capabilities: [.jumpTargets],
+        readinessPolicy: .volatile, fallsBackOnEmptyDiscovery: fallsBack,
+        supportsHandler: { _ in true })
+    }
+    var accessibilityCalls = 0
+    let accessibility = StubSource(
+      identifier: "accessibility", priority: 10, capabilities: [.jumpTargets],
+      readinessPolicy: .continuous, supportsHandler: { _ in true },
+      discoverHandler: { context in
+        accessibilityCalls += 1
+        return [Self.button(pid: context.processID)]
+      })
+    func collect(
+      _ providers: [FlashSource], answering tmux: DeferredStubSource, _ targets: [JumpTarget]
+    )
+      -> AppMonitor.FocusedTargetCollection?
+    {
+      let collected = expectation(description: "the chain completes")
+      var collection: AppMonitor.FocusedTargetCollection?
+      queue.async {
+        AppMonitor.collectFocusedTargets(context: context, providers: providers, on: queue) {
+          collection = $0
+          collected.fulfill()
+        }
+      }
+      queue.sync {}
+      tmux.answer(targets)
+      wait(for: [collected], timeout: 2)
+      return queue.sync { collection }
+    }
+
+    // Targets: the plugin owns the context and nothing else is asked.
+    var tmux = deferred(fallsBack: true)
+    let pane = JumpTarget(
+      id: "pane", frame: CGRect(x: 0, y: 0, width: 10, height: 10), pid: context.processID,
+      providerID: "plugin:tmux")
+    var result = try XCTUnwrap(collect([tmux, accessibility], answering: tmux, [pane]))
+    XCTAssertEqual(result.targets.map(\.target.id), ["pane"])
+    XCTAssertEqual(result.attemptedProviders.map(\.identifier), ["plugin:tmux"])
+    XCTAssertFalse(result.allowsFallback)
+    XCTAssertEqual(accessibilityCalls, 0)
+
+    // An authoritative empty ends the chain.
+    tmux = deferred(fallsBack: false)
+    result = try XCTUnwrap(collect([tmux, accessibility], answering: tmux, []))
+    XCTAssertTrue(result.targets.isEmpty)
+    XCTAssertEqual(result.attemptedProviders.map(\.identifier), ["plugin:tmux"])
+    XCTAssertFalse(result.allowsFallback)
+    XCTAssertEqual(accessibilityCalls, 0)
+
+    // Alone and declining, it leaves the fallback to the caller.
+    tmux = deferred(fallsBack: true)
+    result = try XCTUnwrap(collect([tmux], answering: tmux, []))
+    XCTAssertTrue(result.targets.isEmpty)
+    XCTAssertTrue(result.allowsFallback)
+
+    // Without a deferred provider the chain completes before it returns.
+    var immediate: AppMonitor.FocusedTargetCollection?
+    queue.sync {
+      AppMonitor.collectFocusedTargets(context: context, providers: [accessibility], on: queue) {
+        immediate = $0
+      }
+    }
+    XCTAssertEqual(immediate?.targets.map(\.target.id), ["button"])
+    XCTAssertEqual(accessibilityCalls, 1)
+  }
+
+  private func chainContext() throws -> AppContext {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    return AppContext(
+      bundleIdentifier: try XCTUnwrap(app.bundleIdentifier),
+      processID: app.processIdentifier,
+      runningApp: app,
+      frontWindowFrame: .zero,
+      allScreensFrame: .zero)
+  }
+
+  private static func button(pid: pid_t) -> JumpTarget {
+    JumpTarget(
+      id: "button", frame: CGRect(x: 10, y: 10, width: 20, height: 20), pid: pid,
+      providerID: "accessibility")
+  }
+
   func testCurrentLocationPrefersCurrentLocationCandidateForFocusedPID() throws {
     let resolved = expectation(description: "current plugin location")
     let app = try XCTUnwrap(
@@ -466,7 +616,7 @@ final class SourceRegistryTests: XCTestCase {
             identifier: "plugin:locations",
             capabilities: [.candidates],
             candidateSourceDescriptors: [
-              CandidateSourceDescriptor(name: "locations.items", kind: .locations)
+              CandidateSourceDescriptor(name: "locations.items", type: "items", kind: .locations)
             ],
             candidatesHandler: { _ in
               [
@@ -588,7 +738,7 @@ final class SourceRegistryTests: XCTestCase {
       identifier: "plugin:projects",
       capabilities: [.candidates, .appActivation],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "projects.locations", kind: .locations)
+        CandidateSourceDescriptor(name: "projects.locations", type: "locations", kind: .locations)
       ],
       candidatesHandler: { _ in [project] },
       matchHandler: { target in
@@ -657,10 +807,11 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(lowCalls, 1)
   }
 
-  // Regression: app_open?name=<app> used to type a text-insertion candidate
+  // Regression: app open --name=<app> used to type a text-insertion candidate
   // into the focused field when a higher-priority plugin substring-matched
-  // the name (originally a copied "…slack.com…" clipboard URL; emoji is the
-  // remaining insert-text kind). app_open must resolve the real app first.
+  // the name (originally a copied "…slack.com…" clipboard URL; a row with a
+  // host effect, an emoji here, is what remains). `app open` must resolve
+  // the real app first.
   func testCandidateMatchingPrefersAppSourceOverHigherPriorityInsertTextShadow() {
     let resolved = expectation(description: "app source")
     let slackApp = Candidate(
@@ -668,10 +819,10 @@ final class SourceRegistryTests: XCTestCase {
       title: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
     let emojiShadow = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
+      kind: .plugin("emoji"), sourceID: "plugin:reference",
       source: "emoji", pid: nil,
       title: "slack key cap",
-      subtitle: "emoji", bundleIdentifier: "", url: nil)
+      subtitle: "emoji", bundleIdentifier: "", url: nil, effect: .insertText("#️⃣"))
 
     let registry = SourceRegistry(
       descriptors: [
@@ -696,13 +847,13 @@ final class SourceRegistryTests: XCTestCase {
     registry.resolveCandidate(matching: "Slack") { match in
       XCTAssertEqual(match?.sourceID, "core.apps")
       XCTAssertEqual(match?.kind, .app)
-      XCTAssertFalse(match.map(CandidateFinder.insertsText) ?? true)
+      XCTAssertNil(match?.effect)
       resolved.fulfill()
     }
     wait(for: [resolved], timeout: 1)
   }
 
-  // app_open falls back to plugin sources for non-app names (e.g. a tmux
+  // `app open` falls back to plugin sources for non-app names (e.g. a tmux
   // window), but a text-insertion candidate is never an activation target —
   // even when it is the only substring match, the resolver returns nil rather
   // than typing it.
@@ -713,9 +864,9 @@ final class SourceRegistryTests: XCTestCase {
       kind: .plugin("tmux"), sourceID: "plugin:tmux", source: "tmux", pid: 42,
       title: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
     let emojiEntry = Candidate(
-      kind: CandidateFinder.emojiKind, sourceID: "plugin:reference",
+      kind: .plugin("emoji"), sourceID: "plugin:reference",
       source: "emoji", pid: nil, title: "editor pencil", subtitle: "emoji",
-      bundleIdentifier: "", url: nil)
+      bundleIdentifier: "", url: nil, effect: .insertText("✏️"))
 
     func makeRegistry(includeActivatablePlugin: Bool) -> SourceRegistry {
       var descriptors: [SourceDescriptor] = [
@@ -753,7 +904,7 @@ final class SourceRegistryTests: XCTestCase {
     // An activatable plugin candidate is still reachable as a fallback.
     makeRegistry(includeActivatablePlugin: true).resolveCandidate(matching: "editor") { match in
       XCTAssertEqual(match?.sourceID, "plugin:tmux")
-      XCTAssertFalse(match.map(CandidateFinder.insertsText) ?? true)
+      XCTAssertNil(match?.effect)
       resolved.fulfill()
     }
     wait(for: [skipped, resolved], timeout: 1)
@@ -768,14 +919,14 @@ final class SourceRegistryTests: XCTestCase {
       capabilities: [.candidates],
       activationPolicy: .bundleIDs([bundleID]),
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "active.tabs", kind: .locations)
+        CandidateSourceDescriptor(name: "active.tabs", type: "tabs", kind: .locations)
       ])
     let inactive = StubSource(
       identifier: "plugin:inactive",
       capabilities: [.candidates],
       activationPolicy: .bundleIDs(["invalid.bundle"]),
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "inactive.tabs", kind: .locations)
+        CandidateSourceDescriptor(name: "inactive.tabs", type: "tabs", kind: .locations)
       ])
     let registry = SourceRegistry(
       descriptors: [],
@@ -793,13 +944,13 @@ final class SourceRegistryTests: XCTestCase {
       identifier: "plugin:location",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "location.windows", kind: .locations)
+        CandidateSourceDescriptor(name: "location.windows", type: "windows", kind: .locations)
       ])
     let nonLocation = StubSource(
       identifier: "plugin:emoji",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "emoji.glyphs", kind: .standard)
+        CandidateSourceDescriptor(name: "emoji.glyphs", type: "glyphs", kind: .standard)
       ])
     let registry = SourceRegistry(
       descriptors: [
@@ -808,7 +959,8 @@ final class SourceRegistryTests: XCTestCase {
             identifier: "core.apps",
             capabilities: [.candidates],
             candidateSourceDescriptors: [
-              CandidateSourceDescriptor(name: "core.apps", kind: .locations, priority: .high)
+              CandidateSourceDescriptor(
+                name: "core.apps", type: "apps", kind: .locations, priority: .high)
             ])
         }
       ],
@@ -826,32 +978,32 @@ final class SourceRegistryTests: XCTestCase {
       identifier: "plugin:reference",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "emojis.glyphs", kind: .standard)
+        CandidateSourceDescriptor(name: "emojis.glyphs", type: "emojis", kind: .standard)
       ])
-    let apple = StubSource(
-      identifier: "plugin:apple",
+    let history = StubSource(
+      identifier: "plugin:history",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "notes.notes", kind: .standard)
+        CandidateSourceDescriptor(name: "firefox.history", type: "history", kind: .standard)
       ])
     let location = StubSource(
       identifier: "plugin:tmux",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "tmux.windows", kind: .locations)
+        CandidateSourceDescriptor(name: "tmux.windows", type: "terminals", kind: .locations)
       ])
     let registry = SourceRegistry(
       descriptors: [],
       isTerminalEmulator: { _ in false },
       runningApplications: [],
-      pluginSourcesProvider: { [apple, location, reference] })
+      pluginSourcesProvider: { [history, location, reference] })
 
     XCTAssertEqual(
-      registry.nonLocationCandidateSources(matching: "emojis").map(\.identifier),
+      registry.nonLocationCandidateSources(matching: .type("emojis")).map(\.identifier),
       ["plugin:reference"])
     XCTAssertEqual(
       Set(registry.nonLocationCandidateSources().map(\.identifier)),
-      Set(["plugin:reference", "plugin:apple"]))
+      Set(["plugin:reference", "plugin:history"]))
   }
 
   func testWarmSnapshotIsASynchronousStoreRead() {
@@ -886,7 +1038,7 @@ final class SourceRegistryTests: XCTestCase {
       identifier: "plugin:tabs",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "browser.tabs", kind: .locations)
+        CandidateSourceDescriptor(name: "browser.tabs", type: "tabs", kind: .locations)
       ],
       candidatesHandler: { _ in
         locationCalls += 1
@@ -900,14 +1052,14 @@ final class SourceRegistryTests: XCTestCase {
         ]
       })
     let nonLocation = StubSource(
-      identifier: "plugin:apple",
+      identifier: "plugin:history",
       capabilities: [.candidates],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "notes.notes")
+        CandidateSourceDescriptor(name: "firefox.history", type: "history")
       ],
       candidatesHandler: { _ in
         nonLocationCalls += 1
-        return [Candidate(title: "Note")]
+        return [Candidate(title: "Visit")]
       })
     let registry = SourceRegistry(
       descriptors: [],
@@ -928,7 +1080,7 @@ final class SourceRegistryTests: XCTestCase {
       identifier: "plugin:processes",
       capabilities: [.candidates, .appActivation],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "processes.processes")
+        CandidateSourceDescriptor(name: "processes.processes", type: "processes")
       ],
       candidatesHandler: { _ in
         nonLocationCalls += 1
@@ -938,17 +1090,17 @@ final class SourceRegistryTests: XCTestCase {
       identifier: "plugin:locations",
       capabilities: [.candidates, .appActivation],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "terminal.windows", kind: .locations)
+        CandidateSourceDescriptor(name: "terminal.windows", type: "windows", kind: .locations)
       ],
       candidatesHandler: { _ in
         return [
           Candidate(
-            kind: CandidateFinder.emojiKind,
+            kind: .plugin("emoji"),
             sourceID: "plugin:locations",
             source: "terminal.windows",
             title: "bash emoji",
-            sourcePayload: "😀",
-            isLocation: true),
+            isLocation: true,
+            effect: .insertText("😀")),
           Candidate(
             kind: .plugin("terminal_window"),
             sourceID: "plugin:locations",
@@ -985,7 +1137,7 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(nonLocationCalls, 0)
   }
 
-  // `app_open --name=<text>` ranks the plugin location pool with the
+  // `app open --name=<text>` ranks the plugin location pool with the
   // flashlight scorer: an exact window title from a lower-priority source
   // beats a heavier source whose row merely contains the text, and the
   // winner is not whichever source answered first with a substring.
@@ -996,7 +1148,8 @@ final class SourceRegistryTests: XCTestCase {
       priority: 100,
       capabilities: [.candidates, .appActivation],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "tmux.windows", kind: .locations, priority: .important)
+        CandidateSourceDescriptor(
+          name: "tmux.windows", type: "terminals", kind: .locations, priority: .important)
       ],
       candidatesHandler: { _ in
         [
@@ -1015,7 +1168,8 @@ final class SourceRegistryTests: XCTestCase {
       priority: 10,
       capabilities: [.candidates, .appActivation],
       candidateSourceDescriptors: [
-        CandidateSourceDescriptor(name: "firefox.tabs", kind: .locations, priority: .high)
+        CandidateSourceDescriptor(
+          name: "firefox.tabs", type: "tabs", kind: .locations, priority: .high)
       ],
       candidatesHandler: { _ in
         [
@@ -1071,7 +1225,7 @@ final class SourceRegistryTests: XCTestCase {
       pluginSourcesProvider: { [low, high] })
 
     registry.evaluateQuery(
-      QueryEvaluationRequest(surface: .flashlight, scope: .all, text: "1+1")
+      QueryEvaluationRequest(surface: .flashlight, text: "1+1")
     ) { candidates in
       XCTAssertEqual(candidates.map(\.title), ["high", "low"])
       completion.fulfill()
@@ -1107,7 +1261,6 @@ final class SourceRegistryTests: XCTestCase {
     registry.evaluateQuery(
       QueryEvaluationRequest(
         surface: .flashlight,
-        scope: .all,
         text: "=1+1",
         exclusivePrefix: "=")
     ) { candidates in
@@ -1137,7 +1290,7 @@ final class SourceRegistryTests: XCTestCase {
       pluginSourcesProvider: { [evaluator] })
 
     registry.evaluateQuery(
-      QueryEvaluationRequest(surface: .flashlight, scope: .all, text: "1+1")
+      QueryEvaluationRequest(surface: .flashlight, text: "1+1")
     ) { candidates in
       XCTAssertTrue(
         evaluatorCallbackIsActive,
@@ -1166,7 +1319,7 @@ final class SourceRegistryTests: XCTestCase {
       pluginSourcesProvider: { [fast, stalled] })
 
     registry.evaluateQuery(
-      QueryEvaluationRequest(surface: .flashlight, scope: .all, text: "2+2"),
+      QueryEvaluationRequest(surface: .flashlight, text: "2+2"),
       timeoutMs: 5
     ) { candidates in
       XCTAssertEqual(candidates.map(\.title), ["fast"])
@@ -1199,7 +1352,7 @@ final class SourceRegistryTests: XCTestCase {
       pluginSourcesProvider: { [active, inactive] })
 
     registry.evaluateQuery(
-      QueryEvaluationRequest(surface: .flashlight, scope: .all, text: "3+3")
+      QueryEvaluationRequest(surface: .flashlight, text: "3+3")
     ) { candidates in
       XCTAssertEqual(candidates.map(\.title), ["active"])
       completion.fulfill()
@@ -1208,9 +1361,119 @@ final class SourceRegistryTests: XCTestCase {
     wait(for: [completion], timeout: 1)
     XCTAssertEqual(inactiveCalls, 0)
   }
+
+  /// The source chain asks only the sources that declare the command, in
+  /// contextual-priority order: `.unhandled` moves on, `.failed` and
+  /// `.performed` stop the chain and are attributed to the source.
+  func testSourceChainConsultsOnlySourcesDeclaringTheCommand() throws {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    let context = AppContext(
+      bundleIdentifier: try XCTUnwrap(app.bundleIdentifier), processID: app.processIdentifier,
+      runningApp: app, frontWindowFrame: .zero, allScreensFrame: .zero)
+    let tabNext = CommandName("tab", "next")
+    let tabClose = CommandName("tab", "close")
+    var asked: [String] = []
+    let declines = StubSource(
+      identifier: "plugin:declines", priority: 50, supportsHandler: { _ in true },
+      commands: [tabNext, tabClose],
+      performHandler: { command in
+        asked.append("declines:\(command)")
+        return .unhandled
+      })
+    let performs = StubSource(
+      identifier: "plugin:performs", priority: 10, supportsHandler: { _ in true },
+      commands: [tabNext],
+      performHandler: { command in
+        asked.append("performs:\(command)")
+        return .performed(pid: 7)
+      })
+    let fails = StubSource(
+      identifier: "plugin:fails", priority: 5, supportsHandler: { _ in true },
+      commands: [tabNext, tabClose],
+      performHandler: { command in
+        asked.append("fails:\(command)")
+        return .failed(reason: "broke")
+      })
+    let elsewhere = StubSource(
+      identifier: "plugin:elsewhere", priority: 99, supportsHandler: { _ in false },
+      commands: [tabNext],
+      performHandler: { _ in
+        XCTFail("a source whose selector does not match is never asked")
+        return .performed(pid: 1)
+      })
+    let registry = SourceRegistry(
+      descriptors: [], isTerminalEmulator: { _ in false }, runningApplications: [],
+      pluginSourcesProvider: { [fails, performs, declines, elsewhere] })
+
+    XCTAssertEqual(
+      registry.claimants(of: tabNext, in: context),
+      ["plugin:declines", "plugin:performs", "plugin:fails"])
+    XCTAssertEqual(
+      registry.claimants(of: tabClose, in: context), ["plugin:declines", "plugin:fails"])
+    XCTAssertEqual(registry.claimants(of: CommandName("tab", "new"), in: context), [])
+
+    func perform(_ name: CommandName) -> SourceCommandResult {
+      let done = expectation(description: name.description)
+      var result = SourceCommandResult.unhandled
+      registry.perform(SourceCommand(name: name, arguments: []), in: context) { outcome in
+        result = outcome
+        done.fulfill()
+      }
+      wait(for: [done], timeout: 1)
+      return result
+    }
+    asked = []
+    let next = perform(tabNext)
+    XCTAssertEqual(next.disposition, .performed)
+    XCTAssertEqual(next.targetPID, 7)
+    XCTAssertEqual(next.source, "plugin:performs")
+    XCTAssertEqual(
+      asked, ["declines:tab next", "performs:tab next"], "the chain stops at a performer")
+
+    asked = []
+    let close = perform(tabClose)
+    XCTAssertEqual(close.disposition, .failed)
+    XCTAssertEqual(close.failureReason, "broke")
+    XCTAssertEqual(close.source, "plugin:fails")
+    XCTAssertEqual(asked, ["declines:tab close", "fails:tab close"], "a failure owns the command")
+
+    asked = []
+    XCTAssertEqual(perform(CommandName("tab", "new")).disposition, .unhandled)
+    XCTAssertEqual(asked, [], "no source declares it, so none is asked")
+  }
 }
 
-private final class StubSource: FlashSource, FlashQueryEvaluator {
+/// A provider that answers when the test says so, on the queue the test
+/// picks, the way a plugin's reply arrives.
+private final class DeferredStubSource: StubSource, DeferredHintProvider {
+  private let lock = NSLock()
+  private var pending: [([JumpTarget]) -> Void] = []
+  private(set) var asked = 0
+
+  func discover(in context: AppContext, completion: @escaping ([JumpTarget]) -> Void) {
+    lock.lock()
+    asked += 1
+    pending.append(completion)
+    lock.unlock()
+  }
+
+  /// Whether a pull is waiting for its answer.
+  var isPending: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return !pending.isEmpty
+  }
+
+  func answer(_ targets: [JumpTarget]) {
+    lock.lock()
+    let completion = pending.removeFirst()
+    lock.unlock()
+    completion(targets)
+  }
+}
+
+private class StubSource: FlashSource, FlashQueryEvaluator {
   let identifier: String
   let priority: Int
   let capabilities: FlashSourceCapabilities
@@ -1224,7 +1487,9 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
   private let documentURLHandler: (AppContext) -> String?
   private let discoverHandler: (AppContext) throws -> [JumpTarget]
   let navigationSchemes: Set<String>
-  private let restoreHandler: (URL) -> SourceActionResult
+  private let restoreHandler: (URL) -> SourceCommandResult
+  let commands: Set<CommandName>
+  private let performHandler: (SourceCommand) -> SourceCommandResult
   let candidateSourceLabels: [String]
   let candidateSourceDescriptors: [CandidateSourceDescriptor]
   let queryEvaluationPriority: Int
@@ -1256,7 +1521,9 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     queryEvaluationHandler:
       @escaping (QueryEvaluationRequest, @escaping ([Candidate]) -> Void) -> Void =
       { _, done in done([]) },
-    restoreHandler: @escaping (URL) -> SourceActionResult = { _ in .unhandled }
+    restoreHandler: @escaping (URL) -> SourceCommandResult = { _ in .unhandled },
+    commands: Set<CommandName> = [],
+    performHandler: @escaping (SourceCommand) -> SourceCommandResult = { _ in .unhandled }
   ) {
     self.identifier = identifier
     self.priority = priority
@@ -1267,7 +1534,11 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     self.candidateSourceLabels = candidateSourceLabels
     self.candidateSourceDescriptors =
       candidateSourceDescriptors.isEmpty
-      ? candidateSourceLabels.map { CandidateSourceDescriptor(name: $0) }
+      ? candidateSourceLabels.map {
+        // A stub's type: its label's last word (`firefox.tabs` → tabs).
+        CandidateSourceDescriptor(
+          name: $0, type: String($0.split(separator: ".").last ?? Substring($0)))
+      }
       : candidateSourceDescriptors
     self.navigationSchemes = navigationSchemes
     self.queryEvaluationPriority = queryEvaluationPriority
@@ -1284,9 +1555,20 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     self.documentURLHandler = documentURLHandler
     self.discoverHandler = discoverHandler
     self.restoreHandler = restoreHandler
+    self.commands = commands
+    self.performHandler = performHandler
   }
 
   func supports(_ context: AppContext) -> Bool { supportsHandler(context) }
+
+  func perform(
+    _ command: SourceCommand,
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceCommandResult) -> Void
+  ) {
+    completion(performHandler(command))
+  }
 
   func discover(in context: AppContext) throws -> [JumpTarget] {
     try discoverHandler(context)
@@ -1330,7 +1612,7 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
   func restoreNavigation(
     to url: URL,
     environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
+    completion: @escaping (SourceCommandResult) -> Void
   ) {
     completion(restoreHandler(url))
   }

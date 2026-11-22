@@ -13,14 +13,11 @@ import Foundation
 enum IdleActivation {
   /// True when Flash, active while showing `mode`, must hand activation
   /// back. About and a hint session (which may read its labels through the
-  /// key window) keep it, and so does a physical click still handing focus
-  /// to the app it landed on: that click moves activation itself, and a
-  /// hand-back could race it to the wrong app.
+  /// key window) keep it.
   static func handsBack(
-    flashActive: Bool, mode: Mode, aboutWindowVisible: Bool, hintSessionActive: Bool,
-    pointerClickPending: Bool
+    flashActive: Bool, mode: Mode, aboutWindowVisible: Bool, hintSessionActive: Bool
   ) -> Bool {
     guard flashActive, mode == .insert else { return false }
-    return !aboutWindowVisible && !hintSessionActive && !pointerClickPending
+    return !aboutWindowVisible && !hintSessionActive
   }
 }

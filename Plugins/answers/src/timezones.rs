@@ -58,7 +58,7 @@ impl Timezones {
 
     pub(crate) fn log_index(&self, ctx: &Context) {
         ctx.log_fields(
-            "info",
+            "debug",
             "[answers] zone index warmed",
             BTreeMap::from([("count".to_string(), self.zones.len().to_string())]),
         );
@@ -118,7 +118,7 @@ impl Engine for Timezones {
 }
 
 fn answer(now: Timestamp, label: &str, zone: &TimeZone) -> QueryAnswer {
-    let zoned = now.to_zoned(zone.clone());
+    let zoned = now.to_zoned_datetime(zone.clone());
     let title = format!("{} — {label}", zoned.strftime("%H:%M %a"));
     let compact_offset = zoned.strftime("%z").to_string();
     let offset = match compact_offset.split_at_checked(3) {

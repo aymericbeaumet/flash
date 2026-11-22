@@ -8,6 +8,11 @@ import FlashCore
 struct DiscoveryOutcome: Equatable {
   var path: String
   var retried = false
+  /// Why the prepared model could not serve the activation; nil for a hit
+  /// and for surfaces that never consult it.
+  var miss: PreparedModelMiss? = nil
+  /// What Flash was doing about the model when the lookup missed it.
+  var missContext: PreparedModelMissContext? = nil
 
   var preparedHit: Bool { path == "prepared_model" || path == "prepared_model_filter" }
   var prepared: HintLatencyProbe.Prepared { preparedHit ? .hit : .miss }

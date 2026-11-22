@@ -148,7 +148,7 @@ final class StatusPopupConfigTests: XCTestCase {
       enabled = true
       template = "#[popup=feed]News#[nopopup] #[popup=date]%H:%M#[nopopup] #[range=user|chat]Chat#[norange]"
       [statusbar.click]
-      chat = ["flash", "enter_terminal_mode", "--name=chat"]
+      chat = ["flash", "mode", "terminal", "--name=chat"]
       [popup.date]
       text = "#{flash.calendar}\\n#[popup=agenda]agenda#[nopopup]"
       [popup.feed]
@@ -165,10 +165,10 @@ final class StatusPopupConfigTests: XCTestCase {
       [popup.unused]
       command = ["true"]
       [mode.command.mappings]
-      "cmd+b" = ["flash", "enter_terminal_mode", "--name=bonsai"]
+      "cmd+b" = ["flash", "mode", "terminal", "--name=bonsai"]
       [mode.terminal.mappings]
-      "alt+space" = ["flash", "enter_terminal_mode"]
-      "alt+t" = ["flash", "enter_terminal_mode", "--name=top"]
+      "alt+space" = ["flash", "mode", "terminal"]
+      "alt+t" = ["flash", "mode", "terminal", "--name=top"]
       """)
     XCTAssertTrue(config.diagnostics.isEmpty, "\(config.diagnostics)")
     XCTAssertEqual(

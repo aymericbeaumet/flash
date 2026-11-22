@@ -5,31 +5,26 @@ import Foundation
 
 /// Sensitive host capabilities a plugin must explicitly request in its
 /// `manifest.json` to receive. Default-deny: if the manifest doesn't list a
-/// capability here, the host filters out any host events / RPC paths gated by
-/// it. The registry is frozen: additions are allowed, renames never
-/// (parity-tested against `protocol.json`).
+/// capability here, the host refuses every RPC gated by it. The registry is
+/// frozen: additions are allowed, renames never (parity-tested against
+/// `protocol.json`).
 enum PluginCapability: String, Codable, CaseIterable, Equatable {
-  /// Call `host.clipboard_write`.
-  case clipboard
   /// Call the host's Accessibility broker (`host.ax_snapshot`,
   /// `host.ax_perform`, `host.ax_set`, `host.ax_select_child`) and the
   /// synthesized-input RPCs. The core owns the single AX permission grant
   /// and handle registry; plugins own app-specific interpretation of the
   /// returned nodes.
   case accessibility
-  /// Make outbound network connections. Plugins WITHOUT this run under a
-  /// seatbelt profile that denies network, so a compromised or buggy plugin
-  /// can't exfiltrate.
+  /// Make outbound network connections: composes `network-outbound` into the
+  /// deny-default profile, which otherwise denies network so a compromised
+  /// or buggy plugin can't exfiltrate. Only a sandboxed plugin declares it.
   case network
   /// Fetch specific URLs through the host (`host.fetch`): the host performs
-  /// the request itself against the manifest's `fetch_urls` allowlist with a
-  /// hard timeout and 1 MiB response cap, so the plugin needs no network
-  /// access of its own and keeps a fully network-denied sandbox.
+  /// the request itself against the manifest's `fetch_urls` and
+  /// `fetch_settings` allowlist, within its `fetch_limits`, so the plugin
+  /// needs no network access of its own and keeps a fully network-denied
+  /// sandbox.
   case networkFetch = "network_fetch"
-  /// Exec privileged helper binaries the network sandbox can't run — notably
-  /// setgid `/bin/ps`, which seatbelt refuses. Implies the plugin spawns
-  /// unsandboxed; used by process inspectors (`processes`, `tmux`).
-  case subprocess
   /// Read the host's current normal-mode target pid/bundle
   /// (`host.normal_mode_target`) and raise an app by pid (`host.activate`).
   case appControl = "app_control"
@@ -37,27 +32,80 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// (`host.open`): LaunchServices runs host-side, so the plugin keeps a
   /// fork-free profile.
   case open
-  /// Post a media key (play/pause, next, …) as an NX_SYSTEM_DEFINED event
-  /// through the host (`host.post_media_key`).
-  case mediaKeys = "media_keys"
-  /// Enumerate and select input/output audio devices through host CoreAudio.
-  case audioDevices = "audio_devices"
-  /// Read the host's process table (`host.process_table`) and signal a pid
-  /// (`host.signal`).
-  case processControl = "process_control"
-  /// Show a transient host banner (`host.notify`). Capability-gated (and
-  /// rate-limited host-side) so an arbitrary plugin cannot spam UI.
-  case notify
   /// Read the current Wi-Fi SSID through the host (`host.wifi_info`). The
   /// host owns the Location authorization prompt and CoreWLAN access.
   case wifiInfo = "wifi_info"
+  /// Run fixed AppleScript operations in the resident (`host.applescript`) against the apps
+  /// the manifest's `apple_events_targets` name. The host compiles and runs
+  /// the script, so the plugin loads no AppleScript runtime, keeps its
+  /// sandbox (macOS refuses Apple Events from a sandboxed sender), and macOS
+  /// attributes the Automation request to Flash.
+  case appleEvents = "apple_events"
+  /// List the audio devices, select the default input or output, step the
+  /// output volume and toggle its mute through the host
+  /// (`host.audio_devices`). CoreAudio stays in the resident.
+  case audioDevices = "audio_devices"
+  /// Lock the screen, sleep the Mac or its displays, start the screen
+  /// saver, toggle dark mode, restart, shut down, log out and empty the
+  /// Trash through the host (`host.system_action`). The mechanisms stay in
+  /// the resident and add nothing to the plugin's sandbox; the four that
+  /// cannot be undone run only inside a perform the user confirmed.
+  case systemActions = "system_actions"
+  /// Send a signal to a process through the host (`host.process_signal`).
+  /// `kill(2)` stays in the resident and the plugin's sandbox gains
+  /// nothing; every signal runs only inside a perform the user confirmed,
+  /// never to Flash itself, launchd or a process group.
+  case processSignal = "process_signal"
+  /// Read the process table through the host (`host.process_table`): each
+  /// process the user may measure as its pid, start, CPU time, resident
+  /// memory and executable name, and one process's tree with its thread
+  /// and socket counts, disk I/O and the root's path. libproc stays in the
+  /// resident, the plugin's sandbox gains nothing, and no process's
+  /// arguments or environment are read.
+  case processTable = "process_table"
+  /// Read the access macOS grants Flash to the user's calendars, ask for it,
+  /// and list the events of a bounded window through the host
+  /// (`host.calendar_events`), and hear `core:calendar.changed`. EventKit
+  /// and the grant stay in the resident, macOS names Flash in its prompt,
+  /// and an event's notes never cross the wire.
+  case calendarEvents = "calendar_events"
+  /// Read the access macOS grants Flash to Notes (Automation), ask for it,
+  /// list every note as its identifier and name, and show one in Notes,
+  /// through the host (`host.notes`). The scripts are the host's own and
+  /// fixed; a note's text never crosses the wire.
+  case notes
+  /// The same for the open reminders, through EventKit in the resident
+  /// (`host.reminders`): each one's identifier, title, list and creation
+  /// time, and nothing else of it.
+  case reminders
+  /// The same for the contact cards, through the Contacts framework in the
+  /// resident (`host.contacts`): each card's identifier and the name
+  /// Contacts shows it by, never a phone number, an address or any other
+  /// field.
+  case contacts
 }
 
-extension PluginCapability {
-  /// Sensitive event names that require an explicit capability declaration
-  /// before the host delivers them to a plugin's `event` stream.
-  static func required(for eventName: String) -> PluginCapability? {
-    nil
+/// A macOS privacy grant a plugin's work depends on, declared in its
+/// manifest `permissions` so `flash doctor` reports whether the resident
+/// holds it. A declaration grants nothing and asks for nothing: macOS asks
+/// when the plugin first uses the protected service. The set is closed; an
+/// unknown name fails the load.
+enum PluginPermission: String, Codable, CaseIterable, Equatable {
+  /// Screen Recording, held by the resident a capturing child runs under.
+  case screenRecording = "screen_recording"
+
+  /// The grant as System Settings > Privacy & Security names it.
+  var title: String {
+    switch self {
+    case .screenRecording: return "Screen Recording"
+    }
+  }
+
+  /// Whether the resident holds the grant, read without prompting.
+  var isGranted: Bool {
+    switch self {
+    case .screenRecording: return CGPreflightScreenCaptureAccess()
+    }
   }
 }
 
@@ -202,35 +250,136 @@ struct PluginSelectorStack: Hashable, Equatable {
   }
 }
 
-/// One subcommand a plugin registers. A plugin exposes one or more
-/// **commands** (the verb the user types after `:`, e.g. `spotify`),
-/// and each command has one or more **subcommands** (e.g. `play`). This
-/// row is the denormalized (command, subcommand) pair the command-line
-/// completion engine and the dispatch index are built from.
+/// One argument a plugin's own command declares (an entry of
+/// `commands[].args`): `--name=value` of a closed set of types, or the one
+/// bare word a command takes. The host holds every invocation to the
+/// declaration before the command runs or its question is asked, and
+/// completion and the catalog read it.
+struct PluginCommandArgument: Decodable, Hashable {
+  var name: String
+  /// `integer`, `string`, `enum` or `flag` (`PluginProtocol.commandArgTypes`).
+  var type: String
+  var description: String?
+  var required: Bool
+  /// A bare word instead of `--name=value`; a string, one per command.
+  var positional: Bool
+  /// Inclusive bounds of an `integer`.
+  var min: Int?
+  var max: Int?
+  /// The words an `enum` accepts.
+  var values: [String]?
+
+  init(
+    name: String, type: String, description: String? = nil, required: Bool = false,
+    positional: Bool = false, min: Int? = nil, max: Int? = nil, values: [String]? = nil
+  ) {
+    self.name = name
+    self.type = type
+    self.description = description
+    self.required = required
+    self.positional = positional
+    self.min = min
+    self.max = max
+    self.values = values
+  }
+
+  enum CodingKeys: String, CodingKey, CaseIterable {
+    case name, type, description, required, positional, min, max, values
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.name = try c.decode(String.self, forKey: .name)
+    self.type = try c.decode(String.self, forKey: .type)
+    self.description = try c.decodeIfPresent(String.self, forKey: .description)
+    self.required = try c.decodeIfPresent(Bool.self, forKey: .required) ?? false
+    self.positional = try c.decodeIfPresent(Bool.self, forKey: .positional) ?? false
+    self.min = try c.decodeIfPresent(Int.self, forKey: .min)
+    self.max = try c.decodeIfPresent(Int.self, forKey: .max)
+    self.values = try c.decodeIfPresent([String].self, forKey: .values)
+  }
+
+  /// Why the declaration is malformed, or nil. `protocol.json`
+  /// `command_args` states the rules; the SDK's `plugin!` checks the same
+  /// ones at build time.
+  var validationError: String? {
+    guard CommandName.isWord(name) else { return "name must be a word of [a-z][a-z0-9_]*" }
+    guard PluginProtocol.commandArgTypes.contains(type) else {
+      return "type must be \(PluginProtocol.commandArgTypes.joined(separator: ", "))"
+    }
+    if let description {
+      guard !description.trimmed.isEmpty, !description.contains(where: \.isNewline),
+        description.utf8.count <= PluginProtocol.maxCommandArgDescriptionBytes
+      else {
+        return "description must be one non-empty line of at most "
+          + "\(PluginProtocol.maxCommandArgDescriptionBytes) bytes"
+      }
+    }
+    if type != "integer", min != nil || max != nil { return "min and max come with an integer" }
+    if let min, let max, min > max { return "min is above max" }
+    if type == "enum" {
+      guard let values, !values.isEmpty, values.count <= PluginProtocol.maxCommandArgValues,
+        Set(values).count == values.count,
+        values.allSatisfy({ value in
+          !value.isEmpty && !value.hasPrefix("--") && !value.contains(where: \.isWhitespace)
+        })
+      else {
+        return "an enum lists 1 to \(PluginProtocol.maxCommandArgValues) distinct values, each "
+          + "one word that does not start with --"
+      }
+    } else if values != nil {
+      return "values come with an enum"
+    }
+    if type == "flag", required { return "a flag is on or off: it cannot be required" }
+    if positional, type != "string" { return "only a string can be positional" }
+    return nil
+  }
+
+  /// The argument as the command grammar reads it.
+  var parameter: CommandParameter {
+    let kind: CommandParameter.Kind
+    switch type {
+    case "integer": kind = .integer(min: min, max: max)
+    case "enum": kind = .choice(values ?? [])
+    case "flag": kind = .flag
+    default: kind = .text(name)
+    }
+    return CommandParameter(
+      name: name, kind: kind, required: required, positional: positional,
+      summary: description ?? "")
+  }
+}
+
+/// One `commands[]` entry. Outside Flash's topics it is one of the plugin's
+/// own **commands** (the first word the user types after `:`, e.g.
+/// `spotify`) with one of its **subcommands** (e.g. `play`): the
+/// denormalized pair the command-line completion engine and the dispatch
+/// index are built from, with the `args` it takes. Under one of Flash's
+/// topics (`tab close`) it is a core command the plugin performs where its
+/// selector matches. `confirm` is the question the host asks first when
+/// either is destructive.
 struct PluginCommandRegistration: Decodable, Hashable {
   var command: String
   var subcommand: String
   var description: String
-  /// Per-entry `perform` deadline override in milliseconds. Interactive
-  /// commands (`spotify login` runs a 300 s device-auth flow) declare it
-  /// here; everything else inherits the 10 s perform deadline.
-  var timeoutMs: Int?
+  var confirm: String?
+  /// The arguments of the plugin's own command. Without any, the command
+  /// takes none.
+  var args: [PluginCommandArgument]
 
   init(
-    command: String,
-    subcommand: String = "",
-    description: String = "",
-    timeoutMs: Int? = nil
+    command: String, subcommand: String = "", description: String = "", confirm: String? = nil,
+    args: [PluginCommandArgument] = []
   ) {
     self.command = command
     self.subcommand = subcommand
     self.description = description
-    self.timeoutMs = timeoutMs
+    self.confirm = confirm
+    self.args = args
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case command, subcommand, description
-    case timeoutMs = "timeout_ms"
+    case command, subcommand, description, confirm, args
   }
 
   init(from decoder: Decoder) throws {
@@ -238,21 +387,57 @@ struct PluginCommandRegistration: Decodable, Hashable {
     self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
     self.subcommand = try c.decodeIfPresent(String.self, forKey: .subcommand) ?? ""
     self.description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
-    self.timeoutMs = try c.decodeIfPresent(Int.self, forKey: .timeoutMs)
+    self.confirm = try c.decodeIfPresent(String.self, forKey: .confirm)
+    self.args = try c.decodeIfPresent([PluginCommandArgument].self, forKey: .args) ?? []
+  }
+
+  /// Whether this entry declares a core command (a Flash topic) rather than
+  /// one of the plugin's own.
+  var isCoreCommand: Bool { URLEventHandler.isTopic(command) }
+
+  /// `confirm` as the host asks it, or nil without one.
+  var prompt: String? { confirm.flatMap(PluginProtocol.confirmPrompt) }
+
+  var name: CommandName { CommandName(command, subcommand) }
+
+  /// Whether the entry is the `*` wildcard, whose words are the plugin's.
+  var isWildcard: Bool { subcommand == "*" }
+
+  /// What the command accepts: its declared `args`, or nil for the `*`
+  /// wildcard, which takes the words after the command as typed.
+  var arguments: DeclaredArguments? {
+    isWildcard ? nil : DeclaredArguments(parameters: args.map(\.parameter))
+  }
+
+  /// Why the entry's `args` are malformed, or nil.
+  var argsValidationError: String? {
+    guard !args.isEmpty else { return nil }
+    if isCoreCommand { return "a core command's arguments are Flash's: remove args" }
+    if isWildcard { return "the * wildcard takes its words as typed: remove args" }
+    guard args.count <= PluginProtocol.maxCommandArgs else {
+      return "declares more than \(PluginProtocol.maxCommandArgs) args"
+    }
+    for argument in args {
+      if let error = argument.validationError { return "args \(argument.name): \(error)" }
+    }
+    guard Set(args.map(\.name)).count == args.count else { return "args repeat a name" }
+    guard args.filter(\.positional).count <= 1 else { return "takes one positional at most" }
+    return nil
   }
 }
 
-/// One flashlight bang a plugin registers. When a flashlight submission
-/// starts with `!<token>` (e.g. `!r cat`), core routes the remainder to the
-/// owning plugin as `perform {kind: "command"}` with the bang token as the
-/// subcommand. A `token` of `"*"` is a catch-all: the plugin claims every
-/// otherwise-unclaimed bang and resolves it itself — how `reference`
-/// serves the full DuckDuckGo bang table without enumerating thousands of
+/// One flashlight bang a plugin registers (an entry of manifest `bangs`).
+/// When a flashlight submission starts with `!<token>` (e.g. `!r cat`), core
+/// routes the remainder to the owning plugin as `perform {kind: "command"}`
+/// with the plugin id as the command and the bang token as the subcommand.
+/// A `token` of `"*"` is a catch-all: the plugin claims every
+/// otherwise-unclaimed bang and resolves it itself — how `searchproviders`
+/// serves the DuckDuckGo and Kagi bang lists without enumerating thousands of
 /// entries in the manifest.
 struct PluginBangRegistration: Decodable, Hashable {
   var token: String
   var description: String
-  /// Candidate source label this bang draws its selectable rows from. When
+  /// Candidate source name this bang draws its selectable rows from. When
   /// the user confirms `!<token> `, the flashlight pool swaps to this
   /// source's candidates; Return on a row dispatches the bang. Empty means
   /// the bang has no candidate list — typing the bang submits the typed
@@ -277,71 +462,13 @@ struct PluginBangRegistration: Decodable, Hashable {
   }
 }
 
-/// The manifest `bangs` block: the command every bang dispatches through,
-/// plus its entries.
-struct PluginBangs: Decodable, Equatable {
-  var command: String
-  var items: [PluginBangRegistration]
-
-  init(command: String = "", items: [PluginBangRegistration] = []) {
-    self.command = command
-    self.items = items
-  }
-
-  enum CodingKeys: String, CodingKey, CaseIterable {
-    case command, items
-  }
-
-  init(from decoder: Decoder) throws {
-    let c = try decoder.container(keyedBy: CodingKeys.self)
-    self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
-    self.items = try c.decodeIfPresent([PluginBangRegistration].self, forKey: .items) ?? []
-  }
-}
-
-/// One verb a plugin registers. `name` is the verb users type in mappings or
-/// pass to `flash <name> [k=v]...`; the host dispatches
-/// `perform {kind: "command"}` with the configured `subcommand` (defaulting
-/// to `name`). What an app does for one of Flash's own actions belongs in
-/// `action_bindings`, never in a verb.
-struct PluginVerbRegistration: Decodable, Equatable {
-  var name: String
-  var command: String
-  var subcommand: String
-  var description: String
-
-  init(
-    name: String,
-    command: String = "",
-    subcommand: String = "",
-    description: String = ""
-  ) {
-    self.name = name
-    self.command = command
-    self.subcommand = subcommand
-    self.description = description
-  }
-
-  enum CodingKeys: String, CodingKey, CaseIterable {
-    case name, command, subcommand, description
-  }
-
-  init(from decoder: Decoder) throws {
-    let c = try decoder.container(keyedBy: CodingKeys.self)
-    self.name = try c.decode(String.self, forKey: .name)
-    self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
-    self.subcommand = try c.decodeIfPresent(String.self, forKey: .subcommand) ?? ""
-    self.description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
-  }
-}
-
 /// One key mapping a plugin registers. Mirrors a `[mode.<scope>.mappings]`
 /// config entry plus an optional bundle selector. `priority` decides who
 /// wins when several mappings claim the same key; selector specificity is
 /// added at resolution time, so a bundle-scoped mapping beats an unscoped
 /// mapping at the same declared priority. `command` is an argv array
-/// matching the mapping syntax: `["flash", "<verb>", "k=v" ...]` for
-/// in-process verbs, anything else for argv exec.
+/// matching the mapping syntax: `["flash", "<topic>", "<action>", "--k=v" ...]`
+/// for in-process commands, anything else for argv exec.
 struct PluginMappingRegistration: Decodable, Hashable {
   var key: String
   var mode: String
@@ -402,18 +529,16 @@ struct PluginHelpTopic: Decodable, Equatable {
   var title: String
   var summary: String
   var body: String
-  var aliases: [String]
 
-  init(name: String, title: String, summary: String, body: String, aliases: [String] = []) {
+  init(name: String, title: String, summary: String, body: String) {
     self.name = name
     self.title = title
     self.summary = summary
     self.body = body
-    self.aliases = aliases
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case name, title, summary, body, aliases
+    case name, title, summary, body
   }
 
   init(from decoder: Decoder) throws {
@@ -422,7 +547,6 @@ struct PluginHelpTopic: Decodable, Equatable {
     self.title = try c.decodeIfPresent(String.self, forKey: .title) ?? name
     self.summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
     self.body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
-    self.aliases = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
   }
 }
 
@@ -492,46 +616,66 @@ struct PluginQuery: Decodable, Equatable {
   }
 }
 
-/// Deny-default sandbox spec. Declaring `"sandbox": {}` (even empty) opts
-/// the plugin into the generated deny-default seatbelt profile — everything
-/// is denied except loading the binary, broad reads minus secrets, and
-/// writes inside the plugin's data dir. Absence keeps the legacy
-/// network-deny-only behavior until every bundled plugin has migrated.
+/// The allowances a plugin's deny-default seatbelt profile adds. Everything
+/// else is denied except loading the binary, broad reads minus secrets, and
+/// writes inside the plugin's data dir. A manifest without `sandbox` gets the
+/// empty spec.
 struct PluginSandboxSpec: Decodable, Equatable {
-  /// Executable paths (absolute, or bare tool names resolved through
-  /// `mise which`/login-PATH at spawn) the plugin may `process-exec`.
-  var exec: [String]
-  /// Allow sending AppleEvents (osascript-driven plugins): opens the
-  /// AppleEvents/LaunchServices/TCC mach services and appleevent-send.
-  var appleEvents: Bool
-  /// Allow signalling other processes — needed when an exec'd tool (e.g.
-  /// system's `killall`) signals beyond the plugin's own process group.
-  /// Plugin-side signalling itself goes through `host.signal`.
-  var signal: Bool
-  /// Extra mach service names the plugin's tools need — e.g. pmset requires
-  /// powerd's com.apple.PowerManagement.control. Explicit per plugin; the
-  /// generator never widens mach-lookup beyond named services.
+  /// Extra mach service names the plugin needs — e.g. IOPowerSources
+  /// requires powerd's com.apple.PowerManagement.control. Explicit per
+  /// plugin; the generator never widens mach-lookup beyond named services.
   var mach: [String]
 
-  init(
-    exec: [String] = [], appleEvents: Bool = false, signal: Bool = false, mach: [String] = []
-  ) {
-    self.exec = exec
-    self.appleEvents = appleEvents
-    self.signal = signal
+  init(mach: [String] = []) {
     self.mach = mach
   }
 
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
-    self.exec = try c.decodeIfPresent([String].self, forKey: .exec) ?? []
-    self.appleEvents = try c.decodeIfPresent(Bool.self, forKey: .appleevents) ?? false
-    self.signal = try c.decodeIfPresent(Bool.self, forKey: .signal) ?? false
     self.mach = try c.decodeIfPresent([String].self, forKey: .mach) ?? []
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case exec, appleevents, signal, mach
+    case mach
+  }
+}
+
+/// A manifest's `sandbox` field: an object of allowances for the
+/// deny-default profile, or `false`, which runs the plugin unsandboxed — for
+/// a plugin whose helpers or Apple Events no profile can carry.
+enum PluginSandboxDeclaration: Decodable, Equatable {
+  case spec(PluginSandboxSpec)
+  case disabled
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let enabled = try? container.decode(Bool.self) {
+      guard !enabled else {
+        throw PluginError.failure("manifest.json sandbox must be an object or false")
+      }
+      self = .disabled
+    } else {
+      self = .spec(try container.decode(PluginSandboxSpec.self))
+    }
+  }
+}
+
+/// The manifest `lifecycle` key: how the child's run ends. Absent, the
+/// surfaces decide (`PluginManifest.activation`); the default has no
+/// spelling, so any other value is a typo.
+enum PluginLifecycleDeclaration: String, CaseIterable, Decodable {
+  /// A catalog-only plugin whose run is `on_start`: it publishes and exits
+  /// 0, the host keeps the catalog and runs it again only when its data
+  /// can have changed.
+  case publishThenExit = "publish_then_exit"
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    guard let raw = try? container.decode(String.self), let value = Self(rawValue: raw) else {
+      throw PluginError.failure(
+        "manifest.json lifecycle must be \"publish_then_exit\" (or absent: the surfaces decide)")
+    }
+    self = value
   }
 }
 
@@ -548,81 +692,131 @@ struct PluginManifest: Decodable, Equatable {
   /// files can never re-widen the env allowlist. A relative first element
   /// resolves against the plugin root. `nil` declares a manifest-only
   /// plugin: no process ever runs, and `validate()` restricts the manifest
-  /// to surfaces the host can serve alone (mappings, help, and verbs whose
-  /// every entry declares a default keystroke).
+  /// to surfaces the host can serve alone (mappings, help and bindings).
   var exec: [String]?
-  /// Deny-default sandbox opt-in; see ``PluginSandboxSpec``.
-  var sandbox: PluginSandboxSpec?
+  /// The declared `sandbox` field, nil when absent; ``sandboxSpec`` is what
+  /// the process runs under.
+  var sandbox: PluginSandboxDeclaration?
   /// HTTPS URL prefixes the plugin may request through `host.fetch`.
   /// Requires the `network_fetch` capability; the host rejects any request
-  /// whose URL doesn't start with one of these.
+  /// whose URL starts with neither one of these nor a `fetch_settings` URL.
   var fetchURLs: [String]
+  /// `fetch_settings`: names of `[plugins.<id>]` string settings holding an
+  /// HTTPS URL the user chose, which the plugin may request like a
+  /// `fetch_urls` prefix. Requires the `network_fetch` capability.
+  var fetchSettings: [String]
+  /// `fetch_limits`: the bounds of a `host.fetch` response when they are not
+  /// the standard ones; nil when the manifest declares none.
+  var fetchLimits: PluginFetchLimitsDeclaration?
+  /// Bundle ids of the apps the plugin's fixed operations may address through
+  /// `host.applescript`. Requires the
+  /// `apple_events` capability; the host refuses a script naming any other
+  /// app. Plugin-provided source code is never accepted.
+  var appleEventsTargets: [String]
   /// Host event-name patterns this plugin listens to. `*` is the only
   /// wildcard. Declaring `listen` makes the plugin resident.
   var listen: [String]
+  /// `lifecycle`: nil unless the manifest declares how the run ends.
+  var lifecycle: PluginLifecycleDeclaration?
+  /// `watch_settings`: names of `[plugins.<id>]` settings whose string
+  /// value is a file path the host watches; a change runs a
+  /// `publish_then_exit` plugin again. Needs that lifecycle.
+  var watchSettings: [String]
+  /// `settings`: every `[plugins.<id>]` key the plugin reads, by name. A key
+  /// the manifest does not declare, or a value it does not take, is
+  /// diagnosed and never delivered (`PluginSettings`).
+  var settings: [String: PluginSettingDeclaration]
   var hints: PluginHints?
   var query: PluginQuery?
+  /// Every `commands[]` entry: the plugin's own commands (``pluginCommands``)
+  /// and the core commands it performs (``sourceCommands``).
   var commands: [PluginCommandRegistration]
   var mappings: [PluginMappingRegistration]
   /// Status-bar segment names fed by the `status` notification, rendered as
   /// `#{flash.plugin.<id>.<segment>}`.
   var status: [String]
-  var bangsBlock: PluginBangs?
+  /// Flashlight bangs, each dispatched as `perform {kind: "command"}` with
+  /// the plugin id as the command and the typed token as the subcommand.
+  var bangs: [PluginBangRegistration]
   /// Durable route schemes restorable from movement history, dispatched as
   /// `perform {kind: "navigate"}`.
   var navigation: [String]
-  var verbs: [PluginVerbRegistration]
-  /// What each app does for Flash's actions: action name → bundle id (`""`
-  /// for every app the plugin's selector matches) → binding. The host
-  /// dispatches the binding when no source performs the action in that app,
-  /// so app knowledge lives in the plugin that knows the app, never in the
-  /// host.
-  var actionBindings: [SourceActionName: [String: ActionBindingSpec]]
-  /// The question the host asks before an action this plugin performs
-  /// destructively (`actions` must name it): action name → prompt. The host
-  /// shows it as a confirmation in the apps the plugin's selector matches,
-  /// and dispatches the action only on `y`; the plugin then performs it
-  /// without a prompt of its own.
-  var actionConfirmations: [SourceActionName: String]
+  /// What each app does for Flash's commands: binding key (`"tab new"`,
+  /// `"app reload --force"`) → bundle id (`""` for every app the plugin's
+  /// selector matches) → binding. The host dispatches the binding when no
+  /// source performs the command in that app, so app knowledge lives in the
+  /// plugin that knows the app, never in the host.
+  var bindings: [CommandBindingKey: [String: CommandBindingSpec]]
   /// Bundle ids of apps this plugin declares as terminal emulators; the
   /// union across plugins is `TerminalEmulators`.
   var terminalEmulators: [String]
   /// Bundle ids of apps whose accessibility tree is too costly to warm in the
   /// background; the union across plugins is `OnDemandHintApps`.
   var onDemandHints: [String]
+  /// Bundle ids of apps with their own modal editing or partial
+  /// Accessibility text, which NORMAL never engages; the union across
+  /// plugins is `OwnTextEditingApps`.
+  var ownTextEditing: [String]
+  /// The browsers this plugin declares, by engine; across plugins they are
+  /// `BrowserEngines`, and a browser an earlier plugin declared keeps its
+  /// engine.
+  var browserEngines: BrowserEngineTable
+  /// `query_aliases`: flashlight query tokens this plugin's rows are not
+  /// indexed under, and the words scored in their place; across plugins they
+  /// are `QueryAliases`, and a token an earlier plugin declared keeps its
+  /// words.
+  var queryAliases: QueryAliasTable
   var priority: Int
   /// Global active-window selector for this plugin, compounded with
   /// mapping-entry selectors.
   var selector: PluginSelector
   /// Candidate source descriptors this plugin contributes to `:flashlight`.
   /// `name` is the label rows carry in their first-class `source` field;
-  /// `kind` is the semantic source class used for default ranking;
-  /// `live: true` marks a live (pull) source served by `search`.
+  /// `kind` is the semantic source class used for default ranking. A source
+  /// is pushed, a complete catalog the plugin publishes, unless it declares
+  /// `live`: the host then pulls it with `search` while a query is scoped
+  /// to it. A manifest's sources are all pushed or all live, of one mode
+  /// (``liveSources``).
   var sources: [CandidateSourceDescriptor]
-  /// Source-owned normal-mode action names, dispatched as
-  /// `perform {kind: "action"}`.
-  var actions: [String]
   /// Sensitive host capabilities the plugin requests. Default-deny.
   var capabilities: Set<PluginCapability>
+  /// macOS grants the plugin's work depends on, for the doctor's report.
+  var permissions: Set<PluginPermission>
   /// Help topics this plugin contributes to `:help`.
   var help: PluginHelp
 
   var onlyBundleIDs: [String] { selector.onlyBundleIDs }
 
-  /// Bang registrations, each carrying the block's `command` so the
-  /// flashlight `!` dispatch index sees a flat list.
-  var bangs: [PluginBangRegistration] {
-    bangsBlock?.items ?? []
+  /// The core commands this plugin performs where its selector matches: the
+  /// `commands[]` entries under one of Flash's topics, dispatched as
+  /// `perform {kind: "command"}` with the focused app as `context`.
+  var sourceCommands: Set<CommandName> {
+    Set(commands.filter(\.isCoreCommand).map(\.name))
   }
 
-  var bangCommand: String {
-    bangsBlock?.command ?? ""
+  /// The plugin's own commands: every `commands[]` entry outside Flash's
+  /// topics, the ones that register for dispatch and completion.
+  var pluginCommands: [PluginCommandRegistration] {
+    commands.filter { !$0.isCoreCommand }
   }
 
-  func supportsAction(_ action: String, context: PluginSelectorContext) -> Bool {
-    let requested = action.trimmed
-    guard !requested.isEmpty, actions.contains(requested) else { return false }
-    return CompiledPluginSelector(selector).matches(context)
+  /// The question the host asks before a core command this plugin performs
+  /// destructively (`confirm` on the entry): command → prompt. The host
+  /// shows it as a confirmation in the apps the plugin's selector matches,
+  /// and dispatches the command only on `y`; the plugin then performs it
+  /// without a prompt of its own. An own command's question rides its
+  /// registration (`PluginManager.ownCommandConfirmation`).
+  var confirmations: [CommandName: String] {
+    commands.reduce(into: [:]) { table, entry in
+      guard entry.isCoreCommand, let prompt = entry.prompt else { return }
+      table[entry.name] = prompt
+    }
+  }
+
+  /// Whether this plugin performs `name` in `context`: it declares the core
+  /// command and its selector matches the app.
+  func performs(_ name: CommandName, in context: PluginSelectorContext) -> Bool {
+    sourceCommands.contains(name) && CompiledPluginSelector(selector).matches(context)
   }
 
   var navigationSchemes: [String] {
@@ -639,6 +833,17 @@ struct PluginManifest: Decodable, Equatable {
 
   var candidateSources: [String] {
     sources.map(\.name)
+  }
+
+  /// How the flashlight pulls this plugin's sources, or nil when they are
+  /// pushed catalogs (or there are none). `validate()` holds every source
+  /// to the same declaration.
+  var liveSources: CandidateSourceLive? { sources.first?.live }
+
+  /// The names a `publish` may carry: the pushed sources. A live source's
+  /// rows never enter the catalog store.
+  var pushedSources: [String] {
+    sources.filter { $0.live == nil }.map(\.name)
   }
 
   var candidateSourceDescriptors: [CandidateSourceDescriptor] {
@@ -667,25 +872,51 @@ struct PluginManifest: Decodable, Equatable {
     !sources.isEmpty
   }
 
+  /// The allowances of the deny-default profile the plugin's process runs
+  /// under, or nil when the manifest declares `"sandbox": false`. An absent
+  /// declaration is the empty spec.
+  var sandboxSpec: PluginSandboxSpec? {
+    switch sandbox {
+    case .spec(let spec): spec
+    case .disabled: nil
+    case nil: PluginSandboxSpec()
+    }
+  }
+
   /// A plugin is resident — spawned at startup and kept running — iff its
-  /// manifest declares `sources`, `query`, `hints`, `status`, or `listen`.
-  /// On-demand surfaces alone (`commands`, `bangs`, `verbs`, `navigation`)
-  /// defer the spawn to the first `perform`. No `exec` means no process
-  /// ever.
+  /// manifest declares pushed `sources`, `query`, `hints`, `status`, or
+  /// `listen` without live sources. On-demand surfaces alone (`commands`,
+  /// `bangs`, `navigation`, live `sources`) defer the spawn to the first
+  /// `perform` or `search`, or to the settled-startup prewarm when a
+  /// configured mapping runs one of the plugin's commands
+  /// (`PluginWarmPolicy`). No `exec` means no process ever.
   var activation: PluginActivation {
     if exec == nil { return .manifestOnly }
+    if lifecycle == .publishThenExit { return .publishThenExit }
     let resident =
-      !sources.isEmpty || query != nil || hints != nil || !status.isEmpty || !listen.isEmpty
+      !pushedSources.isEmpty || query != nil || hints != nil || !status.isEmpty
+      || (!listen.isEmpty && !isLiveBound)
     return resident ? .resident : .onDemand
+  }
+
+  /// A plugin whose sources are live and which declares no pushed source,
+  /// `query`, `hints` or `status` — its `listen` subscriptions, if any, feed
+  /// the rows of those sources. Nothing reads the rows until a query is
+  /// scoped to them, so the events keep no process: such a plugin waits for
+  /// its first `search` or `perform`, and hears its events from then on.
+  var isLiveBound: Bool {
+    liveSources != nil && query == nil && hints == nil && status.isEmpty
   }
 
   /// A plugin whose only resident surface is `status` — its `listen`
   /// subscriptions, if any, feed those segments. Nothing reads the segments
-  /// unless the enabled bar, one of its popups or a desktop widget shows one,
-  /// so such a plugin is resident only while observed and otherwise waits for
-  /// its first `perform` like an on-demand plugin.
+  /// unless the enabled bar, one of its text popups, a desktop widget or a
+  /// monitor reads one, so such a plugin is resident only while read and
+  /// otherwise waits for its first `perform` or `search` like an on-demand
+  /// plugin, or is warmed like one when a configured mapping runs one of
+  /// its commands.
   var isStatusBound: Bool {
-    !status.isEmpty && sources.isEmpty && query == nil && hints == nil
+    !status.isEmpty && pushedSources.isEmpty && query == nil && hints == nil
   }
 
   /// `activation`, given whether a status surface shows this plugin's segments.
@@ -693,45 +924,75 @@ struct PluginManifest: Decodable, Equatable {
     isStatusBound && !statusObserved ? .onDemand : activation
   }
 
+  /// The surfaces a live child serves, which a `publish_then_exit` plugin
+  /// cannot declare (`protocol.json` `lifecycle.publish_then_exit.forbids`),
+  /// in the contract's order.
+  static let publishThenExitForbiddenSurfaces = [
+    "hints", "query", "status", "listen", "commands", "bangs", "navigation",
+  ]
+
+  /// Which of the forbidden surfaces this manifest declares.
+  private var publishThenExitSurfacesDeclared: [String] {
+    let declared: [String: Bool] = [
+      "hints": hints != nil, "query": query != nil, "status": !status.isEmpty,
+      "listen": !listen.isEmpty, "commands": !commands.isEmpty, "bangs": !bangs.isEmpty,
+      "navigation": !navigation.isEmpty,
+    ]
+    return Self.publishThenExitForbiddenSurfaces.filter { declared[$0] == true }
+  }
+
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case id, name, version, description, install, exec, sandbox, listen, priority
+    case id, name, version, description, install, exec, sandbox, listen, priority, lifecycle
+    case watchSettings = "watch_settings"
+    case settings
     case fetchURLs = "fetch_urls"
+    case fetchSettings = "fetch_settings"
+    case fetchLimits = "fetch_limits"
+    case appleEventsTargets = "apple_events_targets"
     case onlyBundleIDs = "only_bundle_ids"
     case onlyTerminals = "only_terminals"
-    case capabilities, help
+    case capabilities, permissions, help
     case hints, query, commands, mappings, status, bangs
-    case actions
     case sources
-    case navigation, verbs
-    case actionBindings = "action_bindings"
-    case actionConfirmations = "action_confirmations"
+    case navigation
+    case bindings
     case terminalEmulators = "terminal_emulators"
     case onDemandHints = "on_demand_hints"
+    case ownTextEditing = "own_text_editing"
+    case browserEngines = "browser_engines"
+    case queryAliases = "query_aliases"
   }
 
   init(
     id: String, name: String, version: String, description: String,
     install: String? = nil, exec: [String]? = nil,
-    sandbox: PluginSandboxSpec? = nil,
+    sandbox: PluginSandboxDeclaration? = nil,
     fetchURLs: [String] = [],
+    fetchSettings: [String] = [],
+    fetchLimits: PluginFetchLimitsDeclaration? = nil,
+    appleEventsTargets: [String] = [],
     listen: [String] = [],
+    lifecycle: PluginLifecycleDeclaration? = nil,
+    watchSettings: [String] = [],
+    settings: [String: PluginSettingDeclaration] = [:],
     hints: PluginHints? = nil,
     query: PluginQuery? = nil,
     commands: [PluginCommandRegistration] = [],
     mappings: [PluginMappingRegistration] = [],
     status: [String] = [],
-    bangsBlock: PluginBangs? = nil,
+    bangs: [PluginBangRegistration] = [],
     navigation: [String] = [],
-    verbs: [PluginVerbRegistration] = [],
-    actionBindings: [SourceActionName: [String: ActionBindingSpec]] = [:],
-    actionConfirmations: [SourceActionName: String] = [:],
+    bindings: [CommandBindingKey: [String: CommandBindingSpec]] = [:],
     terminalEmulators: [String] = [],
     onDemandHints: [String] = [],
+    ownTextEditing: [String] = [],
+    browserEngines: BrowserEngineTable = BrowserEngineTable(),
+    queryAliases: QueryAliasTable = QueryAliasTable(),
     priority: Int = 25,
     selector: PluginSelector = PluginSelector(),
     sources: [CandidateSourceDescriptor] = [],
-    actions: [String] = [],
     capabilities: Set<PluginCapability> = [],
+    permissions: Set<PluginPermission> = [],
     help: PluginHelp = PluginHelp()
   ) {
     self.id = id
@@ -742,24 +1003,31 @@ struct PluginManifest: Decodable, Equatable {
     self.exec = exec
     self.sandbox = sandbox
     self.fetchURLs = Self.uniqueTrimmed(fetchURLs)
+    self.fetchSettings = Self.uniqueTrimmed(fetchSettings)
+    self.fetchLimits = fetchLimits
+    self.appleEventsTargets = Self.uniqueTrimmed(appleEventsTargets)
     self.listen = Self.uniqueTrimmed(listen)
+    self.lifecycle = lifecycle
+    self.watchSettings = Self.uniqueTrimmed(watchSettings)
+    self.settings = PluginSettings.marking(fetchSettings: self.fetchSettings, in: settings)
     self.hints = hints
     self.query = query
     self.commands = commands
     self.mappings = mappings
     self.status = Self.uniqueTrimmed(status)
-    self.bangsBlock = bangsBlock
+    self.bangs = bangs
     self.navigation = navigation
-    self.verbs = verbs
-    self.actionBindings = actionBindings
-    self.actionConfirmations = actionConfirmations
+    self.bindings = bindings
     self.terminalEmulators = Self.uniqueTrimmed(terminalEmulators)
     self.onDemandHints = Self.uniqueTrimmed(onDemandHints)
+    self.ownTextEditing = Self.uniqueTrimmed(ownTextEditing)
+    self.browserEngines = browserEngines
+    self.queryAliases = queryAliases
     self.priority = priority
     self.selector = selector
     self.sources = Self.uniqueSourceDescriptors(sources)
-    self.actions = Self.uniqueTrimmed(actions)
     self.capabilities = capabilities
+    self.permissions = permissions
     self.help = help
   }
 
@@ -771,10 +1039,26 @@ struct PluginManifest: Decodable, Equatable {
     self.description = try c.decode(String.self, forKey: .description)
     self.install = try c.decodeIfPresent(String.self, forKey: .install)
     self.exec = try c.decodeIfPresent([String].self, forKey: .exec)
-    self.sandbox = try c.decodeIfPresent(PluginSandboxSpec.self, forKey: .sandbox)
+    self.sandbox = try c.decodeIfPresent(PluginSandboxDeclaration.self, forKey: .sandbox)
     self.fetchURLs = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .fetchURLs) ?? [])
+    self.fetchSettings = Self.uniqueTrimmed(
+      try c.decodeIfPresent([String].self, forKey: .fetchSettings) ?? [])
+    self.fetchLimits = try c.decodeIfPresent(
+      PluginFetchLimitsDeclaration.self, forKey: .fetchLimits)
+    let rawTargets = try c.decodeIfPresent([String].self, forKey: .appleEventsTargets) ?? []
+    guard !rawTargets.contains(where: { $0.trimmed.isEmpty }) else {
+      throw PluginError.failure("manifest.json apple_events_targets entries must be bundle ids")
+    }
+    self.appleEventsTargets = Self.uniqueTrimmed(rawTargets)
     self.listen = Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .listen) ?? [])
+    self.lifecycle = try c.decodeIfPresent(PluginLifecycleDeclaration.self, forKey: .lifecycle)
+    self.watchSettings = Self.uniqueTrimmed(
+      try c.decodeIfPresent([String].self, forKey: .watchSettings) ?? [])
+    self.settings = PluginSettings.marking(
+      fetchSettings: fetchSettings,
+      in: try c.decodeIfPresent([String: PluginSettingDeclaration].self, forKey: .settings) ?? [:]
+    )
     self.hints = try c.decodeIfPresent(PluginHints.self, forKey: .hints)
     self.query = try c.decodeIfPresent(PluginQuery.self, forKey: .query)
     self.commands =
@@ -782,45 +1066,54 @@ struct PluginManifest: Decodable, Equatable {
     self.mappings =
       try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .mappings) ?? []
     self.status = Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .status) ?? [])
-    self.bangsBlock = try c.decodeIfPresent(PluginBangs.self, forKey: .bangs)
+    self.bangs = try c.decodeIfPresent([PluginBangRegistration].self, forKey: .bangs) ?? []
     self.navigation = try c.decodeIfPresent([String].self, forKey: .navigation) ?? []
-    self.verbs = try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .verbs) ?? []
     let bindings =
-      try c.decodeIfPresent(
-        [String: [String: ActionBindingSpec]].self, forKey: .actionBindings) ?? [:]
-    self.actionBindings = try bindings.reduce(into: [:]) { table, entry in
-      guard let name = SourceActionName(rawValue: entry.key) else {
+      try c.decodeIfPresent([String: [String: CommandBindingSpec]].self, forKey: .bindings) ?? [:]
+    self.bindings = try bindings.reduce(into: [:]) { table, entry in
+      // A key is the command line a mapping writes, with its bool flags:
+      // the retired `tab_new` spelling, a value argument or a command Flash
+      // performs itself is not one.
+      guard let key = CommandBindingKey(entry.key), Self.bindableKeys.contains(key) else {
         throw PluginError.failure(
-          "manifest.json action_bindings names an unknown action: \(entry.key)")
+          "manifest.json bindings: \(entry.key) is not a command Flash asks of the focused app")
       }
-      table[name] = entry.value
-    }
-    let confirmations =
-      try c.decodeIfPresent([String: String].self, forKey: .actionConfirmations) ?? [:]
-    self.actionConfirmations = try confirmations.reduce(into: [:]) { table, entry in
-      guard let name = SourceActionName(rawValue: entry.key) else {
-        throw PluginError.failure(
-          "manifest.json action_confirmations names an unknown action: \(entry.key)")
-      }
-      table[name] = entry.value.trimmed
+      table[key] = entry.value
     }
     self.terminalEmulators = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .terminalEmulators) ?? [])
     self.onDemandHints = Self.uniqueTrimmed(
       try c.decodeIfPresent([String].self, forKey: .onDemandHints) ?? [])
+    self.ownTextEditing = Self.uniqueTrimmed(
+      try c.decodeIfPresent([String].self, forKey: .ownTextEditing) ?? [])
+    self.browserEngines = try Self.browserEngines(
+      try c.decodeIfPresent([String: [String]].self, forKey: .browserEngines) ?? [:])
+    self.queryAliases = try Self.queryAliases(
+      try c.decodeIfPresent([String: String].self, forKey: .queryAliases) ?? [:])
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.selector = PluginSelector(
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
       onlyTerminals: try c.decodeIfPresent(Bool.self, forKey: .onlyTerminals) ?? false)
-    self.sources =
-      Self.uniqueSourceDescriptors(
-        try c.decodeIfPresent([CandidateSourceDescriptor].self, forKey: .sources) ?? [])
-    self.actions =
-      Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .actions) ?? [])
+    do {
+      self.sources =
+        Self.uniqueSourceDescriptors(
+          try c.decodeIfPresent([CandidateSourceDescriptor].self, forKey: .sources) ?? [])
+    } catch DecodingError.dataCorrupted(let context)
+      where context.codingPath.last?.stringValue
+      == CandidateSourceDescriptor.CodingKeys.live.rawValue
+    {
+      // A `live` that is neither of its values, said in the manifest's terms.
+      throw PluginError.failure("manifest.json \(context.debugDescription)")
+    }
     let caps = try c.decodeIfPresent([PluginCapability].self, forKey: .capabilities) ?? []
     self.capabilities = Set(caps)
+    self.permissions = Set(
+      try c.decodeIfPresent([PluginPermission].self, forKey: .permissions) ?? [])
     self.help = try c.decodeIfPresent(PluginHelp.self, forKey: .help) ?? PluginHelp()
   }
+
+  /// Every key a `bindings` entry may use.
+  private static let bindableKeys = Set(URLEventHandler.sourceCommandBindingKeys)
 
   private static func uniqueTrimmed(_ values: [String]) -> [String] {
     var seen = Set<String>()
@@ -847,6 +1140,87 @@ struct PluginManifest: Decodable, Equatable {
     }
     return out
   }
+
+  /// The most aliases one manifest declares, and the longest token and
+  /// words, in UTF-8 bytes.
+  static let maxQueryAliases = 256
+  static let maxQueryAliasTokenBytes = 16
+  static let maxQueryAliasWordsBytes = 64
+
+  /// `query_aliases` as a table. A token is lowercase, without whitespace,
+  /// and carries a character that is neither a letter nor a digit: a word
+  /// the flashlight already scores stays that word. Its words are lowercase
+  /// letters, digits and `_`.
+  private static func queryAliases(_ declared: [String: String]) throws -> QueryAliasTable {
+    guard declared.count <= maxQueryAliases else {
+      throw PluginError.failure(
+        "manifest.json query_aliases declares more than \(maxQueryAliases) tokens")
+    }
+    let words = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_")
+    for token in declared.keys.sorted() {
+      let scalars = token.unicodeScalars
+      guard !token.isEmpty, token.utf8.count <= maxQueryAliasTokenBytes,
+        token == token.lowercased(),
+        !scalars.contains(where: { $0.properties.isWhitespace }),
+        scalars.contains(where: { !CharacterSet.alphanumerics.contains($0) })
+      else {
+        throw PluginError.failure(
+          "manifest.json query_aliases: \"\(token)\" is not a token (lowercase, no "
+            + "whitespace, at most \(maxQueryAliasTokenBytes) bytes, with a character that "
+            + "is neither a letter nor a digit)")
+      }
+      let value = declared[token] ?? ""
+      guard !value.isEmpty, value.utf8.count <= maxQueryAliasWordsBytes,
+        value.unicodeScalars.allSatisfy({ words.contains($0) })
+      else {
+        throw PluginError.failure(
+          "manifest.json query_aliases.\(token): words are lowercase letters, digits and _ "
+            + "(at most \(maxQueryAliasWordsBytes) bytes)")
+      }
+    }
+    return QueryAliasTable(declared)
+  }
+
+  /// `browser_engines` as a table. An engine the host does not know, an id
+  /// that is not a bundle id and a browser listed twice each fail the load.
+  private static func browserEngines(_ declared: [String: [String]]) throws
+    -> BrowserEngineTable
+  {
+    var engines: [String: BrowserEngine] = [:]
+    for name in declared.keys.sorted() {
+      guard let engine = BrowserEngine(rawValue: name) else {
+        let known = BrowserEngine.allCases.map(\.rawValue).joined(separator: ", ")
+        throw PluginError.failure(
+          "manifest.json browser_engines: \(name) is not an engine (\(known))")
+      }
+      for bundleID in declared[name] ?? [] {
+        guard SecureInputRelease.isBundleID(bundleID) else {
+          throw PluginError.failure("manifest.json browser_engines.\(name): not a bundle id")
+        }
+        guard engines.updateValue(engine, forKey: bundleID) == nil else {
+          throw PluginError.failure(
+            "manifest.json browser_engines: \(bundleID) is declared twice")
+        }
+      }
+    }
+    return BrowserEngineTable(engines)
+  }
+
+  /// What `host.fetch` may reach for this plugin: the `fetch_urls` prefixes
+  /// and the URL each `fetch_settings` setting holds. A value the host would
+  /// not fetch adds nothing.
+  func fetchAllowlist(settings: [String: PluginConfigValue]) -> [String] {
+    fetchURLs
+      + fetchSettings.compactMap { name in
+        guard case .string(let url)? = settings[name], PluginHostFetch.isFetchable(url) else {
+          return nil
+        }
+        return url
+      }
+  }
+
+  /// The bounds of this plugin's `host.fetch` responses.
+  var effectiveFetchLimits: PluginFetchLimits { fetchLimits?.limits ?? .standard }
 
   static func load(from root: URL) throws -> PluginManifest {
     let url = root.appendingPathComponent("manifest.json")
@@ -875,30 +1249,38 @@ struct PluginManifest: Decodable, Equatable {
       dictionary["sandbox"], allowed: keys(PluginSandboxSpec.CodingKeys.self),
       path: "manifest.json sandbox")
     try rejectObject(
+      dictionary["fetch_limits"], allowed: keys(PluginFetchLimitsDeclaration.CodingKeys.self),
+      path: "manifest.json fetch_limits")
+    try rejectObject(
       dictionary["hints"], allowed: keys(PluginHints.CodingKeys.self),
       path: "manifest.json hints")
     try rejectObject(
       dictionary["query"], allowed: keys(PluginQuery.CodingKeys.self),
       path: "manifest.json query")
+    if let settings = dictionary["settings"] as? [String: Any] {
+      for name in settings.keys.sorted() {
+        try rejectObject(
+          settings[name], allowed: keys(PluginSettingDeclaration.CodingKeys.self),
+          path: "manifest.json settings.\(name)")
+      }
+    }
     try rejectArrayObjects(
       dictionary["commands"], allowed: keys(PluginCommandRegistration.CodingKeys.self),
       path: "manifest.json commands")
+    for (index, command) in ((dictionary["commands"] as? [[String: Any]]) ?? []).enumerated() {
+      try rejectArrayObjects(
+        command["args"], allowed: keys(PluginCommandArgument.CodingKeys.self),
+        path: "manifest.json commands[\(index)].args")
+    }
     try rejectArrayObjects(
       dictionary["mappings"], allowed: keys(PluginMappingRegistration.CodingKeys.self),
       path: "manifest.json mappings")
     try rejectArrayObjects(
-      dictionary["verbs"], allowed: keys(PluginVerbRegistration.CodingKeys.self),
-      path: "manifest.json verbs")
-    try rejectArrayObjects(
       dictionary["sources"], allowed: keys(CandidateSourceDescriptor.CodingKeys.self),
       path: "manifest.json sources")
-    if let bangs = dictionary["bangs"] as? [String: Any] {
-      try rejectUnknownKeys(
-        in: bangs, allowed: keys(PluginBangs.CodingKeys.self), path: "manifest.json bangs")
-      try rejectArrayObjects(
-        bangs["items"], allowed: keys(PluginBangRegistration.CodingKeys.self),
-        path: "manifest.json bangs.items")
-    }
+    try rejectArrayObjects(
+      dictionary["bangs"], allowed: keys(PluginBangRegistration.CodingKeys.self),
+      path: "manifest.json bangs")
     if let help = dictionary["help"] as? [String: Any] {
       try rejectUnknownKeys(
         in: help, allowed: keys(PluginHelp.CodingKeys.self), path: "manifest.json help")
@@ -960,58 +1342,46 @@ struct PluginManifest: Decodable, Equatable {
     if let install, install.trimmed.isEmpty {
       throw PluginError.failure("manifest.json field install must not be empty")
     }
-    if capabilities.contains(.networkFetch) != !fetchURLs.isEmpty {
-      throw PluginError.failure(
-        "manifest.json network_fetch capability and fetch_urls must be declared together")
-    }
-    for prefix in fetchURLs where !prefix.hasPrefix("https://") {
-      throw PluginError.failure(
-        "manifest.json fetch_urls entries must be https:// prefixes: \(prefix)")
-    }
-    // Live sources never join the default pool or the first paint, so they
-    // cannot be `locations`. And because one plugin serves one adapter, its
-    // sources are all-warm or all-live — mixing has no wire representation.
-    for descriptor in sources where descriptor.live && descriptor.kind == .locations {
-      throw PluginError.failure(
-        "manifest.json sources entry \(descriptor.name): live cannot combine with "
-          + "kind \"locations\"")
-    }
-    let liveCount = sources.filter(\.live).count
-    if liveCount > 0 && liveCount != sources.count {
-      throw PluginError.failure(
-        "manifest.json sources must be all-warm or all-live; mixing modes in one plugin "
-          + "is not supported")
-    }
-    for action in actions where SourceAction.byWireName[action] == nil {
-      throw PluginError.failure("manifest.json actions names an unknown action: \(action)")
-    }
-    for (name, bindings) in actionBindings {
+    for (key, bindings) in self.bindings {
       for (bundle, binding) in bindings {
-        if let error = binding.validationError(for: name) {
-          throw PluginError.failure(
-            "manifest.json action_bindings \(name.rawValue) for \"\(bundle)\": \(error)")
+        if let error = binding.validationError(for: key) {
+          throw PluginError.failure("manifest.json bindings \(key) for \"\(bundle)\": \(error)")
         }
       }
     }
-    for (name, prompt) in actionConfirmations {
-      // Only an action this plugin performs can be gated by it: a binding
-      // another plugin dispatches is that plugin's to describe.
-      guard actions.contains(name.rawValue) else {
-        throw PluginError.failure(
-          "manifest.json action_confirmations \(name.rawValue) is not in this plugin's actions")
-      }
-      guard !prompt.isEmpty else {
-        throw PluginError.failure(
-          "manifest.json action_confirmations \(name.rawValue) needs a non-empty prompt")
+    for name in settings.keys.sorted() {
+      if let error = settings[name]?.validationError(name: name) {
+        throw PluginError.failure("manifest.json settings.\(name) \(error)")
       }
     }
-    if let sandbox {
-      // Absolute paths pass through; bare tool names (no slash) resolve
-      // through mise/login-PATH at spawn. Relative paths are neither.
-      for path in sandbox.exec where !path.hasPrefix("/") && path.contains("/") {
-        throw PluginError.failure(
-          "manifest.json sandbox.exec entries must be absolute paths or bare tool names: \(path)")
+    for name in watchSettings where settings[name]?.type != .string {
+      throw PluginError.failure(
+        "manifest.json watch_settings names \(name), which settings does not declare as a string")
+    }
+    for name in fetchSettings where settings[name]?.type != .string {
+      throw PluginError.failure(
+        "manifest.json fetch_settings names \(name), which settings does not declare as a string")
+    }
+    if lifecycle == .publishThenExit {
+      guard exec != nil else {
+        throw PluginError.failure("manifest.json lifecycle publish_then_exit needs exec")
       }
+      guard !sources.isEmpty else {
+        throw PluginError.failure("manifest.json lifecycle publish_then_exit needs sources")
+      }
+      guard liveSources == nil else {
+        throw PluginError.failure(
+          "manifest.json lifecycle publish_then_exit publishes its catalog and exits: its "
+            + "sources cannot be live")
+      }
+      let declared = publishThenExitSurfacesDeclared
+      if !declared.isEmpty {
+        throw PluginError.failure(
+          "manifest.json lifecycle publish_then_exit allows sources alone: remove "
+            + declared.joined(separator: ", "))
+      }
+    } else if !watchSettings.isEmpty {
+      throw PluginError.failure("manifest.json watch_settings needs lifecycle publish_then_exit")
     }
     if let exec {
       if exec.isEmpty || exec.contains(where: { $0.trimmed.isEmpty }) {
@@ -1021,28 +1391,67 @@ struct PluginManifest: Decodable, Equatable {
     } else {
       // Manifest-only plugin: no child process ever runs, so any surface
       // that would need RPC into (or events delivered to) the plugin is
-      // invalid. Mappings, help topics, action bindings and app declarations
-      // (terminal emulators, on-demand hints) are the complete allowed
-      // surface.
+      // invalid. Mappings, help topics, bindings and app declarations
+      // (terminal emulators, on-demand hints, own text editing, browser
+      // engines) and query aliases are the complete allowed surface; a core `commands[]` entry needs a process
+      // like any other.
       let processBound: [(String, Bool)] = [
         ("listen", !listen.isEmpty),
         ("hints", hints != nil),
         ("query", query != nil),
         ("commands", !commands.isEmpty),
-        ("verbs", !verbs.isEmpty),
         ("status", !status.isEmpty),
-        ("bangs", bangsBlock != nil),
+        ("bangs", !bangs.isEmpty),
         ("navigation", !navigation.isEmpty),
         ("sources", !sources.isEmpty),
-        ("actions", !actions.isEmpty),
         ("capabilities", !capabilities.isEmpty),
+        ("permissions", !permissions.isEmpty),
+        ("settings", !settings.isEmpty),
         ("sandbox", sandbox != nil),
         ("fetch_urls", !fetchURLs.isEmpty),
+        ("fetch_settings", !fetchSettings.isEmpty),
+        ("fetch_limits", fetchLimits != nil),
+        ("apple_events_targets", !appleEventsTargets.isEmpty),
       ]
       if let field = processBound.first(where: { $0.1 })?.0 {
         throw PluginError.failure(
           "manifest.json without exec cannot declare \(field) — it requires a plugin process")
       }
+    }
+    // A host-performed capability comes with the allowlist it is checked
+    // against, and only with it.
+    if capabilities.contains(.networkFetch) == (fetchURLs.isEmpty && fetchSettings.isEmpty) {
+      throw PluginError.failure(
+        "manifest.json network_fetch capability comes with fetch_urls or fetch_settings, "
+          + "and only with them")
+    }
+    if let fetchLimits {
+      guard capabilities.contains(.networkFetch) else {
+        throw PluginError.failure("manifest.json fetch_limits needs the network_fetch capability")
+      }
+      if let error = fetchLimits.validationError {
+        throw PluginError.failure("manifest.json \(error)")
+      }
+    }
+    for prefix in fetchURLs where !prefix.hasPrefix("https://") {
+      throw PluginError.failure(
+        "manifest.json fetch_urls entries must be https:// prefixes: \(prefix)")
+    }
+    if capabilities.contains(.appleEvents) != !appleEventsTargets.isEmpty {
+      throw PluginError.failure(
+        "manifest.json apple_events capability and apple_events_targets must be declared together"
+      )
+    }
+    for target in appleEventsTargets where !ConfigLoader.isValidBundleID(target) {
+      throw PluginError.failure(
+        "manifest.json apple_events_targets entries must be bundle ids: \(target)")
+    }
+    // `network` composes `network-outbound` into the deny-default profile and
+    // grants nothing else; an unsandboxed process has no profile to widen.
+    if capabilities.contains(.network), sandboxSpec == nil {
+      throw PluginError.failure(
+        "manifest.json network capability only composes the sandbox profile; an unsandboxed "
+          + "plugin cannot declare it")
     }
     let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
     // Reject `.`/`..`/anything containing `..`: the id becomes the plugin's
@@ -1054,14 +1463,15 @@ struct PluginManifest: Decodable, Equatable {
       throw PluginError.failure(
         "manifest.json id must be lowercase [a-z0-9._-] and not contain \"..\"")
     }
-    // A plugin command is always `flash <command> <subcommand>`. A one-word
-    // `verbs` entry, or a command with no subcommand, is rejected here so it
-    // cannot be registered.
-    if !verbs.isEmpty {
-      throw PluginError.commandConflict(
-        "plugin \(id) failed to load: verbs are not a flash command — "
-          + "declare flash <command> <subcommand> in commands")
+    // `[plugins.<id>]` holds a plugin's settings beside `[plugins]`' own.
+    guard !ConfigLoader.pluginsSettingKeys.contains(id) else {
+      throw PluginError.failure("manifest.json id \(id) is a [plugins] setting")
     }
+    // A plugin command is always `flash <command> <subcommand>`, two words of
+    // `[a-z][a-z0-9_]*` like every Flash command (`*` is the wildcard
+    // subcommand). A command with no subcommand is rejected here so it cannot
+    // be registered. An entry under one of Flash's topics is a core command
+    // the plugin performs, so it must name one Flash asks of the focused app.
     for command in commands {
       if command.command.trimmed.isEmpty {
         throw PluginError.failure("plugin command must not be empty")
@@ -1076,13 +1486,67 @@ struct PluginManifest: Decodable, Equatable {
         throw PluginError.failure(
           "plugin command \(command.command) subcommand must be a single token")
       }
+      guard CommandName.isWord(command.command),
+        subcommand == "*" || CommandName.isWord(subcommand)
+      else {
+        throw PluginError.commandConflict(
+          "plugin \(id) failed to load: flash \(command.command) \(subcommand) must be two "
+            + "words of [a-z][a-z0-9_]* (or the * subcommand)")
+      }
+      if command.isCoreCommand {
+        guard subcommand != "*",
+          URLEventHandler.sourceCommandNames.contains(CommandName(command.command, subcommand))
+        else {
+          throw PluginError.failure(
+            "plugin \(id) failed to load: flash \(command.command) \(subcommand) is not a command "
+              + "Flash asks of the focused app")
+        }
+      } else if command.confirm != nil, subcommand == "*" {
+        // The question names what it gates: one command, not whatever
+        // words follow the wildcard.
+        throw PluginError.failure(
+          "manifest.json commands \(command.command) *: confirm needs a named subcommand")
+      }
+      if let confirm = command.confirm, PluginProtocol.confirmPrompt(confirm) == nil {
+        throw PluginError.failure(
+          "manifest.json commands \(command.command) \(subcommand) confirm needs a non-empty "
+            + "prompt of at most \(PluginProtocol.maxConfirmBytes) bytes")
+      }
+      if let error = command.argsValidationError {
+        throw PluginError.failure(
+          "manifest.json commands \(command.command) \(subcommand) \(error)")
+      }
     }
     if let conflict = Self.commandClaimFailures([self])[id] {
       throw PluginError.commandConflict(conflict)
     }
+    // Every source declares one resource type, the word `@<type>` filters by
+    // (`ResourceTypes`): not one Flash feeds, and of its contract's kind.
+    for source in sources {
+      if let reason = ResourceTypes.pluginRejection(type: source.type, kind: source.kind) {
+        throw PluginError.failure("plugin source \(source.name) \(reason)")
+      }
+      // A live source is pulled only while a query is scoped to it; the
+      // default pool, where location rows live, reads pushed catalogs.
+      if source.live != nil, source.kind == .locations {
+        throw PluginError.failure(
+          "plugin source \(source.name) is live and kind locations: location rows belong to "
+            + "the default pool, which reads pushed catalogs")
+      }
+    }
+    // One adapter serves a plugin's sources, live or not as a whole and of
+    // one pull mode.
+    if Set(sources.map(\.live)).count > 1 {
+      throw PluginError.failure(
+        "manifest.json sources all declare the same live, or none does: split pushed and live "
+          + "sources into two plugins")
+    }
     for bang in bangs {
       if bang.token.trimmed.isEmpty {
         throw PluginError.failure("plugin bang token must not be empty")
+      }
+      if CoreBangs.bang(token: bang.token) != nil {
+        throw PluginError.failure("plugin bang \(bang.token) is one of Flash's own bangs")
       }
       // A bang's completion source must be one this plugin actually serves —
       // a typo here would silently swap the pool to nothing.
@@ -1095,7 +1559,7 @@ struct PluginManifest: Decodable, Equatable {
       guard let scope = ModeScope(rawValue: mapping.mode) else {
         throw PluginError.failure(
           "plugin mapping mode \(mapping.mode) must be all, normal, insert, terminal, command, "
-            + "hyper, or hold")
+            + "hyper, hold, text or visual")
       }
       // The config's rule: the command line reads only native chords.
       if scope == .command, ModeMapping.parseNativeHotkey(mapping.key) == nil {
@@ -1122,10 +1586,11 @@ struct PluginManifest: Decodable, Equatable {
     }
   }
 
-  /// Flash subcommand tokens that cannot be shared. A plugin command is
-  /// `flash <command> <subcommand>`; a verb is `flash <name>`. Either token
-  /// colliding with Flash, a reserved query, or another plugin fails every
-  /// plugin that claims it.
+  /// Plugin command names that cannot be shared. A plugin command is
+  /// `flash <command> <subcommand>`; a command name another plugin's own
+  /// command uses fails every plugin that claims it. An entry under one of
+  /// Flash's topics declares a core command and claims no name: `validate()`
+  /// holds it to the commands Flash asks of the focused app.
   static func commandClaimFailures(_ manifests: [PluginManifest]) -> [String: String] {
     struct Claim {
       var pluginID: String
@@ -1152,44 +1617,20 @@ struct PluginManifest: Decodable, Equatable {
             "plugin \(manifest.id) failed to load: flash \(name) \(subcommand) conflicts — "
               + "declared more than once")
         }
+        guard !URLEventHandler.isTopic(name) else { continue }
         if commandNames.insert(name).inserted {
           owners[name, default: []].append(Claim(pluginID: manifest.id))
         }
       }
-      var verbNames = Set<String>()
-      for verb in manifest.verbs {
-        let name = verb.name.trimmed.lowercased()
-        guard !name.isEmpty else { continue }
-        if !verbNames.insert(name).inserted {
-          note(
-            manifest.id,
-            "plugin \(manifest.id) failed to load: flash \(name) conflicts — "
-              + "declared more than once")
-        }
-        if commandNames.contains(name) {
-          note(
-            manifest.id,
-            "plugin \(manifest.id) failed to load: flash \(name) conflicts — "
-              + "used as both a command and a verb")
-        }
-        owners[name, default: []].append(Claim(pluginID: manifest.id))
-      }
     }
     for (token, claims) in owners {
       let plugins = Array(Set(claims.map(\.pluginID))).sorted()
-      let reserved = FlashQuery.reservationMessage(token)
-      let builtin = URLEventHandler.isBuiltInVerb(token)
-      guard plugins.count > 1 || reserved != nil || builtin else { continue }
-      let why: String
-      if let reserved {
-        why = "\(token) is reserved: \(reserved)"
-      } else if builtin {
-        why = "\(token) is one of Flash's own verbs"
-      } else {
-        why = "\(token) is declared by \(plugins.joined(separator: ", "))"
-      }
+      guard plugins.count > 1 else { continue }
       for id in plugins {
-        note(id, "plugin \(id) failed to load: flash \(token) conflicts — \(why)")
+        note(
+          id,
+          "plugin \(id) failed to load: flash \(token) conflicts — \(token) is declared by "
+            + plugins.joined(separator: ", "))
       }
     }
     return failures

@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/plugin/hints.reply.schema.json",
+  "title": "hints reply",
+  "description": "Plugin to host: the hint targets, or a failure the host serves as none. One malformed target rejects the whole reply.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "result"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "definitions.schema.json#/definitions/id"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "targets"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "targets": {
+              "type": "array",
+              "items": {
+                "$ref": "definitions.schema.json#/definitions/hint_target"
+              }
+            },
+            "context_pid": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "definitions.schema.json#/definitions/pid"
+                }
+              ],
+              "description": "The pid the targets were read for; when present it must be the request's."
+            }
+          }
+        },
+        {
+          "$ref": "definitions.schema.json#/definitions/failure"
+        }
+      ]
+    }
+  }
+}

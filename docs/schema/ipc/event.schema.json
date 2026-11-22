@@ -1,0 +1,708 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/aymericbeaumet/flash/main/docs/schema/ipc/event.schema.json",
+  "title": "event",
+  "description": "Resident to client: one host event a subscription names. Payloads describe Flash and the apps it sees; never keys, typed text, clipboard content, window titles or a hint's target.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "seq",
+    "name",
+    "time_ms",
+    "payload"
+  ],
+  "properties": {
+    "type": {
+      "const": "event"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "One sequence for every subscriber of this resident: a gap is an event this client did not ask for, or one its queue coalesced."
+    },
+    "name": {
+      "enum": [
+        "core:apps.launched",
+        "core:apps.terminated",
+        "core:focus.changed",
+        "core:window.focus.changed",
+        "core:config.changed",
+        "core:power.changed",
+        "core:network.changed",
+        "core:volumes.changed",
+        "core:system.slept",
+        "core:system.woke",
+        "core:displays.slept",
+        "core:displays.woke",
+        "core:screen.locked",
+        "core:screen.unlocked",
+        "core:displays.changed",
+        "core:space.changed",
+        "core:user.idle",
+        "core:user.active",
+        "core:usb.attached",
+        "core:usb.detached",
+        "core:clock.minute",
+        "core:workspace.changed",
+        "core:mode.changed",
+        "core:hints.shown",
+        "core:hints.committed",
+        "core:hints.cancelled",
+        "core:monitor.triggered"
+      ]
+    },
+    "time_ms": {
+      "type": "integer",
+      "description": "When it was emitted, in milliseconds since 1970."
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "name": {
+          "const": "core:apps.launched"
+        },
+        "payload": {
+          "$ref": "#/definitions/apps_launched"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:apps.terminated"
+        },
+        "payload": {
+          "$ref": "#/definitions/apps_terminated"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:focus.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/focus_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:window.focus.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/window_focus_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:config.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/config_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:power.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/power_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:network.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/network_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:volumes.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/volumes_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:system.slept"
+        },
+        "payload": {
+          "$ref": "#/definitions/system_slept"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:system.woke"
+        },
+        "payload": {
+          "$ref": "#/definitions/system_woke"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:displays.slept"
+        },
+        "payload": {
+          "$ref": "#/definitions/displays_slept"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:displays.woke"
+        },
+        "payload": {
+          "$ref": "#/definitions/displays_woke"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:screen.locked"
+        },
+        "payload": {
+          "$ref": "#/definitions/screen_locked"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:screen.unlocked"
+        },
+        "payload": {
+          "$ref": "#/definitions/screen_unlocked"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:displays.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/displays_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:space.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/space_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:user.idle"
+        },
+        "payload": {
+          "$ref": "#/definitions/user_idle"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:user.active"
+        },
+        "payload": {
+          "$ref": "#/definitions/user_active"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:usb.attached"
+        },
+        "payload": {
+          "$ref": "#/definitions/usb_attached"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:usb.detached"
+        },
+        "payload": {
+          "$ref": "#/definitions/usb_detached"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:clock.minute"
+        },
+        "payload": {
+          "$ref": "#/definitions/clock_minute"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:workspace.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/workspace_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:mode.changed"
+        },
+        "payload": {
+          "$ref": "#/definitions/mode_changed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:hints.shown"
+        },
+        "payload": {
+          "$ref": "#/definitions/hints_shown"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:hints.committed"
+        },
+        "payload": {
+          "$ref": "#/definitions/hints_committed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:hints.cancelled"
+        },
+        "payload": {
+          "$ref": "#/definitions/hints_cancelled"
+        }
+      }
+    },
+    {
+      "properties": {
+        "name": {
+          "const": "core:monitor.triggered"
+        },
+        "payload": {
+          "$ref": "#/definitions/monitor_triggered"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "apps_launched": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "localized_name": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "bundle_id",
+        "localized_name",
+        "pid"
+      ]
+    },
+    "apps_terminated": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "localized_name": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "bundle_id",
+        "localized_name",
+        "pid"
+      ]
+    },
+    "focus_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "localized_name": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "bundle_id",
+        "localized_name",
+        "pid"
+      ]
+    },
+    "window_focus_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "bundle_id",
+        "pid"
+      ]
+    },
+    "config_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "power_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "network_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "volumes_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "system_slept": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "system_woke": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "displays_slept": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "displays_woke": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "screen_locked": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "screen_unlocked": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "displays_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "displays": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "added",
+        "displays",
+        "removed"
+      ]
+    },
+    "space_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "user_idle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "seconds"
+      ]
+    },
+    "user_active": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "idle_seconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "idle_seconds"
+      ]
+    },
+    "usb_attached": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vendor_id": {
+          "type": "integer"
+        },
+        "product_id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "usb_detached": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vendor_id": {
+          "type": "integer"
+        },
+        "product_id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "clock_minute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "time": {
+          "type": "string",
+          "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+        },
+        "weekday": {
+          "enum": [
+            "mon",
+            "tue",
+            "wed",
+            "thu",
+            "fri",
+            "sat",
+            "sun"
+          ]
+        },
+        "date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "late_seconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "date",
+        "late_seconds",
+        "time",
+        "weekday"
+      ]
+    },
+    "workspace_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "previous": {
+          "type": "string"
+        },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "workspace",
+        "workspaces"
+      ]
+    },
+    "mode_changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "normal, insert, command, terminal, hyper, hold, visual, disabled, or the name of the active layer."
+        },
+        "previous": {
+          "type": "string",
+          "description": "normal, insert, command, terminal, hyper, hold, visual, disabled, or the name of the active layer."
+        }
+      },
+      "required": [
+        "mode",
+        "previous"
+      ]
+    },
+    "hints_shown": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "surface": {
+          "type": "string",
+          "description": "targets, screen, words, scroll, grid, bigram, positions, screens, mouse_dock, mouse_menubar, mouse_notifications or window_switcher."
+        },
+        "targets": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "surface",
+        "targets"
+      ]
+    },
+    "hints_committed": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "surface": {
+          "type": "string",
+          "description": "targets, screen, words, scroll, grid, bigram, positions, screens, mouse_dock, mouse_menubar, mouse_notifications or window_switcher."
+        }
+      },
+      "required": [
+        "surface"
+      ]
+    },
+    "hints_cancelled": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "surface": {
+          "type": "string",
+          "description": "targets, screen, words, scroll, grid, bigram, positions, screens, mouse_dock, mouse_menubar, mouse_notifications or window_switcher."
+        }
+      },
+      "required": [
+        "surface"
+      ]
+    },
+    "monitor_triggered": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "monitor": {
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "warning",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "level",
+        "monitor"
+      ]
+    }
+  }
+}

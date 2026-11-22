@@ -1,4 +1,4 @@
-import ApplicationServices
+@preconcurrency import ApplicationServices
 import FlashCore
 
 /// A cheap, bounded look at whether an app's accessibility tree has been
