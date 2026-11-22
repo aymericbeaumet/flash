@@ -21,7 +21,7 @@ pages of their own.
 | Surfaces | A terminal | Flash's own bar, desktop widgets, popups, including btop itself |
 | Keyboard | Full keyboard and mouse; optional vim keys | Hints, mappings, `mode terminal --name=btop` |
 | Configuration | `btop.conf`, themes, layout presets | One TOML file, live reload, `flash config check` |
-| Maintenance | v1.4.7, May 2026; active | 1.1.0, October 2026 |
+| Maintenance | v1.4.7, May 2026; active | 2.0.0, November 2026 |
 
 ## Where btop is stronger
 

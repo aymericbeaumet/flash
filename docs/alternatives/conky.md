@@ -18,7 +18,7 @@ who left conky behind on a Linux desktop.
 | Definition | Lua config with `${cpu}`-style variables and Lua drawing | `[widgets.<name>]` tables with tmux-format templates |
 | Rendering | X11 window, or console, file and HTTP output | Native click-through layers at desktop level |
 | Data | Built-in variables for CPU, memory, disks, network, battery, processes, and `${exec}` | Bundled plugins for the same, named sources and `#()` jobs |
-| Maintenance | 1.25.4, October 2026; active, Linux first | 1.1.0, October 2026 |
+| Maintenance | 1.25.4, October 2026; active, Linux first | 2.0.0, November 2026 |
 
 ## Where conky is stronger
 

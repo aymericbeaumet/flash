@@ -27,7 +27,7 @@ command-line tool in a popup: Flash cleans nothing and uninstalls nothing.
 | Alerts | Not documented on its product page | Built-in disk, memory, battery and plugin monitors; any threshold; Notification Center with `notify = true` |
 | Surfaces | Dashboard window, status-bar monitor with an editor and themes | Flash's own bar, desktop widgets, popups |
 | Configuration | In-app editor | One TOML file, live reload, `flash config check` |
-| Maintenance | 2.1.3, September 2026 | 1.1.0, October 2026 |
+| Maintenance | 2.1.3, September 2026 | 2.0.0, November 2026 |
 
 ## Where Sensei is stronger
 

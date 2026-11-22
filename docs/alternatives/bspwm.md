@@ -21,7 +21,7 @@ AeroSpace's, and brings the hotkey daemon inside.
 | Keys | None: sxhkd or any other daemon | Built in: chords, modes, layers, per-app tables |
 | Scripting | `bspc` messages, `query` (JSON with `-T`), `subscribe`, `external_rules_command` | The `flash` CLI over a versioned socket ([IPC protocol](../ipc-protocol.md)), `workspace list`, `flash events watch`, events for monitors and plugins |
 | Configuration | `bspwmrc` shell script and `sxhkdrc` | One TOML file, live reload on save |
-| Maintenance | 0.9.12, October 2025 | 1.1.0, October 2026; tiling is new |
+| Maintenance | 0.9.12, October 2025 | 2.0.0, November 2026; tiling is new |
 
 ## Where bspwm is stronger
 

@@ -23,7 +23,7 @@ resident, with its flashlight as the launcher;
 | Pausing, excluding | `clipctl disable`; `ignore_window` by window title | Concealed, transient and auto-generated items are never recorded |
 | Deleting | `clipdel`, `clipdelmenu` | The Clipboard page, `clipboard delete --id=` |
 | Configuration | `~/.config/clipmenu/clipmenu.conf` | `flash.toml` |
-| Maintenance | Untagged since 2020; commits until April 2026 | 1.1.0, October 2026 |
+| Maintenance | Untagged since 2020; commits until April 2026 | 2.0.0, November 2026 |
 
 ## Where clipmenu is stronger
 

@@ -21,7 +21,7 @@ its own. Many people will keep both.
 | Triggers | 39 kinds: hot keys (pressed, released, held, tapped twice or more), typed strings, time of day, cron, periodic, idle, application, focused window, USB device and its keys, Wi-Fi network, mounted volume, power, sleep, wake, unlock, display layout, Space, appearance, clipboard, folder, MIDI, gestures, palettes, status menus, URL, scripts, web server, remote | Keys and sequences per mode and per app; event monitors on apps, focus, windows, displays, Spaces, sleep and wake, lock, idle, USB, network, volumes, power and times of day |
 | Actions | Hundreds, with conditions, loops, variables, prompts, image and OCR searches, clipboard history and filters, scripts | Flash's commands: hints, the mouse grid, windows, tabs, apps, the flashlight, alerts, notifications; any argv |
 | Configuration | The Keyboard Maestro editor | One TOML file, live reload, `flash config check` |
-| Maintenance | 11.1.1, July 2026; active | 1.1.0, October 2026 |
+| Maintenance | 11.1.1, July 2026; active | 2.0.0, November 2026 |
 
 ## Where Keyboard Maestro is stronger
 

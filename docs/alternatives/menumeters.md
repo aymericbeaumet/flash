@@ -18,7 +18,7 @@ actively. They are heavily recommended."
 | Alerts | None | `[monitors.<name>]` warning and error thresholds; Flash's centred alert |
 | Surfaces | Menu-bar items | Flash's own bar, desktop widgets, popups |
 | Configuration | Preferences window | One TOML file |
-| Maintenance | None since 2022; tested up to Catalina, per its site | 1.1.0, October 2026 |
+| Maintenance | None since 2022; tested up to Catalina, per its site | 2.0.0, November 2026 |
 
 ## Where MenuMeters is stronger
 

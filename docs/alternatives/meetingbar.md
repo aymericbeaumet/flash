@@ -24,7 +24,7 @@ an alert before it starts. It has no meeting menu.
 | Joining | One click or a global shortcut; 50+ services; a browser or native app per service | `calendar join` on a key, a bar click or a monitor; eleven services, then the event's URL field; Zoom and Teams open in their apps |
 | Reminders | macOS notifications, an optional full-screen reminder | Flash's centred alert from a monitor, and a macOS notification with `notify = true` |
 | Configuration | Preferences window, Shortcuts, AppleScript | One TOML file, live reload, `flash config check` |
-| Maintenance | 4.11.6, June 2025; 5.0 RC3, October 2026; active | 1.1.0, October 2026 |
+| Maintenance | 4.11.6, June 2025; 5.0 RC3, October 2026; active | 2.0.0, November 2026 |
 
 ## Where MeetingBar is stronger
 

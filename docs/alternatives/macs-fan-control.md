@@ -28,7 +28,7 @@ Control, keep it. This page covers what Flash adds next to it.
 | What heats the Mac | Not its job | Top processes by CPU and memory, the focused app's process tree |
 | Surfaces | Window, configurable menu-bar display | Flash's own bar, desktop widgets, popups |
 | Configuration | Window, fan presets | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.5.22, 13 October 2026; releases follow new Mac models | 1.1.0, October 2026 |
+| Maintenance | 1.5.22, 13 October 2026; releases follow new Mac models | 2.0.0, November 2026 |
 
 ## Where Macs Fan Control is stronger
 

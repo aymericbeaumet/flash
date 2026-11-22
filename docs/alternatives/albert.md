@@ -23,7 +23,7 @@ modes in one app.
 | Plugins | Native C++ and Python, enabled in settings | Processes in any language over JSON lines, most sandboxed |
 | Beyond launching | None | Hints, NORMAL mode, window placement, status bar, popups |
 | Configuration | Settings window, ini file | `flash.toml`, live reload |
-| Maintenance | v35.1.0, July 2026; active | 1.1.0, October 2026 |
+| Maintenance | v35.1.0, July 2026; active | 2.0.0, November 2026 |
 
 ## Where Albert is stronger
 

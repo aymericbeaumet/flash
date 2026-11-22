@@ -5,13 +5,14 @@ Flash is one app, `/Applications/Flash.app`, whose executable is also the
 Once it runs, [getting started](getting-started.md#1-one-hotkey) continues
 with the first hotkey.
 
-This page describes the current source. **The latest stable release is
-1.1.0**, whose commands and configuration differ; follow its
-[getting-started guide](https://github.com/aymericbeaumet/flash/blob/1.1.0/docs/getting-started.md)
-when installing that version. The nightly follows `main`, so it does not
-include changes that exist only on a feature branch. To try this checkout,
-follow [development setup](development.md). Prebuilt releases need none of
-the development tools.
+This page describes Flash 2.0 and later. **Coming from 1.1?** Its commands
+and configuration names changed: the
+[upgrade notes](https://github.com/aymericbeaumet/flash/blob/main/CHANGELOG.md#upgrading-from-11)
+say what to write instead, and `flash config check` names each old spelling
+it meets. The nightly follows `main`, so it does not include changes that
+exist only on a feature branch; to try one, follow
+[development setup](development.md). Prebuilt releases need none of the
+development tools.
 
 ## Requirements
 

@@ -19,7 +19,7 @@ is updated several times a year. It covers exactly what Flash leaves out.
 | Surfaces | Menu-bar item with stacked values, a main window | Flash's own bar, desktop widgets, popups |
 | Keyboard | Global hotkeys for the window and the menu | Hints on bar segments, popups and details by mapping |
 | Helpers | A service that applies fan changes and checks they come from TG Pro | None |
-| Maintenance | 2.104, September 2026; active | 1.1.0, October 2026 |
+| Maintenance | 2.104, September 2026; active | 2.0.0, November 2026 |
 
 ## Where TG Pro is stronger
 

@@ -19,7 +19,7 @@ it measures far more than Flash does.
 | Keyboard | Hotkeys that open and close a menu | Hints on bar segments, popups and details by mapping or `:sysinfo cpu` |
 | Configuration | Settings window, settings export | One TOML file, validated by `flash config check` |
 | Helpers | iStat Menus Helper for sensors, fans and persistent notifications | None; plugins are sandboxed child processes |
-| Maintenance | 7.5, September 2026; active | 1.1.0, October 2026 |
+| Maintenance | 7.5, September 2026; active | 2.0.0, November 2026 |
 
 ## Where iStat Menus is stronger
 

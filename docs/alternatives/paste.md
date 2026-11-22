@@ -23,7 +23,7 @@ same search box as everything else, with a paste that terminals accept.
 | Pasting | Return, Shift-Return for plain text, Command-1 to 9, the Paste Stack | `<cr>`, `<shift-cr>` for plain text, through the app's own paste command |
 | Sync | iCloud, across Mac, iPhone and iPad | None |
 | Configuration | Settings window; four rebindable shortcuts | One TOML file, live reload, `flash config check` |
-| Maintenance | 7.0.3, October 2026; active | 1.1.0, October 2026 |
+| Maintenance | 7.0.3, October 2026; active | 2.0.0, November 2026 |
 
 ## Where Paste is stronger
 

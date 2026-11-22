@@ -22,7 +22,7 @@ looks stay behind, because macOS draws every window itself.
 | Looks | Animations, blur, shadows, gradient borders, shaders | None; macOS's own window chrome |
 | Binds | `hl.bind` with flags (`repeating`, `release`, `long_press`, `locked`), submaps, per-device binds | Chords in every mode, NORMAL keys and sequences, layers |
 | Configuration | `hyprland.lua`, reloaded on save, `hyprctl` | `flash.toml`, reloaded on save, `flash config check` |
-| Maintenance | v0.56.2, August 2026; fast-moving | 1.1.0, October 2026 |
+| Maintenance | v0.56.2, August 2026; fast-moving | 2.0.0, November 2026 |
 
 ## Where Hyprland is stronger
 

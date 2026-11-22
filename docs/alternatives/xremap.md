@@ -21,7 +21,7 @@ rewriting keys goes to [Karabiner-Elements](karabiner-elements.md) or
 | Modes | `set_mode`, `mode:` filters | NORMAL, INSERT, layers |
 | Sequences | Nested `remap` with `timeout_millis` | NORMAL sequences with `sequence_timeout_ms` and a which-key palette |
 | Configuration | YAML or JSON, generated from Ruby or Python if you like; `--watch` for new devices | `flash.toml`, live reload, `flash config check` |
-| Maintenance | v0.15.15, October 2026; frequent releases | 1.1.0, October 2026 |
+| Maintenance | v0.15.15, October 2026; frequent releases | 2.0.0, November 2026 |
 
 ## Where xremap is stronger
 

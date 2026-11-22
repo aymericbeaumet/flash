@@ -16,7 +16,7 @@ most-starred open-source answer to iStat Menus.
 | Surfaces | Menu-bar widgets per module or combined, popups, macOS widgets | Flash's own bar, which hides the native menu bar; desktop widgets; popups |
 | Keyboard | A shortcut per module popup | Hints on bar segments, popups and details by mapping or `:sysinfo cpu` |
 | Configuration | Settings window; export and import | One TOML file, validated by `flash config check` |
-| Maintenance | 3.0.22, October 2026; very active | 1.1.0, October 2026 |
+| Maintenance | 3.0.22, October 2026; very active | 2.0.0, November 2026 |
 
 ## Where Stats is stronger
 

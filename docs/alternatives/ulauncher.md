@@ -21,7 +21,7 @@ launchers with an extension store.
 | Web keywords | Shortcuts: your own keyword, URL or script with `%s` | About 14,500 `!bangs` from DuckDuckGo's and Kagi's lists; aliases for your own spelling |
 | Extensions | Python, a public gallery | Plugins in any language over JSON lines, most sandboxed |
 | Configuration | Preferences window; JSON files | `flash.toml`, live reload |
-| Maintenance | 5.16.2 and v6 beta, September 2026 | 1.1.0, October 2026 |
+| Maintenance | 5.16.2 and v6 beta, September 2026 | 2.0.0, November 2026 |
 
 ## Where Ulauncher is stronger
 

@@ -25,7 +25,7 @@ plugin unchanged and keeps its title; the dropdown is what you give up.
 | Plugin settings | `<xbar.var>` metadata becomes preferences, stored in a `.vars.json` beside the plugin | `env = { … }` on the source |
 | Refreshing | The filename's interval; `xbar://app.xbarapp.com/refreshPlugin?path=…` | `interval`; `flash status refresh --name=<source>`; `flash status set` to push a value |
 | Configuration | The plugins folder and the app's plugin browser | One TOML file, live reload, `flash config check` |
-| Maintenance | v2.1.7-beta, October 2021; catalogue active | 1.1.0, October 2026 |
+| Maintenance | v2.1.7-beta, October 2021; catalogue active | 2.0.0, November 2026 |
 
 ## Where xbar is stronger
 

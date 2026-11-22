@@ -22,7 +22,7 @@ is the macOS widget engine for anything drawn.
 | Interaction | Buttons, sliders, inputs, hover events, `eww open` and `eww close` | Bar: clicks, hover and pinned popups, hints; widgets are click-through |
 | Placement | Any window: anchors, monitor, stacking `fg` or `bg`, reserved space | The top bar band; widgets at desktop level with nine anchors and gaps |
 | Configuration | `eww.yuck` and `eww.scss` | TOML, live reload |
-| Maintenance | v0.6.0, April 2024; slow | 1.1.0, October 2026 |
+| Maintenance | v0.6.0, April 2024; slow | 2.0.0, November 2026 |
 
 ## Where eww is stronger
 

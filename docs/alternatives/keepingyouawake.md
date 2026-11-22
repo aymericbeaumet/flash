@@ -24,7 +24,7 @@ a monitor, and `#{flash.plugin.caffeinate.state}` shows it in Flash's bar.
 | Display | Can allow the display to sleep | Keeps it awake |
 | Scripting | `open -g "keepingyouawake:///activate?minutes=5"`, `deactivate`, `toggle` | `flash caffeinate on --minutes=5`, `off`, `toggle`, `status` |
 | Configuration | Settings window | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.6.8, September 2025; commits in August 2026 | 1.1.0, October 2026 |
+| Maintenance | 1.6.8, September 2025; commits in August 2026 | 2.0.0, November 2026 |
 
 ## Where KeepingYouAwake is stronger
 

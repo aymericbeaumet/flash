@@ -25,7 +25,7 @@ event editing to Calendar, Fantastical or a calendar CLI.
 | Clock | Date and time in your own pattern, or in place of the system clock | `strftime` in `[statusbar] template`, in a bar that replaces the native one |
 | Keyboard | A global shortcut; H, J, K, L with counts, Space for today, `⇧⌘T` to a date | Mappings in every mode; the popup's pager keys; no month navigation |
 | Configuration | Settings window; `itsycal://date/<yyyy-MM-dd>` URL scheme | One TOML file, live reload, `flash config check` |
-| Maintenance | 0.27.3, October 2026; active | 1.1.0, October 2026 |
+| Maintenance | 0.27.3, October 2026; active | 2.0.0, November 2026 |
 
 ## Where Itsycal is stronger
 

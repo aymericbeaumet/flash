@@ -26,7 +26,7 @@ you can turn into triggers.
 | What stays awake | The system, and the display unless you let it sleep; the screen saver if allowed; a closed lid; drives | The system, idle sleep, the disk and the display, as `caffeinate -dimsu`; no closed-lid mode |
 | Status | Its menu-bar icon, time remaining in the menu | `#{flash.plugin.caffeinate.state}` is `on` while held; no time remaining |
 | Configuration | Preferences window, hot keys, AppleScript | One TOML file, live reload, `flash config check`; `flash caffeinate …` from a shell |
-| Maintenance | 5.3.2, November 2023 | 1.1.0, October 2026 |
+| Maintenance | 5.3.2, November 2023 | 2.0.0, November 2026 |
 
 ## Where Amphetamine is stronger
 

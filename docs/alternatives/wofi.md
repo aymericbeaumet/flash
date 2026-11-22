@@ -20,7 +20,7 @@ is the launcher and `flash menu choose` is `wofi --dmenu`.
 | Picker for scripts | `--dmenu` with prompt, images, markup, password mode | `flash menu choose`: lines in, one line out |
 | Looks | CSS on every widget, a colours file | One design |
 | Configuration | `~/.config/wofi/config`, `style.css`, flags | `flash.toml`, live reload |
-| Maintenance | v1.5.3, early 2026; not actively maintained, by its own account | 1.1.0, October 2026 |
+| Maintenance | v1.5.3, early 2026; not actively maintained, by its own account | 2.0.0, November 2026 |
 
 ## Where wofi is stronger
 

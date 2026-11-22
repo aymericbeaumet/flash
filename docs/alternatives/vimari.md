@@ -20,7 +20,7 @@ Store lists macOS 10.12 or later; the README asks for Safari 12.
 | Modes | Normal and insert (2.1), with optional transparent bindings | NORMAL, INSERT, VISUAL, COMMAND, HOLD and layers, across apps |
 | Where it works | Pages Safari loads it into; not the address bar, `topsites://` or Reader | Every app; in Safari the page, toolbar, tab bar, sidebar and menus |
 | Configuration | A settings screen and a JSON file of bindings | One TOML file, live reload, `flash config check` |
-| Maintenance | 2.1.1, January 2021; no commit since April 2021 | 1.1.0, October 2026 |
+| Maintenance | 2.1.1, January 2021; no commit since April 2021 | 2.0.0, November 2026 |
 
 ## Where Vimari is stronger
 

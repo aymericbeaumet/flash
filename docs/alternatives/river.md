@@ -23,7 +23,7 @@ opt-in [tiling](../tiling.md).
 | Workspaces | Tags as a bitmask: a view can carry several, an output can show several | Named workspaces, one per display, a window in exactly one |
 | Modes | `riverctl declare-mode`, `enter-mode`, a `locked` mode for the lock screen | Layers, plus NORMAL and INSERT for every app |
 | Configuration | An executable `init`, often a shell script of `riverctl` calls | `flash.toml`, applied on save, `flash config check` |
-| Maintenance | 0.5.0, October 2026; classic 0.3.17, April 2026 | 1.1.0, October 2026; tiling is new |
+| Maintenance | 0.5.0, October 2026; classic 0.3.17, April 2026 | 2.0.0, November 2026; tiling is new |
 
 ## Where river is stronger
 

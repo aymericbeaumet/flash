@@ -17,7 +17,7 @@ lists no Apple GPU.
 | Alerts | `careful`, `warning` and `critical` thresholds per plugin in `glances.conf`; an events panel; actions that run a command on warning or critical | `[monitors.<name>]` warning and error thresholds on any numeric value; Flash's centred alert |
 | Surfaces | Terminal UI, web UI on port 61208, client and server mode | Flash's own bar, desktop widgets, popups |
 | Scripting | REST API, Python API, an MCP server | Named sources and `#()` jobs feed it; plugins over JSON lines |
-| Maintenance | 4.5.8, October 2026; active | 1.1.0, October 2026 |
+| Maintenance | 4.5.8, October 2026; active | 2.0.0, November 2026 |
 
 ## Where Glances is stronger
 

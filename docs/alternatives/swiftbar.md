@@ -26,7 +26,7 @@ that trade.
 | Plugin kinds | Standard (filename or cron schedule), Shortcuts, Ephemeral (URL scheme), Streamable (`~~~`) | Polled sources, pushed sources (`flash status set`), `#()` jobs that show a running command's latest line |
 | Actions | `href`, `bash`, `refresh`, `shortcut` per line; a `swiftbar://` URL scheme | `#[link=…]`, `[statusbar.click]` actions, popups under a segment, `flash status refresh` |
 | Configuration | A plugin folder, metadata in each script, a preferences window | One TOML file, live reload, `flash config check` |
-| Maintenance | 2.1.1, August 2026; 2.1.2 in beta | 1.1.0, October 2026 |
+| Maintenance | 2.1.1, August 2026; 2.1.2 in beta | 2.0.0, November 2026 |
 
 ## Where SwiftBar is stronger
 

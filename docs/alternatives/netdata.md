@@ -20,7 +20,7 @@ number of charts displaying system metrics is limited".
 | Alerts | Hundreds of built-in alerts, about 18 for the macOS collectors; e-mail, Slack, Telegram, PagerDuty, Discord, Teams and more, sent by the agent itself | `[monitors.<name>]` warning and error thresholds on any numeric value; Flash's centred alert |
 | Surfaces | Web dashboard on `localhost:19999`, Netdata Cloud | Flash's own bar, desktop widgets, popups |
 | Scripting | HTTP API; exports to Prometheus, InfluxDB, Graphite, OpenTSDB | Named sources and `#()` jobs feed it; plugins over JSON lines |
-| Maintenance | v2.12.1, October 2026; very active, macOS best effort | 1.1.0, October 2026 |
+| Maintenance | v2.12.1, October 2026; very active, macOS best effort | 2.0.0, November 2026 |
 
 ## Where Netdata is stronger
 

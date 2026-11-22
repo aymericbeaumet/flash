@@ -18,7 +18,7 @@ the clipboard.
 | Text | Any string, from arguments or stdin, `-d` between keystrokes | The pick of `@emojis`, `@snippets`, `!clip` or a register; no string from the command line |
 | Keys | `-M`/`-m` modifiers, `-P`/`-p` press and release, `-k` press-and-release, `-s` sleep | `key send --keys=…`, `key sequence --keys=…`, `key arrow`, `key system`; commands that resolve per app |
 | Setup | None beyond the compositor's protocol | The Accessibility grant Flash already holds |
-| Maintenance | v0.5, October 2026 | 1.1.0, October 2026 |
+| Maintenance | v0.5, October 2026 | 2.0.0, November 2026 |
 
 ## Where wtype is stronger
 

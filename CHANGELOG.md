@@ -5,7 +5,33 @@ publishes it ([releases](docs/release.md)). Renamed configuration gets no
 compatibility shims: `flash config check` rejects the old spelling, names the
 command it most likely meant, and the upgrade notes below say what to write.
 
-## Unreleased
+## 2.0.0
+
+### Highlights
+
+Every command is now two words (`flash <topic> <action>`), so a
+configuration written for 1.1 needs the upgrade notes below;
+`flash config check` names each old spelling it meets.
+
+- **Vim across macOS.** NORMAL gains counts, `.` repeat, macros, word
+  motions and VISUAL in the focused field, and each app's everyday menu
+  operations as commands.
+- **Windows.** `window switch` lists every window, most recently used
+  first, `@windows` searches them, and opt-in tiling swaps tiles by drag
+  and restores workspace layouts across restarts.
+- **flashlight.** The menu-bar commands of the app you are in (`@menus`),
+  processes, notes, reminders, contacts, your own bangs and quicklinks, and
+  system actions that ask before they act.
+- **Bar and monitors.** The next meeting from your calendar, `[monitors]`
+  that alert or run a command, and status sources that read SwiftBar, xbar,
+  i3blocks and waybar scripts.
+- **Scripting.** A versioned IPC socket with JSON Schemas, shell
+  completions, a man page, and a JSON Schema for `flash.toml`.
+- **Plugins.** More of Flash is a sandboxed plugin: a plugin reads no
+  process but its own, and `feed` and `searchproviders` open no network
+  connection of their own.
+- **Updates and reach.** In-place updates from the About window, and macOS
+  13 Ventura and later, down from macOS 14.
 
 ### Fixes
 

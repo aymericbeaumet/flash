@@ -19,7 +19,7 @@ Flash's hints, which read the macOS Accessibility tree the same way.
 | Actions | Click, several clicks with a count, Shift right-click, Alt drag, Ctrl hover, `hjkl` move and scroll mode | Click, right, middle, double and triple click, move, drag, select, several clicks, copy a link or text, search, words |
 | Beyond hints | A warm daemon, layered labels for overlapping targets | NORMAL mode, grid, bisect, pointer mode, flashlight, bar, window commands, plugins |
 | Configuration | `~/.config/hints/config.json`, per-application AT-SPI rules | `flash.toml`, `[hints]` and per-app mapping tables |
-| Maintenance | 0.1.1, June 2026; a spare-time project | 1.1.0, October 2026; one maintainer |
+| Maintenance | 0.1.1, June 2026; a spare-time project | 2.0.0, November 2026; one maintainer |
 
 ## Where hints is stronger
 

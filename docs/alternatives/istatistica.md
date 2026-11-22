@@ -19,7 +19,7 @@ silicon and still supports OS X 10.11.
 | Surfaces | Menu-bar items, Notification Center widgets, a main window, a web page over the LAN | Flash's own bar, desktop widgets, popups |
 | Scripting | JSON REST API with IP and passkey filters | Named sources and `#()` jobs feed it; plugins over JSON lines |
 | Configuration | Preferences window | One TOML file |
-| Maintenance | 7.1.3; active | 1.1.0, October 2026 |
+| Maintenance | 7.1.3; active | 2.0.0, November 2026 |
 
 ## Where iStatistica is stronger
 

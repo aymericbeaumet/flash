@@ -28,7 +28,7 @@ top edge.
 | Keyboard | Command Bar: search and trigger items, switch presets; quick reveal and custom hotkeys | `mouse menubar` labels, `@menus` search, hints on the bar, NORMAL mode |
 | Automation | Shortcuts, AppleScript, Siri | `flash <topic> <action>` from any shell; `flash status set` |
 | Configuration | Settings window | One TOML file, live reload, `flash config check` |
-| Maintenance | Bartender 7, September 2026; Applause Group | 1.1.0, October 2026 |
+| Maintenance | Bartender 7, September 2026; Applause Group | 2.0.0, November 2026 |
 
 ## Where Bartender is stronger
 

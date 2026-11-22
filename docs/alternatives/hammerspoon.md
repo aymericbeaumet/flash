@@ -23,7 +23,7 @@ some setups the answer is to keep it.
 | Bar and widgets | `hs.menubar` items and `hs.canvas` drawings you write | Status bar and widgets from tmux-style formats and plugin values |
 | Extensibility | Any Lua, any macOS API a module wraps | Plugins over JSON lines, most of them sandboxed; `flash <topic> <action>` and `flash events watch` from any program |
 | Configuration | `~/.hammerspoon/init.lua`, reloaded by your code or the console | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.1.1, February 2026; slow, with Hammerspoon 2 in development | 1.1.0, October 2026 |
+| Maintenance | 1.1.1, February 2026; slow, with Hammerspoon 2 in development | 2.0.0, November 2026 |
 
 ## Where Hammerspoon is stronger
 

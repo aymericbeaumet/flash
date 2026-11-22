@@ -24,7 +24,7 @@ two meet where Phoenix runs `flash`.
 | Windows | Any frame you compute, neighbours by direction, focus, minimize, full screen, close; Spaces queries | Named positions, proportional frames, display moves, focus by direction, minimize, restore, close, native full screen, slots kept through display changes |
 | Events | Apps, windows, screens, Spaces, mouse, sleep and wake, as callbacks | [Monitors](../monitors.md#runs-and-events) on apps, focus, displays, Spaces, sleep, idle, USB and times of day, each running a command |
 | Configuration | `~/.phoenix.js`, reloaded on change | One TOML file, live reload, `flash config check` |
-| Maintenance | 4.0.1, June 2024; 5.0.0 unreleased, last commit August 2025 | 1.1.0, October 2026 |
+| Maintenance | 4.0.1, June 2024; 5.0.0 unreleased, last commit August 2025 | 2.0.0, November 2026 |
 
 ## Where Phoenix is stronger
 

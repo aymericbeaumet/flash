@@ -24,7 +24,7 @@ lose by letting Flash take over, and how to keep both if you prefer.
 | Skips | Concealed, transient and auto-generated types; 1Password, KeeWeb and any type you add; apps you list; a regular expression; pause, or skip the next copy | Concealed, transient and auto-generated items; nothing else to configure |
 | Pins | Option-P; each pin gets a permanent key | `<cmd-p>`; pins list first and are never trimmed |
 | Configuration | Settings window, `defaults` keys | One TOML file, live reload, `flash config check` |
-| Maintenance | 2.7.1, August 2026 | 1.1.0, October 2026 |
+| Maintenance | 2.7.1, August 2026 | 2.0.0, November 2026 |
 
 ## Where Maccy is stronger
 

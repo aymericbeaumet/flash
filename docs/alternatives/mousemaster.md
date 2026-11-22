@@ -24,7 +24,7 @@ do it best.
 | Keyboard | Combos (sequences, chords, holds, taps, tap-dances), remapping, macros, key aliases, virtual keys | Modes, sequences, layers and per-app mappings to commands; no remapping |
 | Beyond pointing | Cursor indicator, conditional properties | NORMAL mode, flashlight, status bar, widgets, popups, window placement, plugins |
 | Configuration | One `.properties` file, live reload, six presets | One TOML file, live reload, `flash config check` |
-| Maintenance | v95, October 2026; macOS testers wanted | 1.1.0, October 2026 |
+| Maintenance | v95, October 2026; macOS testers wanted | 2.0.0, November 2026 |
 
 ## Where mousemaster is stronger
 

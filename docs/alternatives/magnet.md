@@ -19,7 +19,7 @@ closed source.
 | Tiles | Halves, quarters, thirds, two thirds, maximize, centre, restore, next and previous display, custom commands | Halves, quarters, maximize, centred, any proportional frame, display moves, minimize, restore, close, native full screen, placement rules, opt-in tiling |
 | Sync | iCloud, optional | Your dotfiles |
 | Configuration | Settings window | One TOML file, live reload, `flash config check` |
-| Maintenance | 3.0.7, April 2025 | 1.1.0, October 2026 |
+| Maintenance | 3.0.7, April 2025 | 2.0.0, November 2026 |
 
 ## Where Magnet is stronger
 

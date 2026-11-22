@@ -24,7 +24,7 @@ LaunchBar's object browser, and this page says where that leaves you.
 | Acting | Instant Send of a selection to an app, contact or search template; script actions in AppleScript, JavaScript, Ruby, Python or PHP; a `bc` calculator; clipboard history with ClipMerge; snippets; new events and reminders | Every Flash command from `:`; about 14,500 bangs resolved on the Mac; arithmetic, units, currencies, colours and world clocks; `!clip`; `@snippets`; `menu choose` for scripts |
 | Beyond the launcher | File actions on what you browse to | Hints, NORMAL mode, window placement, status bar, widgets, popups |
 | Configuration | Settings window, index rules, an Actions editor | One TOML file, live reload, `flash config check` |
-| Maintenance | 6.24, April 2026; macOS 26 support in 6.22 and 6.23 | 1.1.0, October 2026 |
+| Maintenance | 6.24, April 2026; macOS 26 support in 6.22 and 6.23 | 2.0.0, November 2026 |
 
 ## Where LaunchBar is stronger
 

@@ -24,7 +24,7 @@ instead.
 | In-panel actions | Hide, minimize, close, quit, zoom, reveal in Finder, preview, reopen | None: switch first, then `window close`, `window minimize`, `app quit` |
 | Placement | On screen, in the menu bar, or both | On screen, on the display you are looking at |
 | Configuration | A System Settings pane with ignore lists | One TOML file, live reload, `flash config check` |
-| Maintenance | 4.7, December 2025 | 1.1.0, October 2026 |
+| Maintenance | 4.7, December 2025 | 2.0.0, November 2026 |
 
 ## Where Witch is stronger
 

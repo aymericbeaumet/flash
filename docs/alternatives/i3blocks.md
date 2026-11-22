@@ -21,7 +21,7 @@ travel and only their scheduling moves into `flash.toml`.
 | Scheduling | Seconds, `once`, `repeat`, `persist`, `SIGRTMIN+n` | Seconds, `0` for once, `#()` jobs for long-running scripts, `flash status refresh` |
 | Clicks | Button and coordinates in the script's environment | A click range bound to any command |
 | Configuration | `~/.config/i3blocks/config` | TOML, live reload |
-| Maintenance | 1.5, August 2019; stable | 1.1.0, October 2026 |
+| Maintenance | 1.5, August 2019; stable | 2.0.0, November 2026 |
 
 ## Where i3blocks is stronger
 

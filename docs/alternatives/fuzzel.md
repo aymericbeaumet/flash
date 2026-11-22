@@ -18,7 +18,7 @@ is the launcher and `flash menu choose` the dmenu mode, without fuzzel's
 | Picker for scripts | `--dmenu`, `--dmenu0`, `--index`, field selection, password mode, prompt and message | `flash menu choose`: lines in, one line out |
 | Matching | `exact`, `fzf` or `fuzzy`, with tunable distances | Typo-tolerant tiers and frecency |
 | Configuration | `fuzzel.ini`, `--override` for any key | `flash.toml`, live reload |
-| Maintenance | 1.15.0, September 2026; active | 1.1.0, October 2026 |
+| Maintenance | 1.15.0, September 2026; active | 2.0.0, November 2026 |
 
 ## Where fuzzel is stronger
 

@@ -27,7 +27,7 @@ pages of their own.
 | Runs | Hundreds of App Intents actions with typed fields; Quick Keys; Siri requests on macOS 27 | Every Flash command from `:`, `@system` actions, `@menus`, `@shortcuts`, about 14,500 search bangs |
 | Clipboard | Command-4: text, links and images, kept 30 minutes to 7 days | `!clip`: up to 10,000 entries, pins, images, file copies, pasted for you |
 | Configuration | System Settings › Spotlight | One TOML file, live reload, `flash config check` |
-| Maintenance | Ships with macOS; macOS 27 in September 2026 | 1.1.0, October 2026 |
+| Maintenance | Ships with macOS; macOS 27 in September 2026 | 2.0.0, November 2026 |
 
 ## Where Spotlight is stronger
 

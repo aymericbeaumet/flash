@@ -32,7 +32,7 @@ when the charge runs low.
 | Alerts | Plus: Mac below a percentage or a remaining time, iPhone or iPad below a threshold | The built-in `battery` monitor (below 20 % and 10 %), any threshold you write; the centred alert, Notification Center with `notify = true` |
 | Surfaces | Window, menu bar | Flash's own bar, desktop widgets, text popups |
 | Configuration | Preferences window | One TOML file, live reload, `flash config check` |
-| Maintenance | 4.4, September 2026; updated for every macOS | 1.1.0, October 2026 |
+| Maintenance | 4.4, September 2026; updated for every macOS | 2.0.0, November 2026 |
 
 ## Where coconutBattery is stronger
 

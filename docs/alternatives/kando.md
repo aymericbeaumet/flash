@@ -23,7 +23,7 @@ a menu from the keyboard, and that is where this page compares them.
 | Per context | Menu conditions on the app name, the window name and a screen area | `[mode.apps."<bundle id>"]` tables by exact bundle ID |
 | Look | Menu themes, icon sets, sound themes, a graphical menu editor | A pill label and an orange window border while a layer is on |
 | Configuration | Settings editor; `config.json` and `menus.json`, reloaded when saved | One TOML file, live reload, `flash config check` |
-| Maintenance | 3.0.0, September 2026; active | 1.1.0, October 2026 |
+| Maintenance | 3.0.0, September 2026; active | 2.0.0, November 2026 |
 
 ## Where Kando is stronger
 

@@ -21,7 +21,7 @@ ones on screen, and a do-not-disturb switch.
 | Actions | `on-button-left`, `on-touch`, `on-notify=exec …`, `makoctl invoke`, `makoctl menu` | A click URL or Flash command on your own; `mouse notifications` labels everyone's buttons |
 | Modes | `[mode=…]` sections, `makoctl mode -a/-r/-t` | macOS Focus; `key system --key=focus` |
 | Configuration | `~/.config/mako/config`, `makoctl reload` | `flash.toml` for Flash's own; System Settings for the rest |
-| Maintenance | v1.11.0, March 2026 | 1.1.0, October 2026 |
+| Maintenance | v1.11.0, March 2026 | 2.0.0, November 2026 |
 
 ## Where mako is stronger
 

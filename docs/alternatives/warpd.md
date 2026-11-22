@@ -17,7 +17,7 @@ a Windows alpha in April 2023; the last commit was June 2023, and a February
 | Targets | Pixels: uniform hint labels, grid, history hints; no element detection | Accessibility elements; keyboard grid; bisect |
 | Pointer modes | Normal (vi pointer with counts), hint, two-stage hint, grid, screen selection; drag with `v`, scroll with `e`/`r` | Hints, search, grid, bisect, pointer mode, screens, drag, select, words, path, sticky |
 | Configuration | `~/.config/warpd/config`; CLI flags; built to be scripted | One TOML file; `flash <topic> <action>` CLI |
-| Maintenance | v1.3.5 for macOS, November 2022; no commit since June 2023 | 1.1.0, October 2026 |
+| Maintenance | v1.3.5 for macOS, November 2022; no commit since June 2023 | 2.0.0, November 2026 |
 
 ## Where warpd is stronger
 

@@ -22,7 +22,7 @@ system's own.
 | Web | Web shortcuts you define in System Settings (`gg:`, `wp:`) | About 14,500 `!bangs` from DuckDuckGo's and Kagi's lists |
 | Commands | Any shell command, in a terminal or as another user | `:` for Flash's commands, `:!cmd` for the shell |
 | Extending | C++ runners, D-Bus runners in any language | Plugins in any language over JSON lines |
-| Maintenance | Plasma 6.8, October 2026; active | 1.1.0, October 2026 |
+| Maintenance | Plasma 6.8, October 2026; active | 2.0.0, November 2026 |
 
 ## Where KRunner is stronger
 

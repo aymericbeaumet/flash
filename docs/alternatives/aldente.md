@@ -27,7 +27,7 @@ replaces AlDente. It is about what Flash shows and does around it.
 | Battery figures | macOS charge, the hardware percentage in Pro, a live power-flow diagram, apps using significant energy (Pro) | Charge, state, time estimate, health, design and full-charge capacity, condition, cycles, temperature, adapter watts |
 | Automation | Pro: Shortcuts actions to set the limit, discharge, top up, calibrate, and read percentage, state or temperature | Mappings and monitors that run any command, Shortcuts included |
 | Configuration | Menu-bar popover and dashboard | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.39.4, September 2026; four patch releases that month | 1.1.0, October 2026 |
+| Maintenance | 1.39.4, September 2026; four patch releases that month | 2.0.0, November 2026 |
 
 ## Where AlDente is stronger
 

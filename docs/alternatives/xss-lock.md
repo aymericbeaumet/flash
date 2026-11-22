@@ -23,7 +23,7 @@ sets up becomes a lock setting plus a few Flash event
 | Before sleep | Holds logind's delay lock until the locker is up (`-l`) | macOS locks on sleep itself when the Lock Screen setting requires a password |
 | Warning first | `-n dim-screen.sh` | A `core:user.idle` monitor with a shorter `idle` |
 | Configuration | Command-line flags, `xset s TIMEOUT CYCLE` | System Settings › Lock Screen, `[monitors.<name>]` in `flash.toml` |
-| Maintenance | 0.3.0, 2013; unchanged since 2014 | 1.1.0, October 2026 |
+| Maintenance | 0.3.0, 2013; unchanged since 2014 | 2.0.0, November 2026 |
 
 ## Where xss-lock is stronger
 

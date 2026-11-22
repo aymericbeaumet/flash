@@ -20,7 +20,7 @@ Flash sits above it: KMonad decides what a key sends, Flash what it does.
 | Layers | `layer-toggle`, `layer-switch`, `layer-delay`, `layer-next` | Layers of commands, sticky or one-shot, and HYPER |
 | macOS setup | Build with `stack`, install the DriverKit extension, start its daemon with `sudo`, run as root, grant Input Monitoring | Install the cask, grant Accessibility |
 | Configuration | `.kbd` file, `fallthrough`, `allow-cmd` | `flash.toml`, live reload, `flash config check` |
-| Maintenance | 0.4.5, May 2026 | 1.1.0, October 2026 |
+| Maintenance | 0.4.5, May 2026 | 2.0.0, November 2026 |
 
 ## Where KMonad is stronger
 

@@ -24,7 +24,7 @@ macOS Accessibility.
 | Hints from | The page's DOM, with extended modes (`;y`, `;i`, `;s` …) and CSS selectors (`:hint -c`) | The Accessibility tree |
 | Command line | Ex commands for everything, with completions, `:help`, `:tutor` | `:` for Flash's commands and Vim's ex aliases; the flashlight for tabs, history and bookmarks |
 | Configuration | `:bind`, `:set`, `.tridactylrc`, autocmds | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.25.1, September 2026; active | 1.1.0, October 2026 |
+| Maintenance | 1.25.1, September 2026; active | 2.0.0, November 2026 |
 
 ## Where Tridactyl is stronger
 

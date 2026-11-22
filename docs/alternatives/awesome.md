@@ -20,7 +20,7 @@ tags as workspaces, a bar, rules) as configuration rather than code.
 | Bar, widgets | `awful.wibar` and `wibox` widgets in Lua | Built-in bar and desktop widgets in tmux formats |
 | Notifications | `naughty`, a notification daemon of its own | macOS Notification Center; `notify send` posts to it |
 | Configuration | `rc.lua`, `awesome -k` checks it, `awesome-client` runs Lua live | `flash.toml`, applied on save, `flash config check`, `flash <topic> <action>` |
-| Maintenance | 4.3, January 2019; `master` active | 1.1.0, October 2026; tiling is new |
+| Maintenance | 4.3, January 2019; `master` active | 2.0.0, November 2026; tiling is new |
 
 ## Where awesome is stronger
 

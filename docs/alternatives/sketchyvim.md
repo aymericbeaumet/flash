@@ -26,7 +26,7 @@ editing is SketchyVim's.
 | Text editing | Vim itself through libvim: every mode, the command line, your `svimrc` | In a field you engage (click it, `gi`, leave INSERT there) NORMAL has Vim's motions with counts (`w` `b` `e`, `0` `^` `$`, `%`, `{` `}`, `t` `T` `;` `,`, `H` `M` `L`, `zz`), computed from the field's text; `h` `j` `k` `l` and the half pages move the caret with the app's arrows; VISUAL (`v`, `V`) selects with the motions for `y` (copy) and `p` (paste over). No edit: no operator, change, delete or cut. INSERT gives the keyboard to the app |
 | Hooks | `~/.config/svim/svim.sh` runs on every mode or command-line change, with `$MODE` and `$CMDLINE` | `flash status set` puts a value in the bar the moment a hook runs |
 | Configuration | `svimrc`, `blacklist`, `svim.sh` | One TOML file, live reload, `flash config check` |
-| Maintenance | v1.0.11, February 2024; quiet since | 1.1.0, October 2026 |
+| Maintenance | v1.0.11, February 2024; quiet since | 2.0.0, November 2026 |
 
 ## Where SketchyVim is stronger
 

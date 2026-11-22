@@ -24,7 +24,7 @@ deciding whether to move both, or neither.
 | Skips | Apps you exclude, Universal Clipboard copies, whitespace-only text | Concealed, transient and auto-generated items |
 | Network | Update checks; Firebase analytics and crash reports, on by default, off in Preferences | No analytics; release checks and the plugin requests [privacy](../privacy.md#network) lists |
 | Configuration | Settings window | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.4.0, October 2026; restarted in 2026 | 1.1.0, October 2026 |
+| Maintenance | 1.4.0, October 2026; restarted in 2026 | 2.0.0, November 2026 |
 
 ## Where Clipy is stronger
 

@@ -23,7 +23,7 @@ launchers.
 | Extending | Script modes, C plugins | Plugins in any language over JSON lines |
 | Looks | rasi themes | One look; `suggestion_count` rows |
 | Configuration | `config.rasi`, command-line flags | `flash.toml`, live reload |
-| Maintenance | 2.0.0, September 2025; active | 1.1.0, October 2026 |
+| Maintenance | 2.0.0, September 2025; active | 2.0.0, November 2026 |
 
 ## Where rofi is stronger
 

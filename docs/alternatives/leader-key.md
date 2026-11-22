@@ -23,7 +23,7 @@ lets the same letters do far more than launch.
 | Model | A global shortcut opens a panel; nested groups of single keys; a cheatsheet always, after a delay you set, or on `?` | `<leader>` sequences in NORMAL with a which-key palette after a pause; from any mode, a chord into a layer of keys |
 | Actions | Open an app, a URL or a folder, run a command; a held modifier runs a whole group, or keeps the panel open | Any Flash command or argv: apps, URLs, folders, windows, tabs, hints, the flashlight |
 | Configuration | A settings editor, `config.json` in a folder you choose; a `leaderkey://` URL scheme on its main branch, newer than the last release | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.17.3, September 2025; focus on Tuna since March 2026 | 1.1.0, October 2026 |
+| Maintenance | 1.17.3, September 2025; focus on Tuna since March 2026 | 2.0.0, November 2026 |
 
 ## Where Leader Key is stronger
 

@@ -22,7 +22,7 @@ compatibility.
 | Windows | Snap grids, close, full screen, minimize, move between displays and Spaces, group resize by divider | Named positions, proportional frames, display moves, focus by direction, minimize, restore, close, native full screen, placement rules, opt-in tiling |
 | Beyond windows | Dock, menu bar and tab gestures | Hints, NORMAL mode, flashlight, status bar, widgets, popups, plugins |
 | Configuration | Settings window with a tutorial; each gesture toggled on its icon | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.13.3, September 2026 | 1.1.0, October 2026 |
+| Maintenance | 1.13.3, September 2026 | 2.0.0, November 2026 |
 
 ## Where Swish is stronger
 

@@ -24,7 +24,7 @@ which is roughly what Neverclick's optional Clairvoyance mode does.
 | Tools | Left click, grid, dual, multi and path select, sticky hints, drag, text selection, target snapping | The same set, plus words, search, bisect, pointer mode and HOLD |
 | Beyond pointing | Scroll, move windows between monitors and virtual desktops, open apps | NORMAL mode, flashlight, status bar, widgets, popups, window placement, plugins |
 | Configuration | Settings window with a virtual keyboard; no config files | One TOML file, live reload, `flash config check` |
-| Maintenance | v0.4.2, October 2026; releases about monthly | 1.1.0, October 2026 |
+| Maintenance | v0.4.2, October 2026; releases about monthly | 2.0.0, November 2026 |
 
 ## Where Neverclick is stronger
 

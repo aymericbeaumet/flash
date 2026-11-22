@@ -21,7 +21,7 @@ what a key does goes to Flash.
 | Layers | Stacked layers, modifier layers (`[capslock:C]`), `oneshot`, `toggle`, `swap` | Command layers, sticky or one-shot, and HYPER in NORMAL |
 | Per keyboard, per app | `[ids]` per device; `keyd-application-mapper` for X, sway and GNOME | Every keyboard alike; `[mode.apps."<bundle id>"]` per app |
 | Configuration | ini files, `keyd reload`, `keyd check` | `flash.toml`, live reload, `flash config check` |
-| Maintenance | v2.6.0, December 2025 | 1.1.0, October 2026 |
+| Maintenance | v2.6.0, December 2025 | 2.0.0, November 2026 |
 
 ## Where keyd is stronger
 

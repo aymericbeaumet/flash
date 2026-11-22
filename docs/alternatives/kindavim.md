@@ -30,7 +30,7 @@ mode's basics and otherwise do different halves of the same job.
 | Text editing | Normal, Visual and Command-line modes; motions, operators and text objects (`ciw`, `di(`, `dap`) with counts and repeat in most | In a field you engage (click it, `gi`, leave INSERT there) NORMAL has Vim's motions with counts (`w` `b` `e`, `0` `^` `$`, `%`, `{` `}`, `t` `T` `;` `,`, `H` `M` `L`, `zz`), computed from the field's text; `h` `j` `k` `l` and the half pages move the caret with the app's arrows; VISUAL (`v`, `V`) selects with the motions for `y` (copy) and `p` (paste over). No edit: no operator, change, delete or cut. INSERT gives the keyboard to the app |
 | Mode display | The Characters Window, placed and sized as you like; mode exposed to Karabiner-Elements and in a JSON file | The mode pill in Flash's bar |
 | Configuration | Settings window with per-app guidance (the Wizard), Karabiner-Elements variables | One TOML file, live reload, `flash config check` |
-| Maintenance | Version 97, September 2026; monthly | 1.1.0, October 2026 |
+| Maintenance | Version 97, September 2026; monthly | 2.0.0, November 2026 |
 
 ## Where kindaVim is stronger
 

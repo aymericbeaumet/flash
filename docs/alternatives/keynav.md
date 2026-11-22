@@ -17,7 +17,7 @@ keynav's own keys.
 | Model | One region, cut and moved until you warp or click | Bisect with the same keys, a keyboard-shaped grid, and labels on Accessibility elements |
 | Commands | `cut-*`, `move-*`, `warp`, `click`, `drag`, `windowzoom`, `cursorzoom`, `grid` and `cell-select`, `record` and `playback`, `history-back`, `sh` | `mouse grid --bisect`, `mouse grid`, `mouse target`, `mouse pointer`, `mouse screens`, click flags on every one |
 | Configuration | `~/.config/keynav/keynavrc`: `keysequence cmd1,cmd2,…` | `flash.toml` mappings to `mouse …` commands |
-| Maintenance | Last commit August 2022 | 1.1.0, October 2026 |
+| Maintenance | Last commit August 2022 | 2.0.0, November 2026 |
 
 ## Where keynav is stronger
 

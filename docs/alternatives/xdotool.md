@@ -21,7 +21,7 @@ coordinates and typed text.
 | Pointer | `mousemove` to coordinates or relative, `click`, `mousedown`, `getmouselocation` | `mouse target`, `grid`, `pointer`, `warp`, `nudge`, `button`, `repeat`; no raw coordinates |
 | Windows | `search` by name, class or pid; activate, move, resize, minimize; desktops; `behave` on events | `window …` on the focused window, `app open`, `window switch`, workspaces with `[tiling]`, event monitors |
 | Interface | A CLI and `libxdo` | The `flash` CLI over a versioned Unix socket ([IPC protocol](../ipc-protocol.md)), exit codes 0, 1 and 2 |
-| Maintenance | v4.20260303.1, March 2026; active | 1.1.0, October 2026 |
+| Maintenance | v4.20260303.1, March 2026; active | 2.0.0, November 2026 |
 
 ## Where xdotool is stronger
 

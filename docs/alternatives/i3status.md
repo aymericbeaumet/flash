@@ -21,7 +21,7 @@ without a shell, and a short source covers the rest.
 | Output | i3bar JSON, dzen2, xmobar, lemonbar, terminal, plain | Its own bar, desktop widgets, popups |
 | Colours | `color_good`, `color_degraded`, `color_bad` with thresholds per module | tmux conditionals in the template; monitors for alerts |
 | Configuration | `i3status.conf` with `order +=` and a section per module | One template string in TOML, live reload |
-| Maintenance | 2.15, August 2024; stable | 1.1.0, October 2026 |
+| Maintenance | 2.15, August 2024; stable | 2.0.0, November 2026 |
 
 ## Where i3status is stronger
 

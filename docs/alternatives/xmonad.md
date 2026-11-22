@@ -21,7 +21,7 @@ and Flash covers the keyboard, the bar and a scratchpad, with an opt-in
 | Keys | `keys` and EZConfig (`"M-S-<Return>"`), Submap, per-window keys from contrib | Chords in every mode, NORMAL keys and sequences, layers, per-app tables |
 | Bar | xmobar or any bar through `XMonad.Hooks.StatusBar` | Built in, with `#{flash.workspace}` |
 | Configuration | `xmonad.hs`, compiled; `M-q` recompiles and restarts | `flash.toml`, applied on save, `flash config check` |
-| Maintenance | 0.18.1 / contrib 0.18.2, March 2026; steady | 1.1.0, October 2026; tiling is new |
+| Maintenance | 0.18.1 / contrib 0.18.2, March 2026; steady | 2.0.0, November 2026; tiling is new |
 
 ## Where xmonad is stronger
 

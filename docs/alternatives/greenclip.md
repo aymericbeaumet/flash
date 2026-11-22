@@ -22,7 +22,7 @@ compares the Mac apps that do the same.
 | Exclusions | `blacklisted_applications` by name | Items an app marks concealed, transient or auto-generated |
 | Kept forever | `static_history` | Pins, which trimming never drops |
 | Configuration | `~/.config/greenclip.toml` | `[clipboard] history_size` |
-| Maintenance | v4.3, March 2025 | 1.1.0, October 2026 |
+| Maintenance | v4.3, March 2025 | 2.0.0, November 2026 |
 
 ## Where greenclip is stronger
 

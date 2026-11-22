@@ -24,7 +24,7 @@ one fits.
 | Mouse | Optional focus follows mouse, drag to swap, drag to resize the layout | Drag a tile to another display; hand moves and resizes snap back |
 | Beyond windows | None | Hints, modes, flashlight, status bar, widgets, popups, plugins |
 | Configuration | Preferences window, or `~/.amethyst.yml` overriding it | One TOML file, live reload, `flash config check` |
-| Maintenance | v0.24.3, April 2026; active | 1.1.0, October 2026; tiling is new |
+| Maintenance | v0.24.3, April 2026; active | 2.0.0, November 2026; tiling is new |
 
 ## Where Amethyst is stronger
 

@@ -20,7 +20,7 @@ it sends. The two do different jobs, so keep kanata.
 | Per-app behaviour | Through the TCP server and companions such as kanata-vk-agent | `[mode.apps."<bundle id>"]` tables |
 | macOS requirements | Karabiner driver v6.2.0, run with `sudo` in a terminal | Accessibility |
 | Configuration | `.kbd` S-expressions, live reload, `--check`, an online simulator | `flash.toml`, live reload, `flash config check` |
-| Maintenance | v1.12.0, July 2026; active | 1.1.0, October 2026 |
+| Maintenance | v1.12.0, July 2026; active | 2.0.0, November 2026 |
 
 ## Where kanata is stronger
 

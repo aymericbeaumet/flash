@@ -20,7 +20,7 @@ or [kanata](kanata.md), and Flash takes the keys after them.
 | Model | Unix pipes of raw input events through filters you choose or write | Key presses to commands, by mode and app |
 | Typical use | Caps Lock as Escape and Control (caps2esc), tap or hold keys (dual-function-keys), Space as Meta | Vim-style modes, hints, windows, a bar |
 | Configuration | `udevmon.yaml` jobs, matched by device name or the events it emits | `flash.toml`, live reload, `flash config check` |
-| Maintenance | v0.6.8, November 2021; stable | 1.1.0, October 2026 |
+| Maintenance | v0.6.8, November 2021; stable | 2.0.0, November 2026 |
 
 ## Where Interception Tools is stronger
 

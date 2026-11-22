@@ -20,7 +20,7 @@ dropdown terminal, a bar) in a TOML file, and tiles with an opt-in
 | Groups | Groups with `matches`, `ScratchPad` and `DropDown` | Emulated workspaces, `[[tiling.rules]]`, persistent popups |
 | Bar | `bar.Bar` of Python widgets | Built-in bar of tmux formats, plugin values and command sources |
 | Configuration | `config.py`, `lazy.reload_config()`, `qtile cmd-obj`, `qtile shell` | `flash.toml`, applied on save, `flash config check`, `flash <topic> <action>` |
-| Maintenance | v0.37.1, September 2026; active | 1.1.0, October 2026; tiling is new |
+| Maintenance | v0.37.1, September 2026; active | 2.0.0, November 2026; tiling is new |
 
 ## Where Qtile is stronger
 

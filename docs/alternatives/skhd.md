@@ -25,7 +25,7 @@ driver extension. This page covers both.
 | Actions | Any shell command through `$SHELL -c`; `skhd -k` and `skhd -t` synthesize a key or a line of text | Flash commands in process (windows, hints, tabs, apps, the flashlight, the bar), or any argv |
 | Configuration | `~/.config/skhd/skhdrc`, hotloaded; `skhd --reload` | One TOML file, live reload, `flash config check` |
 | Runs as | A launchd agent (`skhd --start-service`) | The Flash app, a login item while `[app] autostart` is on |
-| Maintenance | skhd: maintenance mode, v0.3.9, May 2023; skhd.zig: 0.2.0, July 2026, active | 1.1.0, October 2026 |
+| Maintenance | skhd: maintenance mode, v0.3.9, May 2023; skhd.zig: 0.2.0, July 2026, active | 2.0.0, November 2026 |
 
 ## Where skhd is stronger
 

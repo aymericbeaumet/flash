@@ -19,7 +19,7 @@ rest, the part that was a compositor's job.
 | Outputs | `output` blocks: mode, position, scale, transform, background, colour profile | None; System Settings › Displays |
 | Gestures, switches | `bindgesture`, `bindswitch` | None bound; `mouse gesture` performs one |
 | Configuration | i3's syntax plus sway's; `swaymsg reload` | TOML, live reload on save |
-| Maintenance | 1.12, May 2026; active | 1.1.0, October 2026 |
+| Maintenance | 1.12, May 2026; active | 2.0.0, November 2026 |
 
 ## Where sway is stronger
 

@@ -24,7 +24,7 @@ marks, a labelled window list and the flashlight around them.
 | Spaces and sets | Right Command plus 1–9 jumps to a Space; Pro sends windows to a Space and saves Stages | No Space control; opt-in [tiling](../tiling.md) workspaces of Flash's own |
 | Scripting | `rcmd` CLI with `--json` over a local connection; an MCP setting for AI agents | `flash <topic> <action>` CLI; `flash resident status --json` |
 | Configuration | Settings window; `rcmd config` | One TOML file, live reload, `flash config check` |
-| Maintenance | 3.6.4, current in October 2026 | 1.1.0, October 2026 |
+| Maintenance | 3.6.4, current in October 2026 | 2.0.0, November 2026 |
 
 ## Where rcmd is stronger
 

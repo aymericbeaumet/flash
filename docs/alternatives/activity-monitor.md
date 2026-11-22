@@ -25,7 +25,7 @@ keyboard.
 | Alerts | None | `[monitors.<name>]` warning and error thresholds; the centred alert, and a macOS notification with `notify = true` |
 | Surfaces | A window, its Dock icon | Flash's own bar, desktop widgets, popups |
 | Configuration | View menu, columns, update frequency | One TOML file, live reload, `flash config check` |
-| Maintenance | Ships with macOS | 1.1.0, October 2026 |
+| Maintenance | Ships with macOS | 2.0.0, November 2026 |
 
 ## Where Activity Monitor is stronger
 

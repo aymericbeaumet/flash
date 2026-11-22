@@ -22,7 +22,7 @@ and prints the one you pick.
 | Options | `-b`, `-l`, `-p`, `-m`, `-fn`, colours, `-w` | None; one look |
 | Launcher | `dmenu_run` over `$PATH` | The flashlight's apps, tabs and windows; `:!cmd` for the shell |
 | Configuration | `config.h`, recompiled; patches | `flash.toml`, live reload |
-| Maintenance | 5.4, August 2025; commits in October 2026 | 1.1.0, October 2026 |
+| Maintenance | 5.4, August 2025; commits in October 2026 | 2.0.0, November 2026 |
 
 ## Where dmenu is stronger
 

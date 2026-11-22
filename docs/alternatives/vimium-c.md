@@ -23,7 +23,7 @@ no commit since April 2025.
 | Search | The Vomnibar: URLs, bookmarks, history and open tabs | The flashlight: every browser's tabs, Chrome's and Firefox's history and bookmarks, apps, windows, plugin data |
 | Key model | `map`, `mapKey`, `map!`, contextual mappings per site, command trees | NORMAL, INSERT and layers; sequences, counts, per-app tables |
 | Configuration | The extension's options page | One TOML file, live reload, `flash config check` |
-| Maintenance | 2.12 in the stores, April 2025; quiet since | 1.1.0, October 2026 |
+| Maintenance | 2.12 in the stores, April 2025; quiet since | 2.0.0, November 2026 |
 
 ## Where Vimium C is stronger
 

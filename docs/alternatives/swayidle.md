@@ -20,7 +20,7 @@ screen saver belong to macOS; Flash adds the hooks around them, as event
 | Lock | `lock`, `unlock` from logind; the locker is yours (swaylock) | `core:screen.locked`, `core:screen.unlocked`; macOS's own lock screen |
 | Inhibition | The compositor holds idle back for an inhibitor (sway's `inhibit_idle`) | `caffeinate on` keeps the Mac awake; `core:user.idle` counts input only |
 | Configuration | Arguments, or `~/.config/swayidle/config` | `[monitors.<name>]` in `flash.toml` |
-| Maintenance | v1.9.0, November 2025 | 1.1.0, October 2026 |
+| Maintenance | v1.9.0, November 2025 | 2.0.0, November 2026 |
 
 ## Where swayidle is stronger
 

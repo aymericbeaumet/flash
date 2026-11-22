@@ -22,7 +22,7 @@ matters most.
 | Custom modules | `exec`, `interval`, `signal`, `return-type: json` with `text`, `tooltip`, `class`, `percentage` | Sources with `output = "waybar"`, which keeps `text` |
 | Actions | `on-click`, `on-click-right`, `on-scroll-up`, menus | Click ranges in `[statusbar.click]`, hover and pinned popups |
 | Configuration | `config.jsonc` and `style.css`, reloaded on `SIGUSR2` | TOML, live reload |
-| Maintenance | 0.15.0, February 2026; active | 1.1.0, October 2026 |
+| Maintenance | 0.15.0, February 2026; active | 2.0.0, November 2026 |
 
 ## Where Waybar is stronger
 

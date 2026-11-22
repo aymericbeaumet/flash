@@ -23,7 +23,7 @@ keyboard, and silencing them. Flash covers those three.
 | From the keyboard | `dunstctl close`, `history-pop`, `context` through dmenu | `mouse notifications` labels banners and their buttons; `notificationcenter toggle` |
 | Pausing | `dunstctl set-paused`, pause levels per rule | macOS Focus; `key system --key=focus` presses the Focus key |
 | Configuration | `dunstrc`, `dunstctl reload` | `flash.toml` for Flash's own; System Settings for the rest |
-| Maintenance | v1.13.2, March 2026; active | 1.1.0, October 2026 |
+| Maintenance | v1.13.2, March 2026; active | 2.0.0, November 2026 |
 
 ## Where dunst is stronger
 

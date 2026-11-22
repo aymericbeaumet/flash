@@ -22,7 +22,7 @@ things.
 | Rules | Simple and complex modifications: `to_if_alone`, `to_if_held_down`, `to_delayed_action`, simultaneous keys; conditions on the frontmost app, the device, the input source, variables and, since 16.0.0, the focused element's role | Mappings per mode (NORMAL, INSERT, VISUAL, HYPER, HOLD, your layers) and per app; sequences, counts, repeat, a which-key palette |
 | Actions | Other keys and mouse events, `shell_command`, `software_function` (open an app, move the pointer, sleep the Mac) | Every Flash command (hints, the grid, windows, tabs, apps, the flashlight, the bar) or any argv |
 | Configuration | A settings window, rules imported from its gallery, `~/.config/karabiner/karabiner.json`, reloaded when it changes | One TOML file, live reload, `flash config check` |
-| Maintenance | 16.3.0, September 2026; four releases since May 2026 | 1.1.0, October 2026 |
+| Maintenance | 16.3.0, September 2026; four releases since May 2026 | 2.0.0, November 2026 |
 
 ## Where Karabiner-Elements is stronger
 

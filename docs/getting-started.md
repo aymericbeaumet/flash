@@ -3,10 +3,11 @@
 Flash starts with one hotkey and grows one table at a time. Everything here
 is also in the browser help (`flash help show`), with your own mappings filled in.
 
-These instructions describe the current source. If you installed stable
-1.1.0, use its [getting-started guide](https://github.com/aymericbeaumet/flash/blob/1.1.0/docs/getting-started.md):
-command and configuration names have changed since that release. A nightly
-tracks `main`; a feature branch requires a [development build](development.md).
+These instructions describe Flash 2.0 and later. Upgrading from 1.1? Command
+and configuration names changed: the
+[upgrade notes](https://github.com/aymericbeaumet/flash/blob/main/CHANGELOG.md#upgrading-from-11)
+say what to write instead. A nightly tracks `main`; a feature branch
+requires a [development build](development.md).
 
 ## Install
 

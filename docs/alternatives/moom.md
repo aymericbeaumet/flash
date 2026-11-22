@@ -20,7 +20,7 @@ the Mac App Store.
 | Many windows | Saved layouts, triggered by hand, by display count or configuration, on wake; can launch their apps and hide the others | `[[window_rules]]` place each app's windows once as they open; slots kept through display changes; opt-in tiling |
 | Scripting | AppleScript: `apply layout`, `run` a custom action | `flash window move …` from any program |
 | Configuration | Settings window | One TOML file, live reload, `flash config check` |
-| Maintenance | 4.6, August 2026; regular releases | 1.1.0, October 2026 |
+| Maintenance | 4.6, August 2026; regular releases | 2.0.0, November 2026 |
 
 ## Where Moom is stronger
 

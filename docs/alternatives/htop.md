@@ -24,7 +24,7 @@ an alert when one of them crosses a line.
 | Alerts | None | `[monitors.<name>]` warning and error thresholds; the centred alert, and a macOS notification with `notify = true` |
 | Surfaces | A terminal | Flash's own bar, desktop widgets, popups, including htop itself |
 | Configuration | The `F2` setup screen, saved to `~/.config/htop/htoprc` | One TOML file, live reload, `flash config check` |
-| Maintenance | 3.5.3, August 2026; active | 1.1.0, October 2026 |
+| Maintenance | 3.5.3, August 2026; active | 2.0.0, November 2026 |
 
 ## Where htop is stronger
 

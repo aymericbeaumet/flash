@@ -23,7 +23,7 @@ while you hold Flash's own hyper key, the NORMAL leader (`\`) by default.
 | Changes what a key sends | Yes: Caps Lock or another modifier to Hyper, or Caps Lock to another key | No |
 | Binds actions | No: other apps record the Hyper chords | Yes: `cmd+ctrl+alt+shift+<key>` in `[mode.all.mappings]`, per mode and per app, and plain keys in NORMAL and layers |
 | Configuration | A few settings in its window | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.56, November 2025; small fixes a few times a year | 1.1.0, October 2026 |
+| Maintenance | 1.56, November 2025; small fixes a few times a year | 2.0.0, November 2026 |
 
 ## Where Hyperkey is stronger
 

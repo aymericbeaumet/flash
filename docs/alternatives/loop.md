@@ -19,7 +19,7 @@ commits continue in October 2026.
 | Actions | Halves, quarters, thirds, fourths, maximize, almost maximize, centre, grow and shrink by edge, move, undo, initial frame, stash, cycles, custom frames, focus by direction | Named positions, proportional frames, display moves, focus by direction, minimize, restore, close, native full screen, placement rules, opt-in tiling |
 | Scripting | `loop://` URLs from a shell or AppleScript | `flash window move …` from any program; mappings run any argv |
 | Configuration | Settings window; themes for the menu and preview | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.4.2, January 2026; active | 1.1.0, October 2026 |
+| Maintenance | 1.4.2, January 2026; active | 2.0.0, November 2026 |
 
 ## Where Loop is stronger
 

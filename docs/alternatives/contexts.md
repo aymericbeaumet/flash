@@ -23,7 +23,7 @@ pick from, with the flashlight's `@windows` search and the
 | Lists | Command-Tab by window, Command-Backquote for the front app, a Sidebar grouped by Space, filters by Space | `window switch` (`:ls`): every window, most recently used first, one hint label each |
 | Without a list | Fast Search: hold Fn, type, release | `window last`, `window next`, marks, hints, `window focus --direction` |
 | Configuration | A preferences window, several switchers with their own shortcuts | One TOML file, live reload, `flash config check` |
-| Maintenance | 3.9.0, August 2022; none since | 1.1.0, October 2026 |
+| Maintenance | 3.9.0, August 2022; none since | 2.0.0, November 2026 |
 
 ## Where Contexts is stronger
 
@@ -43,7 +43,7 @@ pick from, with the flashlight's `@windows` search and the
 ## Where Flash is stronger
 
 - **Maintained, and on current macOS.** Contexts has not shipped since
-  2022 and its page stops at Sequoia; Flash 1.1.0 shipped in October 2026.
+  2022 and its page stops at Sequoia; Flash 2.0.0 shipped in November 2026.
 - **One keystroke per window in the list.** Every row of `window switch`
   carries a hint label, so the list doubles as a jump table when you already
   know which window you want.

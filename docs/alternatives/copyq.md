@@ -23,7 +23,7 @@ two can share the work.
 | Automation | Commands on copy, on a shortcut or from the menu; a scripting API; a full CLI | `flash clipboard show`, `restore`, `pin`, `delete` from any shell |
 | Protection | Concealed copies ignored by default; encrypted tabs (since 14.0.0); ignore copies from chosen windows or containing chosen text | Concealed, transient and auto-generated items never recorded |
 | Configuration | Preferences, commands dialog, scripts | One TOML file, live reload, `flash config check` |
-| Maintenance | 17.0.0, October 2026; active | 1.1.0, October 2026 |
+| Maintenance | 17.0.0, October 2026; active | 2.0.0, November 2026 |
 
 ## Where CopyQ is stronger
 

@@ -20,7 +20,7 @@ libX11, where it reaches only X11 windows. Flash's `window` and
 | Which window | Any: by title substring, class (`-x`), id (`-i`), `:ACTIVE:` or `:SELECT:` | The focused window; others through the switcher, `@windows` or `app open` |
 | Queries | `-l` windows, `-d` desktops, `-m` window manager | `workspace list` with `[tiling]`, `resident status --json`; no window list for scripts |
 | Placement | `-e gravity,x,y,w,h` in pixels; `-b` states (maximized, fullscreen, sticky, above, shaded) | Named positions, percentages of the usable frame, `--screen=+1`, full screen; rules when windows appear |
-| Maintenance | 1.07, 2005; patches in forks and distributions | 1.1.0, October 2026 |
+| Maintenance | 1.07, 2005; patches in forks and distributions | 2.0.0, November 2026 |
 
 ## Where wmctrl is stronger
 

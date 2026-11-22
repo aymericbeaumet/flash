@@ -21,7 +21,7 @@ plugins instead of modules and runs your scripts as sources.
 | Scripts | `custom/script` (`exec`, `interval`, `tail`), `custom/ipc` hooks | Named sources and `#()` jobs; `output = "i3blocks"` and `"waybar"` for other bars' scripts |
 | Clicks, scroll | `click-left`, `scroll-up` and `%{A1:…:}` on any text | `#[range=user\|name]` spans bound in `[statusbar.click]`; clicks only |
 | Configuration | `config.ini`, `polybar-msg cmd restart` | TOML, live reload |
-| Maintenance | 3.7.2, August 2024; quiet since 2025 | 1.1.0, October 2026 |
+| Maintenance | 3.7.2, August 2024; quiet since 2025 | 2.0.0, November 2026 |
 
 ## Where polybar is stronger
 

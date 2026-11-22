@@ -26,7 +26,7 @@ edge.
 | Showing them again | Click the arrow, a global shortcut, or hover with a Terminal-only setting; auto-collapse after a delay | Reach the top edge; macOS slides the native bar back |
 | Keyboard | One global shortcut to expand or collapse | `mouse menubar` labels app menus and status items; hints on Flash's bar; NORMAL mode |
 | Configuration | A small Preferences window and a few `defaults` keys | One TOML file, live reload, `flash config check` |
-| Maintenance | 1.11.1, September 2026 | 1.1.0, October 2026 |
+| Maintenance | 1.11.1, September 2026 | 2.0.0, November 2026 |
 
 ## Where Hidden Bar is stronger
 

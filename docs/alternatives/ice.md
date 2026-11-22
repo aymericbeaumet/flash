@@ -26,7 +26,7 @@ edge.
 | Finding an item | A search panel on a hotkey | `mouse menubar`: a label on each app menu and status item on screen |
 | Appearance | Tint (solid or gradient), shadow, border, rounded or split shapes for the native bar | Styles in the template, for Flash's own bar |
 | Configuration | Settings window | One TOML file, live reload, `flash config check` |
-| Maintenance | 0.11.12, October 2024; betas to September 2025; macOS 27 support an open pull request | 1.1.0, October 2026 |
+| Maintenance | 0.11.12, October 2024; betas to September 2025; macOS 27 support an open pull request | 2.0.0, November 2026 |
 
 ## Where Ice is stronger
 
@@ -63,7 +63,7 @@ edge.
 - **No screen capture.** Flash finds status items from WindowServer
   geometry and draws its labels over them; it never reads their images, and
   [privacy](../privacy.md) lists every permission it can ask for.
-- **Maintained in the open.** Flash 1.1.0 shipped in October 2026; Ice's
+- **Maintained in the open.** Flash 2.0.0 shipped in November 2026; Ice's
   stable release is from October 2024, and the macOS 26 and 27 work sits in
   betas and pull requests.
 

@@ -22,7 +22,7 @@ Mac apps.
 | Limits | `max-items` (750 by default), `max-store-size`, a minimum length | `[clipboard] history_size` (1000 by default, up to 10,000); pins never trimmed |
 | Pruning | `delete`, `delete-query "secret"`, `wipe` | The Clipboard page, `clipboard delete --id=` |
 | Configuration | Flags, `CLIPHIST_*` variables or `~/.config/cliphist/config` | `flash.toml` |
-| Maintenance | v0.7.0, October 2025; active | 1.1.0, October 2026 |
+| Maintenance | v0.7.0, October 2025; active | 2.0.0, November 2026 |
 
 ## Where cliphist is stronger
 

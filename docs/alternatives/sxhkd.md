@@ -21,7 +21,7 @@ where sxhkd's chains go.
 | Release, replay | `@` runs on release, `~` replays the event to the app | Key down only; a mapped chord never reaches the app |
 | Scope | Global | Global, per mode, and per app by bundle ID |
 | Configuration | `sxhkdrc`; `SIGUSR1` reloads it | TOML, live reload on save, `flash config check` |
-| Maintenance | 0.6.3, September 2025 | 1.1.0, October 2026 |
+| Maintenance | 0.6.3, September 2025 | 2.0.0, November 2026 |
 
 ## Where sxhkd is stronger
 

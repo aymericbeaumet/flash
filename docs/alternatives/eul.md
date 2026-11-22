@@ -17,7 +17,7 @@ universal binary for macOS 10.15 and later.
 | Alerts | None | `[monitors.<name>]` warning and error thresholds; Flash's centred alert |
 | Surfaces | Menu-bar components, four macOS widgets | Flash's own bar, desktop widgets, popups |
 | Configuration | Preferences window | One TOML file |
-| Maintenance | None since 2022 | 1.1.0, October 2026 |
+| Maintenance | None since 2022 | 2.0.0, November 2026 |
 
 ## Where eul is stronger
 

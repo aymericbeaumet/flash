@@ -18,7 +18,7 @@ ydotool script that acts on the desktop, by command rather than by keycode.
 | Keys | `key 29:1 46:1 46:0 29:0` (raw keycodes, press and release), `type` text | `key send --keys=cmd+c`, `key sequence`, `key arrow`; commands such as `clipboard copy` |
 | Pointer | `click` with a button bitmask, `mousemove` relative or `--absolute` | `mouse button`, `nudge`, `warp`, `target`, `grid`, `pointer`; no absolute coordinates |
 | Setup | `ydotoold` running, with access to `/dev/uinput` | The Accessibility grant |
-| Maintenance | v1.0.4, January 2023; commits until December 2025 | 1.1.0, October 2026 |
+| Maintenance | v1.0.4, January 2023; commits until December 2025 | 2.0.0, November 2026 |
 
 ## Where ydotool is stronger
 
