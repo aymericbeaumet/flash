@@ -1069,11 +1069,11 @@ mod tests {
             "{} bytes",
             KAGI_TEXT.len()
         );
-        assert!(KAGI_TEXT.contains("at commit 9867d7e7aecdf013f96d4ff0ce4b9667bfacc137"));
+        assert!(KAGI_TEXT.contains("at commit af28e0bd9169fc76ada4db54536e4d72c5350a4a"));
         let triggers: Vec<&str> = records(KAGI_TEXT)
             .map(|(_, line)| line.split('\t').next().unwrap())
             .collect();
-        assert_eq!(triggers.len(), 10_910);
+        assert_eq!(triggers.len(), 10_911);
         assert!(
             triggers
                 .windows(2)
@@ -1084,8 +1084,8 @@ mod tests {
             .filter_map(|(_, line)| kagi_record(line))
             .map(|(_, aliases)| aliases.split(' ').filter(|a| !a.is_empty()).count())
             .sum();
-        assert_eq!(triggers.len() + aliases, 13_637, "every trigger and alias");
-        assert_eq!(KAGI.len() + KAGI.dropped(), 13_637);
+        assert_eq!(triggers.len() + aliases, 13_641, "every trigger and alias");
+        assert_eq!(KAGI.len() + KAGI.dropped(), 13_641);
         assert!(KAGI.len() > 13_000 && KAGI.len() <= MAX_BANGS);
     }
 
