@@ -11,9 +11,17 @@ Start with that one shortcut. Add a Vim-like normal mode, window controls,
 a tmux-style status bar, desktop widgets or terminal popups when you want
 them, all from one TOML file.
 
+One app covers the ground that usually takes a hint tool, a Vim layer, a
+launcher, a window manager and a status bar. Normal mode, the bar, widgets
+and popups stay off until you configure them, and
+[the comparison](#how-it-compares) says where the tools you already use are
+better.
+
 [Get started](docs/getting-started.md) · [Manual](https://aymericbeaumet.github.io/flash/) ·
 [Compare tools](docs/comparison.md) · [Privacy](docs/privacy.md) ·
 [Report a bug](https://github.com/aymericbeaumet/flash/issues/new/choose)
+
+![Flash: press ⌘⇧Space, then type the label on a control](docs/assets/social-card.jpg)
 
 <!-- Recorded media, listed in docs/assets/README.md, goes here.
 ![Hints in Safari, System Settings and the Dock](docs/assets/hero.gif)
@@ -26,12 +34,6 @@ Flash is free and open source (MIT), written in Swift with plugins in Rust. It
 needs macOS 13 or later on Intel or Apple Silicon and the Accessibility permission.
 
 ## Install
-
-> **This checkout documents the next release.** The latest stable release,
-> 1.1.0, uses different command and configuration names. Installing it?
-> Follow the [1.1.0 getting-started guide](https://github.com/aymericbeaumet/flash/blob/1.1.0/docs/getting-started.md).
-> Building this branch? Use the [development setup](docs/development.md).
-> [Upgrade notes](CHANGELOG.md#upgrading-from-11) explain the changes.
 
 ```sh
 brew install --cask aymericbeaumet/tap/flash
@@ -132,42 +134,32 @@ scrolls, `/` opens Find and `i` switches to INSERT while you type.*
 Everything reloads live when you save. There is no preferences window; the
 menu-bar icon offers About, Open Configuration, and Quit.
 
-## Modular, and loaded on demand
+## How it compares
 
-Flash is one small resident process plus plugins. Each plugin is a separate
-program with declared capabilities. Most run in a sandbox; plugins that need
-unsandboxed access are listed in the [privacy inventory](docs/privacy.md#plugin-isolation).
-Any plugin can be turned off with one line (`[plugins] disabled = ["feed"]`).
-The surfaces you do not configure do not exist at runtime:
+Flash covers ground that usually takes several apps. Each line is one of
+those areas, the tools people use for it, and a page that says honestly
+where they are better and how to move over.
 
-| You configure | Flash starts | Otherwise |
+| Area | In Flash | Tools it compares with |
 | --- | --- | --- |
-| A hotkey | That one hotkey registration | Nothing registered |
-| `[statusbar] enabled = true` | The bar, its clock and the plugins its template names | No bar polling, the native menu bar untouched |
-| `[widgets.<name>]` | One desktop window per widget per display, its sources | No windows |
-| `[monitors.<name>]` (battery, disk, memory and plugin health are built in) | Its evaluation beside the bar, the plugins and sources its value reads, an alert when it crosses a threshold | Nothing evaluated |
-| A terminal popup | A process when opened; persistent and prewarmed popups start ahead | No PTY |
-| A status plugin named in a template (feed, the AI quotas…) | That plugin, while a visible surface reads it | Not running |
-| A `sysinfo` segment in a template (CPU, memory, disks, network, battery) | That domain's sampling, while a visible surface reads it | No sampling |
-| A command such as `:screenshot screen` | Its plugin on first use | Not running |
-| A mapping that runs a plugin command | That plugin, once launch has settled | Started by its first command |
-| `:help` or `[debug] http_inspector_enabled` | The local help server | No listener |
-| `[startup] run` (a `defaults write` line, `killall Dock`…) | Those commands, once after launch, in order | Nothing run, no macOS setting touched |
+| Clicking by keyboard | Hints, search, grid, bisect, drag, selection | [Neru](docs/alternatives/neru.md) · [Homerow](docs/alternatives/homerow.md) · [Shortcat](docs/alternatives/shortcat.md) · [Scoot](docs/alternatives/scoot.md) · [Vimac](docs/alternatives/vimac.md) · [Mouseless](docs/alternatives/mouseless.md) · [Wooshy](docs/alternatives/wooshy.md) · [Superkey](docs/alternatives/superkey.md) · [warpd](docs/alternatives/warpd.md) · [Neverclick](docs/alternatives/neverclick.md) · [mousemaster](docs/alternatives/mousemaster.md) |
+| Vim keys everywhere | NORMAL, INSERT, COMMAND and TERMINAL modes across every app | [Vimium](docs/alternatives/vimium.md) · [Surfingkeys](docs/alternatives/surfingkeys.md) · [Tridactyl](docs/alternatives/tridactyl.md) · [Vimium C](docs/alternatives/vimium-c.md) · [Vimari](docs/alternatives/vimari.md) · [kindaVim](docs/alternatives/kindavim.md) · [SketchyVim](docs/alternatives/sketchyvim.md) |
+| Keyboard automation | Mappings to any command or executable, per app, and layers of your own (skhd modes, modal hotkeys) | [Hammerspoon](docs/alternatives/hammerspoon.md) · [Karabiner-Elements](docs/alternatives/karabiner-elements.md) · [skhd](docs/alternatives/skhd.md) · [Hyperkey](docs/alternatives/hyperkey.md) · [Leader Key](docs/alternatives/leader-key.md) · [Keyboard Maestro](docs/alternatives/keyboard-maestro.md) · [BetterTouchTool](docs/alternatives/bettertouchtool.md) |
+| Search and launching | flashlight: apps, tabs, windows, tmux, emoji, math, currency, plugin data | [Raycast](docs/alternatives/raycast.md) · [Alfred](docs/alternatives/alfred.md) · [Spotlight](docs/alternatives/spotlight.md) · [LaunchBar](docs/alternatives/launchbar.md) · [Kando](docs/alternatives/kando.md) |
+| Status bar | tmux-format templates fed by plugins, shell jobs and SwiftBar, xbar, i3blocks or waybar scripts | [SketchyBar](docs/alternatives/sketchybar.md) · [SwiftBar](docs/alternatives/swiftbar.md) · [xbar](docs/alternatives/xbar.md) · [Ice](docs/alternatives/ice.md) · [Bartender](docs/alternatives/bartender.md) · [Hidden Bar](docs/alternatives/hidden-bar.md) · [MeetingBar](docs/alternatives/meetingbar.md) · [Itsycal](docs/alternatives/itsycal.md) |
+| Desktop widgets | The same templates, drawn below your windows | [Übersicht](docs/alternatives/uebersicht.md) · [conky](docs/alternatives/conky.md) |
+| Terminal popups | Any TUI in a real PTY under a bar segment | None; Flash shows btop, newsboat or calcurse instead of rebuilding them |
+| System monitoring | Bar values and widgets, thresholds that raise an alert, btop in a popup; no temperature or fan sensors | [iStat Menus](docs/alternatives/istat-menus.md) · [Stats](docs/alternatives/stats.md) · [iStatistica](docs/alternatives/istatistica.md) · [TG Pro](docs/alternatives/tg-pro.md) · [eul](docs/alternatives/eul.md) · [MenuMeters](docs/alternatives/menumeters.md) · [btop](docs/alternatives/btop.md) · [htop](docs/alternatives/htop.md) · [Activity Monitor](docs/alternatives/activity-monitor.md) · [Glances](docs/alternatives/glances.md) · [Netdata](docs/alternatives/netdata.md) · [coconutBattery](docs/alternatives/coconutbattery.md) · [AlDente](docs/alternatives/aldente.md) · [Macs Fan Control](docs/alternatives/macs-fan-control.md) · [Sensei](docs/alternatives/sensei.md) |
+| Window switching | Every window, most recently used first, one hint label per row, `@windows` search; no thumbnails, no hold-to-cycle | [AltTab](docs/alternatives/alttab.md) · [Witch](docs/alternatives/witch.md) · [Contexts](docs/alternatives/contexts.md) · [rcmd](docs/alternatives/rcmd.md) |
+| Clipboard history | `!clip`: pins, images, plain-text paste, terminal-aware paste | [Maccy](docs/alternatives/maccy.md) · [Paste](docs/alternatives/paste.md) · [Clipy](docs/alternatives/clipy.md) · [CopyQ](docs/alternatives/copyq.md) |
+| Window placement | Named positions kept through display changes, rules, directional focus, full screen, and opt-in AeroSpace-style [tiling and workspaces](docs/tiling.md) | [AeroSpace](docs/alternatives/aerospace.md) · [yabai](docs/alternatives/yabai.md) · [Rectangle](docs/alternatives/rectangle.md) · [Amethyst](docs/alternatives/amethyst.md) · [Loop](docs/alternatives/loop.md) · [Magnet](docs/alternatives/magnet.md) · [Moom](docs/alternatives/moom.md) · [Swish](docs/alternatives/swish.md) · [Phoenix](docs/alternatives/phoenix.md) |
+| Plugins | Sandboxed JSON-lines processes in any language, one set for all of the above | Raycast's store, Hammerspoon's Spoons |
 
-What does start at launch, with any configuration: the Accessibility
-observer for the focused app, so hints are ready before you press the key;
-one on the Dock, so `missioncontrol show` and `hide` know which view is up;
-the keyboard tap that decides which keys Flash swallows; the private socket
-the `flash` command and your scripts reach it through, idle until one
-connects ([IPC protocol](docs/ipc-protocol.md)); the plugins that
-feed hints and search (browsers, terminals and the other catalog sources)
-and `media`, which follows which media apps run,
-from 2 MB to about 30 MB each ([footprint](docs/performance.md#footprint));
-and, until you disable them, the
-built-in [monitors](docs/monitors.md), which keep the `sysinfo` plugin's
-battery and disk figures sampled. The [architecture guide](docs/architecture.md#what-starts-at-launch)
-lists every one with its cost, and `flash resident status` and the `/plugins` help
-page show what is running on your Mac right now.
+What Flash will not do: read pixels, run on Linux or Windows, remap
+hardware keys or expand text. The [alternatives index](docs/alternatives/README.md)
+says more, [coming from Linux](docs/alternatives/README.md#coming-from-linux) has a
+page for each i3, Hyprland, rofi or Waybar setup, the [comparison table and FAQ](docs/comparison.md) is the one-screen
+summary, and [troubleshooting](docs/troubleshooting.md) starts with `flash resident doctor`.
 
 ## What Flash will not do
 
@@ -248,32 +240,42 @@ prompt, request and file is listed on the [privacy page](docs/privacy.md).
   `~/Library/Application Support/Flash`, readable only by you. Clipboard
   history skips items that password managers mark as concealed or transient.
 
-## How it compares
+## Modular, and loaded on demand
 
-Flash covers ground that usually takes several apps. Each line is one of
-those areas, the tools people use for it, and a page that says honestly
-where they are better and how to move over.
+Flash is one small resident process plus plugins. Each plugin is a separate
+program with declared capabilities. Most run in a sandbox; plugins that need
+unsandboxed access are listed in the [privacy inventory](docs/privacy.md#plugin-isolation).
+Any plugin can be turned off with one line (`[plugins] disabled = ["feed"]`).
+The surfaces you do not configure do not exist at runtime:
 
-| Area | In Flash | Tools it compares with |
+| You configure | Flash starts | Otherwise |
 | --- | --- | --- |
-| Clicking by keyboard | Hints, search, grid, bisect, drag, selection | [Neru](docs/alternatives/neru.md) · [Homerow](docs/alternatives/homerow.md) · [Shortcat](docs/alternatives/shortcat.md) · [Scoot](docs/alternatives/scoot.md) · [Vimac](docs/alternatives/vimac.md) · [Mouseless](docs/alternatives/mouseless.md) · [Wooshy](docs/alternatives/wooshy.md) · [Superkey](docs/alternatives/superkey.md) · [warpd](docs/alternatives/warpd.md) · [Neverclick](docs/alternatives/neverclick.md) · [mousemaster](docs/alternatives/mousemaster.md) |
-| Vim keys everywhere | NORMAL, INSERT, COMMAND and TERMINAL modes across every app | [Vimium](docs/alternatives/vimium.md) · [Surfingkeys](docs/alternatives/surfingkeys.md) · [Tridactyl](docs/alternatives/tridactyl.md) · [Vimium C](docs/alternatives/vimium-c.md) · [Vimari](docs/alternatives/vimari.md) · [kindaVim](docs/alternatives/kindavim.md) · [SketchyVim](docs/alternatives/sketchyvim.md) |
-| Keyboard automation | Mappings to any command or executable, per app, and layers of your own (skhd modes, modal hotkeys) | [Hammerspoon](docs/alternatives/hammerspoon.md) · [Karabiner-Elements](docs/alternatives/karabiner-elements.md) · [skhd](docs/alternatives/skhd.md) · [Hyperkey](docs/alternatives/hyperkey.md) · [Leader Key](docs/alternatives/leader-key.md) · [Keyboard Maestro](docs/alternatives/keyboard-maestro.md) · [BetterTouchTool](docs/alternatives/bettertouchtool.md) |
-| Search and launching | flashlight: apps, tabs, windows, tmux, emoji, math, currency, plugin data | [Raycast](docs/alternatives/raycast.md) · [Alfred](docs/alternatives/alfred.md) · [Spotlight](docs/alternatives/spotlight.md) · [LaunchBar](docs/alternatives/launchbar.md) · [Kando](docs/alternatives/kando.md) |
-| Status bar | tmux-format templates fed by plugins, shell jobs and SwiftBar, xbar, i3blocks or waybar scripts | [SketchyBar](docs/alternatives/sketchybar.md) · [SwiftBar](docs/alternatives/swiftbar.md) · [xbar](docs/alternatives/xbar.md) · [Ice](docs/alternatives/ice.md) · [Bartender](docs/alternatives/bartender.md) · [Hidden Bar](docs/alternatives/hidden-bar.md) · [MeetingBar](docs/alternatives/meetingbar.md) · [Itsycal](docs/alternatives/itsycal.md) |
-| Desktop widgets | The same templates, drawn below your windows | [Übersicht](docs/alternatives/uebersicht.md) · [conky](docs/alternatives/conky.md) |
-| Terminal popups | Any TUI in a real PTY under a bar segment | None; Flash shows btop, newsboat or calcurse instead of rebuilding them |
-| System monitoring | Bar values and widgets, thresholds that raise an alert, btop in a popup; no temperature or fan sensors | [iStat Menus](docs/alternatives/istat-menus.md) · [Stats](docs/alternatives/stats.md) · [iStatistica](docs/alternatives/istatistica.md) · [TG Pro](docs/alternatives/tg-pro.md) · [eul](docs/alternatives/eul.md) · [MenuMeters](docs/alternatives/menumeters.md) · [btop](docs/alternatives/btop.md) · [htop](docs/alternatives/htop.md) · [Activity Monitor](docs/alternatives/activity-monitor.md) · [Glances](docs/alternatives/glances.md) · [Netdata](docs/alternatives/netdata.md) · [coconutBattery](docs/alternatives/coconutbattery.md) · [AlDente](docs/alternatives/aldente.md) · [Macs Fan Control](docs/alternatives/macs-fan-control.md) · [Sensei](docs/alternatives/sensei.md) |
-| Window switching | Every window, most recently used first, one hint label per row, `@windows` search; no thumbnails, no hold-to-cycle | [AltTab](docs/alternatives/alttab.md) · [Witch](docs/alternatives/witch.md) · [Contexts](docs/alternatives/contexts.md) · [rcmd](docs/alternatives/rcmd.md) |
-| Clipboard history | `!clip`: pins, images, plain-text paste, terminal-aware paste | [Maccy](docs/alternatives/maccy.md) · [Paste](docs/alternatives/paste.md) · [Clipy](docs/alternatives/clipy.md) · [CopyQ](docs/alternatives/copyq.md) |
-| Window placement | Named positions kept through display changes, rules, directional focus, full screen, and opt-in AeroSpace-style [tiling and workspaces](docs/tiling.md) | [AeroSpace](docs/alternatives/aerospace.md) · [yabai](docs/alternatives/yabai.md) · [Rectangle](docs/alternatives/rectangle.md) · [Amethyst](docs/alternatives/amethyst.md) · [Loop](docs/alternatives/loop.md) · [Magnet](docs/alternatives/magnet.md) · [Moom](docs/alternatives/moom.md) · [Swish](docs/alternatives/swish.md) · [Phoenix](docs/alternatives/phoenix.md) |
-| Plugins | Sandboxed JSON-lines processes in any language, one set for all of the above | Raycast's store, Hammerspoon's Spoons |
+| A hotkey | That one hotkey registration | Nothing registered |
+| `[statusbar] enabled = true` | The bar, its clock and the plugins its template names | No bar polling, the native menu bar untouched |
+| `[widgets.<name>]` | One desktop window per widget per display, its sources | No windows |
+| `[monitors.<name>]` (battery, disk, memory and plugin health are built in) | Its evaluation beside the bar, the plugins and sources its value reads, an alert when it crosses a threshold | Nothing evaluated |
+| A terminal popup | A process when opened; persistent and prewarmed popups start ahead | No PTY |
+| A status plugin named in a template (feed, the AI quotas…) | That plugin, while a visible surface reads it | Not running |
+| A `sysinfo` segment in a template (CPU, memory, disks, network, battery) | That domain's sampling, while a visible surface reads it | No sampling |
+| A command such as `:screenshot screen` | Its plugin on first use | Not running |
+| A mapping that runs a plugin command | That plugin, once launch has settled | Started by its first command |
+| `:help` or `[debug] http_inspector_enabled` | The local help server | No listener |
+| `[startup] run` (a `defaults write` line, `killall Dock`…) | Those commands, once after launch, in order | Nothing run, no macOS setting touched |
 
-What Flash will not do: read pixels, run on Linux or Windows, remap
-hardware keys or expand text. The [alternatives index](docs/alternatives/README.md)
-says more, [coming from Linux](docs/alternatives/README.md#coming-from-linux) has a
-page for each i3, Hyprland, rofi or Waybar setup, the [comparison table and FAQ](docs/comparison.md) is the one-screen
-summary, and [troubleshooting](docs/troubleshooting.md) starts with `flash resident doctor`.
+What does start at launch, with any configuration: the Accessibility
+observer for the focused app, so hints are ready before you press the key;
+one on the Dock, so `missioncontrol show` and `hide` know which view is up;
+the keyboard tap that decides which keys Flash swallows; the private socket
+the `flash` command and your scripts reach it through, idle until one
+connects ([IPC protocol](docs/ipc-protocol.md)); the plugins that
+feed hints and search (browsers, terminals and the other catalog sources)
+and `media`, which follows which media apps run,
+from 2 MB to about 30 MB each ([footprint](docs/performance.md#footprint));
+and, until you disable them, the
+built-in [monitors](docs/monitors.md), which keep the `sysinfo` plugin's
+battery and disk figures sampled. The [architecture guide](docs/architecture.md#what-starts-at-launch)
+lists every one with its cost, and `flash resident status` and the `/plugins` help
+page show what is running on your Mac right now.
 
 ## Status
 
