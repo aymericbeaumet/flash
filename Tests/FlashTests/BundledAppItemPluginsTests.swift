@@ -224,7 +224,8 @@ final class BundledAppItemPluginsTests: XCTestCase {
     try start([.notes: notes])
     XCTAssertEqual(
       try pull("notes").rows.map(\.title), [], "macOS's prompt is open while the query answers")
-    XCTAssertEqual(notes.asks, 1, "a query scoped to the catalog is the user using it")
+    // A query that outran the plugin's start answers before the ask.
+    waitUntilTrue("a query scoped to the catalog is the user using it") { notes.asks == 1 }
     waitUntilTrue("listed once granted") { notes.lists == 1 }
 
     var rows: [Candidate] = []
@@ -282,7 +283,7 @@ final class BundledAppItemPluginsTests: XCTestCase {
     XCTAssertEqual(notes.lists, 1)
 
     XCTAssertEqual(try pull("contacts").rows.count, 0, "macOS's prompt is open")
-    XCTAssertEqual(contacts.asks, 1)
+    waitUntilTrue("the query asked for access") { contacts.asks == 1 }
     settleRunLoop(0.2)
     XCTAssertEqual(changed.count, 1, "an answered pull and an open prompt change nothing")
     contacts.answer()
