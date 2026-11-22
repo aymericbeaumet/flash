@@ -405,17 +405,20 @@ final class NormalModeTests: XCTestCase {
     // and asynchronous, so a click posted on a fixed delay lands on whichever
     // app is still frontmost. Measured at 9 of 43 clicks hitting the wrong
     // app before this waited for the real handoff.
-    XCTAssertTrue(
-      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: 501, frontmostPID: 777))
+    // The rule is asked with what the target is, not with a pid to look up:
+    // whichever process holds that pid on the machine running the test would
+    // otherwise answer for it.
+    func needsHandoff(_ target: pid_t?, frontmost: pid_t?) -> Bool {
+      AppDelegate.hintCommitNeedsFrontmostHandoff(
+        targetPID: target, frontmostPID: frontmost, targetActivates: true)
+    }
+    XCTAssertTrue(needsHandoff(501, frontmost: 777))
     // Flash itself being frontmost is the same problem, not an exemption.
-    XCTAssertTrue(
-      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: 501, frontmostPID: nil))
+    XCTAssertTrue(needsHandoff(501, frontmost: nil))
     // Already there: post on this turn, no wait, no delay.
-    XCTAssertFalse(
-      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: 501, frontmostPID: 501))
+    XCTAssertFalse(needsHandoff(501, frontmost: 501))
     // Nothing to hand off to.
-    XCTAssertFalse(
-      AppDelegate.hintCommitNeedsFrontmostHandoff(targetPID: nil, frontmostPID: 501))
+    XCTAssertFalse(needsHandoff(nil, frontmost: 501))
     // Gatekeeper and the other agents that show a dialog never become
     // frontmost. Waiting on that handoff only delays the click.
     XCTAssertFalse(
