@@ -1,12 +1,14 @@
 # README media
 
-The README embeds the files below, inside HTML comments until they exist: remove the comment around each one as it is recorded. None is recorded yet; each entry says what
-to show so the set reads as one story. Record on a clean desktop with a
-neutral wallpaper, light appearance, one 16:10 display at 1920×1200 (or scale
-to 1600 px wide), with [KeyCastr](https://github.com/keycastr/keycastr) in
-the bottom-left so every keystroke is visible. GIFs: 10–15 s, 20 fps, under
-5 MB (`screencapture -v`, trim with ffmpeg, encode with gifski). PNGs: 2x,
-under 500 KB.
+The README embeds the files below, inside HTML comments until they exist:
+remove the comment around each one as it is recorded. None of them is
+recorded yet (the README opens with `hints-calculator.gif`, described
+below); each entry says what to show so the set reads as one story. Record
+on a clean desktop with a neutral wallpaper, light appearance, one 16:10
+display at 1920×1200 (or scale to 1600 px wide), with
+[KeyCastr](https://github.com/keycastr/keycastr) in the bottom-left so every
+keystroke is visible. GIFs: 10–15 s, 20 fps, under 5 MB (`screencapture -v`,
+trim with ffmpeg, encode with gifski). PNGs: 2x, under 500 KB.
 
 | File | What to record |
 | --- | --- |
@@ -18,11 +20,20 @@ under 500 KB.
 | `statusbar-widgets.png` | Full desktop, no windows: the bar on top with `docs/examples/statusbar/flash.toml` (feed, quotas, CPU/MEM/DSK/NET/BAT, clock), the system panel widget from `docs/examples/widgets/system-panel.toml` in the top-right, the clock and agenda widget bottom-left. |
 | `popup-btop.png` | Same desktop, the pointer hovering the CPU segment of the bar, the terminal popup below it running btop. |
 
+## Recorded so far
+
+`hints-calculator.gif` opens the README: Calculator over a plain backdrop,
+`mouse target`, then the labels of 7, ×, 6 and = typed one activation at a
+time. It is nine stills (`screencapture -x -R<x,y,w,h>`) joined with ffmpeg,
+not a video: under `screencapture -v` with a region Flash found every
+target occluded and showed no hints, so check a short take before recording
+a long one with any tool that draws over the screen. A region capture also
+keeps everything else on the desktop out of the frame.
+
 ## The link card
 
 `social-card.jpg` (1280×640) is the image a shared link shows: the published
-site names it as every page's preview image, the README shows it until
-`hero.gif` is recorded, and it is the file to upload as the repository's
-social preview (Settings › General › Social preview; GitHub has no API for
+site names it as every page's preview image, and it is the file to upload
+as the repository's social preview (Settings › General › Social preview; GitHub has no API for
 it). It is drawn, not recorded: `Scripts/social-card.html`, rendered by
 `mise run build:social-card`.

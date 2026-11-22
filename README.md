@@ -21,7 +21,13 @@ better.
 [Compare tools](docs/comparison.md) · [Privacy](docs/privacy.md) ·
 [Report a bug](https://github.com/aymericbeaumet/flash/issues/new/choose)
 
-![Flash: press ⌘⇧Space, then type the label on a control](docs/assets/social-card.jpg)
+<p align="center">
+  <img src="docs/assets/hints-calculator.gif" width="320" alt="Flash labels every button of Calculator; typing a label presses its button, here 7 × 6 = 42">
+</p>
+
+*Hints on Calculator: every button gets a label, and typing `O`, `C`, `X`
+then `Y` presses 7, ×, 6 and =. The same hotkey labels the controls of any
+app that exposes them to Accessibility.*
 
 <!-- Recorded media, listed in docs/assets/README.md, goes here.
 ![Hints in Safari, System Settings and the Dock](docs/assets/hero.gif)
