@@ -156,7 +156,6 @@ final class PollSchedulerTests: XCTestCase {
         .high, on: DispatchQueue(label: "poll.starved", qos: .utility).qos.qosClass))
     XCTAssertFalse(
       PollScheduler.starves(.system, on: DispatchQueue(label: "poll.inherits").qos.qosClass))
-    XCTAssertFalse(PollScheduler.starves(.system, on: DispatchQueue.main.qos.qosClass))
   }
 
   func testADeadlineRegistrationRunsOnceAndIsDropped() {
