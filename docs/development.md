@@ -152,6 +152,16 @@ pinned to a full commit with its release in a comment
 (`uses: actions/checkout@<sha> # v7.0.1`); the guardrails reject a tag or a
 branch.
 
+A test that passes on your Mac and fails in CI usually depends on one of two
+things. GitHub's macOS runners start a job's processes clamped to utility
+quality of service, so the main queue itself reports a utility class, and
+they are several times slower. Reproduce the first with
+`taskpolicy -c utility mise run test`. For the second, wait for an effect
+(`waitUntilTrue`) instead of reading it right after the call that causes it,
+never hand a harness to a queue through an `unowned` capture, and never ask
+about a process by a made-up pid: whichever process holds that pid on the
+runner answers.
+
 ## Dependency updates
 
 Update exact tool pins in `mise.toml`, run `mise lock`, and commit application

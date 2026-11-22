@@ -678,3 +678,6 @@ Workspace lookups may be empty and AX window references may resolve to the app;
 neither those results nor missing input events establish an application bug.
 Type-checking and pure tests do not verify the visible overlay: report any
 remaining manual verification honestly.
+CI runs the tests clamped to utility QoS on slower runners: reproduce a
+CI-only failure with `taskpolicy -c utility mise run test`
+([development](docs/development.md#tasks)).
