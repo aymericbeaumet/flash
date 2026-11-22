@@ -114,6 +114,19 @@ const readingArea = /(<div class="reading-area[^"]*">)(<\/div>)/g;
 /** What a server render leaves for a hydration to find its place by. */
 const hydrationMarkers = /<!--[^>]*-->/g;
 
+/**
+ * The HTML without them. Taking one marker out can join the halves of
+ * another (`<!-<!--[-->-->`), so this repeats until none is left.
+ */
+function withoutHydrationMarkers(html: string): string {
+  let previous: string;
+  do {
+    previous = html;
+    html = html.replace(hydrationMarkers, "");
+  } while (html !== previous);
+  return html;
+}
+
 /** The published pages' links all lead somewhere on the site, and nowhere local. */
 function checkPublished(
   pages: Map<string, string>,
@@ -304,7 +317,7 @@ async function renderSite(bundle: DocsBundle, out: string, work: string) {
     ].join("\n    ");
     let body = rendered.body;
     if (rendered.article !== undefined) {
-      const article = rendered.article.replace(hydrationMarkers, "");
+      const article = withoutHydrationMarkers(rendered.article);
       if (body.match(readingArea)?.length !== 1)
         throw new Error(`${route}: the page has no single reading area for its article`);
       body = body.replace(readingArea, (_, open: string, close: string) => open + article + close);
