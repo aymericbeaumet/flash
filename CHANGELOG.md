@@ -35,6 +35,11 @@ configuration written for 1.1 needs the upgrade notes below;
 
 ### Fixes
 
+- Flash started at a lowered priority (`taskpolicy -c utility`, a launcher
+  that clamps what it starts) no longer logs `[poll] starved_registration`
+  for the wake-ups it plans on the main queue, and a debug build no longer
+  stops at the first one. The main queue reports the class the process was
+  launched with, which is not a queue anyone chose.
 - A key another app posts (an automation tool, a script) reads as the key a
   keyboard sends. Such a key carries a flag bit no modifier sets, and NORMAL
   took it for a modifier: a posted digit started no count, a posted Escape

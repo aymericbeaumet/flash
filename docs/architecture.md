@@ -381,7 +381,9 @@ a `system` probe planned from one fired at 150–1,800 ms gaps, and the same
 catalog decode took nine times longer. `PollScheduler` checks the pairing at
 every registration: a `system` or `high` one on a `.utility` or `.background`
 queue stops a debug build there and logs `[poll] starved_registration` in a
-release build.
+release build. The main queue is not judged: it declares no class, and the
+one it reports is how the process was launched (a CI runner starts the tests
+at utility).
 
 | Owner · registration | Cadence or deadline | Priority | Why |
 | --- | --- | --- | --- |

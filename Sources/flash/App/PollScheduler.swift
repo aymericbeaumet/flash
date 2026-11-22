@@ -237,12 +237,20 @@ final class PollScheduler {
     priority <= .high && (qos == .utility || qos == .background)
   }
 
+  /// The pairing for a queue. The main queue is never judged: it declares no
+  /// class, and the one it reports is how the process was launched (a CI
+  /// runner or `taskpolicy -c utility` starts it at utility), which no
+  /// registration chose and no other queue could stand in for.
+  static func starves(_ priority: Priority, on queue: DispatchQueue) -> Bool {
+    queue !== DispatchQueue.main && starves(priority, on: queue.qos.qosClass)
+  }
+
   /// Every registration passes here, so the pairing holds for a queue
   /// declared in another file and for a priority chosen at run time. A debug
   /// build stops at the registration; a release build says so and carries on.
   private static func requireServed(_ id: String, _ priority: Priority, on queue: DispatchQueue) {
+    guard starves(priority, on: queue) else { return }
     let qos = queue.qos.qosClass
-    guard starves(priority, on: qos) else { return }
     FlashLog.error("[poll] starved_registration id=\(id) priority=\(priority) qos=\(qos)")
     assertionFailure("\(id): a \(priority) registration on a \(qos) queue (\(queue.label))")
   }

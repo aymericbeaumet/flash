@@ -152,10 +152,13 @@ final class PollSchedulerTests: XCTestCase {
       }
     }
     XCTAssertTrue(
-      PollScheduler.starves(
-        .high, on: DispatchQueue(label: "poll.starved", qos: .utility).qos.qosClass))
-    XCTAssertFalse(
-      PollScheduler.starves(.system, on: DispatchQueue(label: "poll.inherits").qos.qosClass))
+      PollScheduler.starves(.high, on: DispatchQueue(label: "poll.starved", qos: .utility)))
+    XCTAssertFalse(PollScheduler.starves(.system, on: DispatchQueue(label: "poll.inherits")))
+    // The main queue declares no class: the one it reports is how the process
+    // was launched (a CI runner starts it at utility), which no registration
+    // chose, so none on it is judged.
+    XCTAssertFalse(PollScheduler.starves(.system, on: DispatchQueue.main))
+    XCTAssertFalse(PollScheduler.starves(.high, on: DispatchQueue.main))
   }
 
   func testADeadlineRegistrationRunsOnceAndIsDropped() {
