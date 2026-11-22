@@ -38,11 +38,12 @@ final class StatusSurfaceControllerTests: XCTestCase {
       controller = FlashStatusBarController(
         template: .init(template: bar ?? ""), sources: sources,
         refreshIntervalSeconds: interval,
-        scheduler: PollScheduler(), queue: queue, clock: { [unowned self] in now },
-        wallClock: { [unowned self] in wall },
-        makeJob: { [unowned self] invocation, _, line, completion in
+        // A queued evaluation can land after the test that owned it ended.
+        scheduler: PollScheduler(), queue: queue, clock: { [weak self] in self?.now ?? 0 },
+        wallClock: { [weak self] in self?.wall ?? Date(timeIntervalSince1970: 0) },
+        makeJob: { [weak self] invocation, _, line, completion in
           let task = Task(invocation, line: line, completion: completion)
-          tasks.append(task)
+          self?.tasks.append(task)
           return task
         })
       if bar == nil { controller.setBar(enabled: false) }

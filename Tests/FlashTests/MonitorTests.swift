@@ -308,15 +308,15 @@ final class MonitorTests: XCTestCase {
     ) {
       controller = FlashStatusBarController(
         template: .init(template: bar ?? ""), sources: sources, refreshIntervalSeconds: 5,
-        pluginStatusesProvider: { [unowned self] in plugins },
-        scheduler: PollScheduler(), queue: queue, clock: { [unowned self] in now },
-        wallClock: { [unowned self] in wall },
-        makeJob: { [unowned self] invocation, _, _, completion in
+        // A queued evaluation or a hop can land after the test that owned it ended.
+        pluginStatusesProvider: { [weak self] in self?.plugins ?? [] },
+        scheduler: PollScheduler(), queue: queue, clock: { [weak self] in self?.now ?? 0 },
+        wallClock: { [weak self] in self?.wall ?? Date(timeIntervalSince1970: 0) },
+        makeJob: { [weak self] invocation, _, _, completion in
           let task = Task(invocation, completion: completion)
-          tasks.append(task)
+          self?.tasks.append(task)
           return task
         },
-        // A hop can land after the test that queued it ended.
         monitorAlertSink: { [weak self] in self?.alerts.append($0) },
         monitorFireSink: { [weak self] in self?.fires.append($0) },
         monitorNotifySink: { [weak self] name, alert in self?.notified.append((name, alert)) })

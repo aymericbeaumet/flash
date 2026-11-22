@@ -43,12 +43,13 @@ final class StatusBarControllerTests: XCTestCase {
         popupTemplates: popups.mapValues { .init(template: $0, sourceNames: Set(sources.keys)) },
         sources: sources,
         refreshIntervalSeconds: interval,
-        pluginStatusesProvider: { [unowned self] in pluginStatuses },
-        scheduler: PollScheduler(), queue: queue, clock: { [unowned self] in now },
-        wallClock: { [unowned self] in wall },
-        makeJob: { [unowned self] invocation, _, line, completion in
+        // A queued evaluation can land after the test that owned it ended.
+        pluginStatusesProvider: { [weak self] in self?.pluginStatuses ?? [] },
+        scheduler: PollScheduler(), queue: queue, clock: { [weak self] in self?.now ?? 0 },
+        wallClock: { [weak self] in self?.wall ?? Date(timeIntervalSince1970: 0) },
+        makeJob: { [weak self] invocation, _, line, completion in
           let task = Task(invocation, line: line, completion: completion)
-          tasks.append(task)
+          self?.tasks.append(task)
           return task
         },
         environment: environment)
