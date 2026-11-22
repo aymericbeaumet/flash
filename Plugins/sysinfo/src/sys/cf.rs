@@ -58,11 +58,10 @@ unsafe extern "C" {
     fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
     fn CFArrayGetValueAtIndex(array: CFTypeRef, index: CFIndex) -> CFTypeRef;
     fn CFDictionaryGetValue(dictionary: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
-    fn CFDictionaryGetCount(dictionary: CFTypeRef) -> CFIndex;
-    fn CFDictionaryGetKeysAndValues(
+    fn CFDictionaryApplyFunction(
         dictionary: CFTypeRef,
-        keys: *mut CFTypeRef,
-        values: *mut CFTypeRef,
+        applier: extern "C" fn(key: CFTypeRef, value: CFTypeRef, context: *mut c_void),
+        context: *mut c_void,
     );
 }
 
@@ -232,27 +231,27 @@ pub(crate) unsafe fn as_f64(value: CFTypeRef) -> Option<f64> {
 /// # Safety
 /// `value` is null or a live CF object.
 pub(crate) unsafe fn numeric_entries(value: CFTypeRef) -> BTreeMap<String, f64> {
+    /// Keeps one entry when its key is a string and its value a number.
+    extern "C" fn keep(key: CFTypeRef, value: CFTypeRef, context: *mut c_void) {
+        // SAFETY: `context` is the map `numeric_entries` lends for the length
+        // of the call, and nothing else reads it meanwhile.
+        let entries = unsafe { &mut *context.cast::<BTreeMap<String, f64>>() };
+        // SAFETY: the key and the value are borrowed from the live dictionary.
+        let entry = unsafe { as_string(key).zip(as_f64(value)) };
+        if let Some((key, number)) = entry {
+            entries.insert(key, number);
+        }
+    }
+
+    let mut entries = BTreeMap::new();
     // SAFETY: a type query on a null-or-live object (caller guarantee).
     if !unsafe { is_type(value, CFDictionaryGetTypeID()) } {
-        return BTreeMap::new();
+        return entries;
     }
-    // SAFETY: `value` is a live CFDictionary.
-    let count = usize::try_from(unsafe { CFDictionaryGetCount(value) }).unwrap_or(0);
-    let mut keys: Vec<CFTypeRef> = vec![ptr::null(); count];
-    let mut values: Vec<CFTypeRef> = vec![ptr::null(); count];
-    // SAFETY: both buffers hold `count` entries; the references are borrowed
-    // from the dictionary, which outlives this call.
-    unsafe { CFDictionaryGetKeysAndValues(value, keys.as_mut_ptr(), values.as_mut_ptr()) };
-    keys.into_iter()
-        .zip(values)
-        .filter_map(|(key, value)| {
-            // SAFETY: borrowed entries of the live dictionary.
-            let key = unsafe { as_string(key) }?;
-            // SAFETY: as above.
-            let number = unsafe { as_f64(value) }?;
-            Some((key, number))
-        })
-        .collect()
+    // SAFETY: `value` is a live CFDictionary, and `keep` is called with each
+    // of its entries and `entries` before this returns.
+    unsafe { CFDictionaryApplyFunction(value, keep, (&raw mut entries).cast::<c_void>()) };
+    entries
 }
 
 /// A CFNumber as `i64` (a fraction truncates toward zero), or `None` for any
