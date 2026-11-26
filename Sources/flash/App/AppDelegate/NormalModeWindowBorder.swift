@@ -44,13 +44,6 @@ enum ActiveWindowBorderReadTiming {
   case unlessFresh
 }
 
-enum ActiveWindowBorderSessionSuspension: Hashable {
-  case session
-  case screens
-  case systemSleep
-  case secureUI
-}
-
 /// What the stroke remembers between events: the frames it can paint before
 /// any WindowServer round trip, how fresh they are, the read queued for the
 /// next main turn and the generations that retire superseded work.
@@ -76,7 +69,7 @@ struct ActiveWindowBorderState {
   /// followed, the cache is the window list's answer and a mode change
   /// does not ask again.
   private(set) var readEpochs: [pid_t: UInt64] = [:]
-  var suspensions: Set<ActiveWindowBorderSessionSuspension> = []
+  var suspensions: Set<PollScheduler.Suspension> = []
 
   mutating func noteWindowEvent() { eventEpoch &+= 1 }
 
@@ -397,21 +390,20 @@ extension AppDelegate {
 
   func setActiveWindowBorderSessionSuspended(
     _ suspended: Bool,
-    source: ActiveWindowBorderSessionSuspension,
+    source: PollScheduler.Suspension,
     reason: String
   ) {
     if suspended {
       terminalInputMappings?.flush()
       overlay?.hideStatusBarPopup()
-      let inserted = activeWindowBorder.suspensions.insert(source).inserted
-      guard inserted else { return }
+      guard source.set(true, in: &activeWindowBorder.suspensions) else { return }
       FlashLog.trace("[mode] active_border_session_suspend reason=\(reason)")
       hideActiveWindowBorder(reason: reason)
       windowLayoutSessionChanged(suspended: true)
       return
     }
 
-    guard activeWindowBorder.suspensions.remove(source) != nil else { return }
+    guard source.set(false, in: &activeWindowBorder.suspensions) else { return }
     FlashLog.trace("[mode] active_border_session_resume reason=\(reason)")
     guard activeWindowBorder.suspensions.isEmpty else { return }
     windowLayoutSessionChanged(suspended: false)

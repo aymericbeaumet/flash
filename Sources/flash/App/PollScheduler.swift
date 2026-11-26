@@ -67,8 +67,7 @@ final class PollScheduler {
     var leewayMs: Int = Priority.low.leewayMs
   }
 
-  /// Why every registration is held. Each is set and cleared by its own
-  /// workspace notification, so the reasons overlap freely.
+  /// Workspace signals that suspend polling and the desktop UI.
   enum Suspension: Hashable, CaseIterable {
     /// The user session is switched out (fast user switching).
     case session
@@ -78,6 +77,16 @@ final class PollScheduler {
     case systemSleep
     /// The login window (a locked screen) or the screen saver is in front.
     case secureUI
+
+    /// Whether the signal changed the holds. The displays can wake and the
+    /// user can unlock well before the workspace delivers system did-wake.
+    func set(_ active: Bool, in reasons: inout Set<Self>) -> Bool {
+      if active { return reasons.insert(self).inserted }
+      let count = reasons.count
+      reasons.remove(self)
+      if self == .screens { reasons.remove(.systemSleep) }
+      return reasons.count != count
+    }
   }
 
   /// Pure suspension state: the reasons in force and the transition a change
@@ -95,11 +104,7 @@ final class PollScheduler {
 
     mutating func set(_ reason: Suspension, active: Bool) -> Transition {
       let wasSuspended = isSuspended
-      if active {
-        guard reasons.insert(reason).inserted else { return .unchanged }
-      } else {
-        guard reasons.remove(reason) != nil else { return .unchanged }
-      }
+      guard reason.set(active, in: &reasons) else { return .unchanged }
       switch (wasSuspended, isSuspended) {
       case (false, true): return .suspended
       case (true, false): return .resumed

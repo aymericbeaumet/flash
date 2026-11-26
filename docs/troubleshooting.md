@@ -97,6 +97,12 @@ Compare them with the live [runtime](/state), [mappings](/mappings),
   previous display, and `gm` (`mouse screens`) numbers each display and
   moves the pointer and focus to the one you type. `[statusbar] monitor` is
   `"all"` or `"primary"`, and each widget names its displays.
+- **The feed headline is empty.** In the logs, a successful `host.fetch`
+  followed by `[feed] refresh` with `outcome=empty` means that no item
+  qualified for the carousel. Check the publication dates at the configured
+  URL. If the newest item is more than 24 hours old, check the publisher's
+  last successful update. Flash picks up new headlines on its next refresh.
+  See [feed headlines](status-plugins.md#feed-headlines).
 - **The native menu bar is gone.** `[statusbar] enabled = true` asks macOS to
   auto-hide it (the global "Automatically hide and show the menu bar"
   setting), because the Flash bar takes that band; reaching for the top edge

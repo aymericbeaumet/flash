@@ -210,13 +210,7 @@ final class WindowSwitcherCatalog {
 
   static func readWindows(pid: pid_t, remembered: [AXUIElement]) -> [Window]? {
     let app = AXApp.make(pid: pid, messagingTimeout: 1)
-    var raw: CFTypeRef?
-    let listed: [AXUIElement]
-    switch AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw) {
-    case .success: listed = raw as? [AXUIElement] ?? []
-    case .noValue, .attributeUnsupported: listed = []
-    default: return nil
-    }
+    guard let listed = AXApp.windows(of: app) else { return nil }
     return windows(pid: pid, listed: listed, remembered: remembered, read: readWindow)
   }
 

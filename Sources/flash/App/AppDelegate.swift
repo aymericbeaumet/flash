@@ -1628,16 +1628,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// poll produces can be seen while the displays sleep or the session is
   /// locked or switched out. The last release resumes both.
   func setSessionSuspended(
-    _ suspended: Bool, source: ActiveWindowBorderSessionSuspension, reason: String
+    _ suspended: Bool, source: PollScheduler.Suspension, reason: String
   ) {
-    let poll: PollScheduler.Suspension
-    switch source {
-    case .session: poll = .session
-    case .screens: poll = .screens
-    case .systemSleep: poll = .systemSleep
-    case .secureUI: poll = .secureUI
-    }
-    PollScheduler.shared.setSuspended(suspended, reason: poll)
+    PollScheduler.shared.setSuspended(suspended, reason: source)
     setActiveWindowBorderSessionSuspended(suspended, source: source, reason: reason)
   }
 

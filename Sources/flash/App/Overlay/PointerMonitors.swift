@@ -73,8 +73,17 @@ extension OverlayPanel {
     if event.type == .scrollWheel, !transientContentVisible, toast == nil {
       return
     }
-    let intent: OverlayPointerIntent =
-      event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event))
+    let intent: OverlayPointerIntent
+    if event.type == .scrollWheel {
+      intent = .scroll
+    } else {
+      let front = NSWorkspace.shared.frontmostApplication
+      guard
+        !AppDelegate.activeWindowBorderSecureUISuspendsSession(
+          bundleIdentifier: front?.bundleIdentifier)
+      else { return }
+      intent = .click(Self.pointerClick(event, frontmostPID: front?.processIdentifier ?? -1))
+    }
     DispatchQueue.main.async { [weak self] in
       self?.coordinator?.overlayDidCancelByPointer(intent)
     }
@@ -107,24 +116,23 @@ extension OverlayPanel {
     }
   }
 
-  private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {
+  private static func pointerClick(_ event: NSEvent, frontmostPID: pid_t) -> OverlayPointerClick {
     let action: JumpAction
-    if event?.type == .rightMouseDown {
+    if event.type == .rightMouseDown {
       action = .rightClick
-    } else if event?.type == .otherMouseDown, event?.buttonNumber == 2 {
+    } else if event.type == .otherMouseDown, event.buttonNumber == 2 {
       // A middle click is forwarded as one, never as a primary click.
       action = .middleClick
-    } else if (event?.clickCount ?? 1) >= 3 {
+    } else if event.clickCount >= 3 {
       action = .tripleClick
-    } else if (event?.clickCount ?? 1) >= 2 {
+    } else if event.clickCount >= 2 {
       action = .doubleClick
     } else {
       action = .leftClick
     }
     let modifiers = ClickModifiers(
-      eventFlags: event?.modifierFlags.intersection(.modifierKeys) ?? [],
+      eventFlags: event.modifierFlags.intersection(.modifierKeys),
       allowed: .all)
-    let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
     let flashWasActive =
       NSApp.isActive
       || frontmostPID == getpid()

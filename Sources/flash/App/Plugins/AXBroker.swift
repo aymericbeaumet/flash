@@ -86,7 +86,7 @@ final class AXBroker {
   /// The elements a window snapshot walks from: the app's windows. Tests
   /// substitute the application element itself, which registers without an
   /// AX grant.
-  private let roots: (AXUIElement) -> [AXUIElement]
+  private let roots: (AXUIElement) -> [AXUIElement]?
   /// The app whose menus are installed, read on the main thread.
   private let menuBarOwner: () -> pid_t?
   /// The element a menu-bar snapshot walks from: the app's `AXMenuBar`.
@@ -96,7 +96,7 @@ final class AXBroker {
   private let performAction: (AXUIElement, String) -> AXError
 
   init(
-    roots: @escaping (AXUIElement) -> [AXUIElement] = AXBroker.windows(of:),
+    roots: @escaping (AXUIElement) -> [AXUIElement]? = AXApp.windows(of:),
     menuBarOwner: @escaping () -> pid_t? = AXBroker.menuBarOwner,
     menuBar: @escaping (AXUIElement) -> AXUIElement? = AXMenuBar.element(of:),
     now: @escaping () -> DispatchTime = DispatchTime.now,
@@ -110,11 +110,6 @@ final class AXBroker {
     self.now = now
     self.readAttributes = readAttributes
     self.performAction = performAction
-  }
-
-  /// An app's `AXWindows`, where a window snapshot starts.
-  static func windows(of app: AXUIElement) -> [AXUIElement] {
-    elementArray(app, kAXWindowsAttribute as String)
   }
 
   /// The app whose menus the menu bar shows. The flashlight may hold
@@ -239,7 +234,9 @@ final class AXBroker {
         var seen = AXElementIdentitySet()
         let roots: [AXUIElement]
         switch tree {
-        case .windows: roots = self.roots(app)
+        case .windows:
+          guard let windows = self.roots(app) else { throw SnapshotFailure.failed }
+          roots = windows
         case .menuBar: roots = self.menuBar(app).map { [$0] } ?? []
         }
         try checkCurrent()

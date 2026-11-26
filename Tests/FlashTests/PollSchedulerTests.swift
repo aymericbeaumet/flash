@@ -329,6 +329,16 @@ final class PollSchedulerTests: XCTestCase {
 
   // MARK: - Suspension
 
+  func testWakingTheScreensEndsSystemSleepEvenWhenTheSystemWakeNoticeIsLate() {
+    var gate = PollScheduler.Gate()
+    XCTAssertEqual(gate.set(.systemSleep, active: true), .suspended)
+    XCTAssertEqual(gate.set(.screens, active: true), .unchanged)
+    XCTAssertEqual(gate.set(.secureUI, active: true), .unchanged)
+    XCTAssertEqual(gate.set(.screens, active: false), .unchanged)
+    XCTAssertEqual(gate.set(.secureUI, active: false), .resumed)
+    XCTAssertEqual(gate.set(.systemSleep, active: false), .unchanged)
+  }
+
   func testTheGateHoldsWhileAnyReasonRemainsAndResumesOnTheLast() {
     var gate = PollScheduler.Gate()
     XCTAssertFalse(gate.isSuspended)

@@ -217,6 +217,8 @@ Each bullet is a rule; the linked page states its detail, cases and reasons.
   (SecurityAgent, LocalAuthentication) refuses hints and is never walked or
   clicked, nor the window behind it
   ([which windows](docs/hints.md#beyond-the-focused-window)).
+- Physical pointer handling yields to the login window and screen saver.
+  Recheck session ownership before replaying a click after an activation wait.
 - Hint commits validate captured target identity off the main thread. A missing,
   changed, or ambiguous target cancels; never fall back to its old coordinates.
 - Hot paths never spawn a process where a persistent channel exists: local

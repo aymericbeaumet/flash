@@ -12,10 +12,19 @@ extension AppDelegate {
   }
 
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {
-    Trace.ensure(.pointer) { handlePointerIntent(intent) }
+    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    Trace.ensure(.pointer) { handlePointerIntent(intent, frontmostBundleID: front) }
   }
 
-  private func handlePointerIntent(_ intent: OverlayPointerIntent) {
+  func canHandlePhysicalPointerInput(
+    frontmostBundleID: String? = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+  ) -> Bool {
+    activeWindowBorder.suspensions.isEmpty
+      && !Self.activeWindowBorderSecureUISuspendsSession(bundleIdentifier: frontmostBundleID)
+  }
+
+  func handlePointerIntent(_ intent: OverlayPointerIntent, frontmostBundleID: String?) {
+    guard canHandlePhysicalPointerInput(frontmostBundleID: frontmostBundleID) else { return }
     // A click or a scroll is not the key a half-typed sequence waits for:
     // drop it, and the palette listing what could follow it.
     if !overlay.normalModePending.isEmpty || whichKeyShown {
@@ -891,7 +900,9 @@ extension AppDelegate {
         + "shift:\(click.modifiers.contains(.shift)) "
         + "ctrl:\(click.modifiers.contains(.control)) "
         + "alt:\(click.modifiers.contains(.option))")
-    let post = {
+    let post = { [weak self] in
+      // The session may have locked while activation was pending.
+      guard self?.canHandlePhysicalPointerInput() == true else { return }
       _ = ActionDispatcher.synthesizeClick(
         at: ScreenPoint<NSSpace>(click.location),
         action: click.action,

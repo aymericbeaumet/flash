@@ -301,7 +301,7 @@ final class WhichKeyTests: XCTestCase {
     delegate.modeStore.perform = { _, _, _ in }
     delegate.overlay.normalModePending = key("g")
     delegate.whichKeyShown = true
-    delegate.overlayDidCancelByPointer(.scroll)
+    delegate.handlePointerIntent(.scroll, frontmostBundleID: "com.apple.finder")
     XCTAssertEqual(delegate.overlay.normalModePending, "")
     XCTAssertFalse(delegate.whichKeyShown)
   }

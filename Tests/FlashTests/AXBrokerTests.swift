@@ -22,6 +22,14 @@ final class AXBrokerTests: XCTestCase {
     }
   }
 
+  func testSnapshotOfAnUnavailableAppFailsInsteadOfReportingZeroWindows() {
+    let reply = brokerReply(
+      AXBroker(), "host.ax_snapshot", ["pid": Int(pid_t.max)], pluginID: "browsers")
+    XCTAssertEqual(reply["ok"] as? Bool, false)
+    XCTAssertEqual(reply["error"] as? String, "accessibility snapshot failed")
+    XCTAssertNil(reply["nodes"])
+  }
+
   func testSnapshotFailsAnUnreadableBatchWithoutReturningPartialNodes() {
     let second = AXUIElementCreateApplication(123_456)
     var reads = 0

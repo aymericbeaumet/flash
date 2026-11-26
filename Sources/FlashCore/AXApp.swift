@@ -45,6 +45,17 @@ public enum AXApp {
     return app
   }
 
+  /// An app with no windows returns an empty list. If the app cannot answer,
+  /// callers can keep the last window catalog until the next successful read.
+  public static func windows(of app: AXUIElement) -> [AXUIElement]? {
+    var raw: CFTypeRef?
+    switch AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw) {
+    case .success: return raw as? [AXUIElement]
+    case .noValue, .attributeUnsupported: return []
+    default: return nil
+    }
+  }
+
   /// Bound every AX call in the process that has no timeout of its own to
   /// `timeout` instead of the 6 s system default. Once, at launch, before
   /// any AX work.

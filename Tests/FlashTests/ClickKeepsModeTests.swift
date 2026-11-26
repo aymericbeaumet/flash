@@ -69,6 +69,19 @@ final class ClickKeepsModeTests: XCTestCase {
       frontmostPIDAtClick: -1)
   }
 
+  func testPhysicalClicksDuringSessionSuspensionLeaveNormalInputAlone() {
+    let delegate = delegate()
+    delegate.overlay.normalModePending = "g"
+    let intent = OverlayPointerIntent.click(click(.rightClick))
+    delegate.handlePointerIntent(intent, frontmostBundleID: "com.apple.loginwindow")
+    XCTAssertEqual(delegate.overlay.normalModePending, "g")
+    XCTAssertFalse(delegate.nativeSurfaceSuspended)
+    delegate.activeWindowBorder.suspensions = [.secureUI]
+    delegate.handlePointerIntent(intent, frontmostBundleID: "com.apple.finder")
+    XCTAssertEqual(delegate.overlay.normalModePending, "g")
+    XCTAssertFalse(delegate.nativeSurfaceSuspended)
+  }
+
   /// A primary click into a text field, a password field or a terminal used
   /// to enter INSERT once Accessibility said what was under it. Nothing is
   /// asked any more and the mode stays, the keys after it read by NORMAL.

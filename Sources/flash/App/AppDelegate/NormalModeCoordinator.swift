@@ -1060,6 +1060,7 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
+    guard canHandlePhysicalPointerInput() else { return }
     if Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
     {
@@ -1109,7 +1110,7 @@ extension AppDelegate {
     DispatchQueue.main.asyncAfter(
       deadline: .now() + .milliseconds(Self.pointerFocusLossRecaptureDeferralMs)
     ) { [weak self] in
-      guard let self else { return }
+      guard let self, self.canHandlePhysicalPointerInput() else { return }
       guard self.normalModeRecaptureToken == token else {
         FlashLog.trace("[mode] pointer_recapture_defer_skip token=\(token) reason=stale")
         return

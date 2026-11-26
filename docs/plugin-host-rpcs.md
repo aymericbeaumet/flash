@@ -276,6 +276,9 @@ takes no part in Gecko's process lock.
 The bundled `menus` plugin is the menu bar's reader: one snapshot per
 `@menus` scope, and a row's handle pressed when the row is picked.
 Snapshots have a host-side five-second budget including queue admission.
+An app with no windows, including one that does not support `AXWindows`,
+returns an empty window snapshot. A window-list read that fails or times out
+fails the snapshot, so catalog plugins can keep their last successful rows.
 Expiry, a revoked child, or an unresponsive AX batch fails the whole snapshot;
 it never returns partial nodes or leaves their handles actionable. The budget
 is checked between AX reads and after acquiring Gecko's process lock; it cannot

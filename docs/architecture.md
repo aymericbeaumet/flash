@@ -352,7 +352,10 @@ switched out, the login window (a locked screen) or screen saver is in front,
 or the system is going to sleep, so the scheduler holds every registration —
 plugin cadences, status jobs and clocks, the clipboard watcher — while any of
 those holds (`PollScheduler.Gate`, fed by the same workspace notifications
-that hide the window border). Registrations keep changing while held; the
+that hide the window border). A display wake also clears the system-sleep
+hold because macOS can deliver its system wake notification after the user
+has resumed working. The lock and switched-out session holds still apply.
+Registrations keep changing while held; the
 last release runs each one that fell due meanwhile exactly once, then
 repeating ones return to their grid. The scheduler's clock counts time spent
 asleep (`CLOCK_MONOTONIC_RAW`), so a wake finds those deadlines overdue rather than

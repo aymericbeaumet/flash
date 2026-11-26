@@ -201,6 +201,10 @@ click on activation and Flash posts it again. NORMAL then recaptures, and
 the keys typed after the click are NORMAL's. The session tap never holds a
 key: it swallows or passes each one as it comes.
 
+Clicks on the login window or screen saver belong to macOS. Flash skips
+pointer handling while the session is suspended and checks again before
+replaying a click that waited for an app to activate.
+
 ## The focus region
 
 NORMAL's `move` keys (`h` `j` `k` `l`, the half pages and pages, `gg` /
